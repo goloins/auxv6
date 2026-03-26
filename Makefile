@@ -184,6 +184,9 @@ _rm: user/rm
 _sh: user/sh
 	cp user/sh _sh
 
+_sockettest: user/sockettest
+	cp user/sockettest _sockettest
+
 _stressfs: user/stressfs
 	cp user/stressfs _stressfs
 
@@ -223,6 +226,7 @@ UPROGS=\
 	_mkdir\
 	_rm\
 	_sh\
+	_sockettest\
 	_stressfs\
 	_usertests\
 	_wc\
@@ -244,7 +248,7 @@ clean:
 	kernel/**/*.o kernel/**/*.d kernel/**/*.asm \
 	user/*.o user/*.d user/*.asm user/cat user/echo user/forktest \
 	user/grep user/init user/kill user/ln user/ls user/mkdir \
-	user/rm user/sh user/stressfs user/usertests user/wc user/zombie
+	user/rm user/sh user/sockettest user/stressfs user/usertests user/wc user/zombie
 
 # make a printout
 FILES = $(shell grep -v '^\#' tools/runoff.list)

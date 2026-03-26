@@ -1,5 +1,6 @@
 struct stat;
 struct rtcdate;
+struct sockaddr_in;
 
 // system calls
 int fork(void);
@@ -23,6 +24,8 @@ int getpid(void);
 char* sbrk(int);
 int sleep(int);
 int uptime(void);
+int socket(int family, int type, int protocol);
+int bind(int sockfd, struct sockaddr_in *addr, int addrlen);
 
 // ulib.c
 int stat(const char*, struct stat*);
