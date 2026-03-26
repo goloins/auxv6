@@ -5,7 +5,7 @@
 int
 main(int argc, char *argv[])
 {
-  int sfd, cfd;
+  int sfd, cfd, afd;
   int pid;
   int n;
   char buf[64];
@@ -69,9 +69,18 @@ main(int argc, char *argv[])
     exit();
   }
 
-  n = recv(sfd, buf, sizeof(buf)-1);
+  afd = accept(sfd);
+  if(afd < 0){
+    printf(1, "tcptest: accept failed\n");
+    close(sfd);
+    wait();
+    exit();
+  }
+
+  n = recv(afd, buf, sizeof(buf)-1);
   if(n < 0){
     printf(1, "tcptest: server recv failed\n");
+    close(afd);
     close(sfd);
     wait();
     exit();
@@ -79,6 +88,7 @@ main(int argc, char *argv[])
   buf[n] = '\0';
 
   wait();
+  close(afd);
   close(sfd);
 
   printf(1, "tcptest: PASS n=%d msg=%s\n", n, buf);

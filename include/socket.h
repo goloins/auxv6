@@ -54,6 +54,8 @@ struct tcpcb {
   uint rcv_nxt;
 };
 
+#define SOCKET_LISTENQ_MAX 16
+
 // Socket structure (kernel side)
 struct socket {
   uint state;           // SOCK_* state
@@ -74,6 +76,13 @@ struct socket {
 
   // Transport control state.
   struct tcpcb tcp;
+
+  // Stream listen queue for pending accepted sockets.
+  uint backlog;
+  uint qhead;
+  uint qtail;
+  uint qlen;
+  struct socket *listenq[SOCKET_LISTENQ_MAX];
 
   // Ref count for cleanup
   uint ref;

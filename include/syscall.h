@@ -26,3 +26,4 @@
 #define SYS_send   25
 #define SYS_recv   26
 #define SYS_listen 27
+#define SYS_accept 28
