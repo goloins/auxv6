@@ -9,8 +9,10 @@ struct spinlock;
 struct sleeplock;
 struct stat;
 struct socket;
+struct sockaddr_in;
 struct ifnet;
 struct mbuf;
+struct ip_hdr;
 struct superblock;
 
 // bio.c
@@ -201,6 +203,7 @@ int             sys_bind(void);
 int             sys_connect(void);
 int             sys_send(void);
 int             sys_recv(void);
+int             socket_deliver(struct sockaddr_in*, struct sockaddr_in*, char*, uint);
 
 // net device layer
 void            netdev_init(void);
@@ -211,6 +214,12 @@ void            if_input(struct ifnet*, struct mbuf*);
 void            loopback_attach(void);
 struct mbuf*    mbuf_alloc(void);
 void            mbuf_free(struct mbuf*);
+int             ip_output(struct ifnet*, uchar, uint, uint, char*, uint);
+void            ip_input(struct ifnet*, struct mbuf*);
+int             udp_output(struct ifnet*, struct sockaddr_in*, struct sockaddr_in*, char*, uint);
+void            udp_input(struct ifnet*, struct ip_hdr*, char*, uint);
+int             tcp_output(struct ifnet*, struct sockaddr_in*, struct sockaddr_in*, char*, uint);
+void            tcp_input(struct ifnet*, struct ip_hdr*, char*, uint);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

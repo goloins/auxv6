@@ -7,6 +7,11 @@
 #define MBUF_SIZE 2048
 #define IFNAMSIZ 16
 
+// Protocol IDs
+#define NET_PROTO_IP   0x0800
+#define NET_IP_UDP     17
+#define NET_IP_TCP     6
+
 // Interface flags (subset, BSD-style naming)
 #define IFF_UP        0x1
 #define IFF_LOOPBACK  0x8
@@ -19,6 +24,37 @@ struct mbuf {
 };
 
 struct ifnet;
+struct sockaddr_in;
+
+// Minimal IPv4 header for loopback stack development.
+struct ip_hdr {
+  uchar vhl;
+  uchar proto;
+  ushort len;
+  uint src;
+  uint dst;
+};
+
+// Minimal UDP header for loopback stack development.
+struct udp_hdr {
+  ushort src_port;
+  ushort dst_port;
+  ushort len;
+  ushort csum;
+};
+
+// Minimal TCP header skeleton for future transport implementation.
+struct tcp_hdr {
+  ushort src_port;
+  ushort dst_port;
+  uint seq;
+  uint ack;
+  uchar off;
+  uchar flags;
+  ushort win;
+  ushort csum;
+  ushort urg;
+};
 
 // Network interface operations.
 struct ifnet_ops {
@@ -44,6 +80,21 @@ void if_input(struct ifnet *ifp, struct mbuf *m);
 
 // Built-in interfaces.
 void loopback_attach(void);
+
+// IP layer.
+int ip_output(struct ifnet *ifp, uchar proto, uint src, uint dst,
+              char *payload, uint len);
+void ip_input(struct ifnet *ifp, struct mbuf *m);
+
+// UDP layer.
+int udp_output(struct ifnet *ifp, struct sockaddr_in *src,
+               struct sockaddr_in *dst, char *payload, uint len);
+void udp_input(struct ifnet *ifp, struct ip_hdr *ip, char *payload, uint len);
+
+// TCP layer (skeleton).
+int tcp_output(struct ifnet *ifp, struct sockaddr_in *src,
+               struct sockaddr_in *dst, char *payload, uint len);
+void tcp_input(struct ifnet *ifp, struct ip_hdr *ip, char *payload, uint len);
 
 // Buffer allocation.
 struct mbuf* mbuf_alloc(void);

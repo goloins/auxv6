@@ -30,6 +30,9 @@ OBJS = \
 	kernel/net/socket.o\
 	kernel/net/device.o\
 	kernel/net/loopback.o\
+	kernel/net/ip.o\
+	kernel/net/udp.o\
+	kernel/net/tcp.o\
 
 # Cross-compiling (e.g., on Mac OS X)
 # TOOLPREFIX = i386-jos-elf
