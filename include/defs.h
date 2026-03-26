@@ -206,6 +206,7 @@ int             sys_recv(void);
 int             sys_listen(void);
 int             sys_accept(void);
 int             socket_deliver(struct sockaddr_in*, struct sockaddr_in*, char*, uint);
+int             socket_deliver_raw(uchar, struct sockaddr_in*, struct sockaddr_in*, char*, uint);
 int             socket_stream_connect(struct socket*, struct sockaddr_in*);
 
 // net device layer
@@ -221,6 +222,7 @@ int             ip_output(struct ifnet*, uchar, uint, uint, char*, uint);
 void            ip_input(struct ifnet*, struct mbuf*);
 int             udp_output(struct ifnet*, struct sockaddr_in*, struct sockaddr_in*, char*, uint);
 void            udp_input(struct ifnet*, struct ip_hdr*, char*, uint);
+void            icmp_input(struct ifnet*, struct ip_hdr*, char*, uint);
 int             tcp_connect(struct ifnet*, struct socket*, struct sockaddr_in*);
 int             tcp_output(struct ifnet*, struct sockaddr_in*, struct sockaddr_in*, char*, uint);
 void            tcp_input(struct ifnet*, struct ip_hdr*, char*, uint);

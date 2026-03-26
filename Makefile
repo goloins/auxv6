@@ -31,6 +31,7 @@ OBJS = \
 	kernel/net/device.o\
 	kernel/net/loopback.o\
 	kernel/net/ip.o\
+	kernel/net/icmp.o\
 	kernel/net/udp.o\
 	kernel/net/tcp.o\
 
@@ -195,6 +196,9 @@ _sockettest: user/sockettest
 _tcptest: user/tcptest
 	cp user/tcptest _tcptest
 
+_ping: user/ping
+	cp user/ping _ping
+
 _stressfs: user/stressfs
 	cp user/stressfs _stressfs
 
@@ -236,6 +240,7 @@ UPROGS=\
 	_sh\
 	_sockettest\
 	_tcptest\
+	_ping\
 	_stressfs\
 	_usertests\
 	_wc\
@@ -257,7 +262,7 @@ clean:
 	kernel/**/*.o kernel/**/*.d kernel/**/*.asm \
 	user/*.o user/*.d user/*.asm user/cat user/echo user/forktest \
 	user/grep user/init user/kill user/ln user/ls user/mkdir \
-	user/rm user/sh user/sockettest user/tcptest user/stressfs user/usertests user/wc user/zombie
+	user/rm user/sh user/sockettest user/tcptest user/ping user/stressfs user/usertests user/wc user/zombie
 
 # make a printout
 FILES = $(shell grep -v '^\#' tools/runoff.list)

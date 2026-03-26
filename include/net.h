@@ -9,6 +9,7 @@
 
 // Protocol IDs
 #define NET_PROTO_IP   0x0800
+#define NET_IP_ICMP    1
 #define NET_IP_UDP     17
 #define NET_IP_TCP     6
 
@@ -56,6 +57,18 @@ struct tcp_hdr {
   ushort urg;
 };
 
+// Minimal ICMP echo header.
+struct icmp_hdr {
+  uchar type;
+  uchar code;
+  ushort csum;
+  ushort ident;
+  ushort seq;
+};
+
+#define ICMP_ECHO_REPLY 0
+#define ICMP_ECHO       8
+
 // Network interface operations.
 struct ifnet_ops {
   int (*if_output)(struct ifnet *ifp, struct mbuf *m);
@@ -90,6 +103,9 @@ void ip_input(struct ifnet *ifp, struct mbuf *m);
 int udp_output(struct ifnet *ifp, struct sockaddr_in *src,
                struct sockaddr_in *dst, char *payload, uint len);
 void udp_input(struct ifnet *ifp, struct ip_hdr *ip, char *payload, uint len);
+
+// ICMP layer.
+void icmp_input(struct ifnet *ifp, struct ip_hdr *ip, char *payload, uint len);
 
 // TCP layer (skeleton).
 int tcp_output(struct ifnet *ifp, struct sockaddr_in *src,

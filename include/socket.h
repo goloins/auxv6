@@ -10,6 +10,7 @@
 // Socket types
 #define SOCK_STREAM   1     // TCP
 #define SOCK_DGRAM    2     // UDP
+#define SOCK_RAW      3     // Raw IP payloads (e.g. ICMP)
 
 // Socket states
 #define SOCK_CLOSED   0
@@ -43,6 +44,7 @@ struct sockaddr_in {
 };
 
 // Internet protocol numbers
+#define IPPROTO_ICMP   1
 #define IPPROTO_UDP    17
 #define IPPROTO_TCP    6
 
@@ -60,6 +62,7 @@ struct tcpcb {
 struct socket {
   uint state;           // SOCK_* state
   uint type;            // SOCK_STREAM, SOCK_DGRAM
+  uint protocol;        // IPPROTO_* for raw sockets
   uint family;          // AF_INET, AF_UNIX
 
   // Addressing
