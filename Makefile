@@ -202,7 +202,7 @@ user/forktest: user/forktest.o user/ulib.o user/usys.o
 	$(OBJDUMP) -S user/forktest > forktest.asm
 
 mkfs: tools/mkfs.c include/fs.h
-	gcc -Werror -Wall -isystem include -o mkfs tools/mkfs.c
+	gcc -Werror -Wall -o mkfs tools/mkfs.c
 
 # Prevent deletion of intermediate files, e.g. cat.o, after first build, so
 # that disk image changes after first build are persistent until clean.  More
