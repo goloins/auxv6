@@ -48,7 +48,7 @@ printint(int fd, char *out, int *pos, int max, int xx, int base, int sgn)
     bufputc(fd, out, pos, max, buf[i]);
 }
 
-// Print to the given fd. Only understands %d, %x, %p, %s.
+// Print to the given fd. Only understands %d, %u, %x, %p, %s.
 void
 printf(int fd, const char *fmt, ...)
 {
@@ -72,6 +72,9 @@ printf(int fd, const char *fmt, ...)
     } else if(state == '%'){
       if(c == 'd'){
         printint(fd, out, &pos, sizeof(out), *ap, 10, 1);
+        ap++;
+      } else if(c == 'u'){
+        printint(fd, out, &pos, sizeof(out), *ap, 10, 0);
         ap++;
       } else if(c == 'x' || c == 'p'){
         printint(fd, out, &pos, sizeof(out), *ap, 16, 0);

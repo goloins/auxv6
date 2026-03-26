@@ -23,12 +23,41 @@ icmp_csum(void *buf, uint len)
   return (ushort)(~sum);
 }
 
+static uint
+rdtsc32(void)
+{
+  uint lo;
+
+  asm volatile("rdtsc" : "=a" (lo) : : "edx");
+  return lo;
+}
+
 int
 main(int argc, char *argv[])
 {
+  const int npings = 5;
   int fd;
   int n;
-  int tries;
+  int i;
+  int off;
+  int matched;
+  int timeout_ticks;
+  int t0;
+  int t1;
+  uint c0;
+  uint c1;
+  int rtt;
+  uint cyc;
+  int received;
+  int lost;
+  int min_rtt;
+  int max_rtt;
+  int sum_rtt;
+  int avg_rtt;
+  uint min_cyc;
+  uint max_cyc;
+  uint sum_cyc;
+  uint avg_cyc;
   char buf[128];
   int pid;
   struct sockaddr_in dst;
@@ -58,35 +87,87 @@ main(int argc, char *argv[])
   }
 
   pid = getpid();
-  memset(&pkt, 0, sizeof(pkt));
-  pkt.h.type = ICMP_ECHO;
-  pkt.h.code = 0;
-  pkt.h.ident = (ushort)pid;
-  pkt.h.seq = 1;
-  memmove(pkt.data, "auxv6-ping", 10);
-  pkt.h.csum = 0;
-  pkt.h.csum = icmp_csum(&pkt, sizeof(pkt));
+  timeout_ticks = 50;
+  received = 0;
+  min_rtt = 0;
+  max_rtt = 0;
+  sum_rtt = 0;
+  min_cyc = 0;
+  max_cyc = 0;
+  sum_cyc = 0;
 
-  if(send(fd, &pkt, sizeof(pkt)) < 0) {
-    printf(1, "ping: send failed\n");
-    close(fd);
-    exit();
-  }
+  for(i = 1; i <= npings; i++) {
+    memset(&pkt, 0, sizeof(pkt));
+    pkt.h.type = ICMP_ECHO;
+    pkt.h.code = 0;
+    pkt.h.ident = (ushort)pid;
+    pkt.h.seq = (ushort)i;
+    memmove(pkt.data, "auxv6-ping", 10);
+    pkt.h.csum = 0;
+    pkt.h.csum = icmp_csum(&pkt, sizeof(pkt));
 
-  for(tries = 0; tries < 4; tries++) {
-    n = recv(fd, buf, sizeof(buf));
-    if(n < (int)sizeof(struct icmp_hdr))
-      continue;
-
-    rh = (struct icmp_hdr*)buf;
-    if(rh->type == ICMP_ECHO_REPLY && rh->ident == (ushort)pid) {
-      printf(1, "ping: PASS bytes=%d seq=%d\n", n, rh->seq);
+    t0 = uptime();
+    c0 = rdtsc32();
+    if(send(fd, &pkt, sizeof(pkt)) < 0) {
+      printf(1, "ping: send failed seq=%d\n", i);
       close(fd);
       exit();
     }
+
+    n = recvtimeout(fd, buf, sizeof(buf), timeout_ticks);
+    c1 = rdtsc32();
+    t1 = uptime();
+    if(n <= 0) {
+      printf(1, "ping: timeout seq=%d\n", i);
+      continue;
+    }
+
+    matched = 0;
+    // Raw sockets are byte-stream buffers here; scan for any matching echo reply.
+    for(off = 0; off + (int)sizeof(struct icmp_hdr) <= n; off++) {
+      rh = (struct icmp_hdr*)(buf + off);
+      if(rh->type == ICMP_ECHO_REPLY && rh->ident == (ushort)pid && rh->seq == (ushort)i) {
+        rtt = t1 - t0;
+        cyc = c1 - c0;
+        if(received == 0 || rtt < min_rtt)
+          min_rtt = rtt;
+        if(received == 0 || rtt > max_rtt)
+          max_rtt = rtt;
+        sum_rtt += rtt;
+        if(received == 0 || cyc < min_cyc)
+          min_cyc = cyc;
+        if(received == 0 || cyc > max_cyc)
+          max_cyc = cyc;
+        sum_cyc += cyc;
+        received++;
+
+        if(rtt == 0)
+          printf(1, "ping: PASS bytes=%d seq=%d time=<1 tick cycles=%u\n", n, rh->seq, cyc);
+        else
+          printf(1, "ping: PASS bytes=%d seq=%d time=%d ticks cycles=%u\n", n, rh->seq, rtt, cyc);
+        matched = 1;
+        break;
+      }
+    }
+    if(!matched)
+      printf(1, "ping: no matching echo reply seq=%d\n", i);
+
+    if(i < npings)
+      sleep(10);
   }
 
-  printf(1, "ping: no echo reply\n");
+  lost = npings - received;
+  printf(1, "ping: sent=%d received=%d lost=%d loss=%d%%\n",
+         npings, received, lost, (lost * 100) / npings);
+  if(received > 0) {
+    avg_rtt = (sum_rtt + received / 2) / received;
+      avg_cyc = (sum_cyc + (uint)received / 2) / (uint)received;
+    printf(1, "ping: rtt min/avg/max = %d/%d/%d ticks\n",
+           min_rtt, avg_rtt, max_rtt);
+      printf(1, "ping: cycles min/avg/max = %u/%u/%u\n",
+        min_cyc, avg_cyc, max_cyc);
+  }
+
   close(fd);
   exit();
 }
