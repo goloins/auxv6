@@ -18,6 +18,18 @@
 #define SOCK_CONNECT  3
 #define SOCK_ESTAB    4     // Established
 
+// TCP states (BSD-inspired subset)
+#define TCPS_CLOSED       0
+#define TCPS_LISTEN       1
+#define TCPS_SYN_SENT     2
+#define TCPS_SYN_RECEIVED 3
+#define TCPS_ESTABLISHED  4
+#define TCPS_FIN_WAIT_1   5
+#define TCPS_FIN_WAIT_2   6
+#define TCPS_CLOSE_WAIT   7
+#define TCPS_LAST_ACK     8
+#define TCPS_TIME_WAIT    9
+
 // Special address
 #define INADDR_LOOPBACK  0x7f000001    // 127.0.0.1
 #define INADDR_ANY       0x00000000
@@ -33,6 +45,14 @@ struct sockaddr_in {
 // Internet protocol numbers
 #define IPPROTO_UDP    17
 #define IPPROTO_TCP    6
+
+struct tcpcb {
+  uint state;
+  uint iss;
+  uint snd_nxt;
+  uint irs;
+  uint rcv_nxt;
+};
 
 // Socket structure (kernel side)
 struct socket {
@@ -51,6 +71,9 @@ struct socket {
   uint recv_len;
   uint send_cap;
   uint recv_cap;
+
+  // Transport control state.
+  struct tcpcb tcp;
 
   // Ref count for cleanup
   uint ref;

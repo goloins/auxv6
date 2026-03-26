@@ -29,6 +29,7 @@ int bind(int sockfd, struct sockaddr_in *addr, int addrlen);
 int connect(int sockfd, struct sockaddr_in *addr, int addrlen);
 int send(int sockfd, const void *buf, int len);
 int recv(int sockfd, void *buf, int len);
+int listen(int sockfd, int backlog);
 
 // ulib.c
 int stat(const char*, struct stat*);

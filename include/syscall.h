@@ -25,3 +25,4 @@
 #define SYS_connect 24
 #define SYS_send   25
 #define SYS_recv   26
+#define SYS_listen 27

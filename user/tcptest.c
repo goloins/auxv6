@@ -32,6 +32,12 @@ main(int argc, char *argv[])
     exit();
   }
 
+  if(listen(sfd, 4) < 0){
+    printf(1, "tcptest: server listen failed\n");
+    close(sfd);
+    exit();
+  }
+
   pid = fork();
   if(pid < 0){
     printf(1, "tcptest: fork failed\n");

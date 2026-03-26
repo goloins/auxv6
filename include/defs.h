@@ -203,6 +203,7 @@ int             sys_bind(void);
 int             sys_connect(void);
 int             sys_send(void);
 int             sys_recv(void);
+int             sys_listen(void);
 int             socket_deliver(struct sockaddr_in*, struct sockaddr_in*, char*, uint);
 int             socket_stream_connect(struct socket*, struct sockaddr_in*);
 
