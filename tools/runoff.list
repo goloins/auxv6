@@ -1,0 +1,80 @@
+# basic headers
+include/types.h
+include/param.h
+include/memlayout.h
+include/defs.h
+include/x86.h
+include/asm.h
+include/mmu.h
+include/elf.h
+include/date.h
+
+# entering xv6
+kernel/core/entry.S
+kernel/boot/entryother.S
+kernel/core/main.c
+
+# locks
+include/spinlock.h
+kernel/core/spinlock.c
+
+# processes
+kernel/core/vm.c
+include/proc.h
+kernel/core/proc.c
+kernel/core/swtch.S
+kernel/core/kalloc.c
+
+# system calls
+include/traps.h
+tools/vectors.pl
+kernel/core/trapasm.S
+kernel/core/trap.c
+include/syscall.h
+kernel/core/syscall.c
+kernel/core/sysproc.c
+
+# file system
+include/buf.h
+include/sleeplock.h
+include/fcntl.h
+include/stat.h
+include/fs.h
+include/file.h
+kernel/driver/ide.c
+kernel/fs/bio.c
+kernel/core/sleeplock.c
+kernel/fs/log.c
+kernel/fs/fs.c
+kernel/fs/file.c
+kernel/core/sysfile.c
+kernel/core/exec.c
+
+# pipes
+kernel/core/pipe.c
+
+# string operations
+kernel/core/string.c
+
+# low-level hardware
+include/mp.h
+kernel/driver/mp.c
+kernel/driver/lapic.c
+kernel/driver/ioapic.c
+include/kbd.h
+kernel/driver/kbd.c
+kernel/driver/console.c
+kernel/driver/uart.c
+
+# user-level
+kernel/boot/initcode.S
+user/usys.S
+user/init.c
+user/sh.c
+
+# bootloader
+kernel/boot/bootasm.S
+kernel/boot/bootmain.c
+
+# link
+config/kernel.ld
