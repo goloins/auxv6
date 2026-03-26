@@ -9,6 +9,8 @@ struct spinlock;
 struct sleeplock;
 struct stat;
 struct socket;
+struct ifnet;
+struct mbuf;
 struct superblock;
 
 // bio.c
@@ -196,6 +198,19 @@ void            socket_close(struct socket*);
 struct socket*  getfd_socket(int fd);
 int             sys_socket(void);
 int             sys_bind(void);
+int             sys_connect(void);
+int             sys_send(void);
+int             sys_recv(void);
+
+// net device layer
+void            netdev_init(void);
+int             if_register(struct ifnet*);
+struct ifnet*   if_get(char*);
+int             if_output(struct ifnet*, struct mbuf*);
+void            if_input(struct ifnet*, struct mbuf*);
+void            loopback_attach(void);
+struct mbuf*    mbuf_alloc(void);
+void            mbuf_free(struct mbuf*);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

@@ -26,6 +26,9 @@ int sleep(int);
 int uptime(void);
 int socket(int family, int type, int protocol);
 int bind(int sockfd, struct sockaddr_in *addr, int addrlen);
+int connect(int sockfd, struct sockaddr_in *addr, int addrlen);
+int send(int sockfd, const void *buf, int len);
+int recv(int sockfd, void *buf, int len);
 
 // ulib.c
 int stat(const char*, struct stat*);

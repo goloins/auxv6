@@ -28,6 +28,8 @@ OBJS = \
 	kernel/core/vectors.o\
 	kernel/core/vm.o\
 	kernel/net/socket.o\
+	kernel/net/device.o\
+	kernel/net/loopback.o\
 
 # Cross-compiling (e.g., on Mac OS X)
 # TOOLPREFIX = i386-jos-elf
