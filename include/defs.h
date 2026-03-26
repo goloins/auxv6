@@ -8,6 +8,7 @@ struct rtcdate;
 struct spinlock;
 struct sleeplock;
 struct stat;
+struct socket;
 struct superblock;
 
 // bio.c
@@ -185,6 +186,16 @@ void            switchuvm(struct proc*);
 void            switchkvm(void);
 int             copyout(pde_t*, uint, void*, uint);
 void            clearpteu(pde_t *pgdir, char *uva);
+
+// socket.c
+void            socket_init(void);
+struct socket*  socket_alloc(void);
+struct socket*  socket_ref(struct socket*);
+void            socket_deref(struct socket*);
+void            socket_close(struct socket*);
+struct socket*  getfd_socket(int fd);
+int             sys_socket(void);
+int             sys_bind(void);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

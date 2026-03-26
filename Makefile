@@ -27,6 +27,7 @@ OBJS = \
 	kernel/driver/uart.o\
 	kernel/core/vectors.o\
 	kernel/core/vm.o\
+	kernel/net/socket.o\
 
 # Cross-compiling (e.g., on Mac OS X)
 # TOOLPREFIX = i386-jos-elf
