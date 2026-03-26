@@ -16,3 +16,4 @@ mkfs
 .gdbinit
 aux.kern
 *.info.md
+.vscode/settings.json
