@@ -1,7 +1,7 @@
-#include "types.h"
-#include "stat.h"
-#include "user.h"
-#include "param.h"
+#include "../include/types.h"
+#include "../include/stat.h"
+#include "../include/user.h"
+#include "../include/param.h"
 
 // Memory allocator by Kernighan and Ritchie,
 // The C programming Language, 2nd ed.  Section 8.7.

@@ -1,8 +1,9 @@
 // Shell.
 
-#include "types.h"
-#include "user.h"
-#include "fcntl.h"
+#include "../include/types.h"
+#include "../include/stat.h"
+#include "../include/user.h"
+#include "../include/fcntl.h"
 
 // Parsed command representation
 #define EXEC  1
@@ -54,6 +55,8 @@ void panic(char*);
 struct cmd *parsecmd(char*);
 
 // Execute cmd.  Never returns.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Winfinite-recursion"
 void
 runcmd(struct cmd *cmd)
 {
@@ -129,6 +132,7 @@ runcmd(struct cmd *cmd)
   }
   exit();
 }
+#pragma GCC diagnostic pop
 
 int
 getcmd(char *buf, int nbuf)
