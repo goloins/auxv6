@@ -13,6 +13,10 @@
 #define BACK  5
 
 #define MAXARGS 10
+#define MAXJOBS 16
+
+#define JOB_RUNNING 1
+#define JOB_STOPPED 2
 
 struct cmd {
   int type;
@@ -54,6 +58,26 @@ int fork1(void);  // Fork but panics on failure.
 void panic(char*);
 struct cmd *parsecmd(char*);
 void reapchildren(void);
+int maybe_builtin(char *buf, int shell_pgid);
+int strip_background(char *buf);
+int add_job(int pgid, char *cmdline, int state);
+void remove_job_by_index(int idx);
+int find_job_by_pgid(int pgid);
+int find_job_by_jid(int jid);
+int find_latest_job_index(void);
+int parse_job_arg(char *arg, int *jid_out);
+void print_jobs(void);
+
+struct job {
+  int used;
+  int jid;
+  int pgid;
+  int state;
+  char cmd[100];
+};
+
+static struct job jobs[MAXJOBS];
+static int next_jid = 1;
 
 // Execute cmd.  Never returns.
 #pragma GCC diagnostic push
@@ -152,6 +176,7 @@ main(void)
   static char buf[100];
   int fd;
   int shell_pgid;
+  int bg;
   int pid;
   int status;
 
@@ -173,6 +198,13 @@ main(void)
   while(getcmd(buf, sizeof(buf)) >= 0){
     reapchildren();
 
+    if(maybe_builtin(buf, shell_pgid))
+      continue;
+
+    bg = strip_background(buf);
+    if(buf[0] == 0)
+      continue;
+
     if(buf[0] == 'c' && buf[1] == 'd' && buf[2] == ' '){
       // Chdir must be called by the parent, not the child.
       buf[strlen(buf)-1] = 0;  // chop \n
@@ -188,12 +220,21 @@ main(void)
     }
 
     setpgid(pid, pid);
+
+    if(bg) {
+      int jid = add_job(pid, buf, JOB_RUNNING);
+      if(jid > 0)
+        printf(2, "[%d] %d\n", jid, pid);
+      continue;
+    }
+
     tcsetpgrp(pid);
 
-    while(waitpid(pid, &status, WUNTRACED) == pid){
+    while(waitpid(-pid, &status, WUNTRACED) == pid){
       if(WIFSTOPPED(status)) {
-        printf(2, "[%d] stopped\n", pid);
-        sigsend(-pid, SIGCONT);
+        int jid = add_job(pid, buf, JOB_STOPPED);
+        if(jid > 0)
+          printf(2, "[%d] stopped\n", jid);
         break;
       }
       if(WIFEXITED(status) || WIFSIGNALED(status))
@@ -228,10 +269,270 @@ reapchildren(void)
 {
   int st;
   int pid;
+  int idx;
 
-  // Reap already-finished children (for background work and auto-continued jobs).
-  while((pid = waitpid(-1, &st, WNOHANG)) > 0)
-    ;
+  // Reap background jobs and observe state transitions.
+  while((pid = waitpid(-1, &st, WNOHANG | WUNTRACED | WCONTINUED)) > 0) {
+    idx = find_job_by_pgid(pid);
+    if(idx < 0)
+      continue;
+    if(WIFSTOPPED(st)) {
+      jobs[idx].state = JOB_STOPPED;
+      continue;
+    }
+    if(WIFCONTINUED(st)) {
+      jobs[idx].state = JOB_RUNNING;
+      continue;
+    }
+    if(WIFEXITED(st) || WIFSIGNALED(st))
+      remove_job_by_index(idx);
+  }
+}
+
+int
+find_job_by_pgid(int pgid)
+{
+  int i;
+
+  for(i = 0; i < MAXJOBS; i++)
+    if(jobs[i].used && jobs[i].pgid == pgid)
+      return i;
+  return -1;
+}
+
+int
+find_job_by_jid(int jid)
+{
+  int i;
+
+  for(i = 0; i < MAXJOBS; i++)
+    if(jobs[i].used && jobs[i].jid == jid)
+      return i;
+  return -1;
+}
+
+void
+remove_job_by_index(int idx)
+{
+  if(idx < 0 || idx >= MAXJOBS)
+    return;
+  jobs[idx].used = 0;
+  jobs[idx].jid = 0;
+  jobs[idx].pgid = 0;
+  jobs[idx].state = 0;
+  jobs[idx].cmd[0] = 0;
+}
+
+int
+add_job(int pgid, char *cmdline, int state)
+{
+  int i;
+  int j;
+  int n;
+
+  i = find_job_by_pgid(pgid);
+  if(i < 0) {
+    for(i = 0; i < MAXJOBS; i++)
+      if(!jobs[i].used)
+        break;
+    if(i >= MAXJOBS)
+      return -1;
+    jobs[i].used = 1;
+    jobs[i].jid = next_jid++;
+    jobs[i].pgid = pgid;
+  }
+
+  jobs[i].state = state;
+
+  n = strlen(cmdline);
+  if(n > 0 && cmdline[n-1] == '\n')
+    n--;
+  if(n >= sizeof(jobs[i].cmd))
+    n = sizeof(jobs[i].cmd) - 1;
+
+  for(j = 0; j < n; j++)
+    jobs[i].cmd[j] = cmdline[j];
+  jobs[i].cmd[n] = 0;
+
+  return jobs[i].jid;
+}
+
+void
+print_jobs(void)
+{
+  int i;
+  int latest;
+  char marker;
+  char *state;
+
+  latest = find_latest_job_index();
+
+  for(i = 0; i < MAXJOBS; i++) {
+    if(!jobs[i].used)
+      continue;
+    marker = (i == latest) ? '+' : ' ';
+    state = (jobs[i].state == JOB_STOPPED) ? "stopped" : "running";
+    printf(2, "[%d]%c %s %d %s\n", jobs[i].jid, marker, state, jobs[i].pgid, jobs[i].cmd);
+  }
+}
+
+int
+find_latest_job_index(void)
+{
+  int i;
+  int best;
+
+  best = -1;
+  for(i = 0; i < MAXJOBS; i++) {
+    if(!jobs[i].used)
+      continue;
+    if(best < 0 || jobs[i].jid > jobs[best].jid)
+      best = i;
+  }
+  return best;
+}
+
+int
+parse_job_arg(char *arg, int *jid_out)
+{
+  char *p;
+
+  if(arg == 0 || jid_out == 0)
+    return -1;
+
+  p = arg;
+  if(*p == '%')
+    p++;
+  if(*p == 0 || *p == '\n')
+    return -1;
+
+  while(*p && *p != '\n') {
+    if(*p < '0' || *p > '9')
+      return -1;
+    p++;
+  }
+
+  *jid_out = atoi(arg[0] == '%' ? arg + 1 : arg);
+  if(*jid_out <= 0)
+    return -1;
+  return 0;
+}
+
+int
+strip_background(char *buf)
+{
+  int i;
+
+  i = strlen(buf);
+  while(i > 0 && (buf[i-1] == ' ' || buf[i-1] == '\t' || buf[i-1] == '\n'))
+    i--;
+
+  if(i > 0 && buf[i-1] == '&') {
+    i--;
+    while(i > 0 && (buf[i-1] == ' ' || buf[i-1] == '\t'))
+      i--;
+    buf[i] = 0;
+    return 1;
+  }
+
+  return 0;
+}
+
+int
+maybe_builtin(char *buf, int shell_pgid)
+{
+  char *p;
+  char *arg;
+  int jid;
+  int idx;
+  int status;
+  int wpid;
+
+  p = buf;
+  while(*p == ' ' || *p == '\t')
+    p++;
+
+  if(p[0] == 0 || p[0] == '\n')
+    return 1;
+
+  if(strncmp(p, "jobs", 4) == 0 && (p[4] == 0 || p[4] == '\n' || p[4] == ' ' || p[4] == '\t')) {
+    print_jobs();
+    return 1;
+  }
+
+  if(strncmp(p, "fg", 2) == 0 && (p[2] == 0 || p[2] == '\n' || p[2] == ' ' || p[2] == '\t')) {
+    arg = p + 2;
+    while(*arg == ' ' || *arg == '\t')
+      arg++;
+
+    if(*arg == 0 || *arg == '\n') {
+      idx = find_latest_job_index();
+      if(idx < 0) {
+        printf(2, "fg: no current job\n");
+        return 1;
+      }
+    } else {
+      if(parse_job_arg(arg, &jid) < 0) {
+        printf(2, "usage: fg [%%jobid]\n");
+        return 1;
+      }
+
+      idx = find_job_by_jid(jid);
+      if(idx < 0) {
+        printf(2, "fg: no such job %d\n", jid);
+        return 1;
+      }
+    }
+
+    tcsetpgrp(jobs[idx].pgid);
+    sigsend(-jobs[idx].pgid, SIGCONT);
+    jobs[idx].state = JOB_RUNNING;
+
+    while((wpid = waitpid(-jobs[idx].pgid, &status, WUNTRACED)) > 0) {
+      if(WIFSTOPPED(status)) {
+        jobs[idx].state = JOB_STOPPED;
+        break;
+      }
+      if((WIFEXITED(status) || WIFSIGNALED(status)) && wpid == jobs[idx].pgid) {
+        remove_job_by_index(idx);
+        break;
+      }
+    }
+
+    tcsetpgrp(shell_pgid);
+    return 1;
+  }
+
+  if(strncmp(p, "bg", 2) == 0 && (p[2] == 0 || p[2] == '\n' || p[2] == ' ' || p[2] == '\t')) {
+    arg = p + 2;
+    while(*arg == ' ' || *arg == '\t')
+      arg++;
+
+    if(*arg == 0 || *arg == '\n') {
+      idx = find_latest_job_index();
+      if(idx < 0) {
+        printf(2, "bg: no current job\n");
+        return 1;
+      }
+    } else {
+      if(parse_job_arg(arg, &jid) < 0) {
+        printf(2, "usage: bg [%%jobid]\n");
+        return 1;
+      }
+
+      idx = find_job_by_jid(jid);
+      if(idx < 0) {
+        printf(2, "bg: no such job %d\n", jid);
+        return 1;
+      }
+    }
+
+    sigsend(-jobs[idx].pgid, SIGCONT);
+    jobs[idx].state = JOB_RUNNING;
+    return 1;
+  }
+
+  return 0;
 }
 
 //PAGEBREAK!
