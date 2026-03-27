@@ -6,11 +6,12 @@
 #include "../include/fcntl.h"
 
 char *argv[] = { "login", 0 };
+char *mount_argv[] = { "mount", "/etc/fstab", 0 };
 
 int
 main(void)
 {
-  int pid, wpid;
+  int mpid, pid, wpid;
 
   if(open("/dev/console", O_RDWR) < 0){
     mknod("/dev/console", 1, 1);
@@ -18,6 +19,17 @@ main(void)
   }
   dup(0);  // stdout
   dup(0);  // stderr
+
+  // Best-effort boot mounts from /etc/fstab.
+  mkdir("/proc");
+  mpid = fork();
+  if(mpid == 0){
+    exec("/bin/mount", mount_argv);
+    printf(1, "init: exec mount failed\n");
+    exit();
+  }
+  if(mpid > 0)
+    wait();
 
   for(;;){
     printf(1, "init: starting login\n");

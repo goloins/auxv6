@@ -80,9 +80,12 @@ struct inode*   vfs_nameiparent(char*, char*);
 int             vfs_lookup(char*, struct vnode*);
 int             vfs_lookup_parent(char*, char*, struct vnode*);
 void            vfs_vnode_drop(struct vnode*);
+int             vfs_register_mount(struct vfs*, int, int, char*);
+int             vfs_unmount(char*);
 int             vfs_mount_count(void);
 int             vfs_get_mounts(struct vfs_mount_info*, int);
 void            vfs_xv6fs_init(struct vfs*);
+void            vfs_procfs_init(struct vfs*);
 
 // ide.c
 void            ideinit(void);
@@ -220,6 +223,8 @@ int             sys_setgid(void);
 int             sys_chmod(void);
 int             sys_chown(void);
 int             sys_mountinfo(void);
+int             sys_mount(void);
+int             sys_umount(void);
 int             sys_wait4(void);
 int             sys_waitid(void);
 int             sys_sigaction(void);

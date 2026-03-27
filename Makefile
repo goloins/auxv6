@@ -7,6 +7,7 @@ OBJS = \
 	kernel/fs/fs.o\
 	kernel/fs/vfs.o\
 	kernel/fs/vfs_xv6fs.o\
+	kernel/fs/procfs.o\
 	kernel/driver/ide.o\
 	kernel/driver/ioapic.o\
 	kernel/core/kalloc.o\
@@ -201,6 +202,18 @@ _ls: user/ls
 _mkdir: user/mkdir
 	cp user/mkdir _mkdir
 
+_mounts: user/mounts
+	cp user/mounts _mounts
+
+_mounttest: user/mounttest
+	cp user/mounttest _mounttest
+
+_mount: user/mount
+	cp user/mount _mount
+
+_umount: user/umount
+	cp user/umount _umount
+
 _pwd: user/pwd
 	cp user/pwd _pwd
 
@@ -276,6 +289,10 @@ UPROGS=\
 	_ln\
 	_ls\
 	_mkdir\
+	_mount\
+	_mounts\
+	_mounttest\
+	_umount\
 	_pwd\
 	_rm\
 	_sh\
@@ -309,6 +326,7 @@ clean:
 	kernel/**/*.o kernel/**/*.d kernel/**/*.asm \
 	user/*.o user/*.d user/*.asm user/cat user/echo user/forktest \
 	user/grep user/id user/init user/kill user/ln user/ls user/mkdir \
+	user/mount user/mounts user/mounttest user/umount \
 	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/sh user/sockettest user/su user/tcptest user/ping user/stressfs user/usertests user/wc user/zombie user/login
 
 # make a printout
@@ -366,7 +384,7 @@ qemu-nox-gdb: fs.img xv6.img .gdbinit
 
 EXTRA=\
 	tools/mkfs.c user/ulib.c include/user.h user/cat.c user/echo.c user/forktest.c user/grep.c user/kill.c\
-	user/id.c user/login.c user/ln.c user/ls.c user/mkdir.c user/passwd.c user/pwd.c user/chmod.c user/chown.c user/chgrp.c user/rm.c user/stressfs.c user/su.c user/usertests.c user/wc.c user/whoami.c user/zombie.c\
+	user/id.c user/login.c user/ln.c user/ls.c user/mkdir.c user/mount.c user/mounts.c user/mounttest.c user/umount.c user/passwd.c user/pwd.c user/chmod.c user/chown.c user/chgrp.c user/rm.c user/stressfs.c user/su.c user/usertests.c user/wc.c user/whoami.c user/zombie.c\
 	user/printf.c user/umalloc.c\
 	README etc.hosts etc.fstab etc.profile etc.passwd etc.hostname config/dot-bochsrc tools/*.pl tools/toc.* tools/runoff tools/runoff1 tools/runoff.list\
 	config/.gdbinit.tmpl gdbutil\
