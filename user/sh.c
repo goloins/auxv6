@@ -141,7 +141,7 @@ runcmd(struct cmd *cmd)
     if(ecmd->argv[0] == 0)
       exit();
     exec_with_path(ecmd->argv[0], ecmd->argv);
-    printf(2, "exec %s failed\n", ecmd->argv[0]);
+    printf(2, "%s: command not found\n", ecmd->argv[0]);
     break;
 
   case REDIR:
