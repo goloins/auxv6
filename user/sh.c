@@ -148,7 +148,7 @@ runcmd(struct cmd *cmd)
     rcmd = (struct redircmd*)cmd;
     close(rcmd->fd);
     if(open(rcmd->file, rcmd->mode) < 0){
-      printf(2, "open %s failed\n", rcmd->file);
+      printf(2, "cannot open %s for output (permission denied?)\n", rcmd->file);
       exit();
     }
     runcmd(rcmd->cmd);
