@@ -1,46 +1,9 @@
 struct stat;
 struct rtcdate;
 struct sockaddr_in;
-
-#define SIGHUP   1
-#define SIGINT   2
-#define SIGQUIT  3
-#define SIGCHLD  17
-#define SIGTERM  15
-#define SIGCONT  18
-#define SIGSTOP  19
-#define SIGTSTP  20
-#define SIGKILL  9
-
-#define SIG_DFL ((void(*)(int))0)
-#define SIG_IGN ((void(*)(int))1)
-
-#define WNOHANG    0x0001
-#define WUNTRACED  0x0002
-#define WCONTINUED 0x0004
-
-#define WIFEXITED(s)    (((s) & 0xff) == 0)
-#define WEXITSTATUS(s)  (((s) >> 8) & 0xff)
-#define WIFSIGNALED(s)  (((s) & 0x7f) != 0 && ((s) & 0x7f) != 0x7f)
-#define WTERMSIG(s)     ((s) & 0x7f)
-#define WIFSTOPPED(s)   (((s) & 0xff) == 0x7f)
-#define WSTOPSIG(s)     (((s) >> 8) & 0xff)
-#define WIFCONTINUED(s) ((s) == 0xffff)
-
-#define P_PID  1
-#define P_PGID 2
-#define P_ALL  3
-
-#define CLD_EXITED    1
-#define CLD_KILLED    2
-#define CLD_STOPPED   3
-#define CLD_CONTINUED 4
-
-struct sigaction {
-	void (*sa_handler)(int);
-	uint sa_mask;
-	int sa_flags;
-};
+#include "signal.h"
+#include "wait.h"
+#include "termios.h"
 
 typedef struct {
 	int si_signo;
@@ -77,8 +40,11 @@ int setpgid(int pid, int pgid);
 int setsid(void);
 int sigsend(int pid, int signo);
 int sigaction(int signo, const struct sigaction *act, struct sigaction *oldact);
+int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
 int tcsetpgrp(int pgid);
 int tcgetpgrp(void);
+int tcgetattr(int fd, struct termios *termios_p);
+int tcsetattr(int fd, int optional_actions, const struct termios *termios_p);
 char* sbrk(int);
 int sleep(int);
 int uptime(void);

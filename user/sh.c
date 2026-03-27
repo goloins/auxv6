@@ -14,6 +14,7 @@
 
 #define MAXARGS 10
 #define MAXJOBS 16
+#define JOB_MAX_PROCS 16
 
 #define JOB_RUNNING 1
 #define JOB_STOPPED 2
@@ -63,15 +64,23 @@ int strip_background(char *buf);
 int add_job(int pgid, char *cmdline, int state);
 void remove_job_by_index(int idx);
 int find_job_by_pgid(int pgid);
+int find_job_by_member_pid(int pid);
 int find_job_by_jid(int jid);
 int find_latest_job_index(void);
 int parse_job_arg(char *arg, int *jid_out);
+void mark_job_member_exit(int idx, int pid);
+void jobs_critical_enter(sigset_t *oldmask);
+void jobs_critical_leave(const sigset_t *oldmask);
 void print_jobs(void);
 
 struct job {
   int used;
   int jid;
   int pgid;
+  int leader_pid;
+  int nprocs;
+  int live_procs;
+  int member_pids[JOB_MAX_PROCS];
   int state;
   char cmd[100];
 };
@@ -179,6 +188,7 @@ main(void)
   int bg;
   int pid;
   int status;
+  sigset_t oldmask;
 
   // Ensure that three file descriptors are open.
   while((fd = open("console", O_RDWR)) >= 0){
@@ -222,7 +232,9 @@ main(void)
     setpgid(pid, pid);
 
     if(bg) {
+      jobs_critical_enter(&oldmask);
       int jid = add_job(pid, buf, JOB_RUNNING);
+      jobs_critical_leave(&oldmask);
       if(jid > 0)
         printf(2, "[%d] %d\n", jid, pid);
       continue;
@@ -232,7 +244,9 @@ main(void)
 
     while(waitpid(-pid, &status, WUNTRACED) == pid){
       if(WIFSTOPPED(status)) {
+        jobs_critical_enter(&oldmask);
         int jid = add_job(pid, buf, JOB_STOPPED);
+        jobs_critical_leave(&oldmask);
         if(jid > 0)
           printf(2, "[%d] stopped\n", jid);
         break;
@@ -270,10 +284,12 @@ reapchildren(void)
   int st;
   int pid;
   int idx;
+  sigset_t oldmask;
 
   // Reap background jobs and observe state transitions.
+  jobs_critical_enter(&oldmask);
   while((pid = waitpid(-1, &st, WNOHANG | WUNTRACED | WCONTINUED)) > 0) {
-    idx = find_job_by_pgid(pid);
+    idx = find_job_by_member_pid(pid);
     if(idx < 0)
       continue;
     if(WIFSTOPPED(st)) {
@@ -285,8 +301,9 @@ reapchildren(void)
       continue;
     }
     if(WIFEXITED(st) || WIFSIGNALED(st))
-      remove_job_by_index(idx);
+      mark_job_member_exit(idx, pid);
   }
+  jobs_critical_leave(&oldmask);
 }
 
 int
@@ -297,6 +314,22 @@ find_job_by_pgid(int pgid)
   for(i = 0; i < MAXJOBS; i++)
     if(jobs[i].used && jobs[i].pgid == pgid)
       return i;
+  return -1;
+}
+
+int
+find_job_by_member_pid(int pid)
+{
+  int i;
+  int j;
+
+  for(i = 0; i < MAXJOBS; i++) {
+    if(!jobs[i].used)
+      continue;
+    for(j = 0; j < jobs[i].nprocs && j < JOB_MAX_PROCS; j++)
+      if(jobs[i].member_pids[j] == pid)
+        return i;
+  }
   return -1;
 }
 
@@ -319,6 +352,10 @@ remove_job_by_index(int idx)
   jobs[idx].used = 0;
   jobs[idx].jid = 0;
   jobs[idx].pgid = 0;
+  jobs[idx].leader_pid = 0;
+  jobs[idx].nprocs = 0;
+  jobs[idx].live_procs = 0;
+  memset(jobs[idx].member_pids, 0, sizeof(jobs[idx].member_pids));
   jobs[idx].state = 0;
   jobs[idx].cmd[0] = 0;
 }
@@ -340,6 +377,11 @@ add_job(int pgid, char *cmdline, int state)
     jobs[i].used = 1;
     jobs[i].jid = next_jid++;
     jobs[i].pgid = pgid;
+    jobs[i].leader_pid = pgid;
+    jobs[i].nprocs = 1;
+    jobs[i].live_procs = 1;
+    memset(jobs[i].member_pids, 0, sizeof(jobs[i].member_pids));
+    jobs[i].member_pids[0] = pgid;
   }
 
   jobs[i].state = state;
@@ -355,6 +397,47 @@ add_job(int pgid, char *cmdline, int state)
   jobs[i].cmd[n] = 0;
 
   return jobs[i].jid;
+}
+
+void
+mark_job_member_exit(int idx, int pid)
+{
+  int i;
+
+  if(idx < 0 || idx >= MAXJOBS || !jobs[idx].used)
+    return;
+
+  for(i = 0; i < jobs[idx].nprocs && i < JOB_MAX_PROCS; i++) {
+    if(jobs[idx].member_pids[i] != pid)
+      continue;
+    jobs[idx].member_pids[i] = 0;
+    if(jobs[idx].live_procs > 0)
+      jobs[idx].live_procs--;
+    break;
+  }
+
+  if(jobs[idx].live_procs <= 0)
+    remove_job_by_index(idx);
+}
+
+void
+jobs_critical_enter(sigset_t *oldmask)
+{
+  sigset_t mask;
+
+  if(oldmask == 0)
+    return;
+  mask = SIGBIT(SIGCHLD);
+  if(sigprocmask(SIG_BLOCK, &mask, oldmask) < 0)
+    *oldmask = 0;
+}
+
+void
+jobs_critical_leave(const sigset_t *oldmask)
+{
+  if(oldmask == 0)
+    return;
+  sigprocmask(SIG_SETMASK, oldmask, 0);
 }
 
 void
@@ -447,6 +530,8 @@ maybe_builtin(char *buf, int shell_pgid)
   int idx;
   int status;
   int wpid;
+  int pgid;
+  sigset_t oldmask;
 
   p = buf;
   while(*p == ' ' || *p == '\t')
@@ -461,6 +546,7 @@ maybe_builtin(char *buf, int shell_pgid)
   }
 
   if(strncmp(p, "fg", 2) == 0 && (p[2] == 0 || p[2] == '\n' || p[2] == ' ' || p[2] == '\t')) {
+    jobs_critical_enter(&oldmask);
     arg = p + 2;
     while(*arg == ' ' || *arg == '\t')
       arg++;
@@ -468,35 +554,52 @@ maybe_builtin(char *buf, int shell_pgid)
     if(*arg == 0 || *arg == '\n') {
       idx = find_latest_job_index();
       if(idx < 0) {
+        jobs_critical_leave(&oldmask);
         printf(2, "fg: no current job\n");
         return 1;
       }
     } else {
       if(parse_job_arg(arg, &jid) < 0) {
+        jobs_critical_leave(&oldmask);
         printf(2, "usage: fg [%%jobid]\n");
         return 1;
       }
 
       idx = find_job_by_jid(jid);
       if(idx < 0) {
+        jobs_critical_leave(&oldmask);
         printf(2, "fg: no such job %d\n", jid);
         return 1;
       }
     }
 
-    tcsetpgrp(jobs[idx].pgid);
-    sigsend(-jobs[idx].pgid, SIGCONT);
+    pgid = jobs[idx].pgid;
     jobs[idx].state = JOB_RUNNING;
+    jobs_critical_leave(&oldmask);
 
-    while((wpid = waitpid(-jobs[idx].pgid, &status, WUNTRACED)) > 0) {
+    tcsetpgrp(pgid);
+    sigsend(-pgid, SIGCONT);
+
+    while((wpid = waitpid(-pgid, &status, WUNTRACED)) > 0) {
+      jobs_critical_enter(&oldmask);
+      idx = find_job_by_pgid(pgid);
+      if(idx < 0) {
+        jobs_critical_leave(&oldmask);
+        break;
+      }
       if(WIFSTOPPED(status)) {
         jobs[idx].state = JOB_STOPPED;
+        jobs_critical_leave(&oldmask);
         break;
       }
-      if((WIFEXITED(status) || WIFSIGNALED(status)) && wpid == jobs[idx].pgid) {
-        remove_job_by_index(idx);
-        break;
+      if(WIFEXITED(status) || WIFSIGNALED(status)) {
+        mark_job_member_exit(idx, wpid);
+        if(find_job_by_pgid(pgid) < 0) {
+          jobs_critical_leave(&oldmask);
+          break;
+        }
       }
+      jobs_critical_leave(&oldmask);
     }
 
     tcsetpgrp(shell_pgid);
@@ -504,6 +607,7 @@ maybe_builtin(char *buf, int shell_pgid)
   }
 
   if(strncmp(p, "bg", 2) == 0 && (p[2] == 0 || p[2] == '\n' || p[2] == ' ' || p[2] == '\t')) {
+    jobs_critical_enter(&oldmask);
     arg = p + 2;
     while(*arg == ' ' || *arg == '\t')
       arg++;
@@ -511,24 +615,30 @@ maybe_builtin(char *buf, int shell_pgid)
     if(*arg == 0 || *arg == '\n') {
       idx = find_latest_job_index();
       if(idx < 0) {
+        jobs_critical_leave(&oldmask);
         printf(2, "bg: no current job\n");
         return 1;
       }
     } else {
       if(parse_job_arg(arg, &jid) < 0) {
+        jobs_critical_leave(&oldmask);
         printf(2, "usage: bg [%%jobid]\n");
         return 1;
       }
 
       idx = find_job_by_jid(jid);
       if(idx < 0) {
+        jobs_critical_leave(&oldmask);
         printf(2, "bg: no such job %d\n", jid);
         return 1;
       }
     }
 
-    sigsend(-jobs[idx].pgid, SIGCONT);
+    pgid = jobs[idx].pgid;
     jobs[idx].state = JOB_RUNNING;
+    jobs_critical_leave(&oldmask);
+
+    sigsend(-pgid, SIGCONT);
     return 1;
   }
 

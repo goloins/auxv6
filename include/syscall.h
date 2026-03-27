@@ -39,3 +39,6 @@
 #define SYS_sigaction 38
 #define SYS_tcsetpgrp 39
 #define SYS_tcgetpgrp 40
+#define SYS_sigprocmask 41
+#define SYS_tcgetattr 42
+#define SYS_tcsetattr 43

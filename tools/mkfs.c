@@ -40,6 +40,7 @@ void rinode(uint inum, struct dinode *ip);
 void rsect(uint sec, void *buf);
 uint ialloc(ushort type);
 void iappend(uint inum, void *p, int n);
+uint alloc_block(void);
 
 // convert to intel byte order
 ushort
@@ -210,11 +211,15 @@ rinode(uint inum, struct dinode *ip)
 void
 rsect(uint sec, void *buf)
 {
+  int cc;
+
   if(lseek(fsfd, sec * BSIZE, 0) != sec * BSIZE){
     perror("lseek");
     exit(1);
   }
-  if(read(fsfd, buf, BSIZE) != BSIZE){
+  cc = read(fsfd, buf, BSIZE);
+  if(cc != BSIZE){
+    fprintf(stderr, "mkfs: short read at sector %u: got %d bytes, expected %d\n", sec, cc, BSIZE);
     perror("read");
     exit(1);
   }
@@ -232,6 +237,16 @@ ialloc(ushort type)
   din.size = xint(0);
   winode(inum, &din);
   return inum;
+}
+
+uint
+alloc_block(void)
+{
+  if(freeblock >= FSSIZE){
+    fprintf(stderr, "mkfs: out of data blocks (freeblock=%u, FSSIZE=%u)\n", freeblock, FSSIZE);
+    exit(1);
+  }
+  return freeblock++;
 }
 
 void
@@ -270,16 +285,16 @@ iappend(uint inum, void *xp, int n)
     assert(fbn < MAXFILE);
     if(fbn < NDIRECT){
       if(xint(din.addrs[fbn]) == 0){
-        din.addrs[fbn] = xint(freeblock++);
+        din.addrs[fbn] = xint(alloc_block());
       }
       x = xint(din.addrs[fbn]);
     } else {
       if(xint(din.addrs[NDIRECT]) == 0){
-        din.addrs[NDIRECT] = xint(freeblock++);
+        din.addrs[NDIRECT] = xint(alloc_block());
       }
       rsect(xint(din.addrs[NDIRECT]), (char*)indirect);
       if(indirect[fbn - NDIRECT] == 0){
-        indirect[fbn - NDIRECT] = xint(freeblock++);
+        indirect[fbn - NDIRECT] = xint(alloc_block());
         wsect(xint(din.addrs[NDIRECT]), (char*)indirect);
       }
       x = xint(indirect[fbn-NDIRECT]);

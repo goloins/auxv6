@@ -1,3 +1,6 @@
+// Shared signal constants/types used by kernel and user ABI.
+#include "signal.h"
+
 // Per-CPU state
 struct cpu {
   uchar apicid;                // Local APIC ID
@@ -33,21 +36,6 @@ struct context {
 };
 
 enum procstate { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, STOPPED, ZOMBIE };
-
-// Minimal POSIX-like signal numbering used by kernel bookkeeping.
-#define SIGHUP   1
-#define SIGINT   2
-#define SIGQUIT  3
-#define SIGCHLD  17
-#define SIGTERM  15
-#define SIGCONT  18
-#define SIGSTOP  19
-#define SIGTSTP  20
-#define SIGKILL  9
-
-// Signals are tracked in a 32-bit pending/mask bitmap.
-#define NSIG             32
-#define SIGBIT(sig)      (1U << ((sig) - 1))
 
 // Per-process state
 struct proc {
