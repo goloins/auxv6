@@ -138,7 +138,8 @@ main(int argc, char *argv[])
   etcino = mkfs_mkdir(rootino, "etc", 0, 0, 0755);
   devino = mkfs_mkdir(rootino, "dev", 0, 0, 0755);
   homeino = mkfs_mkdir(rootino, "home", 0, 0, 0755);
-  mkfs_mkdir(rootino, "root", 0, 0, 0755);
+  mkfs_mkdir(rootino, "root", 0, 0, 0700);
+  mkfs_mkdir(rootino, "proc", 0, 0, 0755);
   mkfs_mkdir(homeino, "aux", 1000, 1000, 0755);
   (void)devino;
 
@@ -151,6 +152,10 @@ main(int argc, char *argv[])
       if(strcmp(base, "_init") == 0){
         inum = install_file(binino, "init", src, 0, 0, 0755);
         dirlink_inum(rootino, "init", inum);
+      } else if(strcmp(base, "_sh") == 0){
+        // Install sh as 6sh, then create symlink sh -> 6sh
+        inum = install_file(binino, "6sh", src, 0, 0, 0755);
+        dirlink_inum(binino, "sh", inum);
       } else if(strcmp(base, "_chmod") == 0){
         install_file(sbinino, "chmod", src, 0, 0, 0755);
       } else if(strcmp(base, "_chown") == 0){
@@ -167,6 +172,8 @@ main(int argc, char *argv[])
       install_file(etcino, "profile", src, 0, 0, 0644);
     } else if(strcmp(base, "etc.passwd") == 0){
       install_file(etcino, "passwd", src, 0, 0, 0644);
+    } else if(strcmp(base, "etc.groups") == 0){
+      install_file(etcino, "groups", src, 0, 0, 0644);
     } else if(strcmp(base, "etc.hostname") == 0){
       install_file(etcino, "hostname", src, 0, 0, 0644);
     } else {

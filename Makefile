@@ -314,8 +314,8 @@ UPROGS=\
 	_wc\
 	_zombie\
 
-fs.img: mkfs README etc.hosts etc.fstab etc.profile etc.passwd etc.hostname $(UPROGS)
-	./mkfs fs.img README etc.hosts etc.fstab etc.profile etc.passwd etc.hostname $(UPROGS)
+fs.img: mkfs README etc.hosts etc.fstab etc.profile etc.passwd etc.groups etc.hostname $(UPROGS)
+	./mkfs fs.img README etc.hosts etc.fstab etc.profile etc.passwd etc.groups etc.hostname $(UPROGS)
 
 -include kernel/**/*.d
 -include user/*.d

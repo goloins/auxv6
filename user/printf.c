@@ -48,7 +48,8 @@ printint(int fd, char *out, int *pos, int max, int xx, int base, int sgn)
     bufputc(fd, out, pos, max, buf[i]);
 }
 
-// Print to the given fd. Only understands %d, %u, %x, %p, %s.
+// Print to the given fd. Understands %d/%i, %u, %o, %x/%X/%p, %s, %c, %%
+// and the %l length modifier (no-op on 32-bit where long == int).
 void
 printf(int fd, const char *fmt, ...)
 {
@@ -70,14 +71,21 @@ printf(int fd, const char *fmt, ...)
         bufputc(fd, out, &pos, sizeof(out), c);
       }
     } else if(state == '%'){
-      if(c == 'd'){
+      if(c == 'l'){
+        state = 'l';  // consume length modifier; long==int on 32-bit
+        continue;
+      }
+      if(c == 'd' || c == 'i'){
         printint(fd, out, &pos, sizeof(out), *ap, 10, 1);
         ap++;
       } else if(c == 'u'){
         printint(fd, out, &pos, sizeof(out), *ap, 10, 0);
         ap++;
-      } else if(c == 'x' || c == 'p'){
+      } else if(c == 'x' || c == 'X' || c == 'p'){
         printint(fd, out, &pos, sizeof(out), *ap, 16, 0);
+        ap++;
+      } else if(c == 'o'){
+        printint(fd, out, &pos, sizeof(out), *ap, 8, 0);
         ap++;
       } else if(c == 's'){
         s = (char*)*ap;
@@ -96,6 +104,26 @@ printf(int fd, const char *fmt, ...)
       } else {
         // Unknown % sequence.  Print it to draw attention.
         bufputc(fd, out, &pos, sizeof(out), '%');
+        bufputc(fd, out, &pos, sizeof(out), c);
+      }
+      state = 0;
+    } else if(state == 'l'){
+      // %l modifier: long == int on i686, delegate to same handlers.
+      if(c == 'd' || c == 'i'){
+        printint(fd, out, &pos, sizeof(out), *ap, 10, 1);
+        ap++;
+      } else if(c == 'u'){
+        printint(fd, out, &pos, sizeof(out), *ap, 10, 0);
+        ap++;
+      } else if(c == 'x' || c == 'X'){
+        printint(fd, out, &pos, sizeof(out), *ap, 16, 0);
+        ap++;
+      } else if(c == 'o'){
+        printint(fd, out, &pos, sizeof(out), *ap, 8, 0);
+        ap++;
+      } else {
+        bufputc(fd, out, &pos, sizeof(out), '%');
+        bufputc(fd, out, &pos, sizeof(out), 'l');
         bufputc(fd, out, &pos, sizeof(out), c);
       }
       state = 0;

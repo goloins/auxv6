@@ -251,14 +251,20 @@ main(void)
     if(buf[0] == 0)
       continue;
 
-    if(buf[0] == 'c' && buf[1] == 'd' && buf[2] == ' '){
+    if(buf[0] == 'c' && buf[1] == 'd' && (buf[2] == ' ' || buf[2] == '\n' || buf[2] == '\r' || buf[2] == 0)){
       // Chdir must be called by the parent, not the child.
       buf[strlen(buf)-1] = 0;  // chop \n
-      trim_trailing_ws(buf + 3);
-      if(chdir(buf+3) < 0)
-        printf(2, "cannot cd %s\n", buf+3);
+      const char *path;
+      if(buf[2] == ' '){
+        trim_trailing_ws(buf + 3);
+        path = buf + 3;
+      } else {
+        path = sh_home;
+      }
+      if(chdir(path) < 0)
+        printf(2, "cannot cd %s\n", path);
       else
-        update_cwd_after_cd(buf + 3);
+        update_cwd_after_cd(path);
       continue;
     }
 

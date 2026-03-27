@@ -1,0 +1,8 @@
+# group:gid
+root:0
+daemon:1
+bin:2
+sys:3
+adm:4
+wheel:10
+aux:1000

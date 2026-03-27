@@ -53,3 +53,4 @@
 #define SYS_mount  52
 #define SYS_umount 53
 #define SYS_uname  54
+#define SYS_stat   55
