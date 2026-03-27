@@ -1,1 +1,6 @@
-# auxv6 shell profile\n# PATH is a colon-separated search list for user/sh.\nPATH=/bin\n
+# auxv6 shell profile
+# PATH is a colon-separated search list for user/sh.
+PATH=/bin
+USER=root
+# Prompt escapes: \u=user, \h=hostname, \w=current dir, \$=# or $ by uid.
+PROMPT=\u@\h:\w\$

@@ -42,3 +42,5 @@
 #define SYS_sigprocmask 41
 #define SYS_tcgetattr 42
 #define SYS_tcsetattr 43
+#define SYS_getuid 44
+#define SYS_setuid 45

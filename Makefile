@@ -153,6 +153,10 @@ kernel/core/vectors.S: tools/vectors.pl
 
 ULIB = user/ulib.o user/usys.o user/printf.o user/umalloc.o
 
+# sh is close to xv6 MAXFILE; compile with -Os to keep the binary under limit.
+user/sh.o: user/sh.c
+	$(CC) $(CFLAGS) -Os -c -o $@ $<
+
 user/%: user/%.o $(ULIB)
 	$(LD) $(LDFLAGS) -N -e main -Ttext 0 -o $@ $^
 	$(OBJDUMP) -S $@ > $(basename $@).asm
@@ -175,6 +179,9 @@ _init: user/init
 
 _kill: user/kill
 	cp user/kill _kill
+
+_login: user/login
+	cp user/login _login
 
 _ln: user/ln
 	cp user/ln _ln
@@ -234,6 +241,7 @@ UPROGS=\
 	_grep\
 	_init\
 	_kill\
+	_login\
 	_ln\
 	_ls\
 	_mkdir\
@@ -247,8 +255,8 @@ UPROGS=\
 	_wc\
 	_zombie\
 
-fs.img: mkfs README etc.hosts etc.fstab etc.profile $(UPROGS)
-	./mkfs fs.img README etc.hosts etc.fstab etc.profile $(UPROGS)
+fs.img: mkfs README etc.hosts etc.fstab etc.profile etc.passwd etc.hostname $(UPROGS)
+	./mkfs fs.img README etc.hosts etc.fstab etc.profile etc.passwd etc.hostname $(UPROGS)
 
 -include kernel/**/*.d
 -include user/*.d
@@ -263,7 +271,7 @@ clean:
 	kernel/**/*.o kernel/**/*.d kernel/**/*.asm \
 	user/*.o user/*.d user/*.asm user/cat user/echo user/forktest \
 	user/grep user/init user/kill user/ln user/ls user/mkdir \
-	user/rm user/sh user/sockettest user/tcptest user/ping user/stressfs user/usertests user/wc user/zombie
+	user/rm user/sh user/sockettest user/tcptest user/ping user/stressfs user/usertests user/wc user/zombie user/login
 
 # make a printout
 FILES = $(shell grep -v '^\#' tools/runoff.list)
@@ -320,9 +328,9 @@ qemu-nox-gdb: fs.img xv6.img .gdbinit
 
 EXTRA=\
 	tools/mkfs.c user/ulib.c include/user.h user/cat.c user/echo.c user/forktest.c user/grep.c user/kill.c\
-	user/ln.c user/ls.c user/mkdir.c user/rm.c user/stressfs.c user/usertests.c user/wc.c user/zombie.c\
+	user/login.c user/ln.c user/ls.c user/mkdir.c user/rm.c user/stressfs.c user/usertests.c user/wc.c user/zombie.c\
 	user/printf.c user/umalloc.c\
-	README etc.hosts etc.fstab etc.profile config/dot-bochsrc tools/*.pl tools/toc.* tools/runoff tools/runoff1 tools/runoff.list\
+	README etc.hosts etc.fstab etc.profile etc.passwd etc.hostname config/dot-bochsrc tools/*.pl tools/toc.* tools/runoff tools/runoff1 tools/runoff.list\
 	config/.gdbinit.tmpl gdbutil\
 
 dist:

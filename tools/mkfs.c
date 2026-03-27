@@ -155,6 +155,10 @@ main(int argc, char *argv[])
       install_file(etcino, "fstab", src);
     } else if(strcmp(base, "etc.profile") == 0){
       install_file(etcino, "profile", src);
+    } else if(strcmp(base, "etc.passwd") == 0){
+      install_file(etcino, "passwd", src);
+    } else if(strcmp(base, "etc.hostname") == 0){
+      install_file(etcino, "hostname", src);
     } else {
       install_file(rootino, base, src);
     }

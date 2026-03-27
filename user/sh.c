@@ -4,6 +4,7 @@
 #include "../include/stat.h"
 #include "../include/user.h"
 #include "../include/fcntl.h"
+#include "../include/fs.h"
 
 // Parsed command representation
 #define EXEC  1
@@ -20,6 +21,10 @@
 #define JOB_STOPPED 2
 
 #define PATH_MAX 128
+#define PROMPT_MAX 128
+#define USER_MAX 32
+#define HOST_MAX 32
+#define CWD_MAX 128
 
 struct cmd {
   int type;
@@ -74,10 +79,27 @@ void mark_job_member_exit(int idx, int pid);
 void jobs_critical_enter(sigset_t *oldmask);
 void jobs_critical_leave(const sigset_t *oldmask);
 void print_jobs(void);
-void load_profile_path(void);
+void load_profile(void);
+void load_hostname(void);
+void load_passwd_defaults(void);
+void sh_copy(char *dst, const char *src, int dstsz);
+void sh_append(char *dst, const char *src, int dstsz);
+void set_shell_var(const char *key, const char *value);
+void print_shell_var(const char *key);
+void print_shell_vars(void);
+void prompt_string(char *out, int outsz);
+void format_cwd_for_prompt(char *out, int outsz);
+void trim_trailing_ws(char *s);
+void update_cwd_after_cd(const char *path);
 void exec_with_path(char *cmd, char **argv);
 
 static char sh_path[PATH_MAX] = "/bin";
+static char sh_prompt[PROMPT_MAX] = "\\u:\\w";
+static char sh_user[USER_MAX] = "root";
+static char sh_host[HOST_MAX] = "auxv6";
+static char sh_cwd[CWD_MAX] = "/";
+static char sh_home[CWD_MAX] = "/";
+static int sh_uid = 0;
 
 struct job {
   int used;
@@ -93,7 +115,6 @@ struct job {
 
 static struct job jobs[MAXJOBS];
 static int next_jid = 1;
-
 // Execute cmd.  Never returns.
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Winfinite-recursion"
@@ -177,7 +198,10 @@ runcmd(struct cmd *cmd)
 int
 getcmd(char *buf, int nbuf)
 {
-  printf(2, "$ ");
+  char prompt[256];
+
+  prompt_string(prompt, sizeof(prompt));
+  printf(2, "%s", prompt);
   memset(buf, 0, nbuf);
   gets(buf, nbuf);
   if(buf[0] == 0) // EOF
@@ -204,7 +228,9 @@ main(void)
     }
   }
 
-  load_profile_path();
+  load_hostname();
+  load_passwd_defaults();
+  load_profile();
 
   // Put the shell in its own process group and claim console foreground.
   setpgid(0, 0);
@@ -226,8 +252,11 @@ main(void)
     if(buf[0] == 'c' && buf[1] == 'd' && buf[2] == ' '){
       // Chdir must be called by the parent, not the child.
       buf[strlen(buf)-1] = 0;  // chop \n
+      trim_trailing_ws(buf + 3);
       if(chdir(buf+3) < 0)
         printf(2, "cannot cd %s\n", buf+3);
+      else
+        update_cwd_after_cd(buf + 3);
       continue;
     }
 
@@ -269,7 +298,148 @@ main(void)
 }
 
 void
-load_profile_path(void)
+load_passwd_defaults(void)
+{
+  int fd;
+  int n;
+  int i;
+  int field;
+  int userlen;
+  int homelen;
+  char buf[512];
+  char user[USER_MAX];
+  char home[CWD_MAX];
+  int uid;
+
+  uid = getuid();
+  if(uid >= 0)
+    sh_uid = uid;
+
+  fd = open("/etc/passwd", O_RDONLY);
+  if(fd < 0)
+    return;
+
+  n = read(fd, buf, sizeof(buf) - 1);
+  close(fd);
+  if(n <= 0)
+    return;
+  buf[n] = 0;
+
+  field = 0;
+  userlen = 0;
+  homelen = 0;
+  for(i = 0; i < n; i++) {
+    char c;
+
+    c = buf[i];
+    if(c == '\n' || c == '\r')
+      break;
+    if(c == ':') {
+      field++;
+      continue;
+    }
+    if(field == 0) {
+      if(userlen < USER_MAX - 1)
+        user[userlen++] = c;
+    } else if(field == 5) {
+      if(homelen < CWD_MAX - 1)
+        home[homelen++] = c;
+    }
+  }
+
+  user[userlen] = 0;
+  home[homelen] = 0;
+  if(userlen > 0)
+    sh_copy(sh_user, user, sizeof(sh_user));
+  if(homelen > 0)
+    sh_copy(sh_home, home, sizeof(sh_home));
+  else
+    sh_copy(sh_home, "/", sizeof(sh_home));
+}
+
+void
+load_hostname(void)
+{
+  int fd;
+  int n;
+  int i;
+  char buf[HOST_MAX];
+
+  fd = open("/etc/hostname", O_RDONLY);
+  if(fd < 0)
+    return;
+  n = read(fd, buf, sizeof(buf) - 1);
+  close(fd);
+  if(n <= 0)
+    return;
+
+  buf[n] = 0;
+  for(i = 0; buf[i]; i++) {
+    if(buf[i] == '\n' || buf[i] == '\r' || buf[i] == ' ' || buf[i] == '\t') {
+      buf[i] = 0;
+      break;
+    }
+  }
+
+  if(buf[0])
+    sh_copy(sh_host, buf, sizeof(sh_host));
+}
+
+void
+set_shell_var(const char *key, const char *value)
+{
+  if(strncmp(key, "PATH", 4) == 0){
+    sh_copy(sh_path, value, sizeof(sh_path));
+    return;
+  }
+  if(strncmp(key, "PROMPT", 6) == 0){
+    sh_copy(sh_prompt, value, sizeof(sh_prompt));
+    return;
+  }
+  if(strncmp(key, "USER", 4) == 0){
+    sh_copy(sh_user, value, sizeof(sh_user));
+    return;
+  }
+  if(strncmp(key, "HOST", 4) == 0){
+    sh_copy(sh_host, value, sizeof(sh_host));
+    return;
+  }
+  if(strncmp(key, "HOME", 4) == 0){
+    sh_copy(sh_home, value, sizeof(sh_home));
+    return;
+  }
+}
+
+void
+sh_copy(char *dst, const char *src, int dstsz)
+{
+  int i;
+
+  if(dstsz <= 0)
+    return;
+  for(i = 0; i < dstsz - 1 && src[i]; i++)
+    dst[i] = src[i];
+  dst[i] = 0;
+}
+
+void
+sh_append(char *dst, const char *src, int dstsz)
+{
+  int dlen;
+  int i;
+
+  if(dstsz <= 0)
+    return;
+  dlen = strlen(dst);
+  if(dlen >= dstsz - 1)
+    return;
+  for(i = 0; dlen + i < dstsz - 1 && src[i]; i++)
+    dst[dlen + i] = src[i];
+  dst[dlen + i] = 0;
+}
+
+void
+load_profile(void)
 {
   int fd;
   int n;
@@ -290,7 +460,6 @@ load_profile_path(void)
   while(*line){
     char *next;
     char *value;
-    int len;
 
     while(*line == ' ' || *line == '\t' || *line == '\r' || *line == '\n')
       line++;
@@ -307,20 +476,250 @@ load_profile_path(void)
     while(*next && *next != '\n' && *next != '\r')
       next++;
 
-    if(strncmp(line, "PATH=", 5) == 0){
-      value = line + 5;
-      len = next - value;
-      if(len > 0){
-        if(len >= PATH_MAX)
-          len = PATH_MAX - 1;
-        memmove(sh_path, value, len);
-        sh_path[len] = 0;
+    value = strchr(line, '=');
+    if(value != 0 && value < next){
+      char key[16];
+      char val[PATH_MAX];
+      int klen;
+      int vlen;
+
+      klen = value - line;
+      if(klen > 0 && klen < (int)sizeof(key)){
+        memmove(key, line, klen);
+        key[klen] = 0;
+
+        value++;
+        vlen = next - value;
+        if(vlen >= (int)sizeof(val))
+          vlen = sizeof(val) - 1;
+        if(vlen > 0){
+          memmove(val, value, vlen);
+          val[vlen] = 0;
+          set_shell_var(key, val);
+        }
       }
-      break;
     }
 
     line = next;
   }
+}
+
+void
+prompt_string(char *out, int outsz)
+{
+  int i;
+  int j;
+  int uid_now;
+  int marker;
+  int has_marker_token;
+  char cwd_buf[CWD_MAX];
+
+  if(outsz <= 0)
+    return;
+
+  uid_now = getuid();
+  if(uid_now >= 0)
+    sh_uid = uid_now;
+
+  marker = (sh_uid == 0) ? '#' : '$';
+  has_marker_token = 0;
+  format_cwd_for_prompt(cwd_buf, sizeof(cwd_buf));
+  j = 0;
+
+  for(i = 0; sh_prompt[i] && j < outsz - 3; i++){
+    if(sh_prompt[i] == '\\'){
+      i++;
+      if(!sh_prompt[i])
+        break;
+      if(sh_prompt[i] == 'u'){
+        int k;
+        for(k = 0; sh_user[k] && j < outsz - 3; k++)
+          out[j++] = sh_user[k];
+      } else if(sh_prompt[i] == 'h'){
+        int k;
+        for(k = 0; sh_host[k] && j < outsz - 3; k++)
+          out[j++] = sh_host[k];
+      } else if(sh_prompt[i] == 'w'){
+        int k;
+        for(k = 0; cwd_buf[k] && j < outsz - 3; k++)
+          out[j++] = cwd_buf[k];
+      } else if(sh_prompt[i] == '$'){
+        out[j++] = marker;
+        has_marker_token = 1;
+      } else if(sh_prompt[i] == '\\'){
+        out[j++] = '\\';
+      } else {
+        out[j++] = sh_prompt[i];
+      }
+      continue;
+    }
+    out[j++] = sh_prompt[i];
+  }
+
+  if(!has_marker_token)
+    out[j++] = marker;
+  out[j++] = ' ';
+  out[j] = 0;
+}
+
+void
+format_cwd_for_prompt(char *out, int outsz)
+{
+  int hlen;
+
+  if(outsz <= 0)
+    return;
+
+  if(sh_home[0] == 0) {
+    sh_copy(out, sh_cwd, outsz);
+    return;
+  }
+
+  if(strcmp(sh_home, "/") == 0) {
+    if(strcmp(sh_cwd, "/") == 0) {
+      sh_copy(out, "~", outsz);
+      return;
+    }
+    if(sh_cwd[0] == '/') {
+      sh_copy(out, "~", outsz);
+      sh_append(out, sh_cwd, outsz);
+      return;
+    }
+    sh_copy(out, sh_cwd, outsz);
+    return;
+  }
+
+  hlen = strlen(sh_home);
+  if(hlen > 0 && strncmp(sh_cwd, sh_home, hlen) == 0 &&
+     (sh_cwd[hlen] == 0 || sh_cwd[hlen] == '/')) {
+    sh_copy(out, "~", outsz);
+    if(sh_cwd[hlen] == '/')
+      sh_append(out, sh_cwd + hlen, outsz);
+    return;
+  }
+
+  sh_copy(out, sh_cwd, outsz);
+}
+
+void
+trim_trailing_ws(char *s)
+{
+  int n;
+
+  n = strlen(s);
+  while(n > 0 && (s[n-1] == ' ' || s[n-1] == '\t' || s[n-1] == '\n' || s[n-1] == '\r'))
+    n--;
+  s[n] = 0;
+}
+
+void
+update_cwd_after_cd(const char *path)
+{
+  char newcwd[CWD_MAX];
+  char segment[DIRSIZ + 1];
+  int i;
+  int j;
+  int start;
+  int seglen;
+
+  if(path == 0 || path[0] == 0)
+    return;
+
+  if(path[0] == '/')
+    sh_copy(newcwd, "/", sizeof(newcwd));
+  else
+    sh_copy(newcwd, sh_cwd, sizeof(newcwd));
+
+  i = 0;
+  while(path[i]){
+    while(path[i] == '/')
+      i++;
+    if(path[i] == 0)
+      break;
+
+    start = i;
+    while(path[i] && path[i] != '/')
+      i++;
+    seglen = i - start;
+    if(seglen <= 0)
+      continue;
+
+    if(seglen >= (int)sizeof(segment))
+      seglen = sizeof(segment) - 1;
+    memmove(segment, path + start, seglen);
+    segment[seglen] = 0;
+
+    if(strcmp(segment, ".") == 0)
+      continue;
+    if(strcmp(segment, "..") == 0){
+      j = strlen(newcwd);
+      while(j > 1 && newcwd[j-1] == '/')
+        j--;
+      while(j > 1 && newcwd[j-1] != '/')
+        j--;
+      if(j <= 1)
+        j = 1;
+      newcwd[j] = 0;
+      continue;
+    }
+
+    j = strlen(newcwd);
+    if(j > 1 && newcwd[j-1] == '/')
+      newcwd[j-1] = 0;
+    if(strcmp(newcwd, "/") != 0)
+      sh_append(newcwd, "/", sizeof(newcwd));
+    sh_append(newcwd, segment, sizeof(newcwd));
+  }
+
+  if(newcwd[0] == 0)
+    sh_copy(newcwd, "/", sizeof(newcwd));
+
+  sh_copy(sh_cwd, newcwd, sizeof(sh_cwd));
+}
+
+void
+print_shell_var(const char *key)
+{
+  int uid;
+
+  uid = getuid();
+  if(uid >= 0)
+    sh_uid = uid;
+
+  if(strcmp(key, "PATH") == 0)
+    printf(2, "PATH=%s\n", sh_path);
+  else if(strcmp(key, "PROMPT") == 0)
+    printf(2, "PROMPT=%s\n", sh_prompt);
+  else if(strcmp(key, "USER") == 0)
+    printf(2, "USER=%s\n", sh_user);
+  else if(strcmp(key, "HOST") == 0)
+    printf(2, "HOST=%s\n", sh_host);
+  else if(strcmp(key, "HOME") == 0)
+    printf(2, "HOME=%s\n", sh_home);
+  else if(strcmp(key, "UID") == 0)
+    printf(2, "UID=%d\n", sh_uid);
+  else if(strcmp(key, "PWD") == 0)
+    printf(2, "PWD=%s\n", sh_cwd);
+  else
+    printf(2, "set: unknown variable %s\n", key);
+}
+
+void
+print_shell_vars(void)
+{
+  int uid;
+
+  uid = getuid();
+  if(uid >= 0)
+    sh_uid = uid;
+
+  printf(2, "PATH=%s\n", sh_path);
+  printf(2, "PROMPT=%s\n", sh_prompt);
+  printf(2, "USER=%s\n", sh_user);
+  printf(2, "HOST=%s\n", sh_host);
+  printf(2, "HOME=%s\n", sh_home);
+  printf(2, "UID=%d\n", sh_uid);
+  printf(2, "PWD=%s\n", sh_cwd);
 }
 
 void
@@ -664,6 +1063,38 @@ maybe_builtin(char *buf, int shell_pgid)
 
   if(strncmp(p, "jobs", 4) == 0 && (p[4] == 0 || p[4] == '\n' || p[4] == ' ' || p[4] == '\t')) {
     print_jobs();
+    return 1;
+  }
+
+  if(strncmp(p, "set", 3) == 0 && (p[3] == 0 || p[3] == '\n' || p[3] == ' ' || p[3] == '\t')) {
+    char *arg;
+    char *eq;
+    char key[16];
+    int klen;
+
+    arg = p + 3;
+    while(*arg == ' ' || *arg == '\t')
+      arg++;
+    if(*arg == 0 || *arg == '\n') {
+      print_shell_vars();
+      return 1;
+    }
+
+    trim_trailing_ws(arg);
+    eq = strchr(arg, '=');
+    if(eq == 0) {
+      print_shell_var(arg);
+      return 1;
+    }
+
+    klen = eq - arg;
+    if(klen <= 0 || klen >= (int)sizeof(key)) {
+      printf(2, "set: invalid variable name\n");
+      return 1;
+    }
+    memmove(key, arg, klen);
+    key[klen] = 0;
+    set_shell_var(key, eq + 1);
     return 1;
   }
 

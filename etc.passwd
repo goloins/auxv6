@@ -1,0 +1,2 @@
+# user:passwd:uid:gid:gecos:home:shell
+root:x:0:0:root:/:/bin/sh
