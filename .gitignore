@@ -17,3 +17,5 @@ mkfs
 aux.kern
 *.info.md
 .vscode/settings.json
+future_ideas.txt
+*.swp
