@@ -18,6 +18,8 @@ struct termios;
 struct bdevsw;
 struct vfs;
 struct mount;
+struct vfs_mount_info;
+struct vnode;
 
 // bio.c
 void            binit(void);
@@ -75,6 +77,12 @@ int             writei(struct inode*, char*, uint, uint);
 void            vfs_init(void);
 struct inode*   vfs_namei(char*);
 struct inode*   vfs_nameiparent(char*, char*);
+int             vfs_lookup(char*, struct vnode*);
+int             vfs_lookup_parent(char*, char*, struct vnode*);
+void            vfs_vnode_drop(struct vnode*);
+int             vfs_mount_count(void);
+int             vfs_get_mounts(struct vfs_mount_info*, int);
+void            vfs_xv6fs_init(struct vfs*);
 
 // ide.c
 void            ideinit(void);
