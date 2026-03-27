@@ -3,6 +3,13 @@
 #include "stat.h"
 #include "fcntl.h"
 
+#define MNT_RDONLY 0x0001
+#define MNT_NOSUID 0x0002
+#define MNT_NODEV  0x0004
+#define MNT_NOEXEC 0x0008
+#define MNT_SYNC   0x0010
+#define MNT_REMOUNT 0x0020
+
 static int
 parse_int(const char *s)
 {
@@ -17,13 +24,70 @@ parse_int(const char *s)
 }
 
 static int
-parse_flags(const char *s)
+is_numeric(const char *s)
 {
-  if(strcmp(s, "rw") == 0)
+  if(*s == 0)
+    return 0;
+  while(*s){
+    if(*s < '0' || *s > '9')
+      return 0;
+    s++;
+  }
+  return 1;
+}
+
+static int
+parse_flag_token(const char *s)
+{
+  if(strcmp(s, "rw") == 0 || strcmp(s, "defaults") == 0)
     return 0;
   if(strcmp(s, "ro") == 0)
-    return 1;
-  return parse_int(s);
+    return MNT_RDONLY;
+  if(strcmp(s, "nosuid") == 0)
+    return MNT_NOSUID;
+  if(strcmp(s, "nodev") == 0)
+    return MNT_NODEV;
+  if(strcmp(s, "noexec") == 0)
+    return MNT_NOEXEC;
+  if(strcmp(s, "sync") == 0)
+    return MNT_SYNC;
+  if(strcmp(s, "remount") == 0)
+    return MNT_REMOUNT;
+  if(is_numeric(s))
+    return parse_int(s);
+  return 0;
+}
+
+static int
+parse_flags(const char *s)
+{
+  char token[32];
+  int flags;
+  int i;
+  int j;
+
+  if(s == 0 || *s == 0)
+    return 0;
+  if(is_numeric(s))
+    return parse_int(s);
+
+  flags = 0;
+  i = 0;
+  while(s[i]){
+    j = 0;
+    while(s[i] && s[i] != ','){
+      if(j < sizeof(token) - 1)
+        token[j++] = s[i];
+      i++;
+    }
+    token[j] = 0;
+    if(token[0])
+      flags |= parse_flag_token(token);
+    if(s[i] == ',')
+      i++;
+  }
+
+  return flags;
 }
 
 static char*

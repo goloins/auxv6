@@ -214,6 +214,9 @@ _mount: user/mount
 _umount: user/umount
 	cp user/umount _umount
 
+_uname: user/uname
+	cp user/uname _uname
+
 _pwd: user/pwd
 	cp user/pwd _pwd
 
@@ -293,6 +296,7 @@ UPROGS=\
 	_mounts\
 	_mounttest\
 	_umount\
+	_uname\
 	_pwd\
 	_rm\
 	_sh\
@@ -327,7 +331,8 @@ clean:
 	user/*.o user/*.d user/*.asm user/cat user/echo user/forktest \
 	user/grep user/id user/init user/kill user/ln user/ls user/mkdir \
 	user/mount user/mounts user/mounttest user/umount \
-	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/sh user/sockettest user/su user/tcptest user/ping user/stressfs user/usertests user/wc user/zombie user/login
+	user/uname \
+	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/sh user/sockettest user/su user/whoami user/tcptest user/ping user/stressfs user/usertests user/wc user/zombie user/login
 
 # make a printout
 FILES = $(shell grep -v '^\#' tools/runoff.list)

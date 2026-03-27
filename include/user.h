@@ -47,6 +47,7 @@ int chown(const char*, int, int);
 int mountinfo(struct mountinfo *out, int max);
 int mount(const char *path, const char *fstype, int flags);
 int umount(const char *path);
+int uname(char *buf, int size);
 int chdir(const char*);
 int dup(int);
 int getpid(void);
