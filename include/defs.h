@@ -16,6 +16,8 @@ struct ip_hdr;
 struct superblock;
 struct termios;
 struct bdevsw;
+struct vfs;
+struct mount;
 
 // bio.c
 void            binit(void);
@@ -70,6 +72,9 @@ struct inode*   nameiparent(char*, char*);
 int             readi(struct inode*, char*, uint, uint);
 void            stati(struct inode*, struct stat*);
 int             writei(struct inode*, char*, uint, uint);
+void            vfs_init(void);
+struct inode*   vfs_namei(char*);
+struct inode*   vfs_nameiparent(char*, char*);
 
 // ide.c
 void            ideinit(void);
