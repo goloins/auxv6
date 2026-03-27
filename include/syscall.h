@@ -44,3 +44,5 @@
 #define SYS_tcsetattr 43
 #define SYS_getuid 44
 #define SYS_setuid 45
+#define SYS_getgid 46
+#define SYS_setgid 47

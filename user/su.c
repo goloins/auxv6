@@ -10,6 +10,7 @@ struct passwd_entry {
   char user[USER_MAX];
   char pass[USER_MAX];
   int uid;
+  int gid;
   char home[PATH_MAX];
   char shell[PATH_MAX];
 };
@@ -66,6 +67,7 @@ lookup_user(const char *name, struct passwd_entry *entry)
     int nf;
     int namelen;
     int uid;
+    int gid;
 
     nf = 0;
     fstart[0] = i;
@@ -104,10 +106,21 @@ lookup_user(const char *name, struct passwd_entry *entry)
       uid = uid * 10 + (c - '0');
     }
 
+    gid = 0;
+    for(j = 0; j < flen[3]; j++) {
+      char c;
+
+      c = buf[fstart[3] + j];
+      if(c < '0' || c > '9')
+        return -1;
+      gid = gid * 10 + (c - '0');
+    }
+
     if(entry != 0) {
       copy_field(entry->user, sizeof(entry->user), buf + fstart[0], flen[0]);
       copy_field(entry->pass, sizeof(entry->pass), buf + fstart[1], flen[1]);
       entry->uid = uid;
+      entry->gid = gid;
       copy_field(entry->home, sizeof(entry->home), buf + fstart[5], flen[5]);
       if(flen[6] > 0)
         copy_field(entry->shell, sizeof(entry->shell), buf + fstart[6], flen[6]);
@@ -158,7 +171,7 @@ main(int argc, char *argv[])
     }
   }
 
-  if(setuid(ent.uid) < 0) {
+  if(setgid(ent.gid) < 0 || setuid(ent.uid) < 0) {
     printf(2, "su: permission denied\n");
     exit();
   }

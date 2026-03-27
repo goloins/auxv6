@@ -49,6 +49,7 @@ struct proc {
   int sid;                     // Session ID
   int tty;                     // Controlling terminal index (-1 means none)
   int uid;                     // Effective user ID
+  int gid;                     // Effective group ID
   struct proc *parent;         // Parent process
   struct trapframe *tf;        // Trap frame for current syscall
   struct context *context;     // swtch() here to run process

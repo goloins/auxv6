@@ -38,12 +38,12 @@ void wsect(uint, void*);
 void winode(uint, struct dinode*);
 void rinode(uint inum, struct dinode *ip);
 void rsect(uint sec, void *buf);
-uint ialloc(ushort type);
+uint ialloc(ushort type, ushort mode, ushort uid, ushort gid);
 void iappend(uint inum, void *p, int n);
 uint alloc_block(void);
-uint mkfs_mkdir(uint parent, const char *name);
+uint mkfs_mkdir(uint parent, const char *name, ushort uid, ushort gid, ushort mode);
 void dirlink_inum(uint dirino, const char *name, uint inum);
-uint install_file(uint dirino, const char *name, const char *srcpath);
+uint install_file(uint dirino, const char *name, const char *srcpath, ushort uid, ushort gid, ushort mode);
 const char* pathbase(const char *path);
 
 // convert to intel byte order
@@ -119,7 +119,7 @@ main(int argc, char *argv[])
   memmove(buf, &sb, sizeof(sb));
   wsect(1, buf);
 
-  rootino = ialloc(T_DIR);
+  rootino = ialloc(T_DIR, 0755, 0, 0);
   assert(rootino == ROOTINO);
 
   bzero(&de, sizeof(de));
@@ -133,12 +133,12 @@ main(int argc, char *argv[])
   iappend(rootino, &de, sizeof(de));
 
   // Seed the base rootfs hierarchy.
-  binino = mkfs_mkdir(rootino, "bin");
-  etcino = mkfs_mkdir(rootino, "etc");
-  devino = mkfs_mkdir(rootino, "dev");
-  homeino = mkfs_mkdir(rootino, "home");
-  mkfs_mkdir(rootino, "root");
-  mkfs_mkdir(homeino, "aux");
+  binino = mkfs_mkdir(rootino, "bin", 0, 0, 0755);
+  etcino = mkfs_mkdir(rootino, "etc", 0, 0, 0755);
+  devino = mkfs_mkdir(rootino, "dev", 0, 0, 0755);
+  homeino = mkfs_mkdir(rootino, "home", 0, 0, 0755);
+  mkfs_mkdir(rootino, "root", 0, 0, 0755);
+  mkfs_mkdir(homeino, "aux", 1000, 1000, 0755);
   (void)devino;
 
   for(i = 2; i < argc; i++){
@@ -148,22 +148,22 @@ main(int argc, char *argv[])
     if(base[0] == '_'){
       // Install all user binaries in /bin; keep /init as a bootstrap hard link.
       if(strcmp(base, "_init") == 0){
-        inum = install_file(binino, "init", src);
+        inum = install_file(binino, "init", src, 0, 0, 0755);
         dirlink_inum(rootino, "init", inum);
       } else
-        install_file(binino, base + 1, src);
+        install_file(binino, base + 1, src, 0, 0, 0755);
     } else if(strcmp(base, "etc.hosts") == 0){
-      install_file(etcino, "hosts", src);
+      install_file(etcino, "hosts", src, 0, 0, 0644);
     } else if(strcmp(base, "etc.fstab") == 0){
-      install_file(etcino, "fstab", src);
+      install_file(etcino, "fstab", src, 0, 0, 0644);
     } else if(strcmp(base, "etc.profile") == 0){
-      install_file(etcino, "profile", src);
+      install_file(etcino, "profile", src, 0, 0, 0644);
     } else if(strcmp(base, "etc.passwd") == 0){
-      install_file(etcino, "passwd", src);
+      install_file(etcino, "passwd", src, 0, 0, 0644);
     } else if(strcmp(base, "etc.hostname") == 0){
-      install_file(etcino, "hostname", src);
+      install_file(etcino, "hostname", src, 0, 0, 0644);
     } else {
-      install_file(rootino, base, src);
+      install_file(rootino, base, src, 0, 0, 0644);
     }
   }
 
@@ -204,12 +204,12 @@ dirlink_inum(uint dirino, const char *name, uint inum)
 }
 
 uint
-mkfs_mkdir(uint parent, const char *name)
+mkfs_mkdir(uint parent, const char *name, ushort uid, ushort gid, ushort mode)
 {
   struct dinode pdin;
   uint inum;
 
-  inum = ialloc(T_DIR);
+  inum = ialloc(T_DIR, mode, uid, gid);
   dirlink_inum(inum, ".", inum);
   dirlink_inum(inum, "..", parent);
   dirlink_inum(parent, name, inum);
@@ -223,7 +223,7 @@ mkfs_mkdir(uint parent, const char *name)
 }
 
 uint
-install_file(uint dirino, const char *name, const char *srcpath)
+install_file(uint dirino, const char *name, const char *srcpath, ushort uid, ushort gid, ushort mode)
 {
   int cc;
   int fd;
@@ -235,7 +235,7 @@ install_file(uint dirino, const char *name, const char *srcpath)
     exit(1);
   }
 
-  inum = ialloc(T_FILE);
+  inum = ialloc(T_FILE, mode, uid, gid);
   dirlink_inum(dirino, name, inum);
 
   while((cc = read(fd, buf, sizeof(buf))) > 0)
@@ -303,7 +303,7 @@ rsect(uint sec, void *buf)
 }
 
 uint
-ialloc(ushort type)
+ialloc(ushort type, ushort mode, ushort uid, ushort gid)
 {
   uint inum = freeinode++;
   struct dinode din;
@@ -311,6 +311,9 @@ ialloc(ushort type)
   bzero(&din, sizeof(din));
   din.type = xshort(type);
   din.nlink = xshort(1);
+  din.uid = xshort(uid);
+  din.gid = xshort(gid);
+  din.mode = xshort(mode);
   din.size = xint(0);
   winode(inum, &din);
   return inum;
