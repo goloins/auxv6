@@ -157,6 +157,10 @@ ULIB = user/ulib.o user/usys.o user/printf.o user/umalloc.o
 user/sh.o: user/sh.c
 	$(CC) $(CFLAGS) -Os -c -o $@ $<
 
+# usertests is also close to xv6 MAXFILE once shared userland grows.
+user/usertests.o: user/usertests.c
+	$(CC) $(CFLAGS) -Os -c -o $@ $<
+
 user/%: user/%.o $(ULIB)
 	$(LD) $(LDFLAGS) -N -e main -Ttext 0 -o $@ $^
 	$(OBJDUMP) -S $@ > $(basename $@).asm
@@ -192,6 +196,9 @@ _ls: user/ls
 _mkdir: user/mkdir
 	cp user/mkdir _mkdir
 
+_pwd: user/pwd
+	cp user/pwd _pwd
+
 _rm: user/rm
 	cp user/rm _rm
 
@@ -212,6 +219,15 @@ _ping: user/ping
 
 _passwd: user/passwd
 	cp user/passwd _passwd
+
+_chmod: user/chmod
+	cp user/chmod _chmod
+
+_chown: user/chown
+	cp user/chown _chown
+
+_chgrp: user/chgrp
+	cp user/chgrp _chgrp
 
 _stressfs: user/stressfs
 	cp user/stressfs _stressfs
@@ -251,6 +267,7 @@ UPROGS=\
 	_ln\
 	_ls\
 	_mkdir\
+	_pwd\
 	_rm\
 	_sh\
 	_sockettest\
@@ -258,6 +275,9 @@ UPROGS=\
 	_tcptest\
 	_ping\
 	_passwd\
+	_chmod\
+	_chown\
+	_chgrp\
 	_stressfs\
 	_usertests\
 	_wc\
@@ -279,7 +299,7 @@ clean:
 	kernel/**/*.o kernel/**/*.d kernel/**/*.asm \
 	user/*.o user/*.d user/*.asm user/cat user/echo user/forktest \
 	user/grep user/init user/kill user/ln user/ls user/mkdir \
-	user/passwd user/rm user/sh user/sockettest user/su user/tcptest user/ping user/stressfs user/usertests user/wc user/zombie user/login
+	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/sh user/sockettest user/su user/tcptest user/ping user/stressfs user/usertests user/wc user/zombie user/login
 
 # make a printout
 FILES = $(shell grep -v '^\#' tools/runoff.list)
@@ -336,7 +356,7 @@ qemu-nox-gdb: fs.img xv6.img .gdbinit
 
 EXTRA=\
 	tools/mkfs.c user/ulib.c include/user.h user/cat.c user/echo.c user/forktest.c user/grep.c user/kill.c\
-	user/login.c user/ln.c user/ls.c user/mkdir.c user/passwd.c user/rm.c user/stressfs.c user/su.c user/usertests.c user/wc.c user/zombie.c\
+	user/login.c user/ln.c user/ls.c user/mkdir.c user/passwd.c user/pwd.c user/chmod.c user/chown.c user/chgrp.c user/rm.c user/stressfs.c user/su.c user/usertests.c user/wc.c user/zombie.c\
 	user/printf.c user/umalloc.c\
 	README etc.hosts etc.fstab etc.profile etc.passwd etc.hostname config/dot-bochsrc tools/*.pl tools/toc.* tools/runoff tools/runoff1 tools/runoff.list\
 	config/.gdbinit.tmpl gdbutil\

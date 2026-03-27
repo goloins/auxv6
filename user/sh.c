@@ -91,9 +91,10 @@ void prompt_string(char *out, int outsz);
 void format_cwd_for_prompt(char *out, int outsz);
 void trim_trailing_ws(char *s);
 void update_cwd_after_cd(const char *path);
+void sync_cwd_from_kernel(void);
 void exec_with_path(char *cmd, char **argv);
 
-static char sh_path[PATH_MAX] = "/bin";
+static char sh_path[PATH_MAX] = "/bin:/sbin";
 static char sh_prompt[PROMPT_MAX] = "\\u:\\w";
 static char sh_user[USER_MAX] = "root";
 static char sh_host[HOST_MAX] = "auxv6";
@@ -231,6 +232,7 @@ main(void)
   load_hostname();
   load_passwd_defaults();
   load_profile();
+  sync_cwd_from_kernel();
 
   // Put the shell in its own process group and claim console foreground.
   setpgid(0, 0);
@@ -552,6 +554,7 @@ prompt_string(char *out, int outsz)
   uid_now = getuid();
   if(uid_now >= 0)
     sh_uid = uid_now;
+  sync_cwd_from_kernel();
 
   marker = (sh_uid == 0) ? '#' : '$';
   has_marker_token = 0;
@@ -707,6 +710,15 @@ update_cwd_after_cd(const char *path)
     sh_copy(newcwd, "/", sizeof(newcwd));
 
   sh_copy(sh_cwd, newcwd, sizeof(sh_cwd));
+}
+
+void
+sync_cwd_from_kernel(void)
+{
+  char buf[CWD_MAX];
+
+  if(getcwd(buf, sizeof(buf)) >= 0 && buf[0] != 0)
+    sh_copy(sh_cwd, buf, sizeof(sh_cwd));
 }
 
 void

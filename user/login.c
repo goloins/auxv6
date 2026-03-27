@@ -170,7 +170,7 @@ main(int argc, char *argv[])
 
     printf(1, "password: ");
     memset(pass, 0, sizeof(pass));
-    if(gets(pass, sizeof(pass)) == 0)
+    if(readpass(pass, sizeof(pass)) == 0)
       exit();
     trim_trailing_ws(pass);
 

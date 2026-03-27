@@ -161,7 +161,7 @@ main(int argc, char *argv[])
   if(uid != 0) {
     printf(1, "Password: ");
     memset(pass, 0, sizeof(pass));
-    if(gets(pass, sizeof(pass)) == 0)
+    if(readpass(pass, sizeof(pass)) == 0)
       exit();
     trim_trailing_ws(pass);
 

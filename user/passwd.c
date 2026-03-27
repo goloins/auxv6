@@ -343,7 +343,7 @@ main(int argc, char *argv[])
   if(uid != 0) {
     printf(1, "Current password: ");
     memset(oldpw, 0, sizeof(oldpw));
-    if(gets(oldpw, sizeof(oldpw)) == 0)
+    if(readpass(oldpw, sizeof(oldpw)) == 0)
       exit();
     trim_trailing_ws(oldpw);
 
@@ -355,13 +355,13 @@ main(int argc, char *argv[])
 
   printf(1, "New password: ");
   memset(newpw, 0, sizeof(newpw));
-  if(gets(newpw, sizeof(newpw)) == 0)
+  if(readpass(newpw, sizeof(newpw)) == 0)
     exit();
   trim_trailing_ws(newpw);
 
   printf(1, "Retype new password: ");
   memset(confpw, 0, sizeof(confpw));
-  if(gets(confpw, sizeof(confpw)) == 0)
+  if(readpass(confpw, sizeof(confpw)) == 0)
     exit();
   trim_trailing_ws(confpw);
 

@@ -73,7 +73,7 @@ int
 main(int argc, char *argv[])
 {
   int i;
-  uint rootino, binino, etcino, devino, homeino, inum, off;
+  uint rootino, binino, sbinino, etcino, devino, homeino, inum, off;
   struct dirent de;
   char buf[BSIZE];
   struct dinode din;
@@ -134,6 +134,7 @@ main(int argc, char *argv[])
 
   // Seed the base rootfs hierarchy.
   binino = mkfs_mkdir(rootino, "bin", 0, 0, 0755);
+  sbinino = mkfs_mkdir(rootino, "sbin", 0, 0, 0755);
   etcino = mkfs_mkdir(rootino, "etc", 0, 0, 0755);
   devino = mkfs_mkdir(rootino, "dev", 0, 0, 0755);
   homeino = mkfs_mkdir(rootino, "home", 0, 0, 0755);
@@ -150,6 +151,12 @@ main(int argc, char *argv[])
       if(strcmp(base, "_init") == 0){
         inum = install_file(binino, "init", src, 0, 0, 0755);
         dirlink_inum(rootino, "init", inum);
+      } else if(strcmp(base, "_chmod") == 0){
+        install_file(sbinino, "chmod", src, 0, 0, 0755);
+      } else if(strcmp(base, "_chown") == 0){
+        install_file(sbinino, "chown", src, 0, 0, 0755);
+      } else if(strcmp(base, "_chgrp") == 0){
+        install_file(sbinino, "chgrp", src, 0, 0, 0755);
       } else
         install_file(binino, base + 1, src, 0, 0, 0755);
     } else if(strcmp(base, "etc.hosts") == 0){
@@ -355,7 +362,10 @@ iappend(uint inum, void *xp, int n)
   struct dinode din;
   char buf[BSIZE];
   uint indirect[NINDIRECT];
+  uint dindirect[NINDIRECT];
   uint x;
+  uint outer;
+  uint inner;
 
   rinode(inum, &din);
   off = xint(din.size);
@@ -368,16 +378,34 @@ iappend(uint inum, void *xp, int n)
         din.addrs[fbn] = xint(alloc_block());
       }
       x = xint(din.addrs[fbn]);
-    } else {
-      if(xint(din.addrs[NDIRECT]) == 0){
-        din.addrs[NDIRECT] = xint(alloc_block());
+    } else if(fbn < NDIRECT + NINDIRECT) {
+      if(xint(din.addrs[INDIRECT_INDEX]) == 0){
+        din.addrs[INDIRECT_INDEX] = xint(alloc_block());
       }
-      rsect(xint(din.addrs[NDIRECT]), (char*)indirect);
+      rsect(xint(din.addrs[INDIRECT_INDEX]), (char*)indirect);
       if(indirect[fbn - NDIRECT] == 0){
         indirect[fbn - NDIRECT] = xint(alloc_block());
-        wsect(xint(din.addrs[NDIRECT]), (char*)indirect);
+        wsect(xint(din.addrs[INDIRECT_INDEX]), (char*)indirect);
       }
       x = xint(indirect[fbn-NDIRECT]);
+    } else {
+      fbn -= NDIRECT + NINDIRECT;
+      if(xint(din.addrs[DINDIRECT_INDEX]) == 0){
+        din.addrs[DINDIRECT_INDEX] = xint(alloc_block());
+      }
+      rsect(xint(din.addrs[DINDIRECT_INDEX]), (char*)indirect);
+      outer = fbn / NINDIRECT;
+      inner = fbn % NINDIRECT;
+      if(indirect[outer] == 0){
+        indirect[outer] = xint(alloc_block());
+        wsect(xint(din.addrs[DINDIRECT_INDEX]), (char*)indirect);
+      }
+      rsect(xint(indirect[outer]), (char*)dindirect);
+      if(dindirect[inner] == 0){
+        dindirect[inner] = xint(alloc_block());
+        wsect(xint(indirect[outer]), (char*)dindirect);
+      }
+      x = xint(dindirect[inner]);
     }
     n1 = min(n, (fbn + 1) * BSIZE - off);
     rsect(x, buf);

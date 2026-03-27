@@ -80,6 +80,51 @@ gets(char *buf, int max)
   return buf;
 }
 
+char*
+readpass(char *buf, int max)
+{
+  struct termios oldt;
+  struct termios newt;
+  int i;
+  int cc;
+  char c;
+
+  if(max <= 0)
+    return buf;
+
+  i = 0;
+  if(tcgetattr(0, &oldt) < 0)
+    return gets(buf, max);
+
+  newt = oldt;
+  newt.c_lflag &= ~(ECHO | ICANON);
+  if(tcsetattr(0, TCSANOW, &newt) < 0)
+    return gets(buf, max);
+
+  while(i + 1 < max){
+    cc = read(0, &c, 1);
+    if(cc < 1)
+      break;
+    if(c == '\r' || c == '\n')
+      break;
+    if(c == '\b' || c == '\x7f'){
+      if(i > 0){
+        i--;
+        write(1, "\b \b", 3);
+      }
+      continue;
+    }
+    if(c == 4)
+      break;
+    buf[i++] = c;
+    write(1, "*", 1);
+  }
+  buf[i] = 0;
+  write(1, "\n", 1);
+  tcsetattr(0, TCSANOW, &oldt);
+  return buf;
+}
+
 int
 stat(const char *n, struct stat *st)
 {
