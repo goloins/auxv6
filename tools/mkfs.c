@@ -41,6 +41,10 @@ void rsect(uint sec, void *buf);
 uint ialloc(ushort type);
 void iappend(uint inum, void *p, int n);
 uint alloc_block(void);
+uint mkfs_mkdir(uint parent, const char *name);
+void dirlink_inum(uint dirino, const char *name, uint inum);
+uint install_file(uint dirino, const char *name, const char *srcpath);
+const char* pathbase(const char *path);
 
 // convert to intel byte order
 ushort
@@ -68,8 +72,8 @@ xint(uint x)
 int
 main(int argc, char *argv[])
 {
-  int i, cc, fd;
-  uint rootino, inum, off;
+  int i;
+  uint rootino, binino, etcino, devino, inum, off;
   struct dirent de;
   char buf[BSIZE];
   struct dinode din;
@@ -128,32 +132,32 @@ main(int argc, char *argv[])
   strcpy(de.name, "..");
   iappend(rootino, &de, sizeof(de));
 
+  // Seed the base rootfs hierarchy.
+  binino = mkfs_mkdir(rootino, "bin");
+  etcino = mkfs_mkdir(rootino, "etc");
+  devino = mkfs_mkdir(rootino, "dev");
+  (void)devino;
+
   for(i = 2; i < argc; i++){
-    assert(index(argv[i], '/') == 0);
+    const char *src = argv[i];
+    const char *base = pathbase(src);
 
-    if((fd = open(argv[i], 0)) < 0){
-      perror(argv[i]);
-      exit(1);
+    if(base[0] == '_'){
+      // Install all user binaries in /bin; keep /init as a bootstrap hard link.
+      if(strcmp(base, "_init") == 0){
+        inum = install_file(binino, "init", src);
+        dirlink_inum(rootino, "init", inum);
+      } else
+        install_file(binino, base + 1, src);
+    } else if(strcmp(base, "etc.hosts") == 0){
+      install_file(etcino, "hosts", src);
+    } else if(strcmp(base, "etc.fstab") == 0){
+      install_file(etcino, "fstab", src);
+    } else if(strcmp(base, "etc.profile") == 0){
+      install_file(etcino, "profile", src);
+    } else {
+      install_file(rootino, base, src);
     }
-
-    // Skip leading _ in name when writing to file system.
-    // The binaries are named _rm, _cat, etc. to keep the
-    // build operating system from trying to execute them
-    // in place of system binaries like rm and cat.
-    if(argv[i][0] == '_')
-      ++argv[i];
-
-    inum = ialloc(T_FILE);
-
-    bzero(&de, sizeof(de));
-    de.inum = xshort(inum);
-    strncpy(de.name, argv[i], DIRSIZ);
-    iappend(rootino, &de, sizeof(de));
-
-    while((cc = read(fd, buf, sizeof(buf))) > 0)
-      iappend(inum, buf, cc);
-
-    close(fd);
   }
 
   // fix size of root inode dir
@@ -166,6 +170,72 @@ main(int argc, char *argv[])
   balloc(freeblock);
 
   exit(0);
+}
+
+const char*
+pathbase(const char *path)
+{
+  const char *base;
+
+  if(path == 0)
+    return "";
+  base = strrchr(path, '/');
+  if(base == 0)
+    return path;
+  return base + 1;
+}
+
+void
+dirlink_inum(uint dirino, const char *name, uint inum)
+{
+  struct dirent de;
+
+  bzero(&de, sizeof(de));
+  de.inum = xshort(inum);
+  strncpy(de.name, name, DIRSIZ);
+  iappend(dirino, &de, sizeof(de));
+}
+
+uint
+mkfs_mkdir(uint parent, const char *name)
+{
+  struct dinode pdin;
+  uint inum;
+
+  inum = ialloc(T_DIR);
+  dirlink_inum(inum, ".", inum);
+  dirlink_inum(inum, "..", parent);
+  dirlink_inum(parent, name, inum);
+
+  // Each child directory increments the parent's link count via "..".
+  rinode(parent, &pdin);
+  pdin.nlink = xshort(xshort(pdin.nlink) + 1);
+  winode(parent, &pdin);
+
+  return inum;
+}
+
+uint
+install_file(uint dirino, const char *name, const char *srcpath)
+{
+  int cc;
+  int fd;
+  uint inum;
+  char buf[BSIZE];
+
+  if((fd = open(srcpath, 0)) < 0){
+    perror(srcpath);
+    exit(1);
+  }
+
+  inum = ialloc(T_FILE);
+  dirlink_inum(dirino, name, inum);
+
+  while((cc = read(fd, buf, sizeof(buf))) > 0)
+    iappend(inum, buf, cc);
+
+  close(fd);
+  return inum;
 }
 
 void

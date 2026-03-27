@@ -15,12 +15,19 @@ struct mbuf;
 struct ip_hdr;
 struct superblock;
 struct termios;
+struct bdevsw;
 
 // bio.c
 void            binit(void);
 struct buf*     bread(uint, uint);
 void            brelse(struct buf*);
 void            bwrite(struct buf*);
+
+// blockdev.c
+void            bdevinit(void);
+int             bdev_register(uint dev, const struct bdevsw *ops);
+int             bdevrw(struct buf *b);
+uint            bdev_nblocks(uint dev);
 
 // console.c
 void            consoleinit(void);

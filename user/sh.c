@@ -19,6 +19,8 @@
 #define JOB_RUNNING 1
 #define JOB_STOPPED 2
 
+#define PATH_MAX 128
+
 struct cmd {
   int type;
 };
@@ -72,6 +74,10 @@ void mark_job_member_exit(int idx, int pid);
 void jobs_critical_enter(sigset_t *oldmask);
 void jobs_critical_leave(const sigset_t *oldmask);
 void print_jobs(void);
+void load_profile_path(void);
+void exec_with_path(char *cmd, char **argv);
+
+static char sh_path[PATH_MAX] = "/bin";
 
 struct job {
   int used;
@@ -112,7 +118,7 @@ runcmd(struct cmd *cmd)
     ecmd = (struct execcmd*)cmd;
     if(ecmd->argv[0] == 0)
       exit();
-    exec(ecmd->argv[0], ecmd->argv);
+    exec_with_path(ecmd->argv[0], ecmd->argv);
     printf(2, "exec %s failed\n", ecmd->argv[0]);
     break;
 
@@ -191,12 +197,14 @@ main(void)
   sigset_t oldmask;
 
   // Ensure that three file descriptors are open.
-  while((fd = open("console", O_RDWR)) >= 0){
+  while((fd = open("/dev/console", O_RDWR)) >= 0){
     if(fd >= 3){
       close(fd);
       break;
     }
   }
+
+  load_profile_path();
 
   // Put the shell in its own process group and claim console foreground.
   setpgid(0, 0);
@@ -258,6 +266,120 @@ main(void)
     tcsetpgrp(shell_pgid);
   }
   exit();
+}
+
+void
+load_profile_path(void)
+{
+  int fd;
+  int n;
+  char buf[256];
+  char *line;
+
+  fd = open("/etc/profile", O_RDONLY);
+  if(fd < 0)
+    return;
+
+  n = read(fd, buf, sizeof(buf) - 1);
+  close(fd);
+  if(n <= 0)
+    return;
+
+  buf[n] = 0;
+  line = buf;
+  while(*line){
+    char *next;
+    char *value;
+    int len;
+
+    while(*line == ' ' || *line == '\t' || *line == '\r' || *line == '\n')
+      line++;
+    if(*line == 0)
+      break;
+
+    if(*line == '#'){
+      while(*line && *line != '\n')
+        line++;
+      continue;
+    }
+
+    next = line;
+    while(*next && *next != '\n' && *next != '\r')
+      next++;
+
+    if(strncmp(line, "PATH=", 5) == 0){
+      value = line + 5;
+      len = next - value;
+      if(len > 0){
+        if(len >= PATH_MAX)
+          len = PATH_MAX - 1;
+        memmove(sh_path, value, len);
+        sh_path[len] = 0;
+      }
+      break;
+    }
+
+    line = next;
+  }
+}
+
+void
+exec_with_path(char *cmd, char **argv)
+{
+  char candidate[PATH_MAX];
+  char *seg;
+  int cmdlen;
+
+  if(strchr(cmd, '/')){
+    exec(cmd, argv);
+    return;
+  }
+
+  cmdlen = strlen(cmd);
+  seg = sh_path;
+
+  while(*seg){
+    char *end;
+    int dlen;
+    int off;
+
+    while(*seg == ':')
+      seg++;
+    if(*seg == 0)
+      break;
+
+    end = seg;
+    while(*end && *end != ':')
+      end++;
+    dlen = end - seg;
+    if(dlen <= 0){
+      seg = end;
+      continue;
+    }
+
+    off = dlen;
+    if(off >= PATH_MAX - 1){
+      seg = end;
+      continue;
+    }
+    memmove(candidate, seg, off);
+    if(candidate[off - 1] != '/'){
+      candidate[off++] = '/';
+    }
+
+    if(off + cmdlen >= PATH_MAX){
+      seg = end;
+      continue;
+    }
+    memmove(candidate + off, cmd, cmdlen);
+    candidate[off + cmdlen] = 0;
+
+    exec(candidate, argv);
+    seg = end;
+  }
+
+  // Relative fallback preserves current behavior for local binaries/scripts.
+  exec(cmd, argv);
 }
 
 void

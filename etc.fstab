@@ -1,0 +1,1 @@
+# auxv6 fstab (reserved for future mount plumbing)\n# <dev> <mountpoint> <fstype> <opts>\n/dev/root / xv6fs rw\n

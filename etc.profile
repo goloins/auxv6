@@ -1,0 +1,1 @@
+# auxv6 shell profile\n# PATH is a colon-separated search list for user/sh.\nPATH=/bin\n

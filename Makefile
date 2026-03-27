@@ -1,4 +1,5 @@
 OBJS = \
+	kernel/core/blockdev.o\
 	kernel/fs/bio.o\
 	kernel/driver/console.o\
 	kernel/core/exec.o\
@@ -246,8 +247,8 @@ UPROGS=\
 	_wc\
 	_zombie\
 
-fs.img: mkfs README $(UPROGS)
-	./mkfs fs.img README $(UPROGS)
+fs.img: mkfs README etc.hosts etc.fstab etc.profile $(UPROGS)
+	./mkfs fs.img README etc.hosts etc.fstab etc.profile $(UPROGS)
 
 -include kernel/**/*.d
 -include user/*.d
@@ -321,7 +322,7 @@ EXTRA=\
 	tools/mkfs.c user/ulib.c include/user.h user/cat.c user/echo.c user/forktest.c user/grep.c user/kill.c\
 	user/ln.c user/ls.c user/mkdir.c user/rm.c user/stressfs.c user/usertests.c user/wc.c user/zombie.c\
 	user/printf.c user/umalloc.c\
-	README config/dot-bochsrc tools/*.pl tools/toc.* tools/runoff tools/runoff1 tools/runoff.list\
+	README etc.hosts etc.fstab etc.profile config/dot-bochsrc tools/*.pl tools/toc.* tools/runoff tools/runoff1 tools/runoff.list\
 	config/.gdbinit.tmpl gdbutil\
 
 dist:
