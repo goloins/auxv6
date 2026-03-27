@@ -25,6 +25,8 @@ void            bwrite(struct buf*);
 void            consoleinit(void);
 void            cprintf(char*, ...);
 void            consoleintr(int(*)(void));
+void            console_set_foreground_pgid(int);
+int             console_get_foreground_pgid(void);
 void            panic(char*) __attribute__((noreturn));
 
 // exec.c
@@ -119,6 +121,12 @@ int             proc_getpgrp(void);
 int             proc_setpgid(int pid, int pgid);
 int             proc_setsid(void);
 int             proc_waitpid(int pid, int *status, int options);
+int             proc_wait4(int pid, int *status, int options, uint rusage_addr);
+int             proc_waitid(int idtype, int id, int *infop, int options);
+int             proc_sigaction(int signo, uint act_addr, uint oldact_addr);
+int             proc_signal_pgid(int pgid, int signo);
+int             proc_tcsetpgrp(int pgid);
+int             proc_tcgetpgrp(void);
 void            proc_apply_pending_signals(struct proc *p);
 void            proc_maybe_stop_current(void);
 struct cpu*     mycpu(void);
@@ -173,6 +181,11 @@ int             sys_getppid(void);
 int             sys_getpgrp(void);
 int             sys_setpgid(void);
 int             sys_setsid(void);
+int             sys_wait4(void);
+int             sys_waitid(void);
+int             sys_sigaction(void);
+int             sys_tcsetpgrp(void);
+int             sys_tcgetpgrp(void);
 int             sys_waitpid(void);
 
 // timer.c

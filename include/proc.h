@@ -38,6 +38,7 @@ enum procstate { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, STOPPED, ZOMBIE };
 #define SIGHUP   1
 #define SIGINT   2
 #define SIGQUIT  3
+#define SIGCHLD  17
 #define SIGTERM  15
 #define SIGCONT  18
 #define SIGSTOP  19
@@ -68,8 +69,12 @@ struct proc {
   int wait_event;              // One-shot event: stopped/continued
   int wait_status;             // Status payload for wait_event
   uint sig_pending;            // Pending signal bitmap (SIGBIT)
+  uint sig_caught;             // Signals caught with user handlers (TODO trampoline)
   uint sig_mask;               // Blocked signal bitmap (SIGBIT)
   uint sig_ignored;            // Ignored signal bitmap (SIGBIT)
+  uint sig_handler[NSIG];      // 0=default, 1=ignore, otherwise user handler PC
+  uint sig_actmask[NSIG];      // Per-signal mask set by sigaction
+  uint sig_actflags[NSIG];     // Per-signal flags set by sigaction
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)

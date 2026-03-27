@@ -5,11 +5,15 @@ struct sockaddr_in;
 #define SIGHUP   1
 #define SIGINT   2
 #define SIGQUIT  3
+#define SIGCHLD  17
 #define SIGTERM  15
 #define SIGCONT  18
 #define SIGSTOP  19
 #define SIGTSTP  20
 #define SIGKILL  9
+
+#define SIG_DFL ((void(*)(int))0)
+#define SIG_IGN ((void(*)(int))1)
 
 #define WNOHANG    0x0001
 #define WUNTRACED  0x0002
@@ -23,11 +27,35 @@ struct sockaddr_in;
 #define WSTOPSIG(s)     (((s) >> 8) & 0xff)
 #define WIFCONTINUED(s) ((s) == 0xffff)
 
+#define P_PID  1
+#define P_PGID 2
+#define P_ALL  3
+
+#define CLD_EXITED    1
+#define CLD_KILLED    2
+#define CLD_STOPPED   3
+#define CLD_CONTINUED 4
+
+struct sigaction {
+	void (*sa_handler)(int);
+	uint sa_mask;
+	int sa_flags;
+};
+
+typedef struct {
+	int si_signo;
+	int si_code;
+	int si_status;
+	int si_pid;
+} siginfo_t;
+
 // system calls
 int fork(void);
 int exit(void) __attribute__((noreturn));
 int wait(void);
 int waitpid(int pid, int *status, int options);
+int wait4(int pid, int *status, int options, void *rusage);
+int waitid(int idtype, int id, siginfo_t *info, int options);
 int pipe(int*);
 int write(int, const void*, int);
 int read(int, void*, int);
@@ -48,6 +76,9 @@ int getpgrp(void);
 int setpgid(int pid, int pgid);
 int setsid(void);
 int sigsend(int pid, int signo);
+int sigaction(int signo, const struct sigaction *act, struct sigaction *oldact);
+int tcsetpgrp(int pgid);
+int tcgetpgrp(void);
 char* sbrk(int);
 int sleep(int);
 int uptime(void);

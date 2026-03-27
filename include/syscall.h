@@ -34,3 +34,8 @@
 #define SYS_setpgid 33
 #define SYS_setsid 34
 #define SYS_waitpid 35
+#define SYS_wait4 36
+#define SYS_waitid 37
+#define SYS_sigaction 38
+#define SYS_tcsetpgrp 39
+#define SYS_tcgetpgrp 40

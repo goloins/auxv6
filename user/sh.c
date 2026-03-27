@@ -53,6 +53,7 @@ struct backcmd {
 int fork1(void);  // Fork but panics on failure.
 void panic(char*);
 struct cmd *parsecmd(char*);
+void reapchildren(void);
 
 // Execute cmd.  Never returns.
 #pragma GCC diagnostic push
@@ -150,6 +151,9 @@ main(void)
 {
   static char buf[100];
   int fd;
+  int shell_pgid;
+  int pid;
+  int status;
 
   // Ensure that three file descriptors are open.
   while((fd = open("console", O_RDWR)) >= 0){
@@ -159,8 +163,16 @@ main(void)
     }
   }
 
+  // Put the shell in its own process group and claim console foreground.
+  setpgid(0, 0);
+  shell_pgid = getpgrp();
+  if(shell_pgid > 0)
+    tcsetpgrp(shell_pgid);
+
   // Read and run input commands.
   while(getcmd(buf, sizeof(buf)) >= 0){
+    reapchildren();
+
     if(buf[0] == 'c' && buf[1] == 'd' && buf[2] == ' '){
       // Chdir must be called by the parent, not the child.
       buf[strlen(buf)-1] = 0;  // chop \n
@@ -168,9 +180,27 @@ main(void)
         printf(2, "cannot cd %s\n", buf+3);
       continue;
     }
-    if(fork1() == 0)
+
+    pid = fork1();
+    if(pid == 0){
+      setpgid(0, 0);
       runcmd(parsecmd(buf));
-    wait();
+    }
+
+    setpgid(pid, pid);
+    tcsetpgrp(pid);
+
+    while(waitpid(pid, &status, WUNTRACED) == pid){
+      if(WIFSTOPPED(status)) {
+        printf(2, "[%d] stopped\n", pid);
+        sigsend(-pid, SIGCONT);
+        break;
+      }
+      if(WIFEXITED(status) || WIFSIGNALED(status))
+        break;
+    }
+
+    tcsetpgrp(shell_pgid);
   }
   exit();
 }
@@ -191,6 +221,17 @@ fork1(void)
   if(pid == -1)
     panic("fork");
   return pid;
+}
+
+void
+reapchildren(void)
+{
+  int st;
+  int pid;
+
+  // Reap already-finished children (for background work and auto-continued jobs).
+  while((pid = waitpid(-1, &st, WNOHANG)) > 0)
+    ;
 }
 
 //PAGEBREAK!
