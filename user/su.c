@@ -124,60 +124,52 @@ lookup_user(const char *name, struct passwd_entry *entry)
 int
 main(int argc, char *argv[])
 {
-  int fd;
-  char user[USER_MAX];
+  int uid;
   char pass[USER_MAX];
-  struct passwd_entry ent;
+  char *target;
   char *sh_argv[2];
+  struct passwd_entry ent;
 
-  (void)argc;
-  (void)argv;
-
-  while((fd = open("/dev/console", O_RDWR)) >= 0) {
-    if(fd >= 3) {
-      close(fd);
-      break;
-    }
+  if(argc > 2) {
+    printf(2, "usage: su [user]\n");
+    exit();
   }
 
-  for(;;) {
-    printf(1, "login: ");
-    memset(user, 0, sizeof(user));
-    if(gets(user, sizeof(user)) == 0)
-      exit();
+  target = (argc == 2) ? argv[1] : "root";
+  if(lookup_user(target, &ent) < 0) {
+    printf(2, "su: unknown user %s\n", target);
+    exit();
+  }
 
-    trim_trailing_ws(user);
-    if(user[0] == 0)
-      continue;
+  uid = getuid();
+  if(uid < 0)
+    uid = 0;
 
-    if(lookup_user(user, &ent) < 0) {
-      printf(1, "login: unknown user %s\n", user);
-      continue;
-    }
-
-    printf(1, "password: ");
+  if(uid != 0) {
+    printf(1, "Password: ");
     memset(pass, 0, sizeof(pass));
     if(gets(pass, sizeof(pass)) == 0)
       exit();
     trim_trailing_ws(pass);
 
     if(strcmp(pass, ent.pass) != 0) {
-      printf(1, "login: authentication failed\n");
-      continue;
+      printf(2, "su: authentication failed\n");
+      exit();
     }
-
-    if(setuid(ent.uid) < 0) {
-      printf(1, "login: permission denied\n");
-      continue;
-    }
-
-    if(ent.home[0] != 0)
-      chdir(ent.home);
-
-    sh_argv[0] = ent.shell;
-    sh_argv[1] = 0;
-    exec(ent.shell, sh_argv);
-
-    printf(1, "login: exec %s failed\n", ent.shell);
   }
+
+  if(setuid(ent.uid) < 0) {
+    printf(2, "su: permission denied\n");
+    exit();
+  }
+
+  if(ent.home[0])
+    chdir(ent.home);
+
+  sh_argv[0] = ent.shell;
+  sh_argv[1] = 0;
+  exec(ent.shell, sh_argv);
+
+  printf(2, "su: exec %s failed\n", ent.shell);
+  exit();
 }

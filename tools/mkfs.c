@@ -73,7 +73,7 @@ int
 main(int argc, char *argv[])
 {
   int i;
-  uint rootino, binino, etcino, devino, inum, off;
+  uint rootino, binino, etcino, devino, homeino, inum, off;
   struct dirent de;
   char buf[BSIZE];
   struct dinode din;
@@ -136,6 +136,9 @@ main(int argc, char *argv[])
   binino = mkfs_mkdir(rootino, "bin");
   etcino = mkfs_mkdir(rootino, "etc");
   devino = mkfs_mkdir(rootino, "dev");
+  homeino = mkfs_mkdir(rootino, "home");
+  mkfs_mkdir(rootino, "root");
+  mkfs_mkdir(homeino, "aux");
   (void)devino;
 
   for(i = 2; i < argc; i++){

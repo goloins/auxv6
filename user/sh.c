@@ -303,12 +303,10 @@ load_passwd_defaults(void)
   int fd;
   int n;
   int i;
-  int field;
-  int userlen;
-  int homelen;
+  int j;
+  int line_start;
+  int uidval;
   char buf[512];
-  char user[USER_MAX];
-  char home[CWD_MAX];
   int uid;
 
   uid = getuid();
@@ -325,36 +323,70 @@ load_passwd_defaults(void)
     return;
   buf[n] = 0;
 
-  field = 0;
-  userlen = 0;
-  homelen = 0;
-  for(i = 0; i < n; i++) {
-    char c;
+  line_start = 0;
+  for(i = 0; i <= n; i++) {
+    int fstart[8];
+    int flen[8];
+    int nf;
 
-    c = buf[i];
-    if(c == '\n' || c == '\r')
-      break;
-    if(c == ':') {
-      field++;
+    if(i < n && buf[i] != '\n' && buf[i] != '\r')
       continue;
+
+    nf = 0;
+    fstart[0] = line_start;
+    for(j = line_start; j <= i; j++) {
+      if(j == i || buf[j] == ':') {
+        if(nf < 8) {
+          flen[nf] = j - fstart[nf];
+          nf++;
+        }
+        if(j < i && nf < 8)
+          fstart[nf] = j + 1;
+      }
     }
-    if(field == 0) {
-      if(userlen < USER_MAX - 1)
-        user[userlen++] = c;
-    } else if(field == 5) {
-      if(homelen < CWD_MAX - 1)
-        home[homelen++] = c;
+
+    line_start = i + 1;
+    if(nf < 6)
+      continue;
+
+    uidval = 0;
+    for(j = 0; j < flen[2]; j++) {
+      char c;
+
+      c = buf[fstart[2] + j];
+      if(c < '0' || c > '9') {
+        uidval = -1;
+        break;
+      }
+      uidval = uidval * 10 + (c - '0');
     }
+    if(uidval != sh_uid)
+      continue;
+
+    if(flen[0] > 0) {
+      int ncopy;
+
+      ncopy = flen[0];
+      if(ncopy >= USER_MAX)
+        ncopy = USER_MAX - 1;
+      memmove(sh_user, buf + fstart[0], ncopy);
+      sh_user[ncopy] = 0;
+    }
+
+    if(flen[5] > 0) {
+      int ncopy;
+
+      ncopy = flen[5];
+      if(ncopy >= CWD_MAX)
+        ncopy = CWD_MAX - 1;
+      memmove(sh_home, buf + fstart[5], ncopy);
+      sh_home[ncopy] = 0;
+    } else
+      sh_copy(sh_home, "/", sizeof(sh_home));
+    return;
   }
 
-  user[userlen] = 0;
-  home[homelen] = 0;
-  if(userlen > 0)
-    sh_copy(sh_user, user, sizeof(sh_user));
-  if(homelen > 0)
-    sh_copy(sh_home, home, sizeof(sh_home));
-  else
-    sh_copy(sh_home, "/", sizeof(sh_home));
+  sh_copy(sh_home, "/", sizeof(sh_home));
 }
 
 void
