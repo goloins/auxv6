@@ -28,3 +28,9 @@
 #define SYS_listen 27
 #define SYS_accept 28
 #define SYS_recvtimeout 29
+#define SYS_sigsend 30
+#define SYS_getppid 31
+#define SYS_getpgrp 32
+#define SYS_setpgid 33
+#define SYS_setsid 34
+#define SYS_waitpid 35

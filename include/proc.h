@@ -32,7 +32,21 @@ struct context {
   uint eip;
 };
 
-enum procstate { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
+enum procstate { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, STOPPED, ZOMBIE };
+
+// Minimal POSIX-like signal numbering used by kernel bookkeeping.
+#define SIGHUP   1
+#define SIGINT   2
+#define SIGQUIT  3
+#define SIGTERM  15
+#define SIGCONT  18
+#define SIGSTOP  19
+#define SIGTSTP  20
+#define SIGKILL  9
+
+// Signals are tracked in a 32-bit pending/mask bitmap.
+#define NSIG             32
+#define SIGBIT(sig)      (1U << ((sig) - 1))
 
 // Per-process state
 struct proc {
@@ -41,11 +55,21 @@ struct proc {
   char *kstack;                // Bottom of kernel stack for this process
   enum procstate state;        // Process state
   int pid;                     // Process ID
+  int ppid;                    // Parent process ID (cached)
+  int pgid;                    // Process group ID
+  int sid;                     // Session ID
+  int tty;                     // Controlling terminal index (-1 means none)
   struct proc *parent;         // Parent process
   struct trapframe *tf;        // Trap frame for current syscall
   struct context *context;     // swtch() here to run process
   void *chan;                  // If non-zero, sleeping on chan
   int killed;                  // If non-zero, have been killed
+  int xstatus;                 // Wait status consumed at reap
+  int wait_event;              // One-shot event: stopped/continued
+  int wait_status;             // Status payload for wait_event
+  uint sig_pending;            // Pending signal bitmap (SIGBIT)
+  uint sig_mask;               // Blocked signal bitmap (SIGBIT)
+  uint sig_ignored;            // Ignored signal bitmap (SIGBIT)
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)

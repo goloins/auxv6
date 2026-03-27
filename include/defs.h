@@ -113,6 +113,14 @@ void            exit(void);
 int             fork(void);
 int             growproc(int);
 int             kill(int);
+int             proc_kill_with_signal(int pid, int signo);
+int             proc_getppid(void);
+int             proc_getpgrp(void);
+int             proc_setpgid(int pid, int pgid);
+int             proc_setsid(void);
+int             proc_waitpid(int pid, int *status, int options);
+void            proc_apply_pending_signals(struct proc *p);
+void            proc_maybe_stop_current(void);
 struct cpu*     mycpu(void);
 struct proc*    myproc();
 void            pinit(void);
@@ -160,6 +168,12 @@ int             argstr(int, char**);
 int             fetchint(uint, int*);
 int             fetchstr(uint, char**);
 void            syscall(void);
+int             sys_sigsend(void);
+int             sys_getppid(void);
+int             sys_getpgrp(void);
+int             sys_setpgid(void);
+int             sys_setsid(void);
+int             sys_waitpid(void);
 
 // timer.c
 void            timerinit(void);

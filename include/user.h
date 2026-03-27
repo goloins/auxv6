@@ -2,10 +2,32 @@ struct stat;
 struct rtcdate;
 struct sockaddr_in;
 
+#define SIGHUP   1
+#define SIGINT   2
+#define SIGQUIT  3
+#define SIGTERM  15
+#define SIGCONT  18
+#define SIGSTOP  19
+#define SIGTSTP  20
+#define SIGKILL  9
+
+#define WNOHANG    0x0001
+#define WUNTRACED  0x0002
+#define WCONTINUED 0x0004
+
+#define WIFEXITED(s)    (((s) & 0xff) == 0)
+#define WEXITSTATUS(s)  (((s) >> 8) & 0xff)
+#define WIFSIGNALED(s)  (((s) & 0x7f) != 0 && ((s) & 0x7f) != 0x7f)
+#define WTERMSIG(s)     ((s) & 0x7f)
+#define WIFSTOPPED(s)   (((s) & 0xff) == 0x7f)
+#define WSTOPSIG(s)     (((s) >> 8) & 0xff)
+#define WIFCONTINUED(s) ((s) == 0xffff)
+
 // system calls
 int fork(void);
 int exit(void) __attribute__((noreturn));
 int wait(void);
+int waitpid(int pid, int *status, int options);
 int pipe(int*);
 int write(int, const void*, int);
 int read(int, void*, int);
@@ -21,6 +43,11 @@ int mkdir(const char*);
 int chdir(const char*);
 int dup(int);
 int getpid(void);
+int getppid(void);
+int getpgrp(void);
+int setpgid(int pid, int pgid);
+int setsid(void);
+int sigsend(int pid, int signo);
 char* sbrk(int);
 int sleep(int);
 int uptime(void);
