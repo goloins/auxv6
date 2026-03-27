@@ -10,7 +10,6 @@ bootblock
 entryother
 initcode
 initcode.out
-kernel
 kernelmemfs
 mkfs
 .gdbinit
@@ -19,5 +18,4 @@ aux.kern
 .vscode/settings.json
 future_ideas.txt
 *.swp
-user/whoami
 user/whoami
