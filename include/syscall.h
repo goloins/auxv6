@@ -49,3 +49,4 @@
 #define SYS_getcwd 48
 #define SYS_chmod  49
 #define SYS_chown  50
+#define SYS_mountinfo 51

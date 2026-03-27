@@ -219,6 +219,7 @@ int             sys_setuid(void);
 int             sys_setgid(void);
 int             sys_chmod(void);
 int             sys_chown(void);
+int             sys_mountinfo(void);
 int             sys_wait4(void);
 int             sys_waitid(void);
 int             sys_sigaction(void);

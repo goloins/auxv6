@@ -5,10 +5,12 @@ struct inode;
 
 #define VFS_NAME_MAX 8
 #define VFS_MOUNT_PATH_MAX 32
+#define VFS_MOUNTS_MAX 8
 
 struct vfs_ops {
   struct inode* (*namei)(char *path);
   struct inode* (*nameiparent)(char *path, char *name);
+  void (*inode_put)(struct inode *ip);
 };
 
 struct vfs {

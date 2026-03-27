@@ -12,6 +12,17 @@ typedef struct {
 	int si_pid;
 } siginfo_t;
 
+#define MOUNTINFO_NAME_MAX 8
+#define MOUNTINFO_PATH_MAX 32
+#define MOUNTINFO_MAX 8
+
+struct mountinfo {
+  int dev;
+  int flags;
+  char fstype[MOUNTINFO_NAME_MAX];
+  char path[MOUNTINFO_PATH_MAX];
+};
+
 // system calls
 int fork(void);
 int exit(void) __attribute__((noreturn));
@@ -33,6 +44,7 @@ int link(const char*, const char*);
 int mkdir(const char*);
 int chmod(const char*, int);
 int chown(const char*, int, int);
+int mountinfo(struct mountinfo *out, int max);
 int chdir(const char*);
 int dup(int);
 int getpid(void);
