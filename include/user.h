@@ -15,12 +15,31 @@ typedef struct {
 #define MOUNTINFO_NAME_MAX 8
 #define MOUNTINFO_PATH_MAX 32
 #define MOUNTINFO_MAX 8
+#define NETIFINFO_NAME_MAX 16
+#define NETIFINFO_MAX 16
+#define ROUTEINFO_MAX 32
 
 struct mountinfo {
   int dev;
   int flags;
   char fstype[MOUNTINFO_NAME_MAX];
   char path[MOUNTINFO_PATH_MAX];
+};
+
+struct netifinfo {
+	uint if_index;
+	char if_name[NETIFINFO_NAME_MAX];
+	uint if_mtu;
+	uint if_flags;
+};
+
+struct routeinfo {
+	uint rt_dst;
+	uint rt_mask;
+	uint rt_gateway;
+	uint rt_src;
+	uint rt_flags;
+	uint if_index;
 };
 
 // system calls
@@ -45,6 +64,9 @@ int mkdir(const char*);
 int chmod(const char*, int);
 int chown(const char*, int, int);
 int mountinfo(struct mountinfo *out, int max);
+int netifinfo(struct netifinfo *out, int max);
+int routeinfo(struct routeinfo *out, int max);
+int routeadd(uint dst, uint mask, uint gateway, uint src, int ifindex);
 int mount(const char *path, const char *fstype, int flags);
 int umount(const char *path);
 int uname(char *buf, int size);

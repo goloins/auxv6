@@ -17,7 +17,6 @@
 #define NSOCKET 64
 struct socket sockets[NSOCKET];
 struct spinlock socket_lock;
-static struct ifnet *socket_ifp;
 static ushort next_ephemeral = 40000;
 static uint tcp_iss = 1000;
 static ushort alloc_ephemeral_port_locked(void);
@@ -177,10 +176,6 @@ socket_init(void)
   int i;
 
   initlock(&socket_lock, "socket");
-
-  socket_ifp = if_get("lo0");
-  if(socket_ifp == 0)
-    panic("socket_init: no lo0");
   
   // Initialize socket table
   for(i = 0; i < NSOCKET; i++) {
@@ -199,8 +194,6 @@ socket_stream_prepare_client_locked(struct socket *s)
     if(p == 0)
       return -1;
     s->local_addr.sin_family = AF_INET;
-    if(s->local_addr.sin_addr == 0)
-      s->local_addr.sin_addr = INADDR_LOOPBACK;
     s->local_addr.sin_port = p;
   }
 
@@ -616,6 +609,8 @@ sys_connect(void)
   int sockfd, addrlen;
   struct socket *s;
   struct sockaddr_in *addr;
+  struct ifnet *ifp;
+  uint route_src;
 
   if(argint(0, &sockfd) < 0 || argint(2, &addrlen) < 0)
     return -1;
@@ -630,8 +625,18 @@ sys_connect(void)
   if(addr->sin_family != AF_INET)
     return -1;
 
+  route_src = 0;
+  ifp = route_lookup(addr->sin_addr, &route_src, 0);
+  if(ifp == 0)
+    return -1;
+
+  acquire(&socket_lock);
+  if(s->local_addr.sin_addr == 0)
+    s->local_addr.sin_addr = route_src;
+  release(&socket_lock);
+
   if(s->type == SOCK_STREAM)
-    return tcp_connect(socket_ifp, s, addr);
+    return tcp_connect(ifp, s, addr);
 
   acquire(&socket_lock);
   memmove(&s->remote_addr, addr, sizeof(struct sockaddr_in));
@@ -738,6 +743,8 @@ sys_send(void)
   int type;
   uint proto;
   uint tcp_state;
+  struct ifnet *ifp;
+  uint route_src;
 
   if(argint(0, &sockfd) < 0 || argint(2, &len) < 0)
     return -1;
@@ -750,8 +757,6 @@ sys_send(void)
 
   if((uint)len > MBUF_SIZE - sizeof(struct udp_hdr))
     return -1;
-  if(socket_ifp == 0)
-    return -1;
 
   acquire(&socket_lock);
   memmove(&src, &s->local_addr, sizeof(src));
@@ -761,28 +766,31 @@ sys_send(void)
   tcp_state = s->tcp.state;
   release(&socket_lock);
 
+  route_src = 0;
+  ifp = route_lookup(dst.sin_addr, &route_src, 0);
+  if(ifp == 0)
+    return -1;
+  if(src.sin_addr == 0)
+    src.sin_addr = route_src;
+
   if(type == SOCK_DGRAM){
     if(src.sin_port == 0 || dst.sin_port == 0)
       return -1;
-    if(dst.sin_addr != INADDR_LOOPBACK && dst.sin_addr != INADDR_ANY)
-      return -1;
-    if(udp_output(socket_ifp, &src, &dst, buf, (uint)len) < 0)
+    if(udp_output(ifp, &src, &dst, buf, (uint)len) < 0)
       return -1;
   } else if(type == SOCK_STREAM){
     if(src.sin_port == 0 || dst.sin_port == 0)
       return -1;
-    if(dst.sin_addr != INADDR_LOOPBACK && dst.sin_addr != INADDR_ANY)
-      return -1;
     if(tcp_state != TCPS_ESTABLISHED)
       return -1;
-    if(tcp_output(socket_ifp, &src, &dst, buf, (uint)len) < 0)
+    if(tcp_output(ifp, &src, &dst, buf, (uint)len) < 0)
       return -1;
   } else if(type == SOCK_RAW){
     if(dst.sin_addr == 0)
       return -1;
     if(src.sin_addr == 0)
-      src.sin_addr = INADDR_LOOPBACK;
-    if(ip_output(socket_ifp, (uchar)proto, src.sin_addr, dst.sin_addr, buf, (uint)len) < 0)
+      src.sin_addr = route_src;
+    if(ip_output(ifp, (uchar)proto, src.sin_addr, dst.sin_addr, buf, (uint)len) < 0)
       return -1;
   } else {
     return -1;
@@ -883,6 +891,59 @@ sys_recvtimeout(void)
 
   release(&socket_lock);
   return n;
+}
+
+int
+sys_netifinfo(void)
+{
+  struct netif_info *out;
+  int max;
+
+  if(argint(1, &max) < 0)
+    return -1;
+  if(max <= 0)
+    return -1;
+  if(argptr(0, (char**)&out, max * sizeof(*out)) < 0)
+    return -1;
+
+  return if_dump(out, max);
+}
+
+int
+sys_routeinfo(void)
+{
+  struct route_info *out;
+  int max;
+
+  if(argint(1, &max) < 0)
+    return -1;
+  if(max <= 0)
+    return -1;
+  if(argptr(0, (char**)&out, max * sizeof(*out)) < 0)
+    return -1;
+
+  return route_dump(out, max);
+}
+
+int
+sys_routeadd(void)
+{
+  int dst;
+  int mask;
+  int gateway;
+  int src;
+  int ifindex;
+  struct ifnet *ifp;
+
+  if(argint(0, &dst) < 0 || argint(1, &mask) < 0 || argint(2, &gateway) < 0 ||
+     argint(3, &src) < 0 || argint(4, &ifindex) < 0)
+    return -1;
+
+  ifp = if_byindex((uint)ifindex);
+  if(ifp == 0)
+    return -1;
+
+  return route_add((uint)dst, (uint)mask, (uint)gateway, (uint)src, ifp, RTF_UP);
 }
 
 // close(fd) syscall - we'll handle sockets in the existing close

@@ -33,6 +33,7 @@ OBJS = \
 	kernel/core/vm.o\
 	kernel/net/socket.o\
 	kernel/net/device.o\
+	kernel/net/route.o\
 	kernel/net/loopback.o\
 	kernel/net/ip.o\
 	kernel/net/icmp.o\
@@ -45,10 +46,20 @@ OBJS = \
 # Using native tools (e.g., on X86 Linux)
 #TOOLPREFIX = 
 
+# Optional explicit cross toolchain root (default for local macOS setup).
+CROSS_ROOT ?= /opt/cross
+CROSS_BINDIR ?= $(CROSS_ROOT)/bin
+
 # Try to infer the correct TOOLPREFIX if not set
 ifndef TOOLPREFIX
 TOOLPREFIX := $(shell if i386-jos-elf-objdump -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
 	then echo 'i386-jos-elf-'; \
+	elif test -x '$(CROSS_BINDIR)/i386-jos-elf-objdump' && '$(CROSS_BINDIR)/i386-jos-elf-objdump' -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
+		then echo '$(CROSS_BINDIR)/i386-jos-elf-'; \
+	elif test -x '$(CROSS_BINDIR)/i386-elf-objdump' && '$(CROSS_BINDIR)/i386-elf-objdump' -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
+	then echo '$(CROSS_BINDIR)/i386-elf-'; \
+	elif test -x '$(CROSS_BINDIR)/i686-elf-objdump' && '$(CROSS_BINDIR)/i686-elf-objdump' -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
+	then echo '$(CROSS_BINDIR)/i686-elf-'; \
 	elif objdump -i 2>&1 | grep 'elf32-i386' >/dev/null 2>&1; \
 	then echo ''; \
 	else echo "***" 1>&2; \
@@ -241,6 +252,9 @@ _tcptest: user/tcptest
 _ping: user/ping
 	cp user/ping _ping
 
+_netinfo: user/netinfo
+	cp user/netinfo _netinfo
+
 _passwd: user/passwd
 	cp user/passwd _passwd
 
@@ -305,6 +319,7 @@ UPROGS=\
 	_whoami\
 	_tcptest\
 	_ping\
+	_netinfo\
 	_passwd\
 	_chmod\
 	_chown\
@@ -332,7 +347,7 @@ clean:
 	user/grep user/id user/init user/kill user/ln user/ls user/mkdir \
 	user/mount user/mounts user/mounttest user/umount \
 	user/uname \
-	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/sh user/sockettest user/su user/whoami user/tcptest user/ping user/stressfs user/usertests user/wc user/zombie user/login
+	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/sh user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login
 
 # make a printout
 FILES = $(shell grep -v '^\#' tools/runoff.list)
@@ -389,7 +404,7 @@ qemu-nox-gdb: fs.img xv6.img .gdbinit
 
 EXTRA=\
 	tools/mkfs.c user/ulib.c include/user.h user/cat.c user/echo.c user/forktest.c user/grep.c user/kill.c\
-	user/id.c user/login.c user/ln.c user/ls.c user/mkdir.c user/mount.c user/mounts.c user/mounttest.c user/umount.c user/passwd.c user/pwd.c user/chmod.c user/chown.c user/chgrp.c user/rm.c user/stressfs.c user/su.c user/usertests.c user/wc.c user/whoami.c user/zombie.c\
+	user/id.c user/login.c user/ln.c user/ls.c user/mkdir.c user/mount.c user/mounts.c user/mounttest.c user/umount.c user/passwd.c user/pwd.c user/chmod.c user/chown.c user/chgrp.c user/rm.c user/netinfo.c user/stressfs.c user/su.c user/usertests.c user/wc.c user/whoami.c user/zombie.c\
 	user/printf.c user/umalloc.c\
 	README etc.hosts etc.fstab etc.profile etc.passwd etc.hostname config/dot-bochsrc tools/*.pl tools/toc.* tools/runoff tools/runoff1 tools/runoff.list\
 	config/.gdbinit.tmpl gdbutil\

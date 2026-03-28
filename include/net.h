@@ -6,6 +6,7 @@
 // Network buffer (mbuf-style)
 #define MBUF_SIZE 2048
 #define IFNAMSIZ 16
+#define MAXNETIF 16
 
 // Protocol IDs
 #define NET_PROTO_IP   0x0800
@@ -16,6 +17,9 @@
 // Interface flags (subset, BSD-style naming)
 #define IFF_UP        0x1
 #define IFF_LOOPBACK  0x8
+
+// Route flags.
+#define RTF_UP        0x1
 
 struct mbuf {
   char data[MBUF_SIZE];
@@ -76,6 +80,7 @@ struct ifnet_ops {
 
 // Network interface descriptor.
 struct ifnet {
+  uint if_index;
   char if_xname[IFNAMSIZ];
   uint if_mtu;
   uint if_flags;
@@ -84,12 +89,47 @@ struct ifnet {
   struct ifnet *if_next;
 };
 
+struct route {
+  uint rt_dst;
+  uint rt_mask;
+  uint rt_gateway;
+  uint rt_src;
+  uint rt_flags;
+  struct ifnet *rt_ifp;
+};
+
+struct netif_info {
+  uint if_index;
+  char if_name[IFNAMSIZ];
+  uint if_mtu;
+  uint if_flags;
+};
+
+struct route_info {
+  uint rt_dst;
+  uint rt_mask;
+  uint rt_gateway;
+  uint rt_src;
+  uint rt_flags;
+  uint if_index;
+};
+
 // Core network device layer.
 void netdev_init(void);
 int if_register(struct ifnet *ifp);
 struct ifnet* if_get(char *name);
+struct ifnet* if_byindex(uint ifindex);
+struct ifnet* if_first(void);
+struct ifnet* if_next(struct ifnet *ifp);
+int if_dump(struct netif_info *out, int max);
 int if_output(struct ifnet *ifp, struct mbuf *m);
 void if_input(struct ifnet *ifp, struct mbuf *m);
+
+// Routing table.
+void route_init(void);
+int route_add(uint dst, uint mask, uint gateway, uint src, struct ifnet *ifp, uint flags);
+struct ifnet* route_lookup(uint dst, uint *src, uint *gateway);
+int route_dump(struct route_info *out, int max);
 
 // Built-in interfaces.
 void loopback_attach(void);

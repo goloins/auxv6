@@ -365,7 +365,7 @@ void
 iappend(uint inum, void *xp, int n)
 {
   char *p = (char*)xp;
-  uint fbn, off, n1;
+  uint fbn, lbn, off, n1;
   struct dinode din;
   char buf[BSIZE];
   uint indirect[NINDIRECT];
@@ -378,8 +378,10 @@ iappend(uint inum, void *xp, int n)
   off = xint(din.size);
   // printf("append inum %d at off %d sz %d\n", inum, off, n);
   while(n > 0){
-    fbn = off / BSIZE;
-    assert(fbn < MAXFILE);
+    lbn = off / BSIZE;
+    assert(lbn < MAXFILE);
+    fbn = lbn;
+
     if(fbn < NDIRECT){
       if(xint(din.addrs[fbn]) == 0){
         din.addrs[fbn] = xint(alloc_block());
@@ -396,13 +398,14 @@ iappend(uint inum, void *xp, int n)
       }
       x = xint(indirect[fbn-NDIRECT]);
     } else {
-      fbn -= NDIRECT + NINDIRECT;
+      fbn = fbn - NDIRECT - NINDIRECT;
       if(xint(din.addrs[DINDIRECT_INDEX]) == 0){
         din.addrs[DINDIRECT_INDEX] = xint(alloc_block());
       }
       rsect(xint(din.addrs[DINDIRECT_INDEX]), (char*)indirect);
       outer = fbn / NINDIRECT;
       inner = fbn % NINDIRECT;
+      assert(outer < NINDIRECT);
       if(indirect[outer] == 0){
         indirect[outer] = xint(alloc_block());
         wsect(xint(din.addrs[DINDIRECT_INDEX]), (char*)indirect);
@@ -414,9 +417,10 @@ iappend(uint inum, void *xp, int n)
       }
       x = xint(dindirect[inner]);
     }
-    n1 = min(n, (fbn + 1) * BSIZE - off);
+
+    n1 = min(n, BSIZE - (off % BSIZE));
     rsect(x, buf);
-    bcopy(p, buf + off - (fbn * BSIZE), n1);
+    bcopy(p, buf + (off % BSIZE), n1);
     wsect(x, buf);
     n -= n1;
     off += n1;

@@ -32,4 +32,6 @@ loopback_attach(void)
 
 	if(if_register(&lo_if) < 0)
 		panic("loopback_attach");
+	if(route_add(0x7f000000, 0xff000000, 0, 0x7f000001, &lo_if, RTF_UP) < 0)
+		panic("loopback_route");
 }

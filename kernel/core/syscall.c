@@ -137,6 +137,9 @@ extern int sys_recv(void);
 extern int sys_listen(void);
 extern int sys_accept(void);
 extern int sys_recvtimeout(void);
+extern int sys_netifinfo(void);
+extern int sys_routeinfo(void);
+extern int sys_routeadd(void);
 
 static int (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -192,6 +195,9 @@ static int (*syscalls[])(void) = {
 [SYS_listen]  sys_listen,
 [SYS_accept]  sys_accept,
 [SYS_recvtimeout] sys_recvtimeout,
+[SYS_netifinfo] sys_netifinfo,
+[SYS_routeinfo] sys_routeinfo,
+[SYS_routeadd] sys_routeadd,
 [SYS_sigsend] sys_sigsend,
 [SYS_sigaction] sys_sigaction,
 };

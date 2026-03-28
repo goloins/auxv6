@@ -54,3 +54,6 @@
 #define SYS_umount 53
 #define SYS_uname  54
 #define SYS_stat   55
+#define SYS_netifinfo 56
+#define SYS_routeinfo 57
+#define SYS_routeadd 58
