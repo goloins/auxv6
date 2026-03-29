@@ -40,3 +40,4 @@ extern struct devsw devsw[];
 
 #define CONSOLE 1
 #define PROCFSDEV 2
+#define EXT2DEV 3

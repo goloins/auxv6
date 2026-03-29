@@ -31,7 +31,7 @@ static struct procfs_inode procfs_inodes[] = {
 static uint
 procfs_root_dir_size(void)
 {
-  return 2 * sizeof(struct dirent);
+  return 4 * sizeof(struct dirent);
 }
 
 static uint
@@ -111,19 +111,35 @@ static struct inode*
 procfs_namei(char *path)
 {
   char filename[64];
+  char *start;
   int i;
   int j;
 
-  if(path[0] == '/' && path[1] == 0)
-    return procfs_make_inode(PROCFS_ROOT_INO);
-
-  if(path[0] != '/')
+  if(path == 0)
     return 0;
 
-  for(i = 0; i < sizeof(filename) - 1 && path[i + 1]; i++){
-    if(path[i+1] == '/')
+  if((path[0] == '/' && path[1] == 0) ||
+     (path[0] == '.' && path[1] == 0) ||
+     path[0] == 0)
+    return procfs_make_inode(PROCFS_ROOT_INO);
+
+  start = path;
+  if(start[0] == '/')
+    start++;
+  while(start[0] == '.' && start[1] == '/')
+    start += 2;
+
+  if(start[0] == 0)
+    return procfs_make_inode(PROCFS_ROOT_INO);
+  if(start[0] == '.' && start[1] == 0)
+    return procfs_make_inode(PROCFS_ROOT_INO);
+  if(start[0] == '.' && start[1] == '.' && start[2] == 0)
+    return procfs_make_inode(PROCFS_ROOT_INO);
+
+  for(i = 0; i < sizeof(filename) - 1 && start[i]; i++){
+    if(start[i] == '/')
       return 0;
-    filename[i] = path[i+1];
+    filename[i] = start[i];
   }
   filename[i] = 0;
 
@@ -152,28 +168,41 @@ static struct inode*
 procfs_nameiparent(char *path, char *name)
 {
   char parent[256];
-  int pathlen = strlen(path);
+  char *start;
+  int pathlen;
   int i;
 
+  if(path == 0)
+    return 0;
+
+  start = path;
+  if(start[0] == '/')
+    start++;
+  while(start[0] == '.' && start[1] == '/')
+    start += 2;
+
+  pathlen = strlen(start);
   if(pathlen == 0)
     return 0;
 
   i = pathlen - 1;
-  while(i > 0 && path[i] != '/')
+  while(i > 0 && start[i] != '/')
     i--;
 
-  if(i == 0 && path[0] == '/') {
-    safestrcpy(name, &path[1], 64);
+  if(i == 0 && start[0] != '/') {
+    if(start[0] == '/' && start[1] == 0)
+      return 0;
+    safestrcpy(name, start, 64);
     return procfs_make_inode(PROCFS_ROOT_INO);
   }
 
   if(i == 0)
     return 0;
 
-  memmove(parent, path, i);
+  memmove(parent, start, i);
   parent[i] = 0;
 
-  safestrcpy(name, &path[i+1], 64);
+  safestrcpy(name, &start[i+1], 64);
 
   return procfs_namei(parent);
 }
@@ -185,11 +214,42 @@ procfs_inode_put(struct inode *ip)
     iput(ip);
 }
 
+static int
+procfs_vread(struct inode *ip, char *dst, uint off, uint n)
+{
+  return procfs_readi(ip, dst, off, n);
+}
+
+static int
+procfs_vwrite(struct inode *ip, char *src, uint off, uint n)
+{
+  (void)ip;
+  (void)src;
+  (void)off;
+  (void)n;
+  return -1;
+}
+
+static int
+procfs_vstat(struct inode *ip, struct stat *st)
+{
+  if(ip == 0 || st == 0)
+    return -1;
+  stati(ip, st);
+  return 0;
+}
+
+static int
+procfs_vaccess(struct inode *ip, int mode)
+{
+  return iaccess(ip, mode);
+}
+
 int
 procfs_readi(struct inode *ip, char *dst, uint off, uint n)
 {
   char buf[32];
-  struct dirent entries[2];
+  struct dirent entries[4];
   uint len;
   uint now;
 
@@ -197,10 +257,14 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     return -1;
   if(ip->inum == PROCFS_ROOT_INO){
     memset(entries, 0, sizeof(entries));
-    entries[0].inum = PROCFS_UPTIME_INO;
-    safestrcpy(entries[0].name, "uptime", DIRSIZ);
-    entries[1].inum = PROCFS_VERSION_INO;
-    safestrcpy(entries[1].name, "version", DIRSIZ);
+    entries[0].inum = PROCFS_ROOT_INO;
+    safestrcpy(entries[0].name, ".", DIRSIZ);
+    entries[1].inum = PROCFS_ROOT_INO;
+    safestrcpy(entries[1].name, "..", DIRSIZ);
+    entries[2].inum = PROCFS_UPTIME_INO;
+    safestrcpy(entries[2].name, "uptime", DIRSIZ);
+    entries[3].inum = PROCFS_VERSION_INO;
+    safestrcpy(entries[3].name, "version", DIRSIZ);
     return procfs_copy_data(dst, off, n, (char*)entries, sizeof(entries));
   }
   if(ip->inum == PROCFS_VERSION_INO)
@@ -225,7 +289,17 @@ vfs_procfs_init(struct vfs *fs)
     return;
 
   safestrcpy(fs->name, "procfs", sizeof(fs->name));
+  fs->caps = VFS_CAP_READ;
+  fs->fs_data = 0;
+  fs->fs_destroy = 0;
+  fs->mount_init = 0;
   fs->ops.namei = procfs_namei;
   fs->ops.nameiparent = procfs_nameiparent;
   fs->ops.inode_put = procfs_inode_put;
+  fs->vnode_ops.read = procfs_vread;
+  fs->vnode_ops.write = procfs_vwrite;
+  fs->vnode_ops.stat = procfs_vstat;
+  fs->vnode_ops.access = procfs_vaccess;
+  fs->vnode_ops.dirlookup = 0;
+  fs->vnode_ops.dirlink = 0;
 }

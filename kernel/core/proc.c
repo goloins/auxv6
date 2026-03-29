@@ -270,6 +270,22 @@ proc_has_cwd_on_dev(uint dev)
   return 0;
 }
 
+uint
+proc_cwd_dev(void)
+{
+  struct proc *p;
+  uint dev;
+
+  dev = 0;
+  acquire(&ptable.lock);
+  p = myproc();
+  if(p && p->cwd)
+    dev = inode_get_dev(p->cwd);
+  release(&ptable.lock);
+
+  return dev;
+}
+
 //PAGEBREAK: 32
 // Look in the process table for an UNUSED proc.
 // If found, change state to EMBRYO and initialize

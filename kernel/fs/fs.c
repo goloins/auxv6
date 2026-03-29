@@ -27,6 +27,14 @@
 #define DEFAULT_DEV_MODE (M_IRUSR | M_IWUSR | M_IRGRP | M_IWGRP | M_IROTH | M_IWOTH)
 
 static void itrunc(struct inode*);
+
+uint
+inode_get_dev(struct inode *ip)
+{
+  if(ip == 0)
+    return 0;
+  return ip->dev;
+}
 static int inode_default_mode(short type);
 static int inode_allowed_bits(struct inode *ip, struct proc *p);
 // there should be one superblock per disk device, but we run with

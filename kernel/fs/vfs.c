@@ -11,6 +11,20 @@ static struct mount mounts[VFS_MOUNTS_MAX];
 static int vfs_ready;
 static char vfs_rootrel[] = "/";
 
+static struct mount*
+select_mount_for_dev_locked(uint dev)
+{
+  int i;
+
+  for(i = 0; i < VFS_MOUNTS_MAX; i++){
+    if(mounts[i].used == 0 || mounts[i].fs == 0)
+      continue;
+    if((uint)mounts[i].dev == dev)
+      return &mounts[i];
+  }
+  return 0;
+}
+
 static int
 is_path_separator(char c)
 {
@@ -95,9 +109,23 @@ vfs_mount_register_inode(struct vfs *fs, int dev, int flags, char *path, struct 
   mounts[slot].used = 1;
   mounts[slot].dev = dev;
   mounts[slot].flags = flags;
+  mounts[slot].caps = fs->caps;
   safestrcpy(mounts[slot].path, path, sizeof(mounts[slot].path));
   mounts[slot].fs = fs;
+  mounts[slot].fs_data = 0;
   mounts[slot].mountpoint = mountpoint;
+
+  // Call mount_init if present to allow fs to initialize per-mount state
+  if(fs->mount_init){
+    if(fs->mount_init(&mounts[slot]) < 0){
+      mounts[slot].used = 0;
+      mounts[slot].fs = 0;
+      mounts[slot].fs_data = 0;
+      release(&vfslock);
+      return -1;
+    }
+  }
+
   release(&vfslock);
   return 0;
 }
@@ -165,9 +193,11 @@ vfs_unmount(char *path)
         m->used = 0;
         m->dev = 0;
         m->flags = 0;
+          m->caps = 0;
         m->path[0] = 0;
         m->mountpoint = 0;
         m->fs = 0;
+          m->fs_data = 0;
         break;
       }
     }
@@ -182,6 +212,9 @@ vfs_unmount(char *path)
     fs->ops.inode_put(mountpoint);
   else
     iput(mountpoint);
+
+  if(fs && fs->fs_destroy)
+    fs->fs_destroy(fs);
 
   // Dynamically allocated filesystems are owned by mount(2).
   if(fs && fs != &rootvfs)
@@ -267,6 +300,7 @@ vfs_lookup(char *path, struct vnode *vn)
 {
   struct inode *ip;
   struct inode* (*lookup)(char *path);
+  uint cwddev;
   struct mount *m;
   char *relpath;
 
@@ -281,17 +315,31 @@ vfs_lookup(char *path, struct vnode *vn)
     release(&vfslock);
     return -1;
   }
-  m = select_mount_locked(path);
-  if(m == 0){
-    release(&vfslock);
-    return -1;
+  if(path[0] == '/'){
+    m = select_mount_locked(path);
+    if(m == 0){
+      release(&vfslock);
+      return -1;
+    }
+    relpath = mount_relative_path(m, path);
+    if(relpath == 0){
+      release(&vfslock);
+      return -1;
+    }
+  } else {
+    cwddev = proc_cwd_dev();
+    if(cwddev == 0)
+      cwddev = ROOTDEV;
+    m = select_mount_for_dev_locked(cwddev);
+    if(m == 0 && cwddev == ROOTDEV)
+      m = select_mount_locked("/");
+    if(m == 0){
+      release(&vfslock);
+      return -1;
+    }
+    relpath = path;
   }
   if(m->fs->ops.namei == 0){
-    release(&vfslock);
-    return -1;
-  }
-  relpath = mount_relative_path(m, path);
-  if(relpath == 0){
     release(&vfslock);
     return -1;
   }
@@ -313,6 +361,7 @@ vfs_lookup_parent(char *path, char *name, struct vnode *vn)
 {
   struct inode *ip;
   struct inode* (*lookup_parent)(char *path, char *name);
+  uint cwddev;
   struct mount *m;
   char *relpath;
 
@@ -327,17 +376,31 @@ vfs_lookup_parent(char *path, char *name, struct vnode *vn)
     release(&vfslock);
     return -1;
   }
-  m = select_mount_locked(path);
-  if(m == 0){
-    release(&vfslock);
-    return -1;
+  if(path[0] == '/'){
+    m = select_mount_locked(path);
+    if(m == 0){
+      release(&vfslock);
+      return -1;
+    }
+    relpath = mount_relative_path(m, path);
+    if(relpath == 0){
+      release(&vfslock);
+      return -1;
+    }
+  } else {
+    cwddev = proc_cwd_dev();
+    if(cwddev == 0)
+      cwddev = ROOTDEV;
+    m = select_mount_for_dev_locked(cwddev);
+    if(m == 0 && cwddev == ROOTDEV)
+      m = select_mount_locked("/");
+    if(m == 0){
+      release(&vfslock);
+      return -1;
+    }
+    relpath = path;
   }
   if(m->fs->ops.nameiparent == 0){
-    release(&vfslock);
-    return -1;
-  }
-  relpath = mount_relative_path(m, path);
-  if(relpath == 0){
     release(&vfslock);
     return -1;
   }
@@ -385,6 +448,40 @@ vfs_mount_count(void)
   }
   release(&vfslock);
   return n;
+}
+
+int
+vfs_dev_has_cap(uint dev, uint cap)
+{
+  struct mount *m;
+  int ok;
+
+  acquire(&vfslock);
+  m = select_mount_for_dev_locked(dev);
+  if(m == 0 && dev == ROOTDEV)
+    m = select_mount_locked("/");
+  ok = (m && (m->caps & cap) == cap);
+  release(&vfslock);
+
+  return ok;
+}
+
+const struct vnode_ops*
+vfs_dev_vops(uint dev)
+{
+  struct mount *m;
+  const struct vnode_ops *vops;
+
+  vops = 0;
+  acquire(&vfslock);
+  m = select_mount_for_dev_locked(dev);
+  if(m == 0 && dev == ROOTDEV)
+    m = select_mount_locked("/");
+  if(m && m->fs)
+    vops = &m->fs->vnode_ops;
+  release(&vfslock);
+
+  return vops;
 }
 
 int
