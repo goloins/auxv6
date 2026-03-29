@@ -94,7 +94,7 @@ void update_cwd_after_cd(const char *path);
 void sync_cwd_from_kernel(void);
 void exec_with_path(char *cmd, char **argv);
 
-static char sh_path[PATH_MAX] = "/bin:/sbin";
+static char sh_path[PATH_MAX] = "/:/bin:/sbin";
 static char sh_prompt[PROMPT_MAX] = "\\u:\\w";
 static char sh_user[USER_MAX] = "root";
 static char sh_host[HOST_MAX] = "auxv6";
@@ -1448,7 +1448,7 @@ parseredirs(struct cmd *cmd, char **ps, char *es)
       cmd = redircmd(cmd, q, eq, O_WRONLY|O_CREATE, 1);
       break;
     case '+':  // >>
-      cmd = redircmd(cmd, q, eq, O_WRONLY|O_CREATE, 1);
+        cmd = redircmd(cmd, q, eq, O_WRONLY|O_CREATE|O_APPEND, 1);
       break;
     }
   }

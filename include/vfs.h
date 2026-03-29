@@ -24,6 +24,8 @@ struct vnode_ops {
   int (*access)(struct inode *ip, int mode);
   struct inode* (*dirlookup)(struct inode *dp, char *name, uint *poff);
   int (*dirlink)(struct inode *dp, char *name, uint inum);
+  struct inode* (*create)(struct inode *dp, char *name, short type,
+                          short major, short minor, int uid, int gid);
 };
 
 struct vfs_ops {

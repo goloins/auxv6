@@ -477,6 +477,9 @@ bad:
 static struct inode*
 create(char *path, short type, short major, short minor)
 {
+  const struct vnode_ops *ops;
+  int (*dirlink_fn)(struct inode*, char*, uint);
+  struct inode* (*create_fn)(struct inode*, char*, short, short, short, int, int);
   struct inode *ip, *dp;
   char name[DIRSIZ];
 
@@ -484,12 +487,36 @@ create(char *path, short type, short major, short minor)
     return 0;
   ilock(dp);
 
-  if((ip = dirlookup(dp, name, 0)) != 0){
+  ops = vfs_dev_vops(dp->dev);
+  dirlink_fn = dirlink;
+  create_fn = 0;
+  if(ops && ops->dirlink)
+    dirlink_fn = ops->dirlink;
+  if(ops && ops->create)
+    create_fn = ops->create;
+
+  if(ops && ops->dirlookup)
+    ip = ops->dirlookup(dp, name, 0);
+  else
+    ip = dirlookup(dp, name, 0);
+  if(ip != 0){
     iunlockput(dp);
     ilock(ip);
     if(type == T_FILE && ip->type == T_FILE)
       return ip;
     iunlockput(ip);
+    return 0;
+  }
+
+  if(create_fn){
+    ip = create_fn(dp, name, type, major, minor, myproc()->uid, myproc()->gid);
+    iunlockput(dp);
+    return ip;
+  }
+
+  // Backend does not support creating new directory entries/inodes on this dev.
+  if(!vfs_dev_has_cap(dp->dev, VFS_CAP_CREATE)){
+    iunlockput(dp);
     return 0;
   }
 
@@ -514,11 +541,11 @@ create(char *path, short type, short major, short minor)
     dp->nlink++;  // for ".."
     iupdate(dp);
     // No ip->nlink++ for ".": avoid cyclic ref count.
-    if(dirlink(ip, ".", ip->inum) < 0 || dirlink(ip, "..", dp->inum) < 0)
+    if(dirlink_fn(ip, ".", ip->inum) < 0 || dirlink_fn(ip, "..", dp->inum) < 0)
       panic("create dots");
   }
 
-  if(dirlink(dp, name, ip->inum) < 0)
+  if(dirlink_fn(dp, name, ip->inum) < 0)
     panic("create: dirlink");
 
   iunlockput(dp);
@@ -531,6 +558,7 @@ sys_open(void)
 {
   char *path;
   int fd, omode;
+  uint startoff;
   struct file *f;
   struct inode *ip;
 
@@ -603,12 +631,14 @@ sys_open(void)
     end_op();
     return -1;
   }
+
+  startoff = (omode & O_APPEND) ? ip->size : 0;
   iunlock(ip);
   end_op();
 
   f->type = FD_INODE;
   f->ip = ip;
-  f->off = 0;
+  f->off = startoff;
   f->readable = !(omode & O_WRONLY);
   f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
   return fd;

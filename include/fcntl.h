@@ -2,6 +2,7 @@
 #define O_WRONLY  0x001
 #define O_RDWR    0x002
 #define O_CREATE  0x200
+#define O_APPEND  0x400
 
 #define MNT_RDONLY 0x0001
 #define MNT_NOSUID 0x0002
