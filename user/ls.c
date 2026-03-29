@@ -197,7 +197,7 @@ ls(char *path)
 {
   char buf[512], *p;
   int fd;
-  struct dirent de;
+  struct dirent des[16];
   struct stat st;
 
   if((fd = open(path, 0)) < 0){
@@ -224,16 +224,27 @@ ls(char *path)
     strcpy(buf, path);
     p = buf+strlen(buf);
     *p++ = '/';
-    while(read(fd, &de, sizeof(de)) == sizeof(de)){
-      if(de.inum == 0)
-        continue;
-      memmove(p, de.name, DIRSIZ);
-      p[DIRSIZ] = 0;
-      if(stat(buf, &st) < 0){
-        printf(1, "ls: cannot stat %s\n", buf);
-        continue;
+    for(;;){
+      int nent;
+      int i;
+
+      nent = getdents(fd, des, 16);
+      if(nent < 0){
+        printf(1, "ls: getdents failed %s\n", path);
+        break;
       }
-      printf(1, "%s %d %s %s %s %d%d%d%d\n", fmtname(buf), st.type, uid_to_name(st.uid), gid_to_name(st.gid), fmtsize(st.size), (st.mode>>9)&7, (st.mode>>6)&7, (st.mode>>3)&7, st.mode&7);
+      if(nent == 0)
+        break;
+
+      for(i = 0; i < nent; i++){
+        memmove(p, des[i].name, DIRSIZ);
+        p[DIRSIZ] = 0;
+        if(stat(buf, &st) < 0){
+          printf(1, "ls: cannot stat %s\n", buf);
+          continue;
+        }
+        printf(1, "%s %d %s %s %s %d%d%d%d\n", fmtname(buf), st.type, uid_to_name(st.uid), gid_to_name(st.gid), fmtsize(st.size), (st.mode>>9)&7, (st.mode>>6)&7, (st.mode>>3)&7, st.mode&7);
+      }
     }
     break;
   }

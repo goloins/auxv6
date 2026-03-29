@@ -58,3 +58,4 @@
 #define SYS_routeinfo 57
 #define SYS_routeadd 58
 #define SYS_devblocks 59
+#define SYS_getdents 60

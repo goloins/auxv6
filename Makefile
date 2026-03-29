@@ -190,6 +190,9 @@ _echo: user/echo
 _forktest: user/forktest
 	cp user/forktest _forktest
 
+_fsregress: user/fsregress
+	cp user/fsregress _fsregress
+
 _grep: user/grep
 	cp user/grep _grep
 
@@ -302,6 +305,7 @@ UPROGS=\
 	_cat\
 	_echo\
 	_forktest\
+	_fsregress\
 	_grep\
 	_init\
 	_id\
@@ -351,6 +355,7 @@ clean:
 	.ext2root \
 	kernel/**/*.o kernel/**/*.d kernel/**/*.asm \
 	user/*.o user/*.d user/*.asm user/cat user/echo user/forktest \
+	user/fsregress \
 	user/grep user/id user/init user/kill user/ln user/ls user/lsblk user/mkdir \
 	user/mount user/mounts user/mounttest user/umount \
 	user/uname \
@@ -383,7 +388,8 @@ CPUS := 2
 endif
 comma := ,
 EXT2IMG ?= test_ext2.img
-EXT2QEMU = $(if $(wildcard $(EXT2IMG)),-drive file=$(EXT2IMG)$(comma)index=2$(comma)media=disk$(comma)format=raw,)
+# qemu* targets already depend on $(EXT2IMG), so always attach it as index=2.
+EXT2QEMU = -drive file=$(EXT2IMG)$(comma)index=2$(comma)media=disk$(comma)format=raw
 QEMUOPTS = -drive file=fs.img,index=1,media=disk,format=raw -drive file=xv6.img,index=0,media=disk,format=raw $(EXT2QEMU) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 test_ext2.img:
@@ -420,7 +426,7 @@ qemu-nox-gdb: fs.img xv6.img $(EXT2IMG) .gdbinit
 
 EXTRA=\
 	tools/mkfs.c user/ulib.c include/user.h user/cat.c user/echo.c user/forktest.c user/grep.c user/kill.c\
-	user/id.c user/login.c user/ln.c user/ls.c user/mkdir.c user/mount.c user/mounts.c user/mounttest.c user/umount.c user/passwd.c user/pwd.c user/chmod.c user/chown.c user/chgrp.c user/rm.c user/netinfo.c user/stressfs.c user/su.c user/usertests.c user/wc.c user/whoami.c user/zombie.c\
+	user/id.c user/login.c user/ln.c user/ls.c user/fsregress.c user/mkdir.c user/mount.c user/mounts.c user/mounttest.c user/umount.c user/passwd.c user/pwd.c user/chmod.c user/chown.c user/chgrp.c user/rm.c user/netinfo.c user/stressfs.c user/su.c user/usertests.c user/wc.c user/whoami.c user/zombie.c\
 	user/printf.c user/umalloc.c\
 	README etc.hosts etc.fstab etc.profile etc.passwd etc.hostname config/dot-bochsrc tools/*.pl tools/toc.* tools/runoff tools/runoff1 tools/runoff.list\
 	config/.gdbinit.tmpl gdbutil\

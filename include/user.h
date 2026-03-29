@@ -1,4 +1,5 @@
 struct stat;
+struct dirent;
 struct rtcdate;
 struct sockaddr_in;
 #include "signal.h"
@@ -70,6 +71,7 @@ int routeadd(uint dst, uint mask, uint gateway, uint src, int ifindex);
 int mount(const char *path, const char *fstype, int flags);
 int umount(const char *path);
 int devblocks(int dev);
+int getdents(int fd, struct dirent *ents, int max);
 int uname(char *buf, int size);
 int chdir(const char*);
 int dup(int);

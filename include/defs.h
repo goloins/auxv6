@@ -47,6 +47,28 @@ int             console_get_termios(struct termios *tp);
 int             console_set_termios(const struct termios *tp, int optional_actions);
 void            panic(char*) __attribute__((noreturn));
 
+// Debug logging toggles (set to 0 to compile out noisy diagnostics).
+#ifndef DBG_VFS
+#define DBG_VFS 1
+#endif
+
+#ifndef DBG_MOUNT
+#define DBG_MOUNT 1
+#endif
+
+#ifndef DBG_EXT2
+#define DBG_EXT2 1
+#endif
+
+#ifndef DBG_IDE
+#define DBG_IDE 1
+#endif
+
+#define VFSDBG(...)   do { if(DBG_VFS) cprintf(__VA_ARGS__); } while(0)
+#define MOUNTDBG(...) do { if(DBG_MOUNT) cprintf(__VA_ARGS__); } while(0)
+#define EXT2DBG(...)  do { if(DBG_EXT2) cprintf(__VA_ARGS__); } while(0)
+#define IDEDBG(...)   do { if(DBG_IDE) cprintf(__VA_ARGS__); } while(0)
+
 // exec.c
 int             exec(char*, char**);
 

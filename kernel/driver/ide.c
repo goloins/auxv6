@@ -142,8 +142,8 @@ ide_scan_partitions(uint dev)
     nblocks = count / blocks_per_fs_block;
     pdev = DISK_PART_DEV(unit, p + 1);
     if(bdev_register_part(pdev, dev, start_block, nblocks) == 0)
-      cprintf("ide: part hd%c%d dev=%d start=%d nblk=%d\n",
-              'a' + unit, p + 1, pdev, start_block, nblocks);
+      IDEDBG("ide: part hd%c%d dev=%d start=%d nblk=%d\n",
+             'a' + unit, p + 1, pdev, start_block, nblocks);
   }
 }
 
@@ -226,14 +226,14 @@ idewait_internal(ushort iobase, int checkerr, int noisy)
       break;
   }
   if(spins <= 0){
-    if(noisy)
-      cprintf("ide: wait timeout io=%x st=%x\n", iobase, inb(iobase + 7));
+      if(noisy)
+        IDEDBG("ide: wait timeout io=%x st=%x\n", iobase, inb(iobase + 7));
     return -1;
   }
   if(checkerr && (r & (IDE_DF|IDE_ERR)) != 0)
   {
-    if(noisy)
-      cprintf("ide: wait error io=%x st=%x\n", iobase, r);
+      if(noisy)
+        IDEDBG("ide: wait error io=%x st=%x\n", iobase, r);
     return -1;
   }
   return 0;
@@ -276,7 +276,7 @@ ideinit(void)
   if(!havedisk3 && ide_read_lba0_poll(3, probe_sector) == 0)
     havedisk3 = 1;
 
-  cprintf("ide: probe d0=1 d1=%d d2=%d d3=%d\n", havedisk1, havedisk2, havedisk3);
+  IDEDBG("ide: probe d0=1 d1=%d d2=%d d3=%d\n", havedisk1, havedisk2, havedisk3);
 
   // Switch back to disk 0.
   outb(0x1f6, 0xe0 | (0<<4));
@@ -418,8 +418,8 @@ ide_backend_rw(struct buf *b)
   // This avoids depending on IRQ15 delivery, which is flaky in some setups.
   if(b->dev >= 2){
     acquire(&idelock);
-    if(idestart(b) < 0){
-      cprintf("ide: start failed dev=%d blk=%d\n", b->dev, b->blockno);
+      if(idestart(b) < 0){
+        IDEDBG("ide: start failed dev=%d blk=%d\n", b->dev, b->blockno);
       if((b->flags & B_DIRTY) == 0)
         memset(b->data, 0, BSIZE);
       b->flags |= B_VALID;
@@ -428,8 +428,8 @@ ide_backend_rw(struct buf *b)
       return 0;
     }
     iobase = ide_iobase(b->dev);
-    if(idewait(iobase, 1) < 0){
-      cprintf("ide: rw timeout dev=%d blk=%d\n", b->dev, b->blockno);
+      if(idewait(iobase, 1) < 0){
+        IDEDBG("ide: rw timeout dev=%d blk=%d\n", b->dev, b->blockno);
       if((b->flags & B_DIRTY) == 0)
         memset(b->data, 0, BSIZE);
       b->flags |= B_VALID;

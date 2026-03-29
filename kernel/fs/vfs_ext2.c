@@ -97,24 +97,6 @@ struct ext2_inode {
 #define EXT2_S_IFCHR 0x2000
 #define EXT2_S_IFBLK 0x6000
 
-// ext2 directory entry
-struct ext2_dirent {
-  uint inode;               // Inode number
-  ushort rec_len;           // Record length (must be a multiple of 4)
-  uchar name_len;           // Name length (without null terminator)
-  uchar file_type;          // File type indicator
-  char name[0];             // Name (variable length, followed by padding)
-};
-
-#define EXT2_FT_UNKNOWN 0
-#define EXT2_FT_REG_FILE 1
-#define EXT2_FT_DIR 2
-#define EXT2_FT_CHRDEV 3
-#define EXT2_FT_BLKDEV 4
-#define EXT2_FT_FIFO 5
-#define EXT2_FT_SOCK 6
-#define EXT2_FT_SYMLINK 7
-
 // ext2 filesystem mountpoint data
 struct ext2_mount_data {
   struct ext2_superblock sb;
@@ -144,6 +126,24 @@ static struct ext2_mount_data*
 ext2_data_for_dev(uint dev)
 {
   return (struct ext2_mount_data*)vfs_dev_fs_data(dev);
+}
+
+static int
+ext2_dirent_valid(struct ext2_dirent_hdr *hdr, uint remain)
+{
+  if(hdr == 0)
+    return 0;
+  if(hdr->rec_len < sizeof(struct ext2_dirent_hdr))
+    return 0;
+  if((hdr->rec_len & 3) != 0)
+    return 0;
+  if(hdr->rec_len > remain)
+    return 0;
+  if(hdr->name_len > hdr->rec_len - sizeof(struct ext2_dirent_hdr))
+    return 0;
+  if(hdr->name_len > EXT2_NAME_MAX)
+    return 0;
+  return 1;
 }
 
 static int
@@ -356,15 +356,17 @@ ext2_read_dirents(struct ext2_mount_data *data, struct ext2_inode *dip,
 
   while(doff + sizeof(struct ext2_dirent_hdr) <= dip->i_size){
     struct ext2_dirent_hdr hdr;
+    uint remain;
     int got;
 
     got = ext2_read_data(data, dip, (char*)&hdr, doff, sizeof(hdr));
     if(got < 0)
       return (produced == 0) ? -1 : (int)produced;
-    if(got != sizeof(hdr) || hdr.rec_len < 8)
+    remain = dip->i_size - doff;
+    if(got != sizeof(hdr) || !ext2_dirent_valid(&hdr, remain))
       break;
 
-    if(hdr.inode != 0 && hdr.name_len > 0 && hdr.name_len <= EXT2_NAME_MAX){
+    if(hdr.inode != 0 && hdr.name_len > 0){
       if(cur_index >= want_index){
         struct dirent de;
         char nm[EXT2_NAME_MAX + 1];
@@ -433,6 +435,7 @@ ext2_dirlookup(struct inode *dp, char *name, uint *poff)
   off = 0;
   while(off + sizeof(struct ext2_dirent_hdr) <= dip.i_size){
     struct ext2_dirent_hdr hdr;
+    uint remain;
     int got;
 
     got = ext2_read_data(data, &dip, (char*)&hdr, off, sizeof(hdr));
@@ -440,11 +443,11 @@ ext2_dirlookup(struct inode *dp, char *name, uint *poff)
       return 0;
     if(got != sizeof(hdr))
       break;
-
-    if(hdr.rec_len < 8)
+    remain = dip.i_size - off;
+    if(!ext2_dirent_valid(&hdr, remain))
       break;
 
-    if(hdr.inode != 0 && hdr.name_len > 0 && hdr.name_len <= EXT2_NAME_MAX){
+    if(hdr.inode != 0 && hdr.name_len > 0){
       char nm[EXT2_NAME_MAX + 1];
 
       got = ext2_read_data(data, &dip, nm, off + 8, hdr.name_len);
@@ -644,7 +647,7 @@ ext2_mount_init(struct mount *m)
   stage = 0;
   if(m == 0)
     return -1;
-  cprintf("ext2: mount_init dev=%d path=%s flags=%x\n", m->dev, m->path, m->flags);
+  EXT2DBG("ext2: mount_init dev=%d path=%s flags=%x\n", m->dev, m->path, m->flags);
   stage = 1;
   if(bdev_nblocks(m->dev) == 0)
     return -1;
@@ -661,8 +664,8 @@ ext2_mount_init(struct mount *m)
 
   stage = 3;
   if(data->sb.s_magic != EXT2_SUPER_MAGIC){
-    cprintf("ext2: bad magic dev=%d got=%x want=%x\n",
-            data->dev, data->sb.s_magic, EXT2_SUPER_MAGIC);
+        EXT2DBG("ext2: bad magic dev=%d got=%x want=%x\n",
+          data->dev, data->sb.s_magic, EXT2_SUPER_MAGIC);
     goto fail;
   }
 
@@ -699,11 +702,11 @@ ext2_mount_init(struct mount *m)
 
   m->fs_data = (void *)data;
   ext2_active_dev = data->dev;
-  cprintf("ext2: mount ok dev=%d block=%d groups=%d\n", data->dev, data->block_size, data->group_count);
+  EXT2DBG("ext2: mount ok dev=%d block=%d groups=%d\n", data->dev, data->block_size, data->group_count);
   return 0;
 
 fail:
-  cprintf("ext2: mount failed dev=%d stage=%d\n", m ? m->dev : -1, stage);
+  EXT2DBG("ext2: mount failed dev=%d stage=%d\n", m ? m->dev : -1, stage);
   kfree((char*)data);
   return -1;
 }

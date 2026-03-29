@@ -239,6 +239,52 @@ sys_read(void)
 }
 
 int
+sys_getdents(void)
+{
+  struct file *f;
+  struct dirent *ents;
+  struct dirent de;
+  int max;
+  int out;
+  int r;
+
+  if(argfd(0, 0, &f) < 0 || argint(2, &max) < 0)
+    return -1;
+  if(max < 0)
+    return -1;
+  if(max > PGSIZE / sizeof(*ents))
+    return -1;
+  if(argptr(1, (char**)&ents, max * sizeof(*ents)) < 0)
+    return -1;
+
+  if(f->type != FD_INODE)
+    return -1;
+
+  ilock(f->ip);
+  if(f->ip->type != T_DIR){
+    iunlock(f->ip);
+    return -1;
+  }
+  iunlock(f->ip);
+
+  out = 0;
+  while(out < max){
+    r = fileread(f, (char*)&de, sizeof(de));
+    if(r == 0)
+      break;
+    if(r < 0)
+      return (out > 0) ? out : -1;
+    if(r != sizeof(de))
+      break;
+    if(de.inum == 0)
+      continue;
+    ents[out++] = de;
+  }
+
+  return out;
+}
+
+int
 sys_write(void)
 {
   struct file *f;
@@ -775,8 +821,8 @@ sys_mount(void)
   if(has_dev_override && (dev_override < 0 || dev_override >= NDEV))
     return -1;
 
-  cprintf("sys_mount: path=%s type=%s flags=%x devovr=%d\n",
-          path_buf, fstype_buf, mount_flags, dev_override);
+  MOUNTDBG("sys_mount: path=%s type=%s flags=%x devovr=%d\n",
+           path_buf, fstype_buf, mount_flags, dev_override);
 
   // Allocate and initialize filesystem backend based on type
   fs = (struct vfs*)kalloc();
@@ -806,11 +852,11 @@ sys_mount(void)
     dev = has_dev_override ? dev_override : ROOTDEV;
 
   if(vfs_register_mount(fs, dev, mount_flags, path_buf) < 0){
-    cprintf("sys_mount: failed path=%s type=%s dev=%d\n", path_buf, fstype_buf, dev);
+    MOUNTDBG("sys_mount: failed path=%s type=%s dev=%d\n", path_buf, fstype_buf, dev);
     return -1;
   }
 
-  cprintf("sys_mount: ok path=%s type=%s dev=%d\n", path_buf, fstype_buf, dev);
+  MOUNTDBG("sys_mount: ok path=%s type=%s dev=%d\n", path_buf, fstype_buf, dev);
   return 0;
 }
 

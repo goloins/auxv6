@@ -160,24 +160,26 @@ vfs_register_mount(struct vfs *fs, int dev, int flags, char *path)
 {
   struct vnode vn;
 
-  if(fs == 0 || path == 0 || path[0] != '/')
+  if(fs == 0 || path == 0 || path[0] != '/'){
     return -1;
-  if(fs->ops.namei == 0 || fs->ops.nameiparent == 0 || fs->ops.inode_put == 0)
+  }
+  if(fs->ops.namei == 0 || fs->ops.nameiparent == 0 || fs->ops.inode_put == 0){
     return -1;
+  }
 
-  cprintf("vfs: register mount path=%s fs=%s dev=%d flags=%x\n",
-          path, fs->name, dev, flags);
+    VFSDBG("vfs: register mount path=%s fs=%s dev=%d flags=%x\n",
+      path, fs->name, dev, flags);
 
   if(vfs_lookup(path, &vn) < 0)
     return -1;
 
   if(vfs_mount_register_inode(fs, dev, flags, path, vn.ip) < 0){
-    cprintf("vfs: mount register failed path=%s fs=%s dev=%d\n", path, fs->name, dev);
+    VFSDBG("vfs: mount register failed path=%s fs=%s dev=%d\n", path, fs->name, dev);
     vfs_vnode_drop(&vn);
     return -1;
   }
 
-  cprintf("vfs: mount register ok path=%s fs=%s dev=%d\n", path, fs->name, dev);
+  VFSDBG("vfs: mount register ok path=%s fs=%s dev=%d\n", path, fs->name, dev);
 
   vn.ip = 0;
   vn.mnt = 0;

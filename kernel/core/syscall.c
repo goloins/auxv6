@@ -141,6 +141,7 @@ extern int sys_netifinfo(void);
 extern int sys_routeinfo(void);
 extern int sys_routeadd(void);
 extern int sys_devblocks(void);
+extern int sys_getdents(void);
 
 static int (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -200,6 +201,7 @@ static int (*syscalls[])(void) = {
 [SYS_routeinfo] sys_routeinfo,
 [SYS_routeadd] sys_routeadd,
 [SYS_devblocks] sys_devblocks,
+[SYS_getdents] sys_getdents,
 [SYS_sigsend] sys_sigsend,
 [SYS_sigaction] sys_sigaction,
 };
