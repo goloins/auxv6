@@ -731,10 +731,26 @@ sys_mountinfo(void)
 }
 
 int
+sys_devblocks(void)
+{
+  int dev;
+
+  if(argint(0, &dev) < 0)
+    return -1;
+  if(dev < 0 || dev >= NDEV)
+    return -1;
+
+  return bdev_nblocks((uint)dev);
+}
+
+int
 sys_mount(void)
 {
   char *path, *fstype;
   int flags;
+  int mount_flags;
+  int has_dev_override;
+  int dev_override;
   int dev;
   struct vfs *fs;
   char path_buf[256];
@@ -750,6 +766,17 @@ sys_mount(void)
   // Copy strings to kernel space
   safestrcpy(path_buf, path, sizeof(path_buf));
   safestrcpy(fstype_buf, fstype, sizeof(fstype_buf));
+
+  has_dev_override = MNT_HASDEV(flags);
+  dev_override = -1;
+  if(has_dev_override)
+    dev_override = MNT_GETDEV(flags);
+  mount_flags = flags & ~MNT_DEVMASK;
+  if(has_dev_override && (dev_override < 0 || dev_override >= NDEV))
+    return -1;
+
+  cprintf("sys_mount: path=%s type=%s flags=%x devovr=%d\n",
+          path_buf, fstype_buf, mount_flags, dev_override);
 
   // Allocate and initialize filesystem backend based on type
   fs = (struct vfs*)kalloc();
@@ -774,9 +801,17 @@ sys_mount(void)
   if(memcmp(fstype_buf, "procfs", 7) == 0)
     dev = PROCFSDEV;
   else if(memcmp(fstype_buf, "ext2", 5) == 0)
-    dev = EXT2DEV;
+    dev = has_dev_override ? dev_override : EXT2DEV;
+  else if(memcmp(fstype_buf, "xv6fs", 6) == 0)
+    dev = has_dev_override ? dev_override : ROOTDEV;
 
-  return vfs_register_mount(fs, dev, flags, path_buf);
+  if(vfs_register_mount(fs, dev, mount_flags, path_buf) < 0){
+    cprintf("sys_mount: failed path=%s type=%s dev=%d\n", path_buf, fstype_buf, dev);
+    return -1;
+  }
+
+  cprintf("sys_mount: ok path=%s type=%s dev=%d\n", path_buf, fstype_buf, dev);
+  return 0;
 }
 
 int

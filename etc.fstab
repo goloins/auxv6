@@ -3,3 +3,4 @@
 #   <mountpoint> <fstype> <opts>
 #   <dev> <mountpoint> <fstype> <opts>
 /proc procfs rw
+/dev/hdc /mnt ext2 rw

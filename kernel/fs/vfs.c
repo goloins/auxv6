@@ -95,9 +95,12 @@ static int
 vfs_mount_register_inode(struct vfs *fs, int dev, int flags, char *path, struct inode *mountpoint)
 {
   int slot;
+  void *fs_data;
 
   if(fs == 0 || path == 0 || mountpoint == 0)
     return -1;
+
+  fs_data = 0;
 
   acquire(&vfslock);
   slot = mount_allocate_locked();
@@ -111,21 +114,43 @@ vfs_mount_register_inode(struct vfs *fs, int dev, int flags, char *path, struct 
   mounts[slot].flags = flags;
   mounts[slot].caps = fs->caps;
   safestrcpy(mounts[slot].path, path, sizeof(mounts[slot].path));
-  mounts[slot].fs = fs;
+  // Keep fs null until mount_init finishes so lookup paths skip this slot.
+  mounts[slot].fs = 0;
   mounts[slot].fs_data = 0;
   mounts[slot].mountpoint = mountpoint;
 
-  // Call mount_init if present to allow fs to initialize per-mount state
+  release(&vfslock);
+
+  // mount_init may block on disk I/O; never call it with vfslock held.
   if(fs->mount_init){
-    if(fs->mount_init(&mounts[slot]) < 0){
+    struct mount mctx;
+
+    memset(&mctx, 0, sizeof(mctx));
+    mctx.dev = dev;
+    mctx.flags = flags;
+    mctx.caps = fs->caps;
+    safestrcpy(mctx.path, path, sizeof(mctx.path));
+    mctx.mountpoint = mountpoint;
+    mctx.fs = fs;
+    if(fs->mount_init(&mctx) < 0){
+      acquire(&vfslock);
       mounts[slot].used = 0;
+      mounts[slot].dev = 0;
+      mounts[slot].flags = 0;
+      mounts[slot].caps = 0;
+      mounts[slot].path[0] = 0;
+      mounts[slot].mountpoint = 0;
       mounts[slot].fs = 0;
       mounts[slot].fs_data = 0;
       release(&vfslock);
       return -1;
     }
+    fs_data = mctx.fs_data;
   }
 
+  acquire(&vfslock);
+  mounts[slot].fs_data = fs_data;
+  mounts[slot].fs = fs;
   release(&vfslock);
   return 0;
 }
@@ -140,13 +165,19 @@ vfs_register_mount(struct vfs *fs, int dev, int flags, char *path)
   if(fs->ops.namei == 0 || fs->ops.nameiparent == 0 || fs->ops.inode_put == 0)
     return -1;
 
+  cprintf("vfs: register mount path=%s fs=%s dev=%d flags=%x\n",
+          path, fs->name, dev, flags);
+
   if(vfs_lookup(path, &vn) < 0)
     return -1;
 
   if(vfs_mount_register_inode(fs, dev, flags, path, vn.ip) < 0){
+    cprintf("vfs: mount register failed path=%s fs=%s dev=%d\n", path, fs->name, dev);
     vfs_vnode_drop(&vn);
     return -1;
   }
+
+  cprintf("vfs: mount register ok path=%s fs=%s dev=%d\n", path, fs->name, dev);
 
   vn.ip = 0;
   vn.mnt = 0;
@@ -158,6 +189,7 @@ vfs_unmount(char *path)
 {
   struct inode *mountpoint;
   struct vfs *fs;
+  void *mount_fs_data;
   uint dev;
   struct mount *m;
   int i;
@@ -169,6 +201,7 @@ vfs_unmount(char *path)
 
   mountpoint = 0;
   fs = 0;
+  mount_fs_data = 0;
   dev = 0;
 
   acquire(&vfslock);
@@ -190,14 +223,15 @@ vfs_unmount(char *path)
         }
         mountpoint = m->mountpoint;
         fs = m->fs;
+        mount_fs_data = m->fs_data;
         m->used = 0;
         m->dev = 0;
         m->flags = 0;
-          m->caps = 0;
+        m->caps = 0;
         m->path[0] = 0;
         m->mountpoint = 0;
         m->fs = 0;
-          m->fs_data = 0;
+        m->fs_data = 0;
         break;
       }
     }
@@ -215,6 +249,10 @@ vfs_unmount(char *path)
 
   if(fs && fs->fs_destroy)
     fs->fs_destroy(fs);
+
+  // Per-mount private data is owned by the mount slot.
+  if(mount_fs_data)
+    kfree((char*)mount_fs_data);
 
   // Dynamically allocated filesystems are owned by mount(2).
   if(fs && fs != &rootvfs)
@@ -482,6 +520,24 @@ vfs_dev_vops(uint dev)
   release(&vfslock);
 
   return vops;
+}
+
+void*
+vfs_dev_fs_data(uint dev)
+{
+  struct mount *m;
+  void *fs_data;
+
+  fs_data = 0;
+  acquire(&vfslock);
+  m = select_mount_for_dev_locked(dev);
+  if(m == 0 && dev == ROOTDEV)
+    m = select_mount_locked("/");
+  if(m)
+    fs_data = m->fs_data;
+  release(&vfslock);
+
+  return fs_data;
 }
 
 int

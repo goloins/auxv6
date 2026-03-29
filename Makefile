@@ -211,6 +211,9 @@ _ln: user/ln
 _ls: user/ls
 	cp user/ls _ls
 
+_lsblk: user/lsblk
+	cp user/lsblk _lsblk
+
 _mkdir: user/mkdir
 	cp user/mkdir _mkdir
 
@@ -306,6 +309,7 @@ UPROGS=\
 	_login\
 	_ln\
 	_ls\
+	_lsblk\
 	_mkdir\
 	_mount\
 	_mounts\
@@ -342,10 +346,12 @@ clean:
 	*.o *.d *.asm *.sym kernel/core/vectors.S bootblock entryother \
 	initcode initcode.out aux.kern xv6.img fs.img kernelmemfs \
 	xv6memfs.img mkfs .gdbinit \
+	test_ext2.img \
 	$(UPROGS) \
+	.ext2root \
 	kernel/**/*.o kernel/**/*.d kernel/**/*.asm \
 	user/*.o user/*.d user/*.asm user/cat user/echo user/forktest \
-	user/grep user/id user/init user/kill user/ln user/ls user/mkdir \
+	user/grep user/id user/init user/kill user/ln user/ls user/lsblk user/mkdir \
 	user/mount user/mounts user/mounttest user/umount \
 	user/uname \
 	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/sh user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login
@@ -375,25 +381,34 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
 ifndef CPUS
 CPUS := 2
 endif
-QEMUOPTS = -drive file=fs.img,index=1,media=disk,format=raw -drive file=xv6.img,index=0,media=disk,format=raw -smp $(CPUS) -m 512 $(QEMUEXTRA)
+comma := ,
+EXT2IMG ?= test_ext2.img
+EXT2QEMU = $(if $(wildcard $(EXT2IMG)),-drive file=$(EXT2IMG)$(comma)index=2$(comma)media=disk$(comma)format=raw,)
+QEMUOPTS = -drive file=fs.img,index=1,media=disk,format=raw -drive file=xv6.img,index=0,media=disk,format=raw $(EXT2QEMU) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
-qemu: fs.img xv6.img
+test_ext2.img:
+	rm -rf .ext2root
+	mkdir -p .ext2root
+	printf "hello world\n" > .ext2root/hello.txt
+	genext2fs -b 2048 -d .ext2root test_ext2.img
+
+qemu: fs.img xv6.img $(EXT2IMG)
 	$(QEMU) -serial mon:stdio $(QEMUOPTS)
 
 qemu-memfs: xv6memfs.img
 	$(QEMU) -drive file=xv6memfs.img,index=0,media=disk,format=raw -smp $(CPUS) -m 256
 
-qemu-nox: fs.img xv6.img
+qemu-nox: fs.img xv6.img $(EXT2IMG)
 	$(QEMU) -nographic $(QEMUOPTS)
 
 .gdbinit: config/.gdbinit.tmpl
 	sed "s/localhost:1234/localhost:$(GDBPORT)/" < $^ > $@
 
-qemu-gdb: fs.img xv6.img .gdbinit
+qemu-gdb: fs.img xv6.img $(EXT2IMG) .gdbinit
 	@echo "*** Now run 'gdb'." 1>&2
 	$(QEMU) -serial mon:stdio $(QEMUOPTS) -S $(QEMUGDB)
 
-qemu-nox-gdb: fs.img xv6.img .gdbinit
+qemu-nox-gdb: fs.img xv6.img $(EXT2IMG) .gdbinit
 	@echo "*** Now run 'gdb'." 1>&2
 	$(QEMU) -nographic $(QEMUOPTS) -S $(QEMUGDB)
 

@@ -15,6 +15,7 @@ struct bdevsw {
 
 void bdevinit(void);
 int bdev_register(uint dev, const struct bdevsw *ops);
+int bdev_register_part(uint dev, uint parent, uint start, uint nblocks);
 int bdevrw(struct buf *b);
 uint bdev_nblocks(uint dev);
 

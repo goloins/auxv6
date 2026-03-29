@@ -77,6 +77,7 @@ int vfs_mount_count(void);
 int vfs_get_mounts(struct vfs_mount_info *out, int max);
 int vfs_dev_has_cap(uint dev, uint cap);
 const struct vnode_ops* vfs_dev_vops(uint dev);
+void* vfs_dev_fs_data(uint dev);
 void vfs_xv6fs_init(struct vfs *fs);
 void vfs_ext2_init(struct vfs *fs);
 void vfs_procfs_init(struct vfs *fs);

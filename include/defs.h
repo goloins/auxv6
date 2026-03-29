@@ -33,6 +33,7 @@ void            bwrite(struct buf*);
 // blockdev.c
 void            bdevinit(void);
 int             bdev_register(uint dev, const struct bdevsw *ops);
+int             bdev_register_part(uint dev, uint parent, uint start, uint nblocks);
 int             bdevrw(struct buf *b);
 uint            bdev_nblocks(uint dev);
 
@@ -94,7 +95,9 @@ int             vfs_mount_count(void);
 int             vfs_get_mounts(struct vfs_mount_info*, int);
 int             vfs_dev_has_cap(uint, uint);
 const struct vnode_ops* vfs_dev_vops(uint);
+void*           vfs_dev_fs_data(uint);
 void            vfs_xv6fs_init(struct vfs*);
+void            vfs_ext2_init(struct vfs*);
 void            vfs_procfs_init(struct vfs*);
 
 // ide.c

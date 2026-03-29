@@ -107,17 +107,22 @@ fileread(struct file *f, char *addr, int n)
   if(f->type == FD_PIPE)
     return piperead(f->pipe, addr, n);
   if(f->type == FD_INODE){
-    // Check capability via VFS layer
-    if(!vfs_dev_has_cap(f->ip->dev, VFS_CAP_READ))
-      return -1;
-    
-    // Get backend-specific read operation
-    ops = vfs_dev_vops(f->ip->dev);
-    if(!ops || !ops->read)
-      return -1;
-    
     ilock(f->ip);
-    r = ops->read(f->ip, addr, f->off, n);
+    
+    // Try VFS vnode_ops if device is mounted in VFS
+    ops = vfs_dev_vops(f->ip->dev);
+    if(ops && ops->read) {
+      // Device is mounted; check read capability
+      if(!vfs_dev_has_cap(f->ip->dev, VFS_CAP_READ)) {
+        iunlock(f->ip);
+        return -1;
+      }
+      r = ops->read(f->ip, addr, f->off, n);
+    } else {
+      // Fall back to readi for character/block devices not in VFS
+      r = readi(f->ip, addr, f->off, n);
+    }
+    
     if(r > 0)
       f->off += r;
     iunlock(f->ip);
@@ -139,15 +144,6 @@ filewrite(struct file *f, char *addr, int n)
   if(f->type == FD_PIPE)
     return pipewrite(f->pipe, addr, n);
   if(f->type == FD_INODE){
-    // Check capability via VFS layer
-    if(!vfs_dev_has_cap(f->ip->dev, VFS_CAP_WRITE))
-      return -1;
-    
-    // Get backend-specific write operation
-    ops = vfs_dev_vops(f->ip->dev);
-    if(!ops || !ops->write)
-      return -1;
-
     // write a few blocks at a time to avoid exceeding
     // the maximum log transaction size, including
     // i-node, indirect block, allocation blocks,
@@ -163,7 +159,21 @@ filewrite(struct file *f, char *addr, int n)
 
       begin_op();
       ilock(f->ip);
-      r = ops->write(f->ip, addr + i, f->off, n1);
+      
+      // Try VFS vnode_ops if device is mounted in VFS
+      ops = vfs_dev_vops(f->ip->dev);
+      if(ops && ops->write) {
+        // Device is mounted; check write capability
+        if(!vfs_dev_has_cap(f->ip->dev, VFS_CAP_WRITE)) {
+          r = -1;
+        } else {
+          r = ops->write(f->ip, addr + i, f->off, n1);
+        }
+      } else {
+        // Fall back to writei for character/block devices not in VFS
+        r = writei(f->ip, addr + i, f->off, n1);
+      }
+      
       if(r > 0)
         f->off += r;
       iunlock(f->ip);

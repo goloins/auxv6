@@ -39,5 +39,11 @@ struct devsw {
 extern struct devsw devsw[];
 
 #define CONSOLE 1
-#define PROCFSDEV 2
-#define EXT2DEV 3
+#define DISK_MAX_UNITS 4
+#define DISK_PARTS_PER_DISK 4
+#define DISK_DEV(unit) (unit)
+#define DISK_PART_BASE DISK_MAX_UNITS
+#define DISK_PART_DEV(unit, partno) (DISK_PART_BASE + (unit) * DISK_PARTS_PER_DISK + ((partno) - 1))
+
+#define PROCFSDEV 31
+#define EXT2DEV DISK_DEV(2)

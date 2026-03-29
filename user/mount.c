@@ -3,12 +3,95 @@
 #include "stat.h"
 #include "fcntl.h"
 
-#define MNT_RDONLY 0x0001
-#define MNT_NOSUID 0x0002
-#define MNT_NODEV  0x0004
-#define MNT_NOEXEC 0x0008
-#define MNT_SYNC   0x0010
-#define MNT_REMOUNT 0x0020
+static int parse_int(const char *s);
+static int is_numeric(const char *s);
+static int parse_flags(const char *s);
+
+static int
+parse_dev_token(const char *tok)
+{
+  const char *s = tok;
+  int unit;
+  int part;
+
+  if(s[0] == '/' && s[1] == 'd' && s[2] == 'e' && s[3] == 'v' && s[4] == '/')
+    s += 5;
+
+  if(is_numeric(s))
+    return parse_int(s);
+
+  if(s[0] != 'h' || s[1] != 'd')
+    return -1;
+  unit = s[2] - 'a';
+  if(unit < 0 || unit >= HD_DISK_UNITS)
+    return -1;
+  s += 3;
+
+  if(*s == 0)
+    return HD_DISK_DEV(unit);
+
+  if(*s < '1' || *s > '0' + HD_PARTS_PER_DISK)
+    return -1;
+  part = *s - '0';
+  s++;
+  if(*s != 0)
+    return -1;
+
+  if(part < 1 || part > HD_PARTS_PER_DISK)
+    return -1;
+  return HD_PART_DEV(unit, part);
+}
+
+static int
+looks_like_dev_token(const char *s)
+{
+  return parse_dev_token(s) >= 0;
+}
+
+static int
+looks_like_mount_path(const char *s)
+{
+  return s && s[0] == '/';
+}
+
+static int
+mount_cli(char *a1, char *a2, char *a3, char *a4)
+{
+  int dev;
+  int flags;
+  char *path;
+  char *fstype;
+
+  dev = -1;
+  flags = (a4 && a4[0]) ? parse_flags(a4) : 0;
+
+  if(looks_like_dev_token(a1) && !looks_like_mount_path(a2) && looks_like_mount_path(a3)){
+    // mount <dev> <fstype> <path> [opts]
+    dev = parse_dev_token(a1);
+    fstype = a2;
+    path = a3;
+  } else if(looks_like_dev_token(a1) && looks_like_mount_path(a2) && !looks_like_mount_path(a3)){
+    // mount <dev> <path> <fstype> [opts]
+    dev = parse_dev_token(a1);
+    path = a2;
+    fstype = a3;
+  } else {
+    // mount <path> <fstype> [opts]
+    path = a1;
+    fstype = a2;
+    flags = (a3 && a3[0]) ? parse_flags(a3) : 0;
+  }
+
+  if(dev >= 0)
+    flags |= MNT_MAKEDEV(dev);
+
+  if(mount(path, fstype, flags) < 0){
+    printf(2, "mount: %s %s failed\n", path, fstype);
+    return -1;
+  }
+
+  return 0;
+}
 
 static int
 parse_int(const char *s)
@@ -187,9 +270,20 @@ mount_from_fstab(const char *fstab)
     // 1) <mountpoint> <fstype> <opts>
     // 2) <dev> <mountpoint> <fstype> <opts>
     if(f2[0] != 0 && f1[0] == '/'){
+      int dev;
+
       path = f1;
       fstype = f2;
       flags = (f3[0] == 0) ? 0 : parse_flags(f3);
+      dev = parse_dev_token(f0);
+      if(dev >= 0){
+        if(devblocks(dev) <= 0){
+          printf(1, "mount: skip %s (dev %s not present)\n", path, f0);
+          line = nl;
+          continue;
+        }
+        flags |= MNT_MAKEDEV(dev);
+      }
     } else {
       path = f0;
       fstype = f1;
@@ -214,10 +308,6 @@ mount_from_fstab(const char *fstab)
 int
 main(int argc, char *argv[])
 {
-  char *path;
-  char *fstype;
-  int flags;
-
   if(argc == 1){
     struct mountinfo entries[MOUNTINFO_MAX];
     int i;
@@ -239,17 +329,17 @@ main(int argc, char *argv[])
     exit();
   }
 
-  if(argc < 3 || argc > 4){
-    printf(2, "usage: mount [fstab]|<path> <fstype> [flags]\n");
+  if(argc < 3 || argc > 5){
+    printf(2, "usage: mount [fstab]|<path> <fstype> [flags]|<dev> <fstype> <path> [flags]\n");
     exit();
   }
 
-  path = argv[1];
-  fstype = argv[2];
-  flags = (argc == 4) ? parse_flags(argv[3]) : 0;
-
-  if(mount(path, fstype, flags) < 0)
-    printf(2, "mount: %s %s failed\n", path, fstype);
+  if(argc == 3)
+    mount_cli(argv[1], argv[2], "", "");
+  else if(argc == 4)
+    mount_cli(argv[1], argv[2], argv[3], "");
+  else
+    mount_cli(argv[1], argv[2], argv[3], argv[4]);
 
   exit();
 }

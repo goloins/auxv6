@@ -8,6 +8,49 @@
 char *argv[] = { "login", 0 };
 char *mount_argv[] = { "mount", "/etc/fstab", 0 };
 
+static void
+ensure_node(const char *path, short major, short minor)
+{
+  int fd;
+
+  fd = open(path, O_RDONLY);
+  if(fd >= 0){
+    close(fd);
+    return;
+  }
+  mknod((char*)path, major, minor);
+}
+
+static void
+make_disk_nodes(void)
+{
+  int unit;
+  int part;
+  int dev;
+  char path[16];
+
+  for(unit = 0; unit < HD_DISK_UNITS; unit++){
+    dev = HD_DISK_DEV(unit);
+    if(devblocks(dev) <= 0)
+      continue;
+
+    path[0] = '/'; path[1] = 'd'; path[2] = 'e'; path[3] = 'v'; path[4] = '/';
+    path[5] = 'h'; path[6] = 'd'; path[7] = 'a' + unit; path[8] = 0;
+    ensure_node(path, 2, dev);
+
+    for(part = 1; part <= HD_PARTS_PER_DISK; part++){
+      int pdev = HD_PART_DEV(unit, part);
+      if(devblocks(pdev) <= 0)
+        continue;
+      path[0] = '/'; path[1] = 'd'; path[2] = 'e'; path[3] = 'v'; path[4] = '/';
+      path[5] = 'h'; path[6] = 'd'; path[7] = 'a' + unit;
+      path[8] = '0' + part;
+      path[9] = 0;
+      ensure_node(path, 2, pdev);
+    }
+  }
+}
+
 int
 main(void)
 {
@@ -17,11 +60,16 @@ main(void)
     mknod("/dev/console", 1, 1);
     open("/dev/console", O_RDWR);
   }
+
+  mkdir("/dev");
+  make_disk_nodes();
+
   dup(0);  // stdout
   dup(0);  // stderr
 
   // Best-effort boot mounts from /etc/fstab.
   mkdir("/proc");
+  mkdir("/mnt");
   mpid = fork();
   if(mpid == 0){
     exec("/bin/mount", mount_argv);

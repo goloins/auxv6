@@ -57,3 +57,4 @@
 #define SYS_netifinfo 56
 #define SYS_routeinfo 57
 #define SYS_routeadd 58
+#define SYS_devblocks 59
