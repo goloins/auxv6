@@ -20,6 +20,7 @@
 #define MSDOS_ATTR_LFN 0x0F
 #define MSDOS_EOC16 0xFFF8
 #define MSDOS_EOC32 0x0FFFFFF8
+#define MSDOS_ROOT16_INUM_BASE 0x10000000U
 
 struct fat_dirent {
   uchar name[11];
@@ -77,6 +78,7 @@ struct msdos_mount_data {
   uint root_sectors;
   uint fat_start;
   uint data_start;
+  uint total_clusters;
 };
 
 static uint msdos_active_dev;
@@ -84,6 +86,254 @@ static struct msdos_mount_data *msdos_bootstrap_data;
 
 static struct inode* msdos_root_inode(void);
 static struct inode* msdos_dirlookup(struct inode *dp, char *name, uint *poff);
+static struct msdos_mount_data* msdos_data_for_dev(uint dev);
+static uint msdos_cluster_first_sector(struct msdos_mount_data *md, uint cluster);
+
+static uint
+msdos_eoc_value(struct msdos_mount_data *md)
+{
+  if(md->fat_type == 16)
+    return 0xFFFF;
+  return 0x0FFFFFFF;
+}
+
+static int
+msdos_fat_get(struct msdos_mount_data *md, uint cluster, uint *out)
+{
+  uint off;
+  uint sec;
+  uint sec_off;
+  struct buf *b;
+  uint val;
+
+  if(md == 0 || out == 0 || cluster < 2)
+    return -1;
+
+  if(md->fat_type == 16)
+    off = cluster * 2;
+  else
+    off = cluster * 4;
+
+  sec = md->fat_start + (off / BSIZE);
+  sec_off = off % BSIZE;
+  b = bread(md->dev, sec);
+  if(b == 0)
+    return -1;
+
+  if(md->fat_type == 16){
+    if(sec_off + 1 >= BSIZE){
+      brelse(b);
+      return -1;
+    }
+    val = (uint)b->data[sec_off] | ((uint)b->data[sec_off + 1] << 8);
+  } else {
+    if(sec_off + 3 >= BSIZE){
+      brelse(b);
+      return -1;
+    }
+    val = (uint)b->data[sec_off] |
+          ((uint)b->data[sec_off + 1] << 8) |
+          ((uint)b->data[sec_off + 2] << 16) |
+          ((uint)b->data[sec_off + 3] << 24);
+    val &= 0x0FFFFFFF;
+  }
+  brelse(b);
+  *out = val;
+  return 0;
+}
+
+static int
+msdos_fat_set(struct msdos_mount_data *md, uint cluster, uint value)
+{
+  uint off;
+  uint sec_off;
+  uint i;
+
+  if(md == 0 || cluster < 2)
+    return -1;
+
+  if(md->fat_type == 16)
+    off = cluster * 2;
+  else
+    off = cluster * 4;
+  sec_off = off % BSIZE;
+
+  for(i = 0; i < md->num_fats; i++){
+    uint fat_base;
+    uint sec;
+    struct buf *b;
+
+    fat_base = md->fat_start + i * md->sectors_per_fat;
+    sec = fat_base + (off / BSIZE);
+    b = bread(md->dev, sec);
+    if(b == 0)
+      return -1;
+
+    if(md->fat_type == 16){
+      if(sec_off + 1 >= BSIZE){
+        brelse(b);
+        return -1;
+      }
+      b->data[sec_off] = value & 0xFF;
+      b->data[sec_off + 1] = (value >> 8) & 0xFF;
+    } else {
+      uint old;
+      uint nv;
+
+      if(sec_off + 3 >= BSIZE){
+        brelse(b);
+        return -1;
+      }
+      old = (uint)b->data[sec_off] |
+            ((uint)b->data[sec_off + 1] << 8) |
+            ((uint)b->data[sec_off + 2] << 16) |
+            ((uint)b->data[sec_off + 3] << 24);
+      nv = (old & 0xF0000000U) | (value & 0x0FFFFFFFU);
+      b->data[sec_off] = nv & 0xFF;
+      b->data[sec_off + 1] = (nv >> 8) & 0xFF;
+      b->data[sec_off + 2] = (nv >> 16) & 0xFF;
+      b->data[sec_off + 3] = (nv >> 24) & 0xFF;
+    }
+
+    bwrite(b);
+    brelse(b);
+  }
+  return 0;
+}
+
+static int
+msdos_zero_cluster(struct msdos_mount_data *md, uint cluster)
+{
+  uint csec;
+  uint s;
+
+  if(md == 0 || cluster < 2)
+    return -1;
+  csec = msdos_cluster_first_sector(md, cluster);
+  if(csec == 0)
+    return -1;
+
+  for(s = 0; s < md->sectors_per_cluster; s++){
+    struct buf *b;
+
+    b = bread(md->dev, csec + s);
+    if(b == 0)
+      return -1;
+    memset(b->data, 0, BSIZE);
+    bwrite(b);
+    brelse(b);
+  }
+  return 0;
+}
+
+static int
+msdos_alloc_cluster(struct msdos_mount_data *md, uint *out)
+{
+  uint c;
+  uint maxc;
+
+  if(md == 0 || out == 0)
+    return -1;
+
+  maxc = md->total_clusters + 1;
+  for(c = 2; c <= maxc; c++){
+    uint v;
+
+    if(msdos_fat_get(md, c, &v) < 0)
+      return -1;
+    if(v != 0)
+      continue;
+
+    if(msdos_fat_set(md, c, msdos_eoc_value(md)) < 0)
+      return -1;
+    if(msdos_zero_cluster(md, c) < 0)
+      return -1;
+    *out = c;
+    return 0;
+  }
+
+  return -1;
+}
+
+static int
+msdos_inode_dirent_location(struct msdos_mount_data *md, struct inode *ip,
+                            uint *sec, uint *off)
+{
+  uint inum;
+
+  if(md == 0 || ip == 0 || sec == 0 || off == 0)
+    return -1;
+  inum = ip->inum;
+  if(inum == ROOTINO)
+    return -1;
+
+  if((inum & 0xF0000000U) == MSDOS_ROOT16_INUM_BASE){
+    uint slot;
+    uint byte_off;
+
+    slot = inum - MSDOS_ROOT16_INUM_BASE;
+    byte_off = slot * sizeof(struct fat_dirent);
+    *sec = md->root_start + (byte_off / BSIZE);
+    *off = byte_off % BSIZE;
+    return 0;
+  }
+
+  {
+    uint dir_cluster;
+    uint slot;
+    uint byte_off;
+    uint csec;
+
+    dir_cluster = (inum >> 16) & 0xFFFF;
+    slot = inum & 0xFFFF;
+    if(dir_cluster < 2)
+      return -1;
+
+    byte_off = slot * sizeof(struct fat_dirent);
+    csec = msdos_cluster_first_sector(md, dir_cluster);
+    if(csec == 0)
+      return -1;
+
+    *sec = csec + (byte_off / BSIZE);
+    *off = byte_off % BSIZE;
+    return 0;
+  }
+}
+
+static int
+msdos_sync_inode_entry(struct inode *ip)
+{
+  struct msdos_mount_data *md;
+  uint sec;
+  uint off;
+  struct buf *b;
+  struct fat_dirent de;
+
+  if(ip == 0)
+    return -1;
+  md = msdos_data_for_dev(ip->dev);
+  if(md == 0)
+    return -1;
+  if(msdos_inode_dirent_location(md, ip, &sec, &off) < 0)
+    return -1;
+
+  b = bread(md->dev, sec);
+  if(b == 0)
+    return -1;
+  if(off + sizeof(de) > BSIZE){
+    brelse(b);
+    return -1;
+  }
+
+  memmove(&de, b->data + off, sizeof(de));
+  de.size = ip->size;
+  de.clu_lo = ip->addrs[0] & 0xFFFF;
+  de.clu_hi = (ip->addrs[0] >> 16) & 0xFFFF;
+  memmove(b->data + off, &de, sizeof(de));
+  bwrite(b);
+  brelse(b);
+  return 0;
+}
 
 static struct msdos_mount_data*
 msdos_data_for_dev(uint dev)
@@ -115,45 +365,12 @@ msdos_is_eoc(struct msdos_mount_data *md, uint cluster)
 static int
 msdos_next_cluster(struct msdos_mount_data *md, uint cluster, uint *next)
 {
-  uint off;
-  uint sec;
-  uint sec_off;
-  struct buf *b;
   uint val;
 
   if(md == 0 || next == 0 || cluster < 2)
     return -1;
-
-  if(md->fat_type == 16){
-    off = cluster * 2;
-  } else {
-    off = cluster * 4;
-  }
-
-  sec = md->fat_start + (off / BSIZE);
-  sec_off = off % BSIZE;
-  b = bread(md->dev, sec);
-  if(b == 0)
+  if(msdos_fat_get(md, cluster, &val) < 0)
     return -1;
-
-  if(md->fat_type == 16){
-    if(sec_off + 1 >= BSIZE){
-      brelse(b);
-      return -1;
-    }
-    val = (uint)b->data[sec_off] | ((uint)b->data[sec_off + 1] << 8);
-  } else {
-    if(sec_off + 3 >= BSIZE){
-      brelse(b);
-      return -1;
-    }
-    val = (uint)b->data[sec_off] |
-          ((uint)b->data[sec_off + 1] << 8) |
-          ((uint)b->data[sec_off + 2] << 16) |
-          ((uint)b->data[sec_off + 3] << 24);
-    val &= 0x0FFFFFFF;
-  }
-  brelse(b);
 
   if(msdos_is_eoc(md, val)){
     *next = 0;
@@ -750,6 +967,7 @@ msdos_mount_init(struct mount *m)
 
   datasz = totsec - md->data_start;
   clusters = datasz / md->sectors_per_cluster;
+  md->total_clusters = clusters;
 
   if(clusters < 65525){
     md->fat_type = 16;
@@ -855,7 +1073,13 @@ static int
 msdos_write_file_data(struct inode *ip, char *src, uint off, uint n)
 {
   struct msdos_mount_data *md;
+  uint old_first_cluster;
   uint cluster;
+  uint first_cluster;
+  uint last_cluster;
+  uint cluster_count;
+  uint need_clusters;
+  uint new_end;
   uint cluster_bytes;
   uint skip;
   uint within;
@@ -863,6 +1087,8 @@ msdos_write_file_data(struct inode *ip, char *src, uint off, uint n)
 
   if(ip == 0 || src == 0)
     return -1;
+
+  old_first_cluster = ip->addrs[0];
 
   md = msdos_data_for_dev(ip->dev);
   if(md == 0)
@@ -872,20 +1098,54 @@ msdos_write_file_data(struct inode *ip, char *src, uint off, uint n)
 
   if(n == 0)
     return 0;
-  // Staged write support: in-place only, no sparse write and no growth.
+  // Disallow sparse writes; growth is supported via FAT allocation.
   if(off > ip->size)
     return -1;
   if(off + n < off)
     return -1;
-  if(off + n > ip->size)
-    return -1;
+  new_end = off + n;
 
-  cluster = ip->addrs[0];
-  if(cluster < 2)
-    return -1;
+  first_cluster = ip->addrs[0];
 
   cluster_bytes = md->sectors_per_cluster * BSIZE;
   if(cluster_bytes == 0)
+    return -1;
+
+  need_clusters = (new_end + cluster_bytes - 1) / cluster_bytes;
+  if(need_clusters > 0){
+    if(first_cluster < 2){
+      if(msdos_alloc_cluster(md, &first_cluster) < 0)
+        return -1;
+      ip->addrs[0] = first_cluster;
+    }
+
+    cluster = first_cluster;
+    last_cluster = cluster;
+    cluster_count = 1;
+    while(cluster_count < need_clusters){
+      uint next;
+      if(msdos_next_cluster(md, last_cluster, &next) < 0)
+        return -1;
+      if(next == 0)
+        break;
+      last_cluster = next;
+      cluster_count++;
+    }
+
+    while(cluster_count < need_clusters){
+      uint newc;
+
+      if(msdos_alloc_cluster(md, &newc) < 0)
+        return -1;
+      if(msdos_fat_set(md, last_cluster, newc) < 0)
+        return -1;
+      last_cluster = newc;
+      cluster_count++;
+    }
+  }
+
+  cluster = ip->addrs[0];
+  if(need_clusters > 0 && cluster < 2)
     return -1;
 
   skip = off / cluster_bytes;
@@ -895,7 +1155,7 @@ msdos_write_file_data(struct inode *ip, char *src, uint off, uint n)
     if(msdos_next_cluster(md, cluster, &cluster) < 0)
       return -1;
     if(cluster == 0)
-      return -1;
+      return (done == 0) ? -1 : (int)done;
     skip--;
   }
 
@@ -941,6 +1201,15 @@ msdos_write_file_data(struct inode *ip, char *src, uint off, uint n)
       return (done == 0) ? -1 : (int)done;
     if(cluster == 0)
       return (done == 0) ? -1 : (int)done;
+  }
+
+  if(done > 0 && new_end > ip->size){
+    ip->size = new_end;
+    if(msdos_sync_inode_entry(ip) < 0)
+      return -1;
+  } else if(done > 0 && ip->addrs[0] != old_first_cluster){
+    if(msdos_sync_inode_entry(ip) < 0)
+      return -1;
   }
 
   return done;
