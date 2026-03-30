@@ -111,6 +111,7 @@ fileread(struct file *f, char *addr, int n)
 {
   int r;
   const struct vnode_ops *ops;
+  struct inode *mountpoint;
 
   if(f->readable == 0)
     return -1;
@@ -125,6 +126,55 @@ fileread(struct file *f, char *addr, int n)
         f->off += r;
       iunlock(f->ip);
       return r;
+    }
+
+    // For directories at mount roots, synthesize . and .. entries
+    if(f->ip->type == T_DIR && n == sizeof(struct dirent)){
+      mountpoint = vfs_mount_crossover(f->ip, 0);
+      if(mountpoint){
+        // This is a mount root - synthesize . and .. entries
+        if(f->off == 0){
+          // Entry 0: "." pointing to mount root itself
+          struct dirent de;
+          memset(&de, 0, sizeof(de));
+          de.inum = (ushort)(f->ip->inum & 0xFFFF);
+          if(de.inum == 0)
+            de.inum = 1;
+          de.name[0] = '.';
+          memmove(addr, &de, sizeof(de));
+          f->off += sizeof(de);
+          iput(mountpoint);
+          iunlock(f->ip);
+          return sizeof(de);
+        }
+        if(f->off == sizeof(struct dirent)){
+          // Entry 1: ".." pointing to parent in underlying fs
+          struct dirent de;
+          memset(&de, 0, sizeof(de));
+          de.inum = (ushort)(mountpoint->inum & 0xFFFF);
+          if(de.inum == 0)
+            de.inum = 1;
+          de.name[0] = '.';
+          de.name[1] = '.';
+          memmove(addr, &de, sizeof(de));
+          f->off += sizeof(de);
+          iput(mountpoint);
+          iunlock(f->ip);
+          return sizeof(de);
+        }
+        iput(mountpoint);
+        // For entries beyond . and .., adjust offset and fall through to fs read
+        // The fs will read from offset 0 when we ask for adjusted offset
+        ops = vfs_dev_vops(f->ip->dev);
+        if(ops && ops->read){
+          uint adj_off = f->off - 2 * sizeof(struct dirent);
+          r = ops->read(f->ip, addr, adj_off, n);
+          if(r > 0)
+            f->off += r;
+          iunlock(f->ip);
+          return r;
+        }
+      }
     }
     
     // Try VFS vnode_ops if device is mounted in VFS

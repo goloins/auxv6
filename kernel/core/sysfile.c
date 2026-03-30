@@ -118,6 +118,7 @@ buildcwd(struct inode *cwd, char *buf, int size)
 {
   struct inode *ip;
   struct inode *parent;
+  struct inode *cross;
   char parts[GETCWD_MAX_DEPTH][DIRSIZ + 1];
   int depth;
   int i;
@@ -139,9 +140,33 @@ buildcwd(struct inode *cwd, char *buf, int size)
       iunlockput(ip);
       return -1;
     }
+    // Check for mount boundary crossing
+    iunlock(ip);
+    cross = vfs_mount_crossover(ip, 0);
+    if(cross != 0){
+      // We're at a mount root - cross to underlying filesystem
+      // Don't record name here; let normal parent walk find it
+      iput(ip);
+      ip = cross;
+      continue;
+    }
+    ilock(ip);
     parent = inode_dir_lookup(ip, "..", 0);
     iunlock(ip);
     if(parent == 0){
+      iput(ip);
+      return -1;
+    }
+    // Check if parent is same as ip (stuck at a root)
+    if(parent->dev == ip->dev && parent->inum == ip->inum){
+      iput(parent);
+      // Try mount crossover as fallback
+      cross = vfs_mount_crossover(ip, 0);
+      if(cross != 0){
+        iput(ip);
+        ip = cross;
+        continue;
+      }
       iput(ip);
       return -1;
     }

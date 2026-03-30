@@ -1,0 +1,583 @@
+/*
+ * NVMe (Non-Volatile Memory Express) Driver for auxv6
+ *
+ * Supports NVMe 1.x storage controllers.
+ *
+ * Architecture:
+ * - Memory-mapped I/O via PCI BAR0
+ * - Admin queue for management commands
+ * - I/O queues (one per CPU ideally) for data commands
+ * - Submission/Completion queue pairs
+ *
+ * TODO Phase 1:
+ * - [ ] PCI detection and BAR0 mapping
+ * - [ ] Controller reset and initialization
+ * - [ ] Admin queue setup
+ * - [ ] IDENTIFY controller/namespace
+ * - [ ] Basic I/O queue setup
+ *
+ * TODO Phase 2:
+ * - [ ] Read/write command implementation
+ * - [ ] Block device integration
+ * - [ ] Interrupt handling
+ * - [ ] Multiple I/O queues
+ *
+ * TODO Phase 3:
+ * - [ ] Namespace management
+ * - [ ] MSI-X support
+ * - [ ] Power management
+ *
+ * Reference: NVM Express 1.4 Specification
+ * See also: Linux drivers/nvme/host/pci.c
+ */
+
+#include "types.h"
+#include "defs.h"
+#include "spinlock.h"
+#include "sleeplock.h"
+#include "pci.h"
+#include "blockdev.h"
+#include "stdint.h" 
+
+/* NVMe Register Offsets */
+#define NVME_REG_CAP        0x00    /* Controller Capabilities (64-bit) */
+#define NVME_REG_VS         0x08    /* Version */
+#define NVME_REG_INTMS      0x0C    /* Interrupt Mask Set */
+#define NVME_REG_INTMC      0x10    /* Interrupt Mask Clear */
+#define NVME_REG_CC         0x14    /* Controller Configuration */
+#define NVME_REG_CSTS       0x1C    /* Controller Status */
+#define NVME_REG_NSSR       0x20    /* NVM Subsystem Reset */
+#define NVME_REG_AQA        0x24    /* Admin Queue Attributes */
+#define NVME_REG_ASQ        0x28    /* Admin Submission Queue Base (64-bit) */
+#define NVME_REG_ACQ        0x30    /* Admin Completion Queue Base (64-bit) */
+
+/* Doorbell registers start at 0x1000 */
+#define NVME_REG_SQ0TDBL    0x1000  /* Submission Queue 0 Tail Doorbell */
+
+/* CAP Register Fields */
+#define NVME_CAP_MQES(cap)     ((cap) & 0xFFFF)         /* Max Queue Entries Supported */
+#define NVME_CAP_CQR(cap)      (((cap) >> 16) & 0x1)    /* Contiguous Queues Required */
+#define NVME_CAP_AMS(cap)      (((cap) >> 17) & 0x3)    /* Arbitration Mechanism Supported */
+#define NVME_CAP_TO(cap)       (((cap) >> 24) & 0xFF)   /* Timeout (500ms units) */
+#define NVME_CAP_DSTRD(cap)    (((cap) >> 32) & 0xF)    /* Doorbell Stride */
+#define NVME_CAP_NSSRS(cap)    (((cap) >> 36) & 0x1)    /* NVM Subsystem Reset Supported */
+#define NVME_CAP_CSS(cap)      (((cap) >> 37) & 0xFF)   /* Command Sets Supported */
+#define NVME_CAP_MPSMIN(cap)   (((cap) >> 48) & 0xF)    /* Memory Page Size Minimum */
+#define NVME_CAP_MPSMAX(cap)   (((cap) >> 52) & 0xF)    /* Memory Page Size Maximum */
+
+/* CC Register Fields */
+#define NVME_CC_EN          (1 << 0)    /* Enable */
+#define NVME_CC_CSS_NVM     (0 << 4)    /* NVM Command Set */
+#define NVME_CC_MPS(n)      (((n) & 0xF) << 7)   /* Memory Page Size (2^(12+n)) */
+#define NVME_CC_AMS_RR      (0 << 11)   /* Round Robin arbitration */
+#define NVME_CC_SHN_NONE    (0 << 14)   /* No shutdown notification */
+#define NVME_CC_SHN_NORMAL  (1 << 14)   /* Normal shutdown */
+#define NVME_CC_SHN_ABRUPT  (2 << 14)   /* Abrupt shutdown */
+#define NVME_CC_IOSQES(n)   (((n) & 0xF) << 16)  /* I/O SQ Entry Size (2^n) */
+#define NVME_CC_IOCQES(n)   (((n) & 0xF) << 20)  /* I/O CQ Entry Size (2^n) */
+
+/* CSTS Register Fields */
+#define NVME_CSTS_RDY       (1 << 0)    /* Ready */
+#define NVME_CSTS_CFS       (1 << 1)    /* Controller Fatal Status */
+#define NVME_CSTS_SHST_MASK (3 << 2)    /* Shutdown Status */
+#define NVME_CSTS_NSSRO     (1 << 4)    /* NVM Subsystem Reset Occurred */
+#define NVME_CSTS_PP        (1 << 5)    /* Processing Paused */
+
+/* Admin Commands */
+#define NVME_ADMIN_DELETE_SQ    0x00
+#define NVME_ADMIN_CREATE_SQ    0x01
+#define NVME_ADMIN_GET_LOG_PAGE 0x02
+#define NVME_ADMIN_DELETE_CQ    0x04
+#define NVME_ADMIN_CREATE_CQ    0x05
+#define NVME_ADMIN_IDENTIFY     0x06
+#define NVME_ADMIN_ABORT        0x08
+#define NVME_ADMIN_SET_FEATURES 0x09
+#define NVME_ADMIN_GET_FEATURES 0x0A
+#define NVME_ADMIN_ASYNC_EVENT  0x0C
+#define NVME_ADMIN_NS_MGMT      0x0D
+#define NVME_ADMIN_FW_COMMIT    0x10
+#define NVME_ADMIN_FW_DOWNLOAD  0x11
+#define NVME_ADMIN_NS_ATTACH    0x15
+#define NVME_ADMIN_FORMAT_NVM   0x80
+#define NVME_ADMIN_SECURITY_SEND 0x81
+#define NVME_ADMIN_SECURITY_RECV 0x82
+
+/* I/O Commands (NVM Command Set) */
+#define NVME_CMD_FLUSH          0x00
+#define NVME_CMD_WRITE          0x01
+#define NVME_CMD_READ           0x02
+#define NVME_CMD_WRITE_UNCOR    0x04
+#define NVME_CMD_COMPARE        0x05
+#define NVME_CMD_WRITE_ZEROES   0x08
+#define NVME_CMD_DSM            0x09    /* Dataset Management */
+#define NVME_CMD_VERIFY         0x0C
+#define NVME_CMD_RESERVATION    0x0D
+#define NVME_CMD_RESERVATION_R  0x0E
+#define NVME_CMD_RESERVATION_A  0x11
+#define NVME_CMD_RESERVATION_E  0x15
+
+/* Submission Queue Entry (64 bytes) */
+struct nvme_sqe {
+    uint8_t  opcode;
+    uint8_t  flags;
+    uint16_t cid;           /* Command ID */
+    uint32_t nsid;          /* Namespace ID */
+    uint64_t reserved;
+    uint64_t mptr;          /* Metadata Pointer */
+    uint64_t prp1;          /* PRP Entry 1 */
+    uint64_t prp2;          /* PRP Entry 2 */
+    uint32_t cdw10;
+    uint32_t cdw11;
+    uint32_t cdw12;
+    uint32_t cdw13;
+    uint32_t cdw14;
+    uint32_t cdw15;
+} __attribute__((packed));
+
+/* Completion Queue Entry (16 bytes) */
+struct nvme_cqe {
+    uint32_t result;        /* Command-specific */
+    uint32_t reserved;
+    uint16_t sq_head;       /* SQ Head Pointer */
+    uint16_t sq_id;         /* SQ Identifier */
+    uint16_t cid;           /* Command ID */
+    uint16_t status;        /* Status Field */
+} __attribute__((packed));
+
+#define NVME_CQE_STATUS_PHASE(s)  ((s) & 0x1)
+#define NVME_CQE_STATUS_SC(s)     (((s) >> 1) & 0xFF)     /* Status Code */
+#define NVME_CQE_STATUS_SCT(s)    (((s) >> 9) & 0x7)      /* Status Code Type */
+#define NVME_CQE_STATUS_MORE(s)   (((s) >> 14) & 0x1)
+#define NVME_CQE_STATUS_DNR(s)    (((s) >> 15) & 0x1)     /* Do Not Retry */
+
+/* Identify Controller Data Structure (4KB) */
+struct nvme_id_ctrl {
+    uint16_t vid;           /* PCI Vendor ID */
+    uint16_t ssvid;         /* PCI Subsystem Vendor ID */
+    char     sn[20];        /* Serial Number */
+    char     mn[40];        /* Model Number */
+    char     fr[8];         /* Firmware Revision */
+    uint8_t  rab;           /* Recommended Arbitration Burst */
+    uint8_t  ieee[3];       /* IEEE OUI */
+    uint8_t  cmic;          /* Controller Multi-Path I/O & NS Sharing */
+    uint8_t  mdts;          /* Max Data Transfer Size (2^n * MPS) */
+    uint16_t cntlid;        /* Controller ID */
+    uint32_t ver;           /* Version */
+    uint32_t rtd3r;         /* RTD3 Resume Latency */
+    uint32_t rtd3e;         /* RTD3 Entry Latency */
+    uint32_t oaes;          /* Optional Async Events Supported */
+    uint32_t ctratt;        /* Controller Attributes */
+    uint8_t  reserved[156];
+    /* ... more fields omitted for brevity ... */
+    uint8_t  padding[4096 - 256];
+} __attribute__((packed));
+
+/* Identify Namespace Data Structure (4KB) */
+struct nvme_id_ns {
+    uint64_t nsze;          /* Namespace Size */
+    uint64_t ncap;          /* Namespace Capacity */
+    uint64_t nuse;          /* Namespace Utilization */
+    uint8_t  nsfeat;        /* Namespace Features */
+    uint8_t  nlbaf;         /* Number of LBA Formats */
+    uint8_t  flbas;         /* Formatted LBA Size */
+    uint8_t  mc;            /* Metadata Capabilities */
+    uint8_t  dpc;           /* End-to-end Data Protection */
+    uint8_t  dps;           /* Data Protection Settings */
+    uint8_t  nmic;          /* NS Multi-path I/O & Sharing */
+    uint8_t  rescap;        /* Reservation Capabilities */
+    uint8_t  fpi;           /* Format Progress Indicator */
+    uint8_t  reserved[99];
+    uint8_t  lbaf[64];      /* LBA Format Support */
+    uint8_t  padding[4096 - 192];
+} __attribute__((packed));
+
+/* Queue configuration */
+#define NVME_ADMIN_QUEUE_SIZE  64
+#define NVME_IO_QUEUE_SIZE     256
+
+/* Per-queue state */
+struct nvme_queue {
+    int qid;
+    int depth;
+    
+    struct nvme_sqe *sq;    /* Submission Queue */
+    struct nvme_cqe *cq;    /* Completion Queue */
+    
+    uint16_t sq_tail;       /* SQ tail (written by driver) */
+    uint16_t cq_head;       /* CQ head (written by driver) */
+    uint8_t  cq_phase;      /* Expected phase bit */
+    
+    volatile uint32_t *sq_doorbell;
+    volatile uint32_t *cq_doorbell;
+    
+    struct sleeplock lock;
+};
+
+/* Per-controller state */
+struct nvme_softc {
+    struct pci_dev    *pci;
+    struct spinlock    lock;
+    
+    volatile uint32_t *regs;
+    uint64_t cap;
+    uint32_t db_stride;     /* Doorbell stride in bytes */
+    
+    /* Admin queue */
+    struct nvme_queue admin_q;
+    
+    /* I/O queues */
+    struct nvme_queue *io_queues;
+    int num_io_queues;
+    
+    /* Controller info */
+    struct nvme_id_ctrl *id_ctrl;
+    
+    /* Namespace info */
+    uint32_t nsid;          /* Currently active namespace */
+    uint64_t nsze;          /* Namespace size in blocks */
+    uint32_t lba_size;      /* Logical block size */
+    
+    /* Block device ID */
+    uint dev_id;
+};
+
+/* Global array of NVMe controllers */
+#define MAX_NVME 4
+static struct nvme_softc nvme_devices[MAX_NVME];
+static int nvme_count = 0;
+
+/*
+ * Read controller register (32-bit)
+ */
+static uint32_t
+nvme_read32(struct nvme_softc *sc, uint32_t off)
+{
+    return sc->regs[off / 4];
+}
+
+/*
+ * Write controller register (32-bit)
+ */
+static void
+nvme_write32(struct nvme_softc *sc, uint32_t off, uint32_t val)
+{
+    sc->regs[off / 4] = val;
+}
+
+/*
+ * Read controller register (64-bit)
+ */
+static uint64_t
+nvme_read64(struct nvme_softc *sc, uint32_t off)
+{
+    uint64_t lo = nvme_read32(sc, off);
+    uint64_t hi = nvme_read32(sc, off + 4);
+    return lo | (hi << 32);
+}
+
+/*
+ * Write controller register (64-bit)
+ */
+static void
+nvme_write64(struct nvme_softc *sc, uint32_t off, uint64_t val)
+{
+    nvme_write32(sc, off, val & 0xFFFFFFFF);
+    nvme_write32(sc, off + 4, val >> 32);
+}
+
+/*
+ * Wait for controller ready
+ */
+static int
+nvme_wait_ready(struct nvme_softc *sc, int expected)
+{
+    uint32_t timeout = NVME_CAP_TO(sc->cap) * 500;  /* timeout in ms */
+    
+    for (uint32_t i = 0; i < timeout; i++) {
+        uint32_t csts = nvme_read32(sc, NVME_REG_CSTS);
+        
+        if (csts & NVME_CSTS_CFS) {
+            cprintf("nvme: controller fatal status\n");
+            return -1;
+        }
+        
+        if ((csts & NVME_CSTS_RDY) == expected)
+            return 0;
+        
+        microdelay(1000);
+    }
+    
+    cprintf("nvme: timeout waiting for ready=%d\n", expected);
+    return -1;
+}
+
+/*
+ * Reset controller
+ */
+static int
+nvme_reset(struct nvme_softc *sc)
+{
+    /* Disable controller */
+    nvme_write32(sc, NVME_REG_CC, 0);
+    
+    /* Wait for not ready */
+    if (nvme_wait_ready(sc, 0) < 0)
+        return -1;
+    
+    return 0;
+}
+
+/*
+ * Initialize a queue
+ */
+static int
+nvme_queue_init(struct nvme_softc *sc, struct nvme_queue *q, int qid, int depth)
+{
+    q->qid = qid;
+    q->depth = depth;
+    q->sq_tail = 0;
+    q->cq_head = 0;
+    q->cq_phase = 1;
+    
+    initsleeplock(&q->lock, "nvme_q");
+    
+    /* Allocate submission queue */
+    q->sq = (struct nvme_sqe *)kalloc();
+    if (!q->sq)
+        return -1;
+    memset(q->sq, 0, depth * sizeof(struct nvme_sqe));
+    
+    /* Allocate completion queue */
+    q->cq = (struct nvme_cqe *)kalloc();
+    if (!q->cq)
+        return -1;
+    memset(q->cq, 0, depth * sizeof(struct nvme_cqe));
+    
+    /* Set doorbell pointers */
+    uint32_t db_off = 0x1000 + qid * 2 * sc->db_stride;
+    q->sq_doorbell = (volatile uint32_t *)((char *)sc->regs + db_off);
+    q->cq_doorbell = (volatile uint32_t *)((char *)sc->regs + db_off + sc->db_stride);
+    
+    return 0;
+}
+
+/*
+ * Submit a command to a queue
+ */
+static int
+nvme_submit_cmd(struct nvme_queue *q, struct nvme_sqe *cmd)
+{
+    acquiresleep(&q->lock);
+    
+    /* Copy command to submission queue */
+    memmove(&q->sq[q->sq_tail], cmd, sizeof(*cmd));
+    
+    /* Advance tail */
+    q->sq_tail = (q->sq_tail + 1) % q->depth;
+    
+    /* Ring doorbell */
+    *q->sq_doorbell = q->sq_tail;
+    
+    releasesleep(&q->lock);
+    
+    return 0;
+}
+
+/*
+ * Poll for completion
+ */
+static int
+nvme_poll_completion(struct nvme_queue *q, uint16_t cid, uint32_t *result)
+{
+    struct nvme_cqe *cqe;
+    
+    /* Poll for completion */
+    for (int i = 0; i < 100000; i++) {
+        cqe = &q->cq[q->cq_head];
+        
+        if (NVME_CQE_STATUS_PHASE(cqe->status) == q->cq_phase) {
+            /* Got a completion */
+            if (cqe->cid == cid) {
+                if (result)
+                    *result = cqe->result;
+                
+                /* Advance head */
+                q->cq_head++;
+                if (q->cq_head >= q->depth) {
+                    q->cq_head = 0;
+                    q->cq_phase ^= 1;
+                }
+                
+                /* Update doorbell */
+                *q->cq_doorbell = q->cq_head;
+                
+                /* Check status */
+                if (NVME_CQE_STATUS_SC(cqe->status) != 0) {
+                    cprintf("nvme: command error: sc=%d sct=%d\n",
+                            NVME_CQE_STATUS_SC(cqe->status),
+                            NVME_CQE_STATUS_SCT(cqe->status));
+                    return -1;
+                }
+                
+                return 0;
+            }
+        }
+        
+        microdelay(10);
+    }
+    
+    cprintf("nvme: completion timeout\n");
+    return -1;
+}
+
+/*
+ * Send IDENTIFY command
+ */
+static int
+nvme_identify(struct nvme_softc *sc, uint32_t nsid, uint32_t cns, void *data)
+{
+    struct nvme_sqe cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    
+    cmd.opcode = NVME_ADMIN_IDENTIFY;
+    cmd.nsid = nsid;
+    cmd.prp1 = V2P(data);
+    cmd.cdw10 = cns;
+    cmd.cid = 1;
+    
+    nvme_submit_cmd(&sc->admin_q, &cmd);
+    return nvme_poll_completion(&sc->admin_q, 1, 0);
+}
+
+/*
+ * Initialize controller
+ */
+static int
+nvme_init_controller(struct nvme_softc *sc)
+{
+    /* Read capabilities */
+    sc->cap = nvme_read64(sc, NVME_REG_CAP);
+    sc->db_stride = 4 << NVME_CAP_DSTRD(sc->cap);
+    
+    cprintf("nvme: cap=0x%x%x mqes=%d dstrd=%d\n",
+            (uint32_t)(sc->cap >> 32), (uint32_t)sc->cap,
+            (int)NVME_CAP_MQES(sc->cap), sc->db_stride);
+    
+    /* Reset controller */
+    if (nvme_reset(sc) < 0)
+        return -1;
+    
+    /* Initialize admin queue */
+    if (nvme_queue_init(sc, &sc->admin_q, 0, NVME_ADMIN_QUEUE_SIZE) < 0)
+        return -1;
+    
+    /* Set admin queue attributes */
+    nvme_write32(sc, NVME_REG_AQA,
+        ((NVME_ADMIN_QUEUE_SIZE - 1) << 16) |
+        (NVME_ADMIN_QUEUE_SIZE - 1));
+    
+    /* Set admin queue base addresses */
+    nvme_write64(sc, NVME_REG_ASQ, V2P(sc->admin_q.sq));
+    nvme_write64(sc, NVME_REG_ACQ, V2P(sc->admin_q.cq));
+    
+    /* Configure and enable controller */
+    uint32_t cc = NVME_CC_EN |
+                  NVME_CC_CSS_NVM |
+                  NVME_CC_MPS(0) |      /* 4KB page size */
+                  NVME_CC_AMS_RR |
+                  NVME_CC_SHN_NONE |
+                  NVME_CC_IOSQES(6) |   /* 64 bytes */
+                  NVME_CC_IOCQES(4);    /* 16 bytes */
+    
+    nvme_write32(sc, NVME_REG_CC, cc);
+    
+    /* Wait for ready */
+    if (nvme_wait_ready(sc, NVME_CSTS_RDY) < 0)
+        return -1;
+    
+    cprintf("nvme: controller enabled\n");
+    
+    /* Allocate and execute IDENTIFY CONTROLLER */
+    sc->id_ctrl = (struct nvme_id_ctrl *)kalloc();
+    if (!sc->id_ctrl)
+        return -1;
+    memset(sc->id_ctrl, 0, 4096);
+    
+    if (nvme_identify(sc, 0, 1, sc->id_ctrl) < 0) {
+        cprintf("nvme: identify controller failed\n");
+        return -1;
+    }
+    
+    /* Print controller info */
+    char sn[21], mn[41];
+    memmove(sn, sc->id_ctrl->sn, 20); sn[20] = 0;
+    memmove(mn, sc->id_ctrl->mn, 40); mn[40] = 0;
+    cprintf("nvme: model=%s serial=%s\n", mn, sn);
+    
+    return 0;
+}
+
+/*
+ * PCI probe function
+ */
+int
+nvme_probe(struct pci_dev *pci)
+{
+    if (nvme_count >= MAX_NVME)
+        return -1;
+    
+    struct nvme_softc *sc = &nvme_devices[nvme_count];
+    memset(sc, 0, sizeof(*sc));
+    initlock(&sc->lock, "nvme");
+    sc->pci = pci;
+    
+    /* Map BAR0 */
+    sc->regs = pci_map_bar(pci, 0);
+    if (!sc->regs) {
+        cprintf("nvme: failed to map BAR0\n");
+        return -1;
+    }
+    
+    cprintf("nvme: found at %d:%d.%d regs=%p\n",
+            pci->bus, pci->slot, pci->func, sc->regs);
+    
+    /* Enable memory and bus master */
+    pci_enable_mem(pci);
+    pci_set_master(pci);
+    
+    /* Disable interrupts during init */
+    nvme_write32(sc, NVME_REG_INTMS, 0xFFFFFFFF);
+    
+    /* Initialize controller */
+    if (nvme_init_controller(sc) < 0)
+        return -1;
+    
+    /* Enable interrupts */
+    nvme_write32(sc, NVME_REG_INTMC, 0xFFFFFFFF);
+    pci_enable_irq(pci, ncpu - 1);
+    
+    nvme_count++;
+    
+    return 0;
+}
+
+/*
+ * Module init
+ */
+void
+nvme_init(void)
+{
+    cprintf("nvme: initializing driver\n");
+    
+    /* Search for NVMe PCI devices */
+    for (int i = 0; i < pci_device_count(); i++) {
+        struct pci_dev *dev = pci_get_device(i);
+        if (!dev)
+            continue;
+        
+        if (dev->class_code == PCI_CLASS_STORAGE &&
+            dev->subclass == PCI_SUBCLASS_NVME) {
+            nvme_probe(dev);
+        }
+    }
+}

@@ -289,6 +289,22 @@ proc_cwd_dev(void)
   return dev;
 }
 
+struct inode*
+proc_cwd_idup(void)
+{
+  struct proc *p;
+  struct inode *ip;
+
+  ip = 0;
+  acquire(&ptable.lock);
+  p = myproc();
+  if(p && p->cwd)
+    ip = idup(p->cwd);
+  release(&ptable.lock);
+
+  return ip;
+}
+
 //PAGEBREAK: 32
 // Look in the process table for an UNUSED proc.
 // If found, change state to EMBRYO and initialize

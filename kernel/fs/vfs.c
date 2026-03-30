@@ -432,6 +432,96 @@ vfs_is_root_inode(struct inode *ip)
   return is_root;
 }
 
+// If ip is a mountpoint (underlying directory), return the root inode
+// of the mounted filesystem (with idup). Otherwise return 0.
+// This enables crossing INTO a mounted filesystem during path resolution.
+static struct inode*
+vfs_cross_into_mount(struct inode *ip)
+{
+  int i;
+  struct mount *m;
+  struct inode *root;
+
+  if(ip == 0)
+    return 0;
+
+  root = 0;
+  acquire(&vfslock);
+  for(i = 0; i < VFS_MOUNTS_MAX; i++){
+    m = &mounts[i];
+    if(m->used == 0 || m->fs == 0)
+      continue;
+    // Skip root mount - it has no mountpoint to cross from
+    if(m->path[0] == '/' && m->path[1] == 0)
+      continue;
+    // Check if this mount's mountpoint matches ip
+    if(m->mountpoint && m->mountpoint->dev == ip->dev &&
+       m->mountpoint->inum == ip->inum){
+      // Found it - get the mounted filesystem's root inode
+      if(m->fs->ops.root_inode){
+        release(&vfslock);
+        root = m->fs->ops.root_inode();
+        return root;
+      }
+      break;
+    }
+  }
+  release(&vfslock);
+  return 0;
+}
+
+// If ip is the root inode of a non-root mount, return the mountpoint
+// inode from the underlying filesystem (with idup) and copy the mount
+// basename into name. Otherwise return 0.
+struct inode*
+vfs_mount_crossover(struct inode *ip, char *name)
+{
+  int i;
+  struct mount *m;
+  struct inode *mp;
+  char *p;
+  int len;
+
+  if(ip == 0)
+    return 0;
+
+  mp = 0;
+  acquire(&vfslock);
+  for(i = 0; i < VFS_MOUNTS_MAX; i++){
+    m = &mounts[i];
+    if(m->used == 0 || m->fs == 0)
+      continue;
+    // Skip root mount
+    if(m->path[0] == '/' && m->path[1] == 0)
+      continue;
+    // Check if this mount's device matches and ip is at ROOTINO
+    if((uint)m->dev == ip->dev && ip->inum == ROOTINO){
+      // Found the mount - get the mountpoint from underlying fs
+      mp = m->mountpoint;
+      if(mp)
+        mp = idup(mp);
+      // Extract basename from mount path for name
+      if(name){
+        p = m->path;
+        len = strlen(p);
+        // Find last component
+        while(len > 0 && p[len-1] == '/')
+          len--;
+        while(len > 0 && p[len-1] != '/')
+          len--;
+        safestrcpy(name, p + len, DIRSIZ + 1);
+        // Strip trailing slashes from name
+        len = strlen(name);
+        while(len > 0 && name[len-1] == '/')
+          name[--len] = 0;
+      }
+      break;
+    }
+  }
+  release(&vfslock);
+  return mp;
+}
+
 struct inode*
 vfs_namei(char *path)
 {
@@ -509,6 +599,18 @@ vfs_lookup(char *path, struct vnode *vn)
     vn->mnt = 0;
     return -1;
   }
+
+  // Check if the resolved inode is a mount point - if so, cross into
+  // the mounted filesystem and return its root instead.
+  {
+    struct inode *mounted_root;
+    mounted_root = vfs_cross_into_mount(ip);
+    if(mounted_root){
+      iput(ip);
+      ip = mounted_root;
+    }
+  }
+
   vn->ip = ip;
   return 0;
 }

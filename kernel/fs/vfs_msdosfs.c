@@ -595,6 +595,21 @@ msdos_component_to_83(char *name, uchar out[11])
   if(name == 0 || name[0] == 0)
     return -1;
 
+  // Handle FAT dot entries explicitly.
+  if(name[0] == '.' && name[1] == 0){
+    for(i = 0; i < 11; i++)
+      out[i] = ' ';
+    out[0] = '.';
+    return 0;
+  }
+  if(name[0] == '.' && name[1] == '.' && name[2] == 0){
+    for(i = 0; i < 11; i++)
+      out[i] = ' ';
+    out[0] = '.';
+    out[1] = '.';
+    return 0;
+  }
+
   for(i = 0; i < 11; i++)
     out[i] = ' ';
 
@@ -972,9 +987,20 @@ msdos_walk(char *path, int nameiparent, char *name)
   if(path == 0)
     return 0;
 
-  ip = msdos_root_inode();
-  if(ip == 0)
-    return 0;
+  if(path[0] == '/'){
+    ip = msdos_root_inode();
+    if(ip == 0)
+      return 0;
+  } else {
+    ip = proc_cwd_idup();
+    if(ip == 0 || msdos_data_for_dev(ip->dev) == 0){
+      if(ip)
+        iput(ip);
+      ip = msdos_root_inode();
+      if(ip == 0)
+        return 0;
+    }
+  }
 
   i = 0;
   while(path[i] == '/')
@@ -1010,6 +1036,31 @@ msdos_walk(char *path, int nameiparent, char *name)
 
     if(namecmp(elem, ".") == 0)
       continue;
+
+    // Handle ".." at mount root - cross to underlying filesystem and continue
+    // looking up ".." there to get the actual parent directory
+    if(namecmp(elem, "..") == 0 && ip->inum == ROOTINO){
+      struct inode *mountpoint;
+      mountpoint = vfs_mount_crossover(ip, 0);
+      if(mountpoint){
+        const struct vnode_ops *ops;
+        iput(ip);
+        // Now look up ".." in the underlying filesystem
+        ops = vfs_dev_vops(mountpoint->dev);
+        if(ops && ops->dirlookup){
+          ilock(mountpoint);
+          next = ops->dirlookup(mountpoint, "..", 0);
+          iunlockput(mountpoint);
+          if(next == 0)
+            return 0;
+          ip = next;
+          continue;
+        }
+        // Fallback: just use mountpoint (shouldn't happen)
+        ip = mountpoint;
+        continue;
+      }
+    }
 
     next = msdos_dirlookup(ip, elem, 0);
     if(next == 0){
@@ -1196,6 +1247,7 @@ msdos_read(struct inode *ip, char *dst, uint off, uint n)
   struct nth_ctx ctx;
   struct dirent de;
   char nm[16];
+  uint dinum;
   uint cpy;
 
   if(ip == 0 || dst == 0)
@@ -1215,7 +1267,10 @@ msdos_read(struct inode *ip, char *dst, uint off, uint n)
       return 0;
 
     memset(&de, 0, sizeof(de));
-    de.inum = (ushort)(ctx.inum & 0xFFFF);
+    dinum = ctx.inum & 0xFFFF;
+    if(dinum == 0)
+      dinum = 1;
+    de.inum = (ushort)dinum;
     memset(nm, 0, sizeof(nm));
     msdos_entry_name(&ctx.de, nm, sizeof(nm));
     cpy = strlen(nm);
