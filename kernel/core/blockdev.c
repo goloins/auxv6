@@ -159,6 +159,22 @@ bdev_register_part(uint dev, uint parent, uint start, uint nblocks)
 }
 
 int
+bdev_set_nblocks(uint dev, uint nblocks)
+{
+  if(dev >= NDEV || nblocks == 0)
+    return -1;
+
+  acquire(&bdevtable.lock);
+  if(bdevtable.dev[dev].ops == 0 || bdevtable.dev[dev].is_part){
+    release(&bdevtable.lock);
+    return -1;
+  }
+  bdevtable.dev[dev].nblocks = nblocks;
+  release(&bdevtable.lock);
+  return 0;
+}
+
+int
 bdevrw(struct buf *b)
 {
   const struct bdevsw *ops;
@@ -221,6 +237,9 @@ bdev_nblocks(uint dev)
     return 0;
 
   if(is_part)
+    return nblocks;
+
+  if(nblocks != 0)
     return nblocks;
 
   if(ops->nblocks == 0)

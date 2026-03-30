@@ -22,6 +22,7 @@ user/whoami
 user/cat
 user/echo
 user/forktest
+user/fatregress
 user/fsregress
 user/grep
 user/init
@@ -56,3 +57,4 @@ user/wc
 user/zombie
 include/rootfs_config.h
 .ext2root/
+.fatroot/

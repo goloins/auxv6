@@ -47,19 +47,21 @@ static uint ide_capacity[NDEV];
 static uint
 ide_extract_lba_capacity(ushort *identify)
 {
-  // Words 100-101: 28-bit LBA capacity (total sectors)
-  uint lba28_low = identify[100];
-  uint lba28_high = identify[101];
+  // Words 60-61: 28-bit LBA capacity (total sectors)
+  uint lba28_low = identify[60];
+  uint lba28_high = identify[61];
   uint lba28_sectors = lba28_low | (lba28_high << 16);
 
-  // Words 102-103: 48-bit LBA capacity (for drives > 137GB)
-  uint lba48_low = identify[102];
-  uint lba48_high = identify[103];
+  // Words 100-103: 48-bit LBA capacity. We only keep the low 32 bits.
+  uint lba48_low = identify[100];
+  uint lba48_high = identify[101];
+  uint lba48_upper_low = identify[102];
+  uint lba48_upper_high = identify[103];
   uint lba48_sectors = lba48_low | (lba48_high << 16);
 
   // Prefer LBA48 if supported (non-zero), else use LBA28
   // Note: We only use 32-bit capacity since we can't handle > 2TB anyway
-  if(lba48_sectors != 0)
+  if(lba48_sectors != 0 || lba48_upper_low != 0 || lba48_upper_high != 0)
     return lba48_sectors;
   return lba28_sectors;
 }
@@ -147,8 +149,10 @@ ide_scan_partitions(uint dev)
   uchar mbr[SECTOR_SIZE];
   struct mbr_part *parts;
   uint blocks_per_fs_block;
+  uint total_sectors;
   uint unit;
   uint p;
+  int saw_valid;
 
   if(bdev_nblocks(dev) == 0)
     return;
@@ -161,7 +165,9 @@ ide_scan_partitions(uint dev)
 
   parts = (struct mbr_part *)(mbr + 446);
   blocks_per_fs_block = BSIZE / SECTOR_SIZE;
+  total_sectors = bdev_nblocks(dev) * blocks_per_fs_block;
   unit = dev;
+  saw_valid = 0;
   for(p = 0; p < DISK_PARTS_PER_DISK; p++){
     uint start;
     uint count;
@@ -173,6 +179,12 @@ ide_scan_partitions(uint dev)
     count = parts[p].lba_count;
     if(count == 0)
       continue;
+    if(parts[p].type == 0)
+      continue;
+    if(start == 0)
+      continue;
+    if(start + count < start || start + count > total_sectors)
+      continue;
     if(blocks_per_fs_block == 0)
       continue;
     if((start % blocks_per_fs_block) != 0 || (count / blocks_per_fs_block) == 0)
@@ -181,10 +193,15 @@ ide_scan_partitions(uint dev)
     start_block = start / blocks_per_fs_block;
     nblocks = count / blocks_per_fs_block;
     pdev = DISK_PART_DEV(unit, p + 1);
-    if(bdev_register_part(pdev, dev, start_block, nblocks) == 0)
+    if(bdev_register_part(pdev, dev, start_block, nblocks) == 0){
+      saw_valid = 1;
       IDEDBG("ide: part hd%c%d dev=%d start=%d nblk=%d\n",
              'a' + unit, p + 1, pdev, start_block, nblocks);
+    }
   }
+
+  if(!saw_valid)
+    IDEDBG("ide: ignoring non-partitioned boot sector on dev=%d\n", dev);
 }
 
 static int
@@ -371,8 +388,11 @@ idestart(struct buf *b)
   if(b == 0)
     panic("idestart");
   nblocks = bdev_nblocks(b->dev);
-  if(nblocks == 0 || b->blockno >= nblocks)
+  if(nblocks == 0 || b->blockno >= nblocks){
+    cprintf("ide: out-of-range dev=%d blk=%d nblocks=%d flags=%x\n",
+            b->dev, b->blockno, nblocks, b->flags);
     panic("idestart: block out of range");
+  }
   int sector_per_block =  BSIZE/SECTOR_SIZE;
   int sector = b->blockno * sector_per_block;
   int read_cmd = (sector_per_block == 1) ? IDE_CMD_READ :  IDE_CMD_RDMUL;
