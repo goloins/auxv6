@@ -14,6 +14,7 @@
 
 #define MSDOS_BOOT_SIG_OFF 510
 #define MSDOS_BOOT_SIG 0xAA55
+#define MSDOS_ATTR_RDONLY 0x01
 #define MSDOS_ATTR_DIR 0x10
 #define MSDOS_ATTR_VOLID 0x08
 #define MSDOS_ATTR_LFN 0x0F
@@ -276,6 +277,103 @@ msdos_name_matches_83(char *name, struct fat_dirent *de)
   return memcmp(want, de->name, 11) == 0;
 }
 
+static uint
+msdos_min_u32(uint a, uint b)
+{
+  return (a < b) ? a : b;
+}
+
+static int
+msdos_read_file_data(struct inode *ip, char *dst, uint off, uint n)
+{
+  struct msdos_mount_data *md;
+  uint cluster;
+  uint cluster_bytes;
+  uint skip;
+  uint within;
+  uint done;
+
+  if(ip == 0 || dst == 0)
+    return -1;
+
+  md = msdos_data_for_dev(ip->dev);
+  if(md == 0)
+    return -1;
+  if(md->sectors_per_cluster == 0)
+    return -1;
+
+  if(off >= ip->size)
+    return 0;
+  if(off + n < off)
+    return -1;
+  if(off + n > ip->size)
+    n = ip->size - off;
+
+  cluster = ip->addrs[0];
+  if(cluster < 2)
+    return (n == 0) ? 0 : -1;
+
+  cluster_bytes = md->sectors_per_cluster * BSIZE;
+  if(cluster_bytes == 0)
+    return -1;
+
+  skip = off / cluster_bytes;
+  within = off % cluster_bytes;
+
+  while(skip > 0){
+    if(msdos_next_cluster(md, cluster, &cluster) < 0)
+      return -1;
+    if(cluster == 0)
+      return 0;
+    skip--;
+  }
+
+  done = 0;
+  while(done < n && cluster >= 2){
+    uint csec;
+    uint need;
+    uint copied;
+
+    csec = msdos_cluster_first_sector(md, cluster);
+    if(csec == 0)
+      return (done == 0) ? -1 : (int)done;
+
+    need = msdos_min_u32(n - done, cluster_bytes - within);
+    copied = 0;
+    while(copied < need){
+      uint abs_off;
+      uint sec_idx;
+      uint sec_off;
+      uint chunk;
+      struct buf *b;
+
+      abs_off = within + copied;
+      sec_idx = abs_off / BSIZE;
+      sec_off = abs_off % BSIZE;
+      chunk = msdos_min_u32(need - copied, BSIZE - sec_off);
+
+      b = bread(md->dev, csec + sec_idx);
+      if(b == 0)
+        return (done == 0 && copied == 0) ? -1 : (int)(done + copied);
+      memmove(dst + done + copied, b->data + sec_off, chunk);
+      brelse(b);
+      copied += chunk;
+    }
+
+    done += need;
+    within = 0;
+
+    if(done == n)
+      break;
+    if(msdos_next_cluster(md, cluster, &cluster) < 0)
+      return (done == 0) ? -1 : (int)done;
+    if(cluster == 0)
+      break;
+  }
+
+  return done;
+}
+
 static struct inode*
 msdos_make_inode(uint dev, uint inum, struct fat_dirent *de, int is_root16)
 {
@@ -302,7 +400,10 @@ msdos_make_inode(uint dev, uint inum, struct fat_dirent *de, int is_root16)
       ip->size = 0;
     } else {
       ip->type = T_FILE;
-      ip->mode = M_IFREG | 0444;
+      if(de->attr & MSDOS_ATTR_RDONLY)
+        ip->mode = M_IFREG | 0444;
+      else
+        ip->mode = M_IFREG | 0644;
       ip->size = de->size;
     }
     ip->addrs[0] = start;
@@ -744,17 +845,118 @@ msdos_read(struct inode *ip, char *dst, uint off, uint n)
     return sizeof(de);
   }
 
-  return -1;
+  if(ip->type != T_FILE)
+    return -1;
+
+  return msdos_read_file_data(ip, dst, off, n);
+}
+
+static int
+msdos_write_file_data(struct inode *ip, char *src, uint off, uint n)
+{
+  struct msdos_mount_data *md;
+  uint cluster;
+  uint cluster_bytes;
+  uint skip;
+  uint within;
+  uint done;
+
+  if(ip == 0 || src == 0)
+    return -1;
+
+  md = msdos_data_for_dev(ip->dev);
+  if(md == 0)
+    return -1;
+  if(md->sectors_per_cluster == 0)
+    return -1;
+
+  if(n == 0)
+    return 0;
+  // Staged write support: in-place only, no sparse write and no growth.
+  if(off > ip->size)
+    return -1;
+  if(off + n < off)
+    return -1;
+  if(off + n > ip->size)
+    return -1;
+
+  cluster = ip->addrs[0];
+  if(cluster < 2)
+    return -1;
+
+  cluster_bytes = md->sectors_per_cluster * BSIZE;
+  if(cluster_bytes == 0)
+    return -1;
+
+  skip = off / cluster_bytes;
+  within = off % cluster_bytes;
+
+  while(skip > 0){
+    if(msdos_next_cluster(md, cluster, &cluster) < 0)
+      return -1;
+    if(cluster == 0)
+      return -1;
+    skip--;
+  }
+
+  done = 0;
+  while(done < n && cluster >= 2){
+    uint csec;
+    uint need;
+    uint copied;
+
+    csec = msdos_cluster_first_sector(md, cluster);
+    if(csec == 0)
+      return (done == 0) ? -1 : (int)done;
+
+    need = msdos_min_u32(n - done, cluster_bytes - within);
+    copied = 0;
+    while(copied < need){
+      uint abs_off;
+      uint sec_idx;
+      uint sec_off;
+      uint chunk;
+      struct buf *b;
+
+      abs_off = within + copied;
+      sec_idx = abs_off / BSIZE;
+      sec_off = abs_off % BSIZE;
+      chunk = msdos_min_u32(need - copied, BSIZE - sec_off);
+
+      b = bread(md->dev, csec + sec_idx);
+      if(b == 0)
+        return (done == 0 && copied == 0) ? -1 : (int)(done + copied);
+      memmove(b->data + sec_off, src + done + copied, chunk);
+      bwrite(b);
+      brelse(b);
+      copied += chunk;
+    }
+
+    done += need;
+    within = 0;
+
+    if(done == n)
+      break;
+    if(msdos_next_cluster(md, cluster, &cluster) < 0)
+      return (done == 0) ? -1 : (int)done;
+    if(cluster == 0)
+      return (done == 0) ? -1 : (int)done;
+  }
+
+  return done;
 }
 
 static int
 msdos_write(struct inode *ip, char *src, uint off, uint n)
 {
-  (void)ip;
-  (void)src;
-  (void)off;
-  (void)n;
-  return -1;
+  if(ip == 0 || src == 0)
+    return -1;
+  if(ip->type != T_FILE)
+    return -1;
+  if((ip->mode & 0222) == 0)
+    return -1;
+
+  return msdos_write_file_data(ip, src, off, n);
 }
 
 static int
@@ -785,8 +987,13 @@ msdos_stat(struct inode *ip, struct stat *st)
 static int
 msdos_access(struct inode *ip, int mode)
 {
-  (void)ip;
-  if(mode & IACC_WRITE)
+  if(ip == 0)
+    return -1;
+  if((mode & IACC_READ) && (ip->mode & 0444) == 0)
+    return -1;
+  if((mode & IACC_WRITE) && (ip->mode & 0222) == 0)
+    return -1;
+  if((mode & IACC_EXEC) && (ip->mode & 0111) == 0)
     return -1;
   return 0;
 }
@@ -825,7 +1032,7 @@ vfs_msdosfs_init(struct vfs *fs)
     return;
 
   safestrcpy(fs->name, "msdosfs", sizeof(fs->name));
-  fs->caps = VFS_CAP_READ;
+  fs->caps = VFS_CAP_READ | VFS_CAP_WRITE;
   fs->fs_data = 0;
   fs->fs_destroy = 0;
   fs->mount_init = msdos_mount_init;
