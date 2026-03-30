@@ -99,6 +99,7 @@ int vfs_dev_faultctl(uint dev, int which, int value);
 void* vfs_dev_fs_data(uint dev);
 void vfs_xv6fs_init(struct vfs *fs);
 void vfs_ext2_init(struct vfs *fs);
+void vfs_msdosfs_init(struct vfs *fs);
 void vfs_procfs_init(struct vfs *fs);
 
 #endif

@@ -9,6 +9,7 @@ OBJS = \
 	kernel/fs/vfs_xv6fs.o\
 	kernel/fs/procfs.o\
 	kernel/fs/vfs_ext2.o\
+	kernel/fs/vfs_msdosfs.o\
 	kernel/driver/ide.o\
 	kernel/driver/ioapic.o\
 	kernel/core/kalloc.o\

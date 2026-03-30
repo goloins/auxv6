@@ -124,6 +124,7 @@ void*           vfs_dev_fs_data(uint);
 int             vfs_dev_faultctl(uint, int, int);
 void            vfs_xv6fs_init(struct vfs*);
 void            vfs_ext2_init(struct vfs*);
+void            vfs_msdosfs_init(struct vfs*);
 void            vfs_procfs_init(struct vfs*);
 
 // ide.c

@@ -1119,6 +1119,9 @@ sys_mount(void)
     vfs_xv6fs_init(fs);
   } else if(memcmp(fstype_buf, "ext2", 5) == 0) {
     vfs_ext2_init(fs);
+  } else if(memcmp(fstype_buf, "msdosfs", 8) == 0 ||
+            memcmp(fstype_buf, "fat", 4) == 0) {
+    vfs_msdosfs_init(fs);
   } else {
     kfree((void*)fs);
     return -1;
@@ -1131,6 +1134,9 @@ sys_mount(void)
     dev = has_dev_override ? dev_override : EXT2DEV;
   else if(memcmp(fstype_buf, "xv6fs", 6) == 0)
     dev = has_dev_override ? dev_override : ROOTDEV;
+  else if(memcmp(fstype_buf, "msdosfs", 8) == 0 ||
+          memcmp(fstype_buf, "fat", 4) == 0)
+    dev = has_dev_override ? dev_override : DISK_DEV(3);
 
   if(vfs_register_mount(fs, dev, mount_flags, path_buf) < 0){
     MOUNTDBG("sys_mount: failed path=%s type=%s dev=%d\n", path_buf, fstype_buf, dev);
