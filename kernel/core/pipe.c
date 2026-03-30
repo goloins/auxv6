@@ -7,6 +7,7 @@
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "file.h"
+#include "signal.h"
 
 #define PIPESIZE 512
 
@@ -79,12 +80,23 @@ int
 pipewrite(struct pipe *p, char *addr, int n)
 {
   int i;
+  struct proc *curproc = myproc();
 
   acquire(&p->lock);
+  
+  // Check if read end is already closed - generate SIGPIPE
+  if(p->readopen == 0) {
+    release(&p->lock);
+    curproc->sig_pending |= SIGBIT(SIGPIPE);
+    return -1;
+  }
+  
   for(i = 0; i < n; i++){
     while(p->nwrite == p->nread + PIPESIZE){  //DOC: pipewrite-full
-      if(p->readopen == 0 || myproc()->killed){
+      if(p->readopen == 0 || curproc->killed){
         release(&p->lock);
+        if(p->readopen == 0)
+          curproc->sig_pending |= SIGBIT(SIGPIPE);
         return -1;
       }
       wakeup(&p->nread);

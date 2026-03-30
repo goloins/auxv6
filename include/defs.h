@@ -205,6 +205,8 @@ int             proc_tcgetattr(int fd, uint termios_addr);
 int             proc_tcsetattr(int fd, int optional_actions, uint termios_addr);
 void            proc_apply_pending_signals(struct proc *p);
 void            proc_maybe_stop_current(void);
+void            proc_check_alarms(uint current_ticks);
+int             proc_deliver_signal(struct proc *p);
 struct cpu*     mycpu(void);
 struct proc*    myproc();
 void            pinit(void);
@@ -275,6 +277,8 @@ int             sys_wait4(void);
 int             sys_waitid(void);
 int             sys_sigaction(void);
 int             sys_sigprocmask(void);
+int             sys_sigreturn(void);
+int             sys_alarm(void);
 int             sys_tcsetpgrp(void);
 int             sys_tcgetpgrp(void);
 int             sys_tcgetattr(void);
@@ -312,6 +316,7 @@ pde_t*          copyuvm(pde_t*, uint);
 void            switchuvm(struct proc*);
 void            switchkvm(void);
 int             copyout(pde_t*, uint, void*, uint);
+int             copyin(pde_t*, void*, uint, uint);
 void            clearpteu(pde_t *pgdir, char *uva);
 
 // socket.c

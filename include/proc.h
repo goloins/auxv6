@@ -65,6 +65,7 @@ struct proc {
   uint sig_handler[NSIG];      // 0=default, 1=ignore, otherwise user handler PC
   uint sig_actmask[NSIG];      // Per-signal mask set by sigaction
   uint sig_actflags[NSIG];     // Per-signal flags set by sigaction
+  uint alarm_ticks;            // Tick count when SIGALRM should fire (0=none)
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)

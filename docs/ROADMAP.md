@@ -29,7 +29,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 ### ⚠️ Partially Implemented (30-60%)
 | Subsystem | Status | Notes |
 |-----------|--------|-------|
-| Signal handling | 50% | Signal infrastructure exists, handlers NOT delivered to userspace |
+| Signal handling | 95% | Full delivery, alarm(), SIGPIPE, hardware faults |
 | TCP/IP stack | 40% | UDP working, DNS works, TCP state machine but no actual packets |
 | Networking interfaces | 30% | BSD ifnet abstraction, loopback only |
 | procfs | 60% | Basic process info, missing many nodes |
@@ -50,14 +50,41 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 
 These items are blocking everything else and must be done first.
 
-### 1.1 Signal Delivery to Userspace [CRITICAL]
-**Current:** Signals queued in `proc.p_siglist` but never delivered. Signal handlers stored in `proc.p_sigacts` but never called.  
-**Files:** `proc.c:syscall()`, `trap.c`, `proc.h`  
-**Fix:**
-1. Before returning to userspace in `trap.c`, check pending signals
-2. Save user context on user stack
-3. Modify trap frame to "return" to signal handler
-4. sigreturn syscall restores original context
+### 1.1 Signal Delivery to Userspace [COMPLETE]
+**Status:** Implemented 2026-03-30  
+**Files:** `proc.c:proc_deliver_signal()`, `sysproc.c:sys_sigreturn()`, `trap.c`, `signal.h`, `vm.c:copyin()`  
+**Implementation:**
+1. Signal frame (`struct sigframe`) pushed onto user stack with saved registers
+2. Trampoline code embedded in frame calls `sigreturn` syscall
+3. `proc_deliver_signal()` called from `trap.c` before returning to userspace
+4. `sigreturn` restores original context via `copyin()` from user stack
+5. Signal mask saved/restored properly
+
+**Signals Implemented (POSIX-compatible numbering):**
+| Signal | # | Default | Notes |
+|--------|---|---------|-------|
+| SIGHUP | 1 | term | Terminal hangup |
+| SIGINT | 2 | term | Interrupt (Ctrl+C) |
+| SIGQUIT | 3 | term | Quit (Ctrl+\\) |
+| SIGILL | 4 | term | Illegal instruction (from trap.c) |
+| SIGTRAP | 5 | term | Breakpoint/debug (from trap.c) |
+| SIGABRT | 6 | term | Abort |
+| SIGBUS | 7 | term | Alignment fault (from trap.c) |
+| SIGFPE | 8 | term | FPU/divide error (from trap.c) |
+| SIGKILL | 9 | term | Kill (uncatchable) |
+| SIGUSR1 | 10 | term | User-defined 1 |
+| SIGSEGV | 11 | term | Segfault/GPF (from trap.c) |
+| SIGUSR2 | 12 | term | User-defined 2 |
+| SIGPIPE | 13 | term | Broken pipe (implemented in pipewrite) |
+| SIGALRM | 14 | term | Alarm (alarm() syscall implemented) |
+| SIGTERM | 15 | term | Termination |
+| SIGCHLD | 17 | ignore | Child status change |
+| SIGCONT | 18 | cont | Continue |
+| SIGSTOP | 19 | stop | Stop (uncatchable) |
+| SIGTSTP | 20 | stop | Terminal stop (Ctrl+Z) |
+| SIGTTIN | 21 | stop | Background tty read |
+| SIGTTOU | 22 | stop | Background tty write |
+| SIGWINCH | 28 | ignore | Window resize |
 
 **Estimate:** 3-4 days
 

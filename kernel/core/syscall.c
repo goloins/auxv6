@@ -113,6 +113,8 @@ extern int sys_kill(void);
 extern int sys_sigsend(void);
 extern int sys_sigaction(void);
 extern int sys_sigprocmask(void);
+extern int sys_sigreturn(void);
+extern int sys_alarm(void);
 extern int sys_tcsetpgrp(void);
 extern int sys_tcgetpgrp(void);
 extern int sys_tcgetattr(void);
@@ -210,6 +212,8 @@ static int (*syscalls[])(void) = {
 [SYS_fsfault] sys_fsfault,
 [SYS_sigsend] sys_sigsend,
 [SYS_sigaction] sys_sigaction,
+[SYS_sigreturn] sys_sigreturn,
+[SYS_alarm] sys_alarm,
 };
 
 void

@@ -300,6 +300,9 @@ _chgrp: user/chgrp
 _stressfs: user/stressfs
 	cp user/stressfs _stressfs
 
+_sigtest: user/sigtest
+	cp user/sigtest _sigtest
+
 _usertests: user/usertests
 	cp user/usertests _usertests
 
@@ -359,6 +362,7 @@ UPROGS=\
 	_chown\
 	_chgrp\
 	_stressfs\
+	_sigtest\
 	_usertests\
 	_wc\
 	_zombie\

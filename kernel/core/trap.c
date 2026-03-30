@@ -7,6 +7,29 @@
 #include "x86.h"
 #include "traps.h"
 #include "spinlock.h"
+#include "signal.h"
+
+// Map x86 trap number to Unix signal number
+// Returns 0 if no mapping (unknown trap)
+static int
+trap_to_signal(int trapno)
+{
+  switch(trapno) {
+  case T_DIVIDE:   return SIGFPE;    // Divide by zero
+  case T_DEBUG:    return SIGTRAP;   // Debug exception
+  case T_BRKPT:    return SIGTRAP;   // Breakpoint (int3)
+  case T_OFLOW:    return SIGFPE;    // Overflow
+  case T_BOUND:    return SIGSEGV;   // Bounds check failed
+  case T_ILLOP:    return SIGILL;    // Illegal opcode
+  case T_DEVICE:   return SIGFPE;    // Device not available
+  case T_GPFLT:    return SIGSEGV;   // General protection fault
+  case T_PGFLT:    return SIGSEGV;   // Page fault
+  case T_FPERR:    return SIGFPE;    // x87 FPU error
+  case T_ALIGN:    return SIGBUS;    // Alignment check
+  case T_SIMDERR:  return SIGFPE;    // SIMD floating point
+  default:         return 0;         // Unknown
+  }
+}
 
 // Interrupt descriptor table (shared by all CPUs).
 struct gatedesc idt[256];
@@ -42,6 +65,7 @@ trap(struct trapframe *tf)
     myproc()->tf = tf;
     syscall();
     proc_apply_pending_signals(myproc());
+    proc_deliver_signal(myproc());
     proc_maybe_stop_current();
     if(myproc()->killed)
       exit();
@@ -55,6 +79,8 @@ trap(struct trapframe *tf)
       ticks++;
       wakeup(&ticks);
       release(&tickslock);
+      // Check all processes for expired alarms
+      proc_check_alarms(ticks);
     }
     lapiceoi();
     break;
@@ -89,16 +115,28 @@ trap(struct trapframe *tf)
               tf->trapno, cpuid(), tf->eip, rcr2());
       panic("trap");
     }
-    // In user space, assume process misbehaved.
-    cprintf("pid %d %s: trap %d err %d on cpu %d "
-            "eip 0x%x addr 0x%x--kill proc\n",
-            myproc()->pid, myproc()->name, tf->trapno,
-            tf->err, cpuid(), tf->eip, rcr2());
-    myproc()->killed = 1;
+    // In user space, deliver appropriate signal for hardware faults.
+    // If the process has a handler installed, it can catch it.
+    {
+      int signo = trap_to_signal(tf->trapno);
+      if(signo) {
+        // Post signal - will be delivered before returning to userspace
+        myproc()->sig_pending |= SIGBIT(signo);
+      } else {
+        // Unknown trap, just kill
+        cprintf("pid %d %s: trap %d err %d on cpu %d "
+                "eip 0x%x addr 0x%x--kill proc\n",
+                myproc()->pid, myproc()->name, tf->trapno,
+                tf->err, cpuid(), tf->eip, rcr2());
+        myproc()->killed = 1;
+      }
+    }
   }
 
   if(myproc() && (tf->cs&3) == DPL_USER)
     proc_apply_pending_signals(myproc());
+  if(myproc() && (tf->cs&3) == DPL_USER)
+    proc_deliver_signal(myproc());
   if(myproc() && (tf->cs&3) == DPL_USER)
     proc_maybe_stop_current();
 

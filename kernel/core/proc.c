@@ -11,6 +11,9 @@
 #include "termios.h"
 #include "fs.h"
 #include "file.h"
+#include "traps.h"
+#include "signal.h"
+#include "syscall.h"
 
 #ifndef WCONTINUED
 #define WCONTINUED 0x0004
@@ -73,18 +76,53 @@ signal_pick_stop(uint pending)
     return SIGSTOP;
   if(pending & SIGBIT(SIGTSTP))
     return SIGTSTP;
+  if(pending & SIGBIT(SIGTTIN))
+    return SIGTTIN;
+  if(pending & SIGBIT(SIGTTOU))
+    return SIGTTOU;
   return 0;
 }
 
 static int
 signal_pick_fatal(uint pending)
 {
+  // Check in priority order
   if(pending & SIGBIT(SIGKILL))
     return SIGKILL;
+  if(pending & SIGBIT(SIGSEGV))
+    return SIGSEGV;
+  if(pending & SIGBIT(SIGBUS))
+    return SIGBUS;
+  if(pending & SIGBIT(SIGILL))
+    return SIGILL;
+  if(pending & SIGBIT(SIGFPE))
+    return SIGFPE;
+  if(pending & SIGBIT(SIGABRT))
+    return SIGABRT;
   if(pending & SIGBIT(SIGTERM))
     return SIGTERM;
   if(pending & SIGBIT(SIGINT))
     return SIGINT;
+  if(pending & SIGBIT(SIGQUIT))
+    return SIGQUIT;
+  if(pending & SIGBIT(SIGHUP))
+    return SIGHUP;
+  if(pending & SIGBIT(SIGTRAP))
+    return SIGTRAP;
+  if(pending & SIGBIT(SIGPIPE))
+    return SIGPIPE;
+  if(pending & SIGBIT(SIGALRM))
+    return SIGALRM;
+  if(pending & SIGBIT(SIGUSR1))
+    return SIGUSR1;
+  if(pending & SIGBIT(SIGUSR2))
+    return SIGUSR2;
+  if(pending & SIGBIT(SIGXCPU))
+    return SIGXCPU;
+  if(pending & SIGBIT(SIGXFSZ))
+    return SIGXFSZ;
+  if(pending & SIGBIT(SIGSYS))
+    return SIGSYS;
   return 0;
 }
 
@@ -124,6 +162,30 @@ proc_note_signal_locked(struct proc *p, int signo)
     p->state = RUNNABLE;
 }
 
+// Check all processes for expired alarms and post SIGALRM.
+// Called from timer interrupt on CPU 0.
+void
+proc_check_alarms(uint current_ticks)
+{
+  struct proc *p;
+
+  acquire(&ptable.lock);
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+    if(p->state == UNUSED)
+      continue;
+    if(p->alarm_ticks == 0)
+      continue;
+    if(current_ticks >= p->alarm_ticks) {
+      p->alarm_ticks = 0;  // One-shot, clear the alarm
+      p->sig_pending |= SIGBIT(SIGALRM);
+      // Wake process if sleeping so it can receive the signal
+      if(p->state == SLEEPING)
+        p->state = RUNNABLE;
+    }
+  }
+  release(&ptable.lock);
+}
+
 void
 proc_apply_pending_signals(struct proc *p)
 {
@@ -139,9 +201,18 @@ proc_apply_pending_signals(struct proc *p)
   if(p == 0)
     return;
 
-  fatal = SIGBIT(SIGINT) | SIGBIT(SIGTERM) | SIGBIT(SIGKILL);
-  stopset = SIGBIT(SIGSTOP) | SIGBIT(SIGTSTP);
+  // Signals with default action: terminate
+  fatal = SIGBIT(SIGHUP) | SIGBIT(SIGINT) | SIGBIT(SIGQUIT) |
+          SIGBIT(SIGILL) | SIGBIT(SIGTRAP) | SIGBIT(SIGABRT) |
+          SIGBIT(SIGBUS) | SIGBIT(SIGFPE) | SIGBIT(SIGKILL) |
+          SIGBIT(SIGUSR1) | SIGBIT(SIGSEGV) | SIGBIT(SIGUSR2) |
+          SIGBIT(SIGPIPE) | SIGBIT(SIGALRM) | SIGBIT(SIGTERM) |
+          SIGBIT(SIGXCPU) | SIGBIT(SIGXFSZ) | SIGBIT(SIGSYS);
+  // Signals with default action: stop
+  stopset = SIGBIT(SIGSTOP) | SIGBIT(SIGTSTP) | SIGBIT(SIGTTIN) | SIGBIT(SIGTTOU);
+  // Signals with default action: continue
   cont = SIGBIT(SIGCONT);
+  // Signals with default action: ignore (SIGCHLD, SIGWINCH, SIGURG)
 
   acquire(&ptable.lock);
   pending = p->sig_pending & ~p->sig_mask;
@@ -208,6 +279,108 @@ proc_maybe_stop_current(void)
   if(p->state == STOPPED)
     sched();
   release(&ptable.lock);
+}
+
+// Deliver one caught signal to userspace by setting up a signal frame
+// on the user stack and redirecting execution to the signal handler.
+// Returns 1 if a signal was delivered, 0 otherwise.
+int
+proc_deliver_signal(struct proc *p)
+{
+  int signo;
+  uint handler;
+  uint sp;
+  struct sigframe sf;
+  struct trapframe *tf;
+
+  if(p == 0 || p->sig_caught == 0)
+    return 0;
+
+  tf = p->tf;
+  if(tf == 0)
+    return 0;
+
+  // Find first caught signal
+  acquire(&ptable.lock);
+  for(signo = 1; signo < NSIG; signo++) {
+    if(p->sig_caught & SIGBIT(signo))
+      break;
+  }
+  if(signo >= NSIG) {
+    release(&ptable.lock);
+    return 0;
+  }
+
+  handler = p->sig_handler[signo];
+  if(handler <= 1) {
+    // SIG_DFL or SIG_IGN, shouldn't be in sig_caught
+    p->sig_caught &= ~SIGBIT(signo);
+    release(&ptable.lock);
+    return 0;
+  }
+
+  // Clear this signal from caught set
+  p->sig_caught &= ~SIGBIT(signo);
+
+  // Save signal mask and apply handler's mask
+  sf.sf_oldmask = p->sig_mask;
+  p->sig_mask |= p->sig_actmask[signo];
+  p->sig_mask |= SIGBIT(signo);  // Block delivered signal during handler
+  p->sig_mask &= ~(SIGBIT(SIGKILL) | SIGBIT(SIGSTOP));  // Can't block these
+  release(&ptable.lock);
+
+  // Build signal frame with saved context
+  sf.sf_signo = signo;
+  sf.sf_edi = tf->edi;
+  sf.sf_esi = tf->esi;
+  sf.sf_ebp = tf->ebp;
+  sf.sf_ebx = tf->ebx;
+  sf.sf_edx = tf->edx;
+  sf.sf_ecx = tf->ecx;
+  sf.sf_eax = tf->eax;
+  sf.sf_eip = tf->eip;
+  sf.sf_eflags = tf->eflags;
+  sf.sf_esp = tf->esp;
+
+  // Build trampoline: mov $SYS_sigreturn, %eax; int $T_SYSCALL
+  // b8 40 00 00 00       mov $64, %eax (SYS_sigreturn = 64)
+  // cd 40                int $0x40 (T_SYSCALL)
+  sf.sf_trampoline[0] = 0xb8;
+  sf.sf_trampoline[1] = SYS_sigreturn;
+  sf.sf_trampoline[2] = 0x00;
+  sf.sf_trampoline[3] = 0x00;
+  sf.sf_trampoline[4] = 0x00;
+  sf.sf_trampoline[5] = 0xcd;
+  sf.sf_trampoline[6] = T_SYSCALL;
+  sf.sf_trampoline[7] = 0x00;  // padding
+
+  // Push signal frame onto user stack
+  sp = tf->esp;
+  sp -= sizeof(sf);
+  sp &= ~3;  // Align to 4 bytes
+
+  // Verify user stack is accessible (simple bounds check)
+  if(sp < PGSIZE || sp > p->sz) {
+    cprintf("pid %d: signal delivery failed, bad stack 0x%x\n", p->pid, sp);
+    p->killed = 1;
+    return 0;
+  }
+
+  // Set return address to trampoline
+  sf.sf_sigreturn = sp + ((uint)&((struct sigframe *)0)->sf_trampoline);
+
+  // Copy signal frame to user stack
+  if(copyout(p->pgdir, sp, &sf, sizeof(sf)) < 0) {
+    cprintf("pid %d: signal delivery copyout failed\n", p->pid);
+    p->killed = 1;
+    return 0;
+  }
+
+  // Modify trap frame to "return" to signal handler
+  tf->eip = handler;
+  tf->esp = sp;
+
+  return 1;
 }
 
 void

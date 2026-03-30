@@ -62,3 +62,5 @@
 #define SYS_rename  61
 #define SYS_ext2fail 62
 #define SYS_fsfault 63
+#define SYS_sigreturn 64
+#define SYS_alarm 65

@@ -91,6 +91,8 @@ int setgid(int gid);
 int sigsend(int pid, int signo);
 int sigaction(int signo, const struct sigaction *act, struct sigaction *oldact);
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
+int sigreturn(void);
+int alarm(int seconds);
 int tcsetpgrp(int pgid);
 int tcgetpgrp(void);
 int tcgetattr(int fd, struct termios *termios_p);
