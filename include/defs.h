@@ -114,6 +114,8 @@ int             vfs_lookup_parent(char*, char*, struct vnode*);
 void            vfs_vnode_drop(struct vnode*);
 int             vfs_register_mount(struct vfs*, int, int, char*);
 int             vfs_unmount(char*);
+uint            vfs_root_dev(void);
+int             vfs_is_root_inode(struct inode*);
 int             vfs_mount_count(void);
 int             vfs_get_mounts(struct vfs_mount_info*, int);
 int             vfs_dev_has_cap(uint, uint);

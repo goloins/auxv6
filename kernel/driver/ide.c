@@ -39,7 +39,30 @@ static struct buf *idequeue;
 static int havedisk1;
 static int havedisk2;
 static int havedisk3;
+// Per-device capacity in filesystem blocks (1KB/block)
 static uint ide_capacity[NDEV];
+
+// Extract LBA48 capacity from IDENTIFY data (words 100-103)
+// Returns capacity in sectors; 0 if not supported
+static uint
+ide_extract_lba_capacity(ushort *identify)
+{
+  // Words 100-101: 28-bit LBA capacity (total sectors)
+  uint lba28_low = identify[100];
+  uint lba28_high = identify[101];
+  uint lba28_sectors = lba28_low | (lba28_high << 16);
+
+  // Words 102-103: 48-bit LBA capacity (for drives > 137GB)
+  uint lba48_low = identify[102];
+  uint lba48_high = identify[103];
+  uint lba48_sectors = lba48_low | (lba48_high << 16);
+
+  // Prefer LBA48 if supported (non-zero), else use LBA28
+  // Note: We only use 32-bit capacity since we can't handle > 2TB anyway
+  if(lba48_sectors != 0)
+    return lba48_sectors;
+  return lba28_sectors;
+}
 static int idestart(struct buf*);
 static int idewait(ushort iobase, int checkerr);
 static int idewait_quiet(ushort iobase, int checkerr);
@@ -58,12 +81,14 @@ struct mbr_part {
 static int ide_read_lba0_poll(uint dev, uchar *dst);
 static void ide_scan_partitions(uint dev);
 
-static int
+static uint
 ide_probe_unit(ushort iobase, int unit)
 {
   int spins;
   uchar st;
   ushort identify[256];
+  uint lba_sectors;
+  uint capacity_blocks;
 
   outb(iobase + 6, 0xe0 | ((unit & 1) << 4));
   for(spins = 0; spins < 1000; spins++)
@@ -98,7 +123,22 @@ ide_probe_unit(ushort iobase, int unit)
 
   insl(iobase, identify, 128);
 
-  return 1;
+  // Extract LBA capacity from IDENTIFY response
+  lba_sectors = ide_extract_lba_capacity(identify);
+  if(lba_sectors == 0){
+    // Fallback: use standard FS size if IDENTIFY doesn't report capacity
+    // (some emulated disks may have incomplete IDENTIFY support)
+    return FSSIZE;
+  }
+
+  // Convert sectors to filesystem blocks (BSIZE = 1024 bytes, sector = 512 bytes)
+  capacity_blocks = lba_sectors / (BSIZE / SECTOR_SIZE);
+  
+  // Sanity check: don't allow unreasonably small drives
+  if(capacity_blocks < 100)
+    capacity_blocks = FSSIZE;
+
+  return capacity_blocks;
 }
 
 static void
@@ -256,41 +296,49 @@ ideinit(void)
 {
   int i;
   uchar probe_sector[SECTOR_SIZE];
+  uint cap0, cap1, cap2, cap3;
 
   initlock(&idelock, "ide");
   ioapicenable(IRQ_IDE, ncpu - 1);
   ioapicenable(IRQ_IDE + 1, ncpu - 1);
   idewait(0x1f0, 0);
 
-  // Probe optional units conservatively to avoid registering phantom disks.
-  havedisk1 = ide_probe_unit(0x1f0, 1);
-  havedisk2 = ide_probe_unit(0x170, 0);
-  havedisk3 = ide_probe_unit(0x170, 1);
+  // Probe optional units and get capacity
+  cap0 = FSSIZE;  // Primary IDE disk 0 is always available
+  cap1 = ide_probe_unit(0x1f0, 1);
+  cap2 = ide_probe_unit(0x170, 0);
+  cap3 = ide_probe_unit(0x170, 1);
 
-  // Some emulated controllers can be flaky with IDENTIFY on secondary units.
-  // Fallback to a bounded polling read of LBA0 before declaring absent.
-  if(!havedisk1 && ide_read_lba0_poll(1, probe_sector) == 0)
-    havedisk1 = 1;
-  if(!havedisk2 && ide_read_lba0_poll(2, probe_sector) == 0)
-    havedisk2 = 1;
-  if(!havedisk3 && ide_read_lba0_poll(3, probe_sector) == 0)
-    havedisk3 = 1;
+  // Some emulated controllers are flaky with IDENTIFY on secondary units.
+  // If probe failed, try a fallback capacity check via LBA0 read.
+  if(cap1 == 0 && ide_read_lba0_poll(1, probe_sector) == 0)
+    cap1 = FSSIZE;
+  if(cap2 == 0 && ide_read_lba0_poll(2, probe_sector) == 0)
+    cap2 = FSSIZE;
+  if(cap3 == 0 && ide_read_lba0_poll(3, probe_sector) == 0)
+    cap3 = FSSIZE;
 
-  IDEDBG("ide: probe d0=1 d1=%d d2=%d d3=%d\n", havedisk1, havedisk2, havedisk3);
+  // Update availability flags based on probed capacities
+  havedisk1 = (cap1 > 0) ? 1 : 0;
+  havedisk2 = (cap2 > 0) ? 1 : 0;
+  havedisk3 = (cap3 > 0) ? 1 : 0;
+
+  IDEDBG("ide: probe d0=%ukB d1=%d(%ukB) d2=%d(%ukB) d3=%d(%ukB)\n",
+         cap0, havedisk1, cap1, havedisk2, cap2, havedisk3, cap3);
 
   // Switch back to disk 0.
   outb(0x1f6, 0xe0 | (0<<4));
 
-  // Seed per-device capacities; backend checks consume these via bdev_nblocks().
+  // Store per-device capacities; backend checks consume these via bdev_nblocks().
   for(i = 0; i < NDEV; i++)
     ide_capacity[i] = 0;
-  ide_capacity[0] = FSSIZE;
+  ide_capacity[0] = cap0;
   if(havedisk1)
-    ide_capacity[1] = FSSIZE;
+    ide_capacity[1] = cap1;
   if(havedisk2)
-    ide_capacity[2] = FSSIZE;
+    ide_capacity[2] = cap2;
   if(havedisk3)
-    ide_capacity[3] = FSSIZE;
+    ide_capacity[3] = cap3;
 
   // Expose available IDE units through block-device switch.
   if(bdev_register(0, &ide_bdev_ops) < 0)

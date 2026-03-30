@@ -283,6 +283,12 @@ xv6fs_rename(struct inode *olddp, char *oldname, struct inode *newdp, char *newn
 }
 
 static struct inode*
+xv6fs_root_inode(void)
+{
+  return iget(ROOTFS_DEV, ROOTINO);
+}
+
+static struct inode*
 xv6fs_namei(char *path)
 {
   return namei(path);
@@ -312,6 +318,7 @@ vfs_xv6fs_init(struct vfs *fs)
   fs->fs_data = 0;
   fs->fs_destroy = 0;
   fs->mount_init = 0;
+  fs->ops.root_inode = xv6fs_root_inode;
   fs->ops.namei = xv6fs_namei;
   fs->ops.nameiparent = xv6fs_nameiparent;
   fs->ops.inode_put = xv6fs_inode_put;

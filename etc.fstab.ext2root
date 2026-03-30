@@ -1,0 +1,3 @@
+# auxv6 fstab for ext2 root boot
+/proc procfs rw
+/dev/hdb /mnt xv6fs rw

@@ -48,3 +48,8 @@ extern struct devsw devsw[];
 
 #define PROCFSDEV 31
 #define EXT2DEV DISK_DEV(2)
+
+#define ROOTFS_TYPE_XV6FS 1
+#define ROOTFS_TYPE_EXT2 2
+
+#include "rootfs_config.h"

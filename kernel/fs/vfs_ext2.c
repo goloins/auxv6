@@ -122,6 +122,7 @@ struct ext2_dirent_hdr {
 };
 
 static uint ext2_active_dev = EXT2DEV;
+static struct ext2_mount_data *ext2_bootstrap_data;
 static int ext2_fail_alloc_after = -1;
 static uint ext2_alloc_calls;
 static int ext2_fail_inode_write_after = -1;
@@ -188,7 +189,12 @@ ext2_align4(uint n)
 static struct ext2_mount_data*
 ext2_data_for_dev(uint dev)
 {
-  return (struct ext2_mount_data*)vfs_dev_fs_data(dev);
+  struct ext2_mount_data *data;
+
+  data = (struct ext2_mount_data*)vfs_dev_fs_data(dev);
+  if(data == 0 && ext2_bootstrap_data && ext2_bootstrap_data->dev == (int)dev)
+    data = ext2_bootstrap_data;
+  return data;
 }
 
 static int
@@ -2289,6 +2295,12 @@ ext2_rename(struct inode *olddp, char *oldname, struct inode *newdp, char *newna
 }
 
 static struct inode*
+ext2_root_inode(void)
+{
+  return ext2_make_inode(ext2_active_dev, EXT2_ROOT_INO);
+}
+
+static struct inode*
 ext2_namei(char *path)
 {
   return ext2_walk(path, 0, 0);
@@ -2373,6 +2385,8 @@ ext2_mount_init(struct mount *m)
 
   m->fs_data = (void *)data;
   ext2_active_dev = data->dev;
+  if(m->path[0] == '/' && m->path[1] == 0)
+    ext2_bootstrap_data = data;
   EXT2DBG("ext2: mount ok dev=%d block=%d groups=%d\n", data->dev, data->block_size, data->group_count);
   return 0;
 
@@ -2401,6 +2415,7 @@ vfs_ext2_init(struct vfs *fs)
   fs->fs_data = 0;
   fs->fs_destroy = ext2_mount_destroy;
   fs->mount_init = ext2_mount_init;
+  fs->ops.root_inode = ext2_root_inode;
   fs->ops.namei = ext2_namei;
   fs->ops.nameiparent = ext2_nameiparent;
   fs->ops.inode_put = ext2_inode_put;

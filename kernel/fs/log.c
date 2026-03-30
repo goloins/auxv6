@@ -5,6 +5,7 @@
 #include "sleeplock.h"
 #include "fs.h"
 #include "buf.h"
+#include "rootfs_config.h"
 
 // Simple logging that allows concurrent FS system calls.
 //
@@ -125,6 +126,10 @@ recover_from_log(void)
 void
 begin_op(void)
 {
+  // Skip logging for non-xv6fs filesystems.
+  if(ROOTFS_TYPE != ROOTFS_TYPE_XV6FS)
+    return;
+
   acquire(&log.lock);
   while(1){
     if(log.committing){
@@ -146,6 +151,9 @@ void
 end_op(void)
 {
   int do_commit = 0;
+  // Skip logging for non-xv6fs filesystems.
+  if(ROOTFS_TYPE != ROOTFS_TYPE_XV6FS)
+    return;
 
   acquire(&log.lock);
   log.outstanding -= 1;

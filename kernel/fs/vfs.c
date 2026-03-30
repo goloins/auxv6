@@ -3,13 +3,28 @@
 #include "param.h"
 #include "fs.h"
 #include "spinlock.h"
+#include "sleeplock.h"
+#include "file.h"
 #include "vfs.h"
 
 static struct spinlock vfslock;
 static struct vfs rootvfs;
 static struct mount mounts[VFS_MOUNTS_MAX];
 static int vfs_ready;
+static uint vfs_rootdev = ROOTFS_DEV;
 static char vfs_rootrel[] = "/";
+
+static void
+vfs_root_configure(struct vfs *fs)
+{
+#if ROOTFS_TYPE == ROOTFS_TYPE_EXT2
+  vfs_ext2_init(fs);
+#elif ROOTFS_TYPE == ROOTFS_TYPE_XV6FS
+  vfs_xv6fs_init(fs);
+#else
+#error Unsupported ROOTFS_TYPE
+#endif
+}
 
 static struct mount*
 select_mount_for_dev_locked(uint dev)
@@ -116,6 +131,27 @@ mount_allocate_locked(void)
       return i;
   }
   return -1;
+}
+
+static int
+vfs_attach_mount_locked(struct vfs *fs, int dev, int flags, char *path,
+                        struct inode *mountpoint, void *fs_data)
+{
+  int slot;
+
+  slot = mount_allocate_locked();
+  if(slot < 0)
+    return -1;
+
+  mounts[slot].used = 1;
+  mounts[slot].dev = dev;
+  mounts[slot].flags = flags;
+  mounts[slot].caps = fs->caps;
+  safestrcpy(mounts[slot].path, path, sizeof(mounts[slot].path));
+  mounts[slot].mountpoint = mountpoint;
+  mounts[slot].fs_data = fs_data;
+  mounts[slot].fs = fs;
+  return 0;
 }
 
 static int
@@ -326,25 +362,74 @@ mount_relative_path(struct mount *m, char *path)
 void
 vfs_init(void)
 {
+  struct mount mctx;
+  void *root_fs_data;
   struct inode *rootip;
 
   initlock(&vfslock, "vfs");
 
-  vfs_xv6fs_init(&rootvfs);
-  if(rootvfs.ops.namei == 0)
-    panic("vfs_init: root namei");
+  memset(&rootvfs, 0, sizeof(rootvfs));
+  vfs_root_configure(&rootvfs);
+  if(rootvfs.ops.root_inode == 0 && rootvfs.ops.namei == 0)
+    panic("vfs_init: root lookup");
+
+  root_fs_data = 0;
+  if(rootvfs.mount_init){
+    memset(&mctx, 0, sizeof(mctx));
+    mctx.dev = vfs_rootdev;
+    mctx.flags = 0;
+    mctx.caps = rootvfs.caps;
+    safestrcpy(mctx.path, "/", sizeof(mctx.path));
+    mctx.fs = &rootvfs;
+    if(rootvfs.mount_init(&mctx) < 0)
+      panic("vfs_init: root mount_init");
+    root_fs_data = mctx.fs_data;
+  }
 
   // Hold a stable mountpoint reference for '/'.
-  rootip = rootvfs.ops.namei("/");
+  if(rootvfs.ops.root_inode)
+    rootip = rootvfs.ops.root_inode();
+  else
+    rootip = rootvfs.ops.namei("/");
   if(rootip == 0)
     panic("vfs_init: root mountpoint");
 
-  if(vfs_mount_register_inode(&rootvfs, ROOTDEV, 0, "/", rootip) < 0)
-    panic("vfs_init: mount root");
-
   acquire(&vfslock);
+  if(vfs_attach_mount_locked(&rootvfs, vfs_rootdev, 0, "/", rootip, root_fs_data) < 0){
+    release(&vfslock);
+    panic("vfs_init: mount root");
+  }
+
   vfs_ready = 1;
   release(&vfslock);
+}
+
+uint
+vfs_root_dev(void)
+{
+  uint dev;
+
+  acquire(&vfslock);
+  dev = vfs_rootdev;
+  release(&vfslock);
+  return dev;
+}
+
+int
+vfs_is_root_inode(struct inode *ip)
+{
+  struct mount *m;
+  int is_root;
+
+  if(ip == 0)
+    return 0;
+
+  acquire(&vfslock);
+  m = select_mount_locked("/");
+  is_root = (m && m->mountpoint && m->mountpoint->dev == ip->dev &&
+             m->mountpoint->inum == ip->inum);
+  release(&vfslock);
+  return is_root;
 }
 
 struct inode*
@@ -401,9 +486,9 @@ vfs_lookup(char *path, struct vnode *vn)
   } else {
     cwddev = proc_cwd_dev();
     if(cwddev == 0)
-      cwddev = ROOTDEV;
+      cwddev = vfs_rootdev;
     m = select_mount_for_dev_locked(cwddev);
-    if(m == 0 && cwddev == ROOTDEV)
+    if(m == 0 && cwddev == vfs_rootdev)
       m = select_mount_locked("/");
     if(m == 0){
       release(&vfslock);
@@ -462,9 +547,9 @@ vfs_lookup_parent(char *path, char *name, struct vnode *vn)
   } else {
     cwddev = proc_cwd_dev();
     if(cwddev == 0)
-      cwddev = ROOTDEV;
+      cwddev = vfs_rootdev;
     m = select_mount_for_dev_locked(cwddev);
-    if(m == 0 && cwddev == ROOTDEV)
+    if(m == 0 && cwddev == vfs_rootdev)
       m = select_mount_locked("/");
     if(m == 0){
       release(&vfslock);
@@ -530,7 +615,7 @@ vfs_dev_has_cap(uint dev, uint cap)
 
   acquire(&vfslock);
   m = select_mount_for_dev_locked(dev);
-  if(m == 0 && dev == ROOTDEV)
+  if(m == 0 && dev == vfs_rootdev)
     m = select_mount_locked("/");
   ok = (m && (m->caps & cap) == cap);
   release(&vfslock);
@@ -547,13 +632,31 @@ vfs_dev_vops(uint dev)
   vops = 0;
   acquire(&vfslock);
   m = select_mount_for_dev_locked(dev);
-  if(m == 0 && dev == ROOTDEV)
+  if(m == 0 && dev == vfs_rootdev)
     m = select_mount_locked("/");
   if(m && m->fs)
     vops = &m->fs->vnode_ops;
   release(&vfslock);
 
   return vops;
+}
+
+int
+vfs_dev_is_xv6fs(uint dev)
+{
+  struct mount *m;
+  int is_xv6;
+
+  is_xv6 = 0;
+  acquire(&vfslock);
+  m = select_mount_for_dev_locked(dev);
+  if(m == 0 && dev == vfs_rootdev)
+    m = select_mount_locked("/");
+  if(m && m->fs && strncmp(m->fs->name, "xv6fs", VFS_NAME_MAX) == 0)
+    is_xv6 = 1;
+  release(&vfslock);
+
+  return is_xv6;
 }
 
 int
@@ -576,7 +679,7 @@ vfs_dev_fs_data(uint dev)
   fs_data = 0;
   acquire(&vfslock);
   m = select_mount_for_dev_locked(dev);
-  if(m == 0 && dev == ROOTDEV)
+  if(m == 0 && dev == vfs_rootdev)
     m = select_mount_locked("/");
   if(m)
     fs_data = m->fs_data;

@@ -6,8 +6,11 @@
 #include "x86.h"
 #include "proc.h"
 #include "spinlock.h"
+#include "sleeplock.h"
 #include "wait.h"
 #include "termios.h"
+#include "fs.h"
+#include "file.h"
 
 #ifndef WCONTINUED
 #define WCONTINUED 0x0004
@@ -361,15 +364,17 @@ void
 userinit(void)
 {
   struct proc *p;
-  extern char _binary_initcode_start[], _binary_initcode_size[];
 
   p = allocproc();
   
   initproc = p;
   if((p->pgdir = setupkvm()) == 0)
     panic("userinit: out of memory?");
-  inituvm(p->pgdir, _binary_initcode_start, (int)_binary_initcode_size);
-  p->sz = PGSIZE;
+  // Allocate initial stack page
+  if((p->sz = allocuvm(p->pgdir, 0, PGSIZE)) == 0)
+    panic("userinit: allocuvm");
+  clearpteu(p->pgdir, (char*)(p->sz - PGSIZE));
+
   memset(p->tf, 0, sizeof(*p->tf));
   p->tf->cs = (SEG_UCODE << 3) | DPL_USER;
   p->tf->ds = (SEG_UDATA << 3) | DPL_USER;
@@ -377,10 +382,10 @@ userinit(void)
   p->tf->ss = p->tf->ds;
   p->tf->eflags = FL_IF;
   p->tf->esp = PGSIZE;
-  p->tf->eip = 0;  // beginning of initcode.S
+  // eip will be set by kinit_exec() after vfs_init()
 
-  safestrcpy(p->name, "initcode", sizeof(p->name));
-  p->cwd = namei("/");
+  safestrcpy(p->name, "init", sizeof(p->name));
+  p->cwd = 0;
   p->ppid = 0;
   p->pgid = p->pid;
   p->sid = p->pid;
@@ -983,6 +988,29 @@ yield(void)
   release(&ptable.lock);
 }
 
+// Try to exec init from standard paths: /sbin/init, /bin/init, /init
+// Called from forkret() after vfs_init() is complete.
+static void
+kinit_exec(void)
+{
+  char *init_paths[] = {"/sbin/init", "/bin/init", "/init", 0};
+  char *argv[] = {0, 0};  // argv[0] will be set to the path
+  int i;
+
+  // Try each standard init path
+  for(i = 0; init_paths[i] != 0; i++){
+    argv[0] = init_paths[i];
+    if(exec(init_paths[i], argv) >= 0){
+      // In kernel context, exec() returns 0 on success and the caller
+      // must return to trapret to enter userspace at the new image.
+      return;
+    }
+  }
+
+  // If we get here, no init executable was found
+  panic("kinit_exec: cannot find init (/sbin/init, /bin/init, or /init)");
+}
+
 // A fork child's very first scheduling by scheduler()
 // will swtch here.  "Return" to user space.
 void
@@ -997,9 +1025,24 @@ forkret(void)
     // of a regular process (e.g., they call sleep), and thus cannot
     // be run from main().
     first = 0;
-    iinit(ROOTDEV);
-    initlog(ROOTDEV);
+    // iinit/initlog are xv6fs-specific; only call for xv6-root
+    if(ROOTFS_TYPE == ROOTFS_TYPE_XV6FS){
+      iinit(ROOTDEV);
+      initlog(ROOTDEV);
+    }
     vfs_init();
+    
+    // If this is the init process, exec the init program
+    if(myproc() == initproc){
+      kinit_exec();
+      // kinit_exec() panics on failure, so we never get here
+    }
+  }
+
+  if(myproc()->cwd == 0){
+    myproc()->cwd = vfs_namei("/");
+    if(myproc()->cwd == 0)
+      panic("forkret: cwd");
   }
 
   // Return to "caller", actually trapret (see allocproc).

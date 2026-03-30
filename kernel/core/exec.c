@@ -8,12 +8,16 @@
 #include "x86.h"
 #include "elf.h"
 #include "fs.h"
+#include "vfs.h"
 
 int
 exec(char *path, char **argv)
 {
   char *s, *last;
   int i, off;
+  int (*read_fn)(struct inode*, char*, uint, uint);
+  int (*access_fn)(struct inode*, int);
+  const struct vnode_ops *ops;
   uint argc, sz, sp, ustack[3+MAXARG+1];
   struct elfhdr elf;
   struct inode *ip;
@@ -28,13 +32,20 @@ exec(char *path, char **argv)
     return -1;
   }
   ilock(ip);
+  ops = vfs_dev_vops(inode_get_dev(ip));
+  read_fn = readi;
+  access_fn = iaccess;
+  if(ops && ops->read)
+    read_fn = ops->read;
+  if(ops && ops->access)
+    access_fn = ops->access;
   pgdir = 0;
 
-  if(iaccess(ip, IACC_EXEC) < 0)
+  if(access_fn(ip, IACC_EXEC) < 0)
     goto bad;
 
   // Check ELF header
-  if(readi(ip, (char*)&elf, 0, sizeof(elf)) != sizeof(elf))
+  if(read_fn(ip, (char*)&elf, 0, sizeof(elf)) != sizeof(elf))
     goto bad;
   if(elf.magic != ELF_MAGIC)
     goto bad;
@@ -45,7 +56,7 @@ exec(char *path, char **argv)
   // Load program into memory.
   sz = 0;
   for(i=0, off=elf.phoff; i<elf.phnum; i++, off+=sizeof(ph)){
-    if(readi(ip, (char*)&ph, off, sizeof(ph)) != sizeof(ph))
+    if(read_fn(ip, (char*)&ph, off, sizeof(ph)) != sizeof(ph))
       goto bad;
     if(ph.type != ELF_PROG_LOAD)
       continue;

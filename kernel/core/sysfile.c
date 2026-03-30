@@ -24,6 +24,8 @@
 
 static int create_default_mode(short type);
 static int create_device_mode(int mode);
+static int inode_dir_read(struct inode *dp, struct dirent *de, uint off);
+static struct inode* inode_dir_lookup(struct inode *dp, char *name, uint *poff);
 static int child_name_in_parent(struct inode *parent, uint child_inum, char *name);
 static int buildcwd(struct inode *cwd, char *buf, int size);
 static int inode_is_owner_or_root(struct inode *ip);
@@ -57,6 +59,34 @@ create_device_mode(int mode)
 }
 
 static int
+inode_dir_read(struct inode *dp, struct dirent *de, uint off)
+{
+  const struct vnode_ops *ops;
+
+  if(dp == 0 || de == 0)
+    return -1;
+
+  ops = vfs_dev_vops(dp->dev);
+  if(ops && ops->read)
+    return ops->read(dp, (char*)de, off, sizeof(*de));
+  return readi(dp, (char*)de, off, sizeof(*de));
+}
+
+static struct inode*
+inode_dir_lookup(struct inode *dp, char *name, uint *poff)
+{
+  const struct vnode_ops *ops;
+
+  if(dp == 0 || name == 0)
+    return 0;
+
+  ops = vfs_dev_vops(dp->dev);
+  if(ops && ops->dirlookup)
+    return ops->dirlookup(dp, name, poff);
+  return dirlookup(dp, name, poff);
+}
+
+static int
 child_name_in_parent(struct inode *parent, uint child_inum, char *name)
 {
   uint off;
@@ -64,7 +94,7 @@ child_name_in_parent(struct inode *parent, uint child_inum, char *name)
   struct dirent de;
 
   for(off = 0; off < parent->size; off += sizeof(de)){
-    if(readi(parent, (char*)&de, off, sizeof(de)) != sizeof(de))
+    if(inode_dir_read(parent, &de, off) != sizeof(de))
       return -1;
     if(de.inum != child_inum)
       continue;
@@ -101,7 +131,7 @@ buildcwd(struct inode *cwd, char *buf, int size)
 
   for(;;){
     ilock(ip);
-    if(ip->inum == ROOTINO){
+    if(vfs_is_root_inode(ip)){
       iunlock(ip);
       break;
     }
@@ -109,7 +139,7 @@ buildcwd(struct inode *cwd, char *buf, int size)
       iunlockput(ip);
       return -1;
     }
-    parent = dirlookup(ip, "..", 0);
+    parent = inode_dir_lookup(ip, "..", 0);
     iunlock(ip);
     if(parent == 0){
       iput(ip);
@@ -537,7 +567,7 @@ isdirempty(struct inode *dp)
   struct dirent de;
 
   for(off=2*sizeof(de); off<dp->size; off+=sizeof(de)){
-    if(readi(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
+    if(inode_dir_read(dp, &de, off) != sizeof(de))
       panic("isdirempty: readi");
     if(de.inum != 0)
       return 0;
@@ -619,6 +649,7 @@ static struct inode*
 create(char *path, short type, short major, short minor, int mode)
 {
   const struct vnode_ops *ops;
+  int legacy_xv6;
   int (*dirlink_fn)(struct inode*, char*, uint);
   struct inode* (*create_fn)(struct inode*, char*, short, short, short, int, int, int);
   struct inode *ip, *dp;
@@ -629,6 +660,7 @@ create(char *path, short type, short major, short minor, int mode)
   ilock(dp);
 
   ops = vfs_dev_vops(dp->dev);
+  legacy_xv6 = vfs_dev_is_xv6fs(dp->dev);
   dirlink_fn = dirlink;
   create_fn = 0;
   if(ops && ops->dirlink)
@@ -638,8 +670,12 @@ create(char *path, short type, short major, short minor, int mode)
 
   if(ops && ops->dirlookup)
     ip = ops->dirlookup(dp, name, 0);
-  else
+  else if(legacy_xv6)
     ip = dirlookup(dp, name, 0);
+  else {
+    iunlockput(dp);
+    return 0;
+  }
   if(ip != 0){
     iunlockput(dp);
     ilock(ip);
@@ -653,6 +689,11 @@ create(char *path, short type, short major, short minor, int mode)
     ip = create_fn(dp, name, type, major, minor, mode, myproc()->uid, myproc()->gid);
     iunlockput(dp);
     return ip;
+  }
+
+  if(!legacy_xv6){
+    iunlockput(dp);
+    return 0;
   }
 
   // Backend does not support creating new directory entries/inodes on this dev.

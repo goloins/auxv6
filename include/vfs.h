@@ -41,6 +41,7 @@ struct vnode_ops {
 };
 
 struct vfs_ops {
+  struct inode* (*root_inode)(void);
   struct inode* (*namei)(char *path);
   struct inode* (*nameiparent)(char *path, char *name);
   void (*inode_put)(struct inode *ip);
@@ -87,10 +88,13 @@ int vfs_lookup_parent(char *path, char *name, struct vnode *vn);
 void vfs_vnode_drop(struct vnode *vn);
 int vfs_register_mount(struct vfs *fs, int dev, int flags, char *path);
 int vfs_unmount(char *path);
+uint vfs_root_dev(void);
+int vfs_is_root_inode(struct inode *ip);
 int vfs_mount_count(void);
 int vfs_get_mounts(struct vfs_mount_info *out, int max);
 int vfs_dev_has_cap(uint dev, uint cap);
 const struct vnode_ops* vfs_dev_vops(uint dev);
+int vfs_dev_is_xv6fs(uint dev);
 int vfs_dev_faultctl(uint dev, int which, int value);
 void* vfs_dev_fs_data(uint dev);
 void vfs_xv6fs_init(struct vfs *fs);
