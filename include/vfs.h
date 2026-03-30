@@ -23,6 +23,10 @@ struct vnode_ops {
   int (*write)(struct inode *ip, char *src, uint off, uint n);
   int (*truncate)(struct inode *ip);
   int (*stat)(struct inode *ip, struct stat *st);
+  int (*setattr)(struct inode *ip,
+                 int set_mode, int mode,
+                 int set_uid, int uid,
+                 int set_gid, int gid);
   int (*access)(struct inode *ip, int mode);
   struct inode* (*dirlookup)(struct inode *dp, char *name, uint *poff);
   int (*dirlink)(struct inode *dp, char *name, uint inum);
@@ -30,8 +34,10 @@ struct vnode_ops {
   int (*remove)(struct inode *dp, char *name);
   int (*rename)(struct inode *olddp, char *oldname,
                 struct inode *newdp, char *newname);
+  int (*faultctl)(int which, int value);
   struct inode* (*create)(struct inode *dp, char *name, short type,
-                          short major, short minor, int uid, int gid);
+                          short major, short minor, int mode,
+                          int uid, int gid);
 };
 
 struct vfs_ops {
@@ -85,6 +91,7 @@ int vfs_mount_count(void);
 int vfs_get_mounts(struct vfs_mount_info *out, int max);
 int vfs_dev_has_cap(uint dev, uint cap);
 const struct vnode_ops* vfs_dev_vops(uint dev);
+int vfs_dev_faultctl(uint dev, int which, int value);
 void* vfs_dev_fs_data(uint dev);
 void vfs_xv6fs_init(struct vfs *fs);
 void vfs_ext2_init(struct vfs *fs);

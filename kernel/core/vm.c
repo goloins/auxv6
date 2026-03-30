@@ -6,6 +6,8 @@
 #include "mmu.h"
 #include "proc.h"
 #include "elf.h"
+#include "fs.h"
+#include "vfs.h"
 
 extern char data[];  // defined by kernel.ld
 pde_t *kpgdir;  // for use in scheduler()
@@ -199,9 +201,11 @@ loaduvm(pde_t *pgdir, char *addr, struct inode *ip, uint offset, uint sz)
 {
   uint i, pa, n;
   pte_t *pte;
+  const struct vnode_ops *ops;
 
   if((uint) addr % PGSIZE != 0)
     panic("loaduvm: addr must be page aligned");
+  ops = vfs_dev_vops(inode_get_dev(ip));
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walkpgdir(pgdir, addr+i, 0)) == 0)
       panic("loaduvm: address should exist");
@@ -210,8 +214,13 @@ loaduvm(pde_t *pgdir, char *addr, struct inode *ip, uint offset, uint sz)
       n = sz - i;
     else
       n = PGSIZE;
-    if(readi(ip, P2V(pa), offset+i, n) != n)
-      return -1;
+    if(ops && ops->read){
+      if(ops->read(ip, P2V(pa), offset+i, n) != n)
+        return -1;
+    } else {
+      if(readi(ip, P2V(pa), offset+i, n) != n)
+        return -1;
+    }
   }
   return 0;
 }

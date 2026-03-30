@@ -60,3 +60,5 @@
 #define SYS_devblocks 59
 #define SYS_getdents 60
 #define SYS_rename  61
+#define SYS_ext2fail 62
+#define SYS_fsfault 63

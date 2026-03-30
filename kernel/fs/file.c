@@ -5,6 +5,7 @@
 #include "types.h"
 #include "defs.h"
 #include "param.h"
+#include "stat.h"
 #include "fs.h"
 #include "vfs.h"
 #include "spinlock.h"
@@ -117,6 +118,14 @@ fileread(struct file *f, char *addr, int n)
     return piperead(f->pipe, addr, n);
   if(f->type == FD_INODE){
     ilock(f->ip);
+
+    if(f->ip->type == T_DEV){
+      r = readi(f->ip, addr, f->off, n);
+      if(r > 0)
+        f->off += r;
+      iunlock(f->ip);
+      return r;
+    }
     
     // Try VFS vnode_ops if device is mounted in VFS
     ops = vfs_dev_vops(f->ip->dev);
@@ -153,6 +162,15 @@ filewrite(struct file *f, char *addr, int n)
   if(f->type == FD_PIPE)
     return pipewrite(f->pipe, addr, n);
   if(f->type == FD_INODE){
+    if(f->ip->type == T_DEV){
+      ilock(f->ip);
+      r = writei(f->ip, addr, f->off, n);
+      if(r > 0)
+        f->off += r;
+      iunlock(f->ip);
+      return r;
+    }
+
     // write a few blocks at a time to avoid exceeding
     // the maximum log transaction size, including
     // i-node, indirect block, allocation blocks,

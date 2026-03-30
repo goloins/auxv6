@@ -556,6 +556,17 @@ vfs_dev_vops(uint dev)
   return vops;
 }
 
+int
+vfs_dev_faultctl(uint dev, int which, int value)
+{
+  const struct vnode_ops *ops;
+
+  ops = vfs_dev_vops(dev);
+  if(ops == 0 || ops->faultctl == 0)
+    return -1;
+  return ops->faultctl(which, value);
+}
+
 void*
 vfs_dev_fs_data(uint dev)
 {

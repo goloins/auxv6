@@ -400,7 +400,7 @@ test_ext2.img:
 	rm -rf .ext2root
 	mkdir -p .ext2root
 	printf "hello world\n" > .ext2root/hello.txt
-	genext2fs -b 2048 -d .ext2root test_ext2.img
+	genext2fs -b 2048 -N 256 -d .ext2root test_ext2.img
 
 ext2-reset:
 	rm -f $(EXT2IMG)

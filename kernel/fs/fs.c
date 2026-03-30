@@ -329,6 +329,8 @@ ilock(struct inode *ip)
     ip->uid = dip->uid;
     ip->gid = dip->gid;
     ip->mode = dip->mode;
+    if(ip->type == T_DEV && (ip->mode & M_IFMT) == 0)
+      ip->mode = (ip->mode & 07777) | M_IFCHR;
     ip->size = dip->size;
     memmove(ip->addrs, dip->addrs, sizeof(ip->addrs));
     brelse(bp);
@@ -571,6 +573,8 @@ stati(struct inode *ip, struct stat *st)
   st->dev = ip->dev;
   st->ino = ip->inum;
   st->type = ip->type;
+  st->major = ip->major;
+  st->minor = ip->minor;
   st->nlink = ip->nlink;
   st->uid = ip->uid;
   st->gid = ip->gid;
@@ -593,7 +597,7 @@ readi(struct inode *ip, char *dst, uint off, uint n)
   if(ip->type == T_DEV){
     if(ip->major < 0 || ip->major >= NDEV || !devsw[ip->major].read)
       return -1;
-    return devsw[ip->major].read(ip, dst, n);
+    return devsw[ip->major].read(ip, dst, off, n);
   }
 
   if(off > ip->size || off + n < off)
@@ -625,7 +629,7 @@ writei(struct inode *ip, char *src, uint off, uint n)
   if(ip->type == T_DEV){
     if(ip->major < 0 || ip->major >= NDEV || !devsw[ip->major].write)
       return -1;
-    return devsw[ip->major].write(ip, src, n);
+    return devsw[ip->major].write(ip, src, off, n);
   }
 
   if(off > ip->size || off + n < off)

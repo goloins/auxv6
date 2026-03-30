@@ -143,6 +143,8 @@ extern int sys_routeinfo(void);
 extern int sys_routeadd(void);
 extern int sys_devblocks(void);
 extern int sys_getdents(void);
+extern int sys_ext2fail(void);
+extern int sys_fsfault(void);
 
 static int (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -204,6 +206,8 @@ static int (*syscalls[])(void) = {
 [SYS_routeadd] sys_routeadd,
 [SYS_devblocks] sys_devblocks,
 [SYS_getdents] sys_getdents,
+[SYS_ext2fail] sys_ext2fail,
+[SYS_fsfault] sys_fsfault,
 [SYS_sigsend] sys_sigsend,
 [SYS_sigaction] sys_sigaction,
 };

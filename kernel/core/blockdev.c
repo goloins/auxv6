@@ -6,6 +6,10 @@
 #include "fs.h"
 #include "buf.h"
 #include "blockdev.h"
+#include "file.h"
+
+static int blockdev_read(struct inode *ip, char *dst, uint off, int n);
+static int blockdev_write(struct inode *ip, char *src, uint off, int n);
 
 struct {
   struct spinlock lock;
@@ -33,6 +37,86 @@ bdevinit(void)
     bdevtable.dev[i].is_part = 0;
   }
   release(&bdevtable.lock);
+
+  devsw[BLOCKDEV].read = blockdev_read;
+  devsw[BLOCKDEV].write = blockdev_write;
+}
+
+static int
+blockdev_read(struct inode *ip, char *dst, uint off, int n)
+{
+  uint total;
+  uint limit;
+
+  if(ip == 0 || dst == 0 || ip->minor < 0 || ip->minor >= NDEV)
+    return -1;
+
+  limit = bdev_nblocks(ip->minor) * BSIZE;
+  if(off > limit || off + n < off)
+    return -1;
+  if(off + n > limit)
+    n = limit - off;
+
+  for(total = 0; total < (uint)n; ){
+    struct buf *bp;
+    uint blockno;
+    uint blockoff;
+    uint chunk;
+
+    blockno = off / BSIZE;
+    blockoff = off % BSIZE;
+    chunk = BSIZE - blockoff;
+    if(chunk > (uint)n - total)
+      chunk = (uint)n - total;
+
+    bp = bread(ip->minor, blockno);
+    memmove(dst + total, bp->data + blockoff, chunk);
+    brelse(bp);
+
+    total += chunk;
+    off += chunk;
+  }
+
+  return n;
+}
+
+static int
+blockdev_write(struct inode *ip, char *src, uint off, int n)
+{
+  uint total;
+  uint limit;
+
+  if(ip == 0 || src == 0 || ip->minor < 0 || ip->minor >= NDEV)
+    return -1;
+
+  limit = bdev_nblocks(ip->minor) * BSIZE;
+  if(off > limit || off + n < off)
+    return -1;
+  if(off + n > limit)
+    n = limit - off;
+
+  for(total = 0; total < (uint)n; ){
+    struct buf *bp;
+    uint blockno;
+    uint blockoff;
+    uint chunk;
+
+    blockno = off / BSIZE;
+    blockoff = off % BSIZE;
+    chunk = BSIZE - blockoff;
+    if(chunk > (uint)n - total)
+      chunk = (uint)n - total;
+
+    bp = bread(ip->minor, blockno);
+    memmove(bp->data + blockoff, src + total, chunk);
+    bwrite(bp);
+    brelse(bp);
+
+    total += chunk;
+    off += chunk;
+  }
+
+  return n;
 }
 
 int

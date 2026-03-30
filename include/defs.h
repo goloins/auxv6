@@ -119,6 +119,7 @@ int             vfs_get_mounts(struct vfs_mount_info*, int);
 int             vfs_dev_has_cap(uint, uint);
 const struct vnode_ops* vfs_dev_vops(uint);
 void*           vfs_dev_fs_data(uint);
+int             vfs_dev_faultctl(uint, int, int);
 void            vfs_xv6fs_init(struct vfs*);
 void            vfs_ext2_init(struct vfs*);
 void            vfs_procfs_init(struct vfs*);
@@ -274,6 +275,8 @@ int             sys_tcgetattr(void);
 int             sys_tcsetattr(void);
 int             sys_waitpid(void);
 int             sys_rename(void);
+int             sys_ext2fail(void);
+int             sys_fsfault(void);
 
 // timer.c
 void            timerinit(void);

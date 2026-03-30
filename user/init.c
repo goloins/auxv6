@@ -9,16 +9,21 @@ char *argv[] = { "login", 0 };
 char *mount_argv[] = { "mount", "/etc/fstab", 0 };
 
 static void
-ensure_node(const char *path, short major, short minor)
+ensure_node(const char *path, int mode, short major, short minor)
 {
   int fd;
+  struct stat st;
 
   fd = open(path, O_RDONLY);
   if(fd >= 0){
     close(fd);
-    return;
+    if(stat(path, &st) == 0 && st.type == T_DEV &&
+       st.major == major && st.minor == minor &&
+       (st.mode & M_IFMT) == (mode & M_IFMT))
+      return;
+    unlink(path);
   }
-  mknod((char*)path, major, minor);
+  mknod((char*)path, mode, major, minor);
 }
 
 static void
@@ -36,7 +41,7 @@ make_disk_nodes(void)
 
     path[0] = '/'; path[1] = 'd'; path[2] = 'e'; path[3] = 'v'; path[4] = '/';
     path[5] = 'h'; path[6] = 'd'; path[7] = 'a' + unit; path[8] = 0;
-    ensure_node(path, 2, dev);
+    ensure_node(path, M_IFBLK, 2, dev);
 
     for(part = 1; part <= HD_PARTS_PER_DISK; part++){
       int pdev = HD_PART_DEV(unit, part);
@@ -46,7 +51,7 @@ make_disk_nodes(void)
       path[5] = 'h'; path[6] = 'd'; path[7] = 'a' + unit;
       path[8] = '0' + part;
       path[9] = 0;
-      ensure_node(path, 2, pdev);
+      ensure_node(path, M_IFBLK, 2, pdev);
     }
   }
 }
@@ -57,7 +62,7 @@ main(void)
   int mpid, pid, wpid;
 
   if(open("/dev/console", O_RDWR) < 0){
-    mknod("/dev/console", 1, 1);
+    mknod("/dev/console", M_IFCHR, 1, 1);
     open("/dev/console", O_RDWR);
   }
 

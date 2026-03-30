@@ -32,13 +32,14 @@ struct inode {
 // table mapping major device number to
 // device functions
 struct devsw {
-  int (*read)(struct inode*, char*, int);
-  int (*write)(struct inode*, char*, int);
+  int (*read)(struct inode*, char*, uint, int);
+  int (*write)(struct inode*, char*, uint, int);
 };
 
 extern struct devsw devsw[];
 
 #define CONSOLE 1
+#define BLOCKDEV 2
 #define DISK_MAX_UNITS 4
 #define DISK_PARTS_PER_DISK 4
 #define DISK_DEV(unit) (unit)

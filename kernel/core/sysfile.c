@@ -23,6 +23,7 @@
 #define GETCWD_MAX_DEPTH 32
 
 static int create_default_mode(short type);
+static int create_device_mode(int mode);
 static int child_name_in_parent(struct inode *parent, uint child_inum, char *name);
 static int buildcwd(struct inode *cwd, char *buf, int size);
 static int inode_is_owner_or_root(struct inode *ip);
@@ -35,9 +36,24 @@ create_default_mode(short type)
 {
   if(type == T_DIR)
     return DEFAULT_CREATE_DIR_MODE;
-  if(type == T_DEV)
-    return DEFAULT_CREATE_DEV_MODE;
   return DEFAULT_CREATE_FILE_MODE;
+}
+
+static int
+create_device_mode(int mode)
+{
+  int kind;
+  int perms;
+
+  kind = mode & M_IFMT;
+  if(kind != M_IFCHR && kind != M_IFBLK)
+    kind = M_IFCHR;
+
+  perms = mode & 07777;
+  if(perms == 0)
+    perms = DEFAULT_CREATE_DEV_MODE;
+
+  return kind | perms;
 }
 
 static int
@@ -600,11 +616,11 @@ bad:
 }
 
 static struct inode*
-create(char *path, short type, short major, short minor)
+create(char *path, short type, short major, short minor, int mode)
 {
   const struct vnode_ops *ops;
   int (*dirlink_fn)(struct inode*, char*, uint);
-  struct inode* (*create_fn)(struct inode*, char*, short, short, short, int, int);
+  struct inode* (*create_fn)(struct inode*, char*, short, short, short, int, int, int);
   struct inode *ip, *dp;
   char name[DIRSIZ];
 
@@ -634,7 +650,7 @@ create(char *path, short type, short major, short minor)
   }
 
   if(create_fn){
-    ip = create_fn(dp, name, type, major, minor, myproc()->uid, myproc()->gid);
+    ip = create_fn(dp, name, type, major, minor, mode, myproc()->uid, myproc()->gid);
     iunlockput(dp);
     return ip;
   }
@@ -659,7 +675,10 @@ create(char *path, short type, short major, short minor)
   ip->nlink = 1;
   ip->uid = myproc()->uid;
   ip->gid = myproc()->gid;
-  ip->mode = create_default_mode(type);
+  if(type == T_DEV)
+    ip->mode = create_device_mode(mode);
+  else
+    ip->mode = create_default_mode(type);
   iupdate(ip);
 
   if(type == T_DIR){  // Create . and .. entries.
@@ -695,7 +714,7 @@ sys_open(void)
   begin_op();
 
   if(omode & O_CREATE){
-    ip = create(path, T_FILE, 0, 0);
+    ip = create(path, T_FILE, 0, 0, 0);
     if(ip == 0){
       end_op();
       return -1;
@@ -792,7 +811,7 @@ sys_mkdir(void)
   struct inode *ip;
 
   begin_op();
-  if(argstr(0, &path) < 0 || (ip = create(path, T_DIR, 0, 0)) == 0){
+  if(argstr(0, &path) < 0 || (ip = create(path, T_DIR, 0, 0, 0)) == 0){
     end_op();
     return -1;
   }
@@ -806,13 +825,16 @@ sys_mknod(void)
 {
   struct inode *ip;
   char *path;
+    int mode;
   int major, minor;
 
   begin_op();
   if((argstr(0, &path)) < 0 ||
-     argint(1, &major) < 0 ||
-     argint(2, &minor) < 0 ||
-     (ip = create(path, T_DEV, major, minor)) == 0){
+      argint(1, &mode) < 0 ||
+      argint(2, &major) < 0 ||
+      argint(3, &minor) < 0 ||
+      ((mode & M_IFMT) != M_IFCHR && (mode & M_IFMT) != M_IFBLK) ||
+      (ip = create(path, T_DEV, major, minor, mode)) == 0){
     end_op();
     return -1;
   }
@@ -877,6 +899,7 @@ sys_chmod(void)
   char *path;
   int mode;
   struct inode *ip;
+  const struct vnode_ops *ops;
 
   if(argstr(0, &path) < 0 || argint(1, &mode) < 0)
     return -1;
@@ -892,8 +915,17 @@ sys_chmod(void)
     end_op();
     return -1;
   }
-  ip->mode = mode & 07777;
-  iupdate(ip);
+  ops = vfs_dev_vops(ip->dev);
+  if(ops && ops->setattr){
+    if(ops->setattr(ip, 1, mode, 0, 0, 0, 0) < 0){
+      iunlockput(ip);
+      end_op();
+      return -1;
+    }
+  } else {
+    ip->mode = (ip->mode & M_IFMT) | (mode & 07777);
+    iupdate(ip);
+  }
   iunlockput(ip);
   end_op();
   return 0;
@@ -906,6 +938,7 @@ sys_chown(void)
   int uid;
   int gid;
   struct inode *ip;
+  const struct vnode_ops *ops;
 
   if(argstr(0, &path) < 0 || argint(1, &uid) < 0 || argint(2, &gid) < 0)
     return -1;
@@ -921,11 +954,20 @@ sys_chown(void)
     end_op();
     return -1;
   }
-  if(uid >= 0)
-    ip->uid = uid;
-  if(gid >= 0)
-    ip->gid = gid;
-  iupdate(ip);
+  ops = vfs_dev_vops(ip->dev);
+  if(ops && ops->setattr){
+    if(ops->setattr(ip, 0, 0, uid >= 0, uid, gid >= 0, gid) < 0){
+      iunlockput(ip);
+      end_op();
+      return -1;
+    }
+  } else {
+    if(uid >= 0)
+      ip->uid = uid;
+    if(gid >= 0)
+      ip->gid = gid;
+    iupdate(ip);
+  }
   iunlockput(ip);
   end_op();
   return 0;
@@ -958,6 +1000,33 @@ sys_devblocks(void)
     return -1;
 
   return bdev_nblocks((uint)dev);
+}
+
+int
+sys_ext2fail(void)
+{
+  int which;
+  int value;
+
+  if(argint(0, &which) < 0 || argint(1, &value) < 0)
+    return -1;
+
+  return vfs_dev_faultctl(EXT2DEV, which, value);
+}
+
+int
+sys_fsfault(void)
+{
+  int dev;
+  int which;
+  int value;
+
+  if(argint(0, &dev) < 0 || argint(1, &which) < 0 || argint(2, &value) < 0)
+    return -1;
+  if(dev < 0 || dev >= NDEV)
+    return -1;
+
+  return vfs_dev_faultctl((uint)dev, which, value);
 }
 
 int
