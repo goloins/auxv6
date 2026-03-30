@@ -32,6 +32,7 @@ user/login
 user/ln
 user/ls
 user/lsblk
+user/lspci
 user/mkdir
 user/mount
 user/mounts
@@ -51,6 +52,7 @@ user/passwd
 user/chmod
 user/chown
 user/chgrp
+user/sigtest
 user/stressfs
 user/usertests
 user/wc
@@ -58,3 +60,4 @@ user/zombie
 include/rootfs_config.h
 .ext2root/
 .fatroot/
+user/sigtest

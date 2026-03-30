@@ -139,6 +139,19 @@ void            ioapicenable(int irq, int cpu);
 extern uchar    ioapicid;
 void            ioapicinit(void);
 
+// pci.c
+void            pci_init(void);
+int             pci_format_devices(char*, int);
+
+// dma.c
+void            dma_init(void);
+void*           dma_alloc(uint, uint*);
+void            dma_free(void*, uint);
+uint            dma_virt_to_phys(void*);
+void*           dma_alloc_aligned(uint, uint, uint*);
+void            dma_sync_for_device(void*, uint);
+void            dma_sync_for_cpu(void*, uint);
+
 // kalloc.c
 char*           kalloc(void);
 void            kfree(char*);
@@ -296,6 +309,9 @@ void            idtinit(void);
 extern uint     ticks;
 void            tvinit(void);
 extern struct spinlock tickslock;
+typedef void (*irq_handler_t)(int irq, void *arg);
+int             irq_register(int irq, irq_handler_t handler, void *arg, const char *name);
+void            irq_unregister(int irq);
 
 // uart.c
 void            uartinit(void);

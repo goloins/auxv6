@@ -12,6 +12,8 @@ OBJS = \
 	kernel/fs/vfs_msdosfs.o\
 	kernel/driver/ide.o\
 	kernel/driver/ioapic.o\
+	kernel/driver/pci.o\
+	kernel/driver/dma.o\
 	kernel/core/kalloc.o\
 	kernel/driver/kbd.o\
 	kernel/driver/lapic.o\
@@ -237,6 +239,9 @@ _ls: user/ls
 _lsblk: user/lsblk
 	cp user/lsblk _lsblk
 
+_lspci: user/lspci
+	cp user/lspci _lspci
+
 _mkdir: user/mkdir
 	cp user/mkdir _mkdir
 
@@ -341,6 +346,7 @@ UPROGS=\
 	_ln\
 	_ls\
 	_lsblk\
+	_lspci\
 	_mkdir\
 	_mount\
 	_mounts\
@@ -435,7 +441,7 @@ clean:
 	user/grep user/id user/init user/kill user/ln user/ls user/lsblk user/mkdir user/mv \
 	user/mount user/mounts user/mounttest user/umount \
 	user/uname \
-	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/sh user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login
+	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/lspci
 
 # make a printout
 FILES = $(shell grep -v '^\#' tools/runoff.list)

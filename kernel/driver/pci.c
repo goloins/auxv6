@@ -22,6 +22,7 @@
 
 #include "types.h"
 #include "defs.h"
+#include "memlayout.h"
 #include "x86.h"
 #include "spinlock.h"
 #include "pci.h"
@@ -247,6 +248,10 @@ pci_probe_function(uint8_t bus, uint8_t slot, uint8_t func)
         }
     }
     
+    cprintf("pci %d:%d.%d: %x:%x class %x:%x irq %d\n",
+            bus, slot, func, vendor, device,
+            dev->class_code, dev->subclass, dev->irq_line);
+    
     pci_ndevices++;
     return 1;
 }
@@ -331,19 +336,42 @@ int pci_bar_type(struct pci_dev *dev, int bar)
 
 /*
  * Map a BAR into kernel virtual address space
- * TODO: Implement proper mapping via paging
+ * 
+ * Memory layout:
+ * - PHYSTOP (0x0E000000): End of usable RAM
+ * - DEVSPACE (0xFE000000): Start of device memory (identity mapped)
+ * 
+ * For MMIO BARs:
+ * - >= DEVSPACE: Return physical address (identity mapped in kmap)
+ * - < PHYSTOP: Return P2V(addr)
+ * - Between: Not currently mapped (returns NULL)
  */
 void *
 pci_map_bar(struct pci_dev *dev, int bar)
 {
-    /* For now, just return P2V of the BAR base for low addresses */
-    /* Real implementation needs to set up page mappings */
     uint32_t base = pci_bar_base(dev, bar);
-    if (base == 0 || (dev->bar_type[bar] & PCI_BAR_IO))
+    uint32_t size = pci_bar_size(dev, bar);
+    
+    if (base == 0 || size == 0)
         return 0;
     
-    /* TODO: Map via ioremap-style function */
-    return (void *)P2V(base);
+    /* I/O BARs don't need virtual mapping - use port I/O functions */
+    if (dev->bar_type[bar] & PCI_BAR_IO)
+        return 0;
+    
+    /* Check which memory region the BAR falls into */
+    if (base >= DEVSPACE) {
+        /* Device memory region - identity mapped in kernel page table */
+        return (void *)(uintptr_t)base;
+    } else if (base < PHYSTOP) {
+        /* Low memory - use standard kernel mapping */
+        return (void *)P2V(base);
+    } else {
+        /* Gap between PHYSTOP and DEVSPACE - not mapped */
+        /* TODO: Could implement dynamic mapping here if needed */
+        cprintf("pci_map_bar: BAR at 0x%x not in mapped region\n", base);
+        return 0;
+    }
 }
 
 /*
@@ -529,4 +557,61 @@ pci_dump_devices(void)
                 dev->class_code, dev->subclass,
                 dev->irq_line);
     }
+}
+
+/* Helper: write hex nibble */
+static char
+hexchar(int n)
+{
+    return n < 10 ? '0' + n : 'a' + n - 10;
+}
+
+/*
+ * Format PCI devices list for /proc/pci
+ * Returns number of bytes written (up to maxlen)
+ */
+int
+pci_format_devices(char *buf, int maxlen)
+{
+    int len = 0;
+    
+    for (int i = 0; i < pci_ndevices && len < maxlen - 32; i++) {
+        struct pci_dev *dev = &pci_devices[i];
+        
+        /* Format: BB:SS.F VVVV:DDDD CC:SS IRQ\n */
+        buf[len++] = hexchar(dev->bus >> 4);
+        buf[len++] = hexchar(dev->bus & 0xF);
+        buf[len++] = ':';
+        buf[len++] = hexchar(dev->slot >> 4);
+        buf[len++] = hexchar(dev->slot & 0xF);
+        buf[len++] = '.';
+        buf[len++] = '0' + dev->func;
+        buf[len++] = ' ';
+        
+        buf[len++] = hexchar((dev->vendor_id >> 12) & 0xF);
+        buf[len++] = hexchar((dev->vendor_id >> 8) & 0xF);
+        buf[len++] = hexchar((dev->vendor_id >> 4) & 0xF);
+        buf[len++] = hexchar(dev->vendor_id & 0xF);
+        buf[len++] = ':';
+        buf[len++] = hexchar((dev->device_id >> 12) & 0xF);
+        buf[len++] = hexchar((dev->device_id >> 8) & 0xF);
+        buf[len++] = hexchar((dev->device_id >> 4) & 0xF);
+        buf[len++] = hexchar(dev->device_id & 0xF);
+        buf[len++] = ' ';
+        
+        buf[len++] = hexchar(dev->class_code >> 4);
+        buf[len++] = hexchar(dev->class_code & 0xF);
+        buf[len++] = ':';
+        buf[len++] = hexchar(dev->subclass >> 4);
+        buf[len++] = hexchar(dev->subclass & 0xF);
+        buf[len++] = ' ';
+        
+        /* IRQ (decimal) */
+        if (dev->irq_line >= 100) buf[len++] = '0' + (dev->irq_line / 100);
+        if (dev->irq_line >= 10) buf[len++] = '0' + ((dev->irq_line / 10) % 10);
+        buf[len++] = '0' + (dev->irq_line % 10);
+        buf[len++] = '\n';
+    }
+    
+    return len;
 }

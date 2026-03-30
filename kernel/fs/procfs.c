@@ -14,6 +14,7 @@
 #define PROCFS_ROOT_INO     1
 #define PROCFS_UPTIME_INO   2
 #define PROCFS_VERSION_INO  3
+#define PROCFS_PCI_INO      4
 #define PROCFS_VERSION_STR  "a/ux86 aux86 i686\n"
 
 struct procfs_inode {
@@ -25,13 +26,14 @@ struct procfs_inode {
 static struct procfs_inode procfs_inodes[] = {
   { PROCFS_UPTIME_INO,  "uptime",  16 },
   { PROCFS_VERSION_INO, "version", 32 },
+  { PROCFS_PCI_INO,     "pci",     2048 },
   { 0, 0, 0 }
 };
 
 static uint
 procfs_root_dir_size(void)
 {
-  return 4 * sizeof(struct dirent);
+  return 5 * sizeof(struct dirent);
 }
 
 static uint
@@ -85,6 +87,10 @@ procfs_fill_inode(struct inode *ip, uint inum)
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
     ip->size = 16;
+  } else if(inum == PROCFS_PCI_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
+    ip->size = 2048;  /* Dynamic content */
   } else {
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
@@ -248,28 +254,31 @@ procfs_vaccess(struct inode *ip, int mode)
 int
 procfs_readi(struct inode *ip, char *dst, uint off, uint n)
 {
-  char buf[32];
-  struct dirent entries[4];
+  char buf[2048];
+  struct dirent entries[3];
   uint len;
   uint now;
 
   if(ip == 0 || dst == 0)
     return -1;
   if(ip->inum == PROCFS_ROOT_INO){
+    // Note: . and .. are synthesized by VFS for mount roots
     memset(entries, 0, sizeof(entries));
-    entries[0].inum = PROCFS_ROOT_INO;
-    safestrcpy(entries[0].name, ".", DIRSIZ);
-    entries[1].inum = PROCFS_ROOT_INO;
-    safestrcpy(entries[1].name, "..", DIRSIZ);
-    entries[2].inum = PROCFS_UPTIME_INO;
-    safestrcpy(entries[2].name, "uptime", DIRSIZ);
-    entries[3].inum = PROCFS_VERSION_INO;
-    safestrcpy(entries[3].name, "version", DIRSIZ);
+    entries[0].inum = PROCFS_UPTIME_INO;
+    safestrcpy(entries[0].name, "uptime", DIRSIZ);
+    entries[1].inum = PROCFS_VERSION_INO;
+    safestrcpy(entries[1].name, "version", DIRSIZ);
+    entries[2].inum = PROCFS_PCI_INO;
+    safestrcpy(entries[2].name, "pci", DIRSIZ);
     return procfs_copy_data(dst, off, n, (char*)entries, sizeof(entries));
   }
   if(ip->inum == PROCFS_VERSION_INO)
     return procfs_copy_data(dst, off, n, PROCFS_VERSION_STR,
                             sizeof(PROCFS_VERSION_STR) - 1);
+  if(ip->inum == PROCFS_PCI_INO){
+    len = pci_format_devices(buf, sizeof(buf));
+    return procfs_copy_data(dst, off, n, buf, len);
+  }
   if(ip->inum != PROCFS_UPTIME_INO)
     return -1;
 

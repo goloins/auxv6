@@ -24,6 +24,7 @@ main(void)
   seginit();       // segment descriptors
   picinit();       // disable pic
   ioapicinit();    // another interrupt controller
+  pci_init();      // PCI bus enumeration
   consoleinit();   // console hardware
   uartinit();      // serial port
   pinit();         // process table

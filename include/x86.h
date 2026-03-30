@@ -30,6 +30,28 @@ outw(ushort port, ushort data)
   asm volatile("out %0,%1" : : "a" (data), "d" (port));
 }
 
+static inline ushort
+inw(ushort port)
+{
+  ushort data;
+  asm volatile("in %1,%0" : "=a" (data) : "d" (port));
+  return data;
+}
+
+static inline uint
+inl(ushort port)
+{
+  uint data;
+  asm volatile("inl %1,%0" : "=a" (data) : "d" (port));
+  return data;
+}
+
+static inline void
+outl(ushort port, uint data)
+{
+  asm volatile("outl %0,%1" : : "a" (data), "d" (port));
+}
+
 static inline void
 outsl(int port, const void *addr, int cnt)
 {

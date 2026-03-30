@@ -124,41 +124,46 @@ These items are blocking everything else and must be done first.
 
 ---
 
-## Priority Tier 2: Device Infrastructure (Weeks 5-8)
+## Priority Tier 2: Device Infrastructure (Weeks 5-8) [COMPLETE]
 
-### 2.1 PCI Subsystem [HIGH]
-**Status:** Stub created at `kernel/driver/pci.c`  
-**Blocking:** All modern device drivers  
-**Tasks:**
-- [ ] PCI bus enumeration
-- [ ] Config space read/write (I/O ports 0xCF8/0xCFC)
-- [ ] BAR mapping to virtual memory
-- [ ] MSI/MSI-X interrupt setup
-- [ ] Device driver registration framework
+### 2.1 PCI Subsystem [COMPLETE]
+**Status:** Implemented 2026-03-30  
+**Files:** `kernel/driver/pci.c`, `include/pci.h`  
+**Implementation:**
+- [x] PCI bus enumeration (bus 0, all slots/functions)
+- [x] Config space read/write (I/O ports 0xCF8/0xCFC)
+- [x] BAR decoding and size detection
+- [x] BAR mapping to virtual memory (MMIO via DEVSPACE)
+- [x] Device lookup: pci_find_device(), pci_find_class()
+- [x] Command register helpers: pci_set_master(), pci_enable_io/mem()
+- [ ] MSI/MSI-X interrupt setup (future)
+- [x] Device driver registration framework (struct pci_driver)
 
-**Dependencies:** None  
-**Estimate:** 1 week
-
-### 2.2 Interrupt Routing Modernization [HIGH]
-**Current:** trap.c has hardcoded switch statement  
-**Target:** Dynamic interrupt table with handler registration
+### 2.2 Interrupt Routing Modernization [COMPLETE]
+**Status:** Implemented 2026-03-30  
+**Files:** `kernel/core/trap.c`  
+**Implementation:**
 ```c
-typedef void (*irq_handler_t)(int irq);
-void irq_register(int irq, irq_handler_t handler);
+typedef void (*irq_handler_t)(int irq, void *arg);
+int irq_register(int irq, irq_handler_t handler, void *arg, const char *name);
+void irq_unregister(int irq);
 ```
+- Dynamic IRQ table with up to 256 handlers
+- Automatic dispatch from trap() for IRQs 0-255
+- Handler name tracking for debugging
 
-**Estimate:** 2-3 days
-
-### 2.3 DMA Abstraction [MEDIUM]
-**Current:** No DMA support  
-**Target:** Simple bounce buffer and contiguous allocation
+### 2.3 DMA Abstraction [COMPLETE]
+**Status:** Implemented 2026-03-30  
+**Files:** `kernel/driver/dma.c`, `include/defs.h`  
+**Implementation:**
 ```c
-void *dma_alloc(size_t size, uint32_t *phys_addr);
-void dma_free(void *vaddr, size_t size);
+void *dma_alloc(uint size, uint *phys_addr);
+void dma_free(void *vaddr, uint size);
+void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 ```
-
-**Dependencies:** Virtual memory changes  
-**Estimate:** 3-4 days
+- Simple page-based allocation with physical address tracking
+- Supports up to 64 concurrent DMA allocations
+- Alignment support for device requirements
 
 ---
 
