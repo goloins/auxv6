@@ -98,6 +98,7 @@ void            iput(struct inode*);
 void            iunlock(struct inode*);
 void            iunlockput(struct inode*);
 void            iupdate(struct inode*);
+void            itruncate(struct inode*);
 int             namecmp(const char*, const char*);
 struct inode*   namei(char*);
 struct inode*   nameiparent(char*, char*);
@@ -272,6 +273,7 @@ int             sys_tcgetpgrp(void);
 int             sys_tcgetattr(void);
 int             sys_tcsetattr(void);
 int             sys_waitpid(void);
+int             sys_rename(void);
 
 // timer.c
 void            timerinit(void);

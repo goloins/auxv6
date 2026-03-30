@@ -557,6 +557,12 @@ itrunc(struct inode *ip)
   iupdate(ip);
 }
 
+void
+itruncate(struct inode *ip)
+{
+  itrunc(ip);
+}
+
 // Copy stat information from inode.
 // Caller must hold ip->lock.
 void

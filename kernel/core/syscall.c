@@ -118,6 +118,7 @@ extern int sys_tcgetpgrp(void);
 extern int sys_tcgetattr(void);
 extern int sys_tcsetattr(void);
 extern int sys_link(void);
+extern int sys_rename(void);
 extern int sys_mkdir(void);
 extern int sys_mknod(void);
 extern int sys_open(void);
@@ -187,6 +188,7 @@ static int (*syscalls[])(void) = {
 [SYS_mknod]   sys_mknod,
 [SYS_unlink]  sys_unlink,
 [SYS_link]    sys_link,
+[SYS_rename]  sys_rename,
 [SYS_mkdir]   sys_mkdir,
 [SYS_close]   sys_close,
 [SYS_socket]  sys_socket,

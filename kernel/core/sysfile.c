@@ -326,6 +326,8 @@ int
 sys_stat(void)
 {
   char *path;
+  const struct vnode_ops *ops;
+  int rc;
   struct stat *st;
   struct inode *ip;
 
@@ -338,16 +340,23 @@ sys_stat(void)
     return -1;
   }
   ilock(ip);
-  stati(ip, st);
+  ops = vfs_dev_vops(ip->dev);
+  if(ops && ops->stat){
+    rc = ops->stat(ip, st);
+  } else {
+    rc = 0;
+    stati(ip, st);
+  }
   iunlockput(ip);
   end_op();
-  return 0;
+  return rc;
 }
 
 // Create the path new as a link to the same inode as old.
 int
 sys_link(void)
 {
+  const struct vnode_ops *ops;
   char name[DIRSIZ], *new, *old;
   struct inode *dp, *ip;
 
@@ -367,17 +376,33 @@ sys_link(void)
     return -1;
   }
 
+  if((dp = vfs_resolve_parent(new, name)) == 0)
+    goto bad_locked;
+  ilock(dp);
+  if(iaccess(dp, IACC_WRITE | IACC_EXEC) < 0){
+    iunlockput(dp);
+    goto bad_locked;
+  }
+
+  ops = vfs_dev_vops(dp->dev);
+  if(ops && ops->link){
+    iunlock(ip);
+    if(ops->link(ip, dp, name) < 0){
+      iunlockput(dp);
+      iput(ip);
+      end_op();
+      return -1;
+    }
+    iunlockput(dp);
+    iput(ip);
+    end_op();
+    return 0;
+  }
+
   ip->nlink++;
   iupdate(ip);
   iunlock(ip);
 
-  if((dp = vfs_resolve_parent(new, name)) == 0)
-    goto bad;
-  ilock(dp);
-  if(iaccess(dp, IACC_WRITE | IACC_EXEC) < 0){
-    iunlockput(dp);
-    goto bad;
-  }
   if(dp->dev != ip->dev || dirlink(dp, name, ip->inum) < 0){
     iunlockput(dp);
     goto bad;
@@ -394,6 +419,96 @@ bad:
   ip->nlink--;
   iupdate(ip);
   iunlockput(ip);
+  end_op();
+  return -1;
+
+bad_locked:
+  iunlockput(ip);
+  end_op();
+  return -1;
+}
+
+int
+sys_rename(void)
+{
+  const struct vnode_ops *ops;
+  char oldname[DIRSIZ], newname[DIRSIZ], *old, *new;
+  struct inode *olddp, *newdp;
+  struct inode *first, *second;
+  int rc;
+
+  if(argstr(0, &old) < 0 || argstr(1, &new) < 0)
+    return -1;
+  if(strlen(old) == strlen(new) && strncmp(old, new, strlen(old)) == 0)
+    return 0;
+
+  begin_op();
+
+  olddp = vfs_resolve_parent(old, oldname);
+  if(olddp == 0)
+    goto bad;
+  newdp = vfs_resolve_parent(new, newname);
+  if(newdp == 0){
+    iput(olddp);
+    goto bad;
+  }
+
+  if(namecmp(oldname, ".") == 0 || namecmp(oldname, "..") == 0 ||
+     namecmp(newname, ".") == 0 || namecmp(newname, "..") == 0){
+    iput(olddp);
+    iput(newdp);
+    goto bad;
+  }
+
+  if(olddp == newdp){
+    ilock(olddp);
+    if(iaccess(olddp, IACC_WRITE | IACC_EXEC) < 0){
+      iunlockput(olddp);
+      goto bad;
+    }
+    ops = vfs_dev_vops(olddp->dev);
+    if(ops == 0 || ops->rename == 0){
+      iunlockput(olddp);
+      goto bad;
+    }
+    rc = ops->rename(olddp, oldname, olddp, newname);
+    iunlockput(olddp);
+    end_op();
+    return rc;
+  }
+
+  first = olddp;
+  second = newdp;
+  if((newdp->dev < olddp->dev) ||
+     (newdp->dev == olddp->dev && newdp->inum < olddp->inum)){
+    first = newdp;
+    second = olddp;
+  }
+
+  ilock(first);
+  ilock(second);
+
+  if(iaccess(olddp, IACC_WRITE | IACC_EXEC) < 0 ||
+     iaccess(newdp, IACC_WRITE | IACC_EXEC) < 0){
+    iunlockput(second);
+    iunlockput(first);
+    goto bad;
+  }
+
+  ops = vfs_dev_vops(olddp->dev);
+  if(ops == 0 || ops->rename == 0){
+    iunlockput(second);
+    iunlockput(first);
+    goto bad;
+  }
+
+  rc = ops->rename(olddp, oldname, newdp, newname);
+  iunlockput(second);
+  iunlockput(first);
+  end_op();
+  return rc;
+
+bad:
   end_op();
   return -1;
 }
@@ -418,6 +533,7 @@ isdirempty(struct inode *dp)
 int
 sys_unlink(void)
 {
+  const struct vnode_ops *ops;
   struct inode *ip, *dp;
   struct dirent de;
   char name[DIRSIZ], *path;
@@ -439,6 +555,15 @@ sys_unlink(void)
   // Cannot unlink "." or "..".
   if(namecmp(name, ".") == 0 || namecmp(name, "..") == 0)
     goto bad;
+
+  ops = vfs_dev_vops(dp->dev);
+  if(ops && ops->remove){
+    if(ops->remove(dp, name) < 0)
+      goto bad;
+    iunlockput(dp);
+    end_op();
+    return 0;
+  }
 
   if((ip = dirlookup(dp, name, &off)) == 0)
     goto bad;
@@ -558,9 +683,11 @@ sys_open(void)
 {
   char *path;
   int fd, omode;
+  int must_write;
   uint startoff;
   struct file *f;
   struct inode *ip;
+  const struct vnode_ops *ops;
 
   if(argstr(0, &path) < 0 || argint(1, &omode) < 0)
     return -1;
@@ -630,6 +757,20 @@ sys_open(void)
     iunlockput(ip);
     end_op();
     return -1;
+  }
+
+  must_write = (omode & O_WRONLY) || ((omode & O_RDWR) == O_RDWR);
+  if((omode & O_TRUNC) && must_write){
+    ops = vfs_dev_vops(ip->dev);
+    if(ops && ops->truncate){
+      if(ops->truncate(ip) < 0){
+        myproc()->ofile[fd] = 0;
+        fileclose(f);
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+    }
   }
 
   startoff = (omode & O_APPEND) ? ip->size : 0;

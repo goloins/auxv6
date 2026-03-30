@@ -276,12 +276,16 @@ static int
 ext2_alloc_inode(struct ext2_mount_data *data, uint *out_inum)
 {
   uint g;
-  uchar bitmap[4096];
+  uchar *bitmap;
   uint first_ino;
 
   if(data == 0 || out_inum == 0)
     return -1;
-  if(data->block_size > sizeof(bitmap))
+  if(data->block_size > PGSIZE)
+    return -1;
+
+  bitmap = (uchar*)kalloc();
+  if(bitmap == 0)
     return -1;
 
   first_ino = data->sb.s_first_ino;
@@ -298,7 +302,7 @@ ext2_alloc_inode(struct ext2_mount_data *data, uint *out_inum)
 
     bitmap_off = data->group_descs[g].bg_inode_bitmap * data->block_size;
     if(ext2_dev_read(data->dev, bitmap_off, (char*)bitmap, data->block_size) < 0)
-      return -1;
+      goto fail;
 
     bitmax = data->sb.s_inodes_per_group;
     for(b = 0; b < bitmax; b++){
@@ -317,7 +321,7 @@ ext2_alloc_inode(struct ext2_mount_data *data, uint *out_inum)
 
       bitmap[byte_index] |= bit_mask;
       if(ext2_dev_write(data->dev, bitmap_off, (char*)bitmap, data->block_size) < 0)
-        return -1;
+        goto fail;
 
       if(data->group_descs[g].bg_free_inodes_count > 0)
         data->group_descs[g].bg_free_inodes_count--;
@@ -325,15 +329,18 @@ ext2_alloc_inode(struct ext2_mount_data *data, uint *out_inum)
         data->sb.s_free_inodes_count--;
 
       if(ext2_write_group_descs(data) < 0)
-        return -1;
+        goto fail;
       if(ext2_write_super(data) < 0)
-        return -1;
+        goto fail;
 
       *out_inum = inum;
+      kfree((char*)bitmap);
       return 0;
     }
   }
 
+fail:
+  kfree((char*)bitmap);
   return -1;
 }
 
@@ -341,11 +348,15 @@ static int
 ext2_alloc_block(struct ext2_mount_data *data, uint *out_blockno)
 {
   uint g;
-  uchar bitmap[4096];
+  uchar *bitmap;
 
   if(data == 0 || out_blockno == 0)
     return -1;
-  if(data->block_size > sizeof(bitmap))
+  if(data->block_size > PGSIZE)
+    return -1;
+
+  bitmap = (uchar*)kalloc();
+  if(bitmap == 0)
     return -1;
 
   for(g = 0; g < data->group_count; g++){
@@ -358,7 +369,7 @@ ext2_alloc_block(struct ext2_mount_data *data, uint *out_blockno)
 
     bitmap_off = data->group_descs[g].bg_block_bitmap * data->block_size;
     if(ext2_dev_read(data->dev, bitmap_off, (char*)bitmap, data->block_size) < 0)
-      return -1;
+      goto fail;
 
     bitmax = data->sb.s_blocks_per_group;
     for(b = 0; b < bitmax; b++){
@@ -377,7 +388,7 @@ ext2_alloc_block(struct ext2_mount_data *data, uint *out_blockno)
 
       bitmap[byte_index] |= bit_mask;
       if(ext2_dev_write(data->dev, bitmap_off, (char*)bitmap, data->block_size) < 0)
-        return -1;
+        goto fail;
 
       if(data->group_descs[g].bg_free_blocks_count > 0)
         data->group_descs[g].bg_free_blocks_count--;
@@ -385,15 +396,136 @@ ext2_alloc_block(struct ext2_mount_data *data, uint *out_blockno)
         data->sb.s_free_blocks_count--;
 
       if(ext2_write_group_descs(data) < 0)
-        return -1;
+        goto fail;
       if(ext2_write_super(data) < 0)
-        return -1;
+        goto fail;
 
       *out_blockno = blockno;
+      kfree((char*)bitmap);
       return 0;
     }
   }
 
+fail:
+  kfree((char*)bitmap);
+  return -1;
+}
+
+static int
+ext2_free_block(struct ext2_mount_data *data, uint blockno)
+{
+  uint rel;
+  uint g;
+  uint b;
+  uint bitmap_off;
+  uint byte_index;
+  uchar bit_mask;
+  uchar *bitmap;
+
+  if(data == 0)
+    return -1;
+  if(blockno < data->sb.s_first_data_block || blockno >= data->sb.s_blocks_count)
+    return -1;
+  if(data->block_size > PGSIZE)
+    return -1;
+
+  rel = blockno - data->sb.s_first_data_block;
+  g = rel / data->sb.s_blocks_per_group;
+  b = rel % data->sb.s_blocks_per_group;
+  if(g >= data->group_count)
+    return -1;
+
+  bitmap = (uchar*)kalloc();
+  if(bitmap == 0)
+    return -1;
+
+  bitmap_off = data->group_descs[g].bg_block_bitmap * data->block_size;
+  if(ext2_dev_read(data->dev, bitmap_off, (char*)bitmap, data->block_size) < 0)
+    goto fail;
+
+  byte_index = b / 8;
+  bit_mask = 1 << (b % 8);
+  if((bitmap[byte_index] & bit_mask) == 0){
+    kfree((char*)bitmap);
+    return 0;
+  }
+
+  bitmap[byte_index] &= ~bit_mask;
+  if(ext2_dev_write(data->dev, bitmap_off, (char*)bitmap, data->block_size) < 0)
+    goto fail;
+
+  data->group_descs[g].bg_free_blocks_count++;
+  data->sb.s_free_blocks_count++;
+
+  if(ext2_write_group_descs(data) < 0)
+    goto fail;
+  if(ext2_write_super(data) < 0)
+    goto fail;
+
+  kfree((char*)bitmap);
+  return 0;
+
+fail:
+  kfree((char*)bitmap);
+  return -1;
+}
+
+static int
+ext2_free_inode(struct ext2_mount_data *data, uint inum, int was_dir)
+{
+  uint g;
+  uint b;
+  uint bitmap_off;
+  uint byte_index;
+  uchar bit_mask;
+  uchar *bitmap;
+
+  if(data == 0)
+    return -1;
+  if(inum == 0 || inum > data->sb.s_inodes_count)
+    return -1;
+  if(data->block_size > PGSIZE)
+    return -1;
+
+  g = (inum - 1) / data->sb.s_inodes_per_group;
+  b = (inum - 1) % data->sb.s_inodes_per_group;
+  if(g >= data->group_count)
+    return -1;
+
+  bitmap = (uchar*)kalloc();
+  if(bitmap == 0)
+    return -1;
+
+  bitmap_off = data->group_descs[g].bg_inode_bitmap * data->block_size;
+  if(ext2_dev_read(data->dev, bitmap_off, (char*)bitmap, data->block_size) < 0)
+    goto fail;
+
+  byte_index = b / 8;
+  bit_mask = 1 << (b % 8);
+  if((bitmap[byte_index] & bit_mask) == 0){
+    kfree((char*)bitmap);
+    return 0;
+  }
+
+  bitmap[byte_index] &= ~bit_mask;
+  if(ext2_dev_write(data->dev, bitmap_off, (char*)bitmap, data->block_size) < 0)
+    goto fail;
+
+  data->group_descs[g].bg_free_inodes_count++;
+  if(was_dir && data->group_descs[g].bg_used_dirs_count > 0)
+    data->group_descs[g].bg_used_dirs_count--;
+  data->sb.s_free_inodes_count++;
+
+  if(ext2_write_group_descs(data) < 0)
+    goto fail;
+  if(ext2_write_super(data) < 0)
+    goto fail;
+
+  kfree((char*)bitmap);
+  return 0;
+
+fail:
+  kfree((char*)bitmap);
   return -1;
 }
 
@@ -501,24 +633,76 @@ ext2_dir_add_entry(struct ext2_mount_data *data, struct ext2_inode *dip,
     off += hdr.rec_len;
   }
 
+  // No free slot in existing records: grow directory by one direct block.
+  if(need > data->block_size)
+    return -1;
+  if((dip->i_size % data->block_size) != 0)
+    return -1;
+  {
+    uint lbn;
+    uint new_block;
+    uint dev_off;
+    char *zbuf;
+    struct ext2_dirent_hdr nhdr;
+
+    if(data->block_size > PGSIZE)
+      return -1;
+
+    lbn = dip->i_size / data->block_size;
+    if(lbn >= 12)
+      return -1;
+
+    if(ext2_alloc_block(data, &new_block) < 0)
+      return -1;
+
+    zbuf = kalloc();
+    if(zbuf == 0)
+      return -1;
+    memset(zbuf, 0, PGSIZE);
+    dev_off = new_block * data->block_size;
+    if(ext2_dev_write(data->dev, dev_off, zbuf, data->block_size) < 0){
+      kfree(zbuf);
+      return -1;
+    }
+    kfree(zbuf);
+
+    nhdr.inode = inum;
+    nhdr.rec_len = data->block_size;
+    nhdr.name_len = (uchar)namelen;
+    nhdr.file_type = file_type;
+    if(ext2_dev_write(data->dev, dev_off, (char*)&nhdr, sizeof(nhdr)) < 0)
+      return -1;
+    if(ext2_dev_write(data->dev, dev_off + EXT2_DIRENT_MIN_SIZE, name, namelen) < 0)
+      return -1;
+
+    dip->i_block[lbn] = new_block;
+    dip->i_size += data->block_size;
+    dip->i_blocks += data->block_size / 512;
+    return 0;
+  }
+
   return -1;
 }
 
 static int
 ext2_dir_init_block(struct ext2_mount_data *data, uint blockno, uint self_inum, uint parent_inum)
 {
-  char buf[4096];
+  char *buf;
   struct ext2_dirent_hdr dot;
   struct ext2_dirent_hdr dotdot;
+  int r;
 
   if(data == 0 || blockno == 0 || self_inum == 0 || parent_inum == 0)
     return -1;
-  if(data->block_size > sizeof(buf))
+  if(data->block_size > PGSIZE)
     return -1;
   if(data->block_size < 24)
     return -1;
 
-  memset(buf, 0, sizeof(buf));
+  buf = kalloc();
+  if(buf == 0)
+    return -1;
+  memset(buf, 0, PGSIZE);
 
   dot.inode = self_inum;
   dot.rec_len = 12;
@@ -535,7 +719,101 @@ ext2_dir_init_block(struct ext2_mount_data *data, uint blockno, uint self_inum, 
   buf[dot.rec_len + EXT2_DIRENT_MIN_SIZE] = '.';
   buf[dot.rec_len + EXT2_DIRENT_MIN_SIZE + 1] = '.';
 
-  return ext2_dev_write(data->dev, blockno * data->block_size, buf, data->block_size);
+  r = ext2_dev_write(data->dev, blockno * data->block_size, buf, data->block_size);
+  kfree(buf);
+  return r;
+}
+
+static int
+ext2_inode_truncate_blocks(struct ext2_mount_data *data, struct ext2_inode *dip)
+{
+  uint i;
+
+  if(data == 0 || dip == 0)
+    return -1;
+
+  for(i = 0; i < 12; i++){
+    if(dip->i_block[i] == 0)
+      continue;
+    if(ext2_free_block(data, dip->i_block[i]) < 0)
+      return -1;
+    dip->i_block[i] = 0;
+  }
+
+  if(dip->i_block[12]){
+    uint ind_block;
+    uint *tbl;
+    uint ptrs;
+
+    ind_block = dip->i_block[12];
+    if(data->block_size > PGSIZE)
+      return -1;
+    tbl = (uint*)kalloc();
+    if(tbl == 0)
+      return -1;
+    if(ext2_dev_read(data->dev, ind_block * data->block_size, (char*)tbl, data->block_size) < 0){
+      kfree((char*)tbl);
+      return -1;
+    }
+    ptrs = data->block_size / sizeof(uint);
+    for(i = 0; i < ptrs; i++){
+      if(tbl[i] == 0)
+        continue;
+      if(ext2_free_block(data, tbl[i]) < 0){
+        kfree((char*)tbl);
+        return -1;
+      }
+    }
+    kfree((char*)tbl);
+    if(ext2_free_block(data, ind_block) < 0)
+      return -1;
+    dip->i_block[12] = 0;
+  }
+
+  dip->i_block[13] = 0;
+  dip->i_block[14] = 0;
+  dip->i_size = 0;
+  dip->i_blocks = 0;
+  return 0;
+}
+
+static int
+ext2_dir_is_empty(struct ext2_mount_data *data, struct ext2_inode *dip)
+{
+  uint off;
+
+  if(data == 0 || dip == 0)
+    return 0;
+
+  off = 0;
+  while(off + sizeof(struct ext2_dirent_hdr) <= dip->i_size){
+    struct ext2_dirent_hdr hdr;
+    uint remain;
+    int got;
+
+    got = ext2_read_data(data, dip, (char*)&hdr, off, sizeof(hdr));
+    if(got != sizeof(hdr))
+      return 0;
+    remain = dip->i_size - off;
+    if(!ext2_dirent_valid(&hdr, remain))
+      return 0;
+
+    if(hdr.inode != 0 && hdr.name_len > 0){
+      char nm[EXT2_NAME_MAX + 1];
+
+      got = ext2_read_data(data, dip, nm, off + 8, hdr.name_len);
+      if(got != hdr.name_len)
+        return 0;
+      nm[hdr.name_len] = 0;
+      if(!(hdr.name_len == 1 && nm[0] == '.') &&
+         !(hdr.name_len == 2 && nm[0] == '.' && nm[1] == '.'))
+        return 0;
+    }
+
+    off += hdr.rec_len;
+  }
+
+  return 1;
 }
 
 static struct inode*
@@ -1074,15 +1352,21 @@ ext2_write(struct inode *ip, char *src, uint off, uint n)
       return -1;
     if(blockno == 0){
       uint new_block;
-      char zbuf[4096];
+      char *zbuf;
 
       if(lbn >= 12)
         return -1;
       if(ext2_alloc_block(data, &new_block) < 0)
         return -1;
-      memset(zbuf, 0, sizeof(zbuf));
-      if(ext2_dev_write(data->dev, new_block * data->block_size, zbuf, data->block_size) < 0)
+      zbuf = kalloc();
+      if(zbuf == 0)
         return -1;
+      memset(zbuf, 0, PGSIZE);
+      if(ext2_dev_write(data->dev, new_block * data->block_size, zbuf, data->block_size) < 0){
+        kfree(zbuf);
+        return -1;
+      }
+      kfree(zbuf);
       dip.i_block[lbn] = new_block;
       alloc_count++;
     }
@@ -1163,12 +1447,256 @@ ext2_access(struct inode *ip, int mode)
 }
 
 static int
+ext2_truncate(struct inode *ip)
+{
+  struct ext2_mount_data *data;
+  struct ext2_inode dip;
+
+  if(ip == 0)
+    return -1;
+
+  data = ext2_data_for_dev(ip->dev);
+  if(data == 0)
+    return -1;
+  if(ext2_read_disk_inode(data, ip->inum, &dip) < 0)
+    return -1;
+  if((dip.i_mode & EXT2_S_IFMT) != EXT2_S_IFREG)
+    return -1;
+
+  if(ext2_inode_truncate_blocks(data, &dip) < 0)
+    return -1;
+  acquire(&tickslock);
+  dip.i_mtime = ticks;
+  dip.i_ctime = ticks;
+  release(&tickslock);
+
+  if(ext2_write_disk_inode(data, ip->inum, &dip) < 0)
+    return -1;
+
+  ip->size = 0;
+  return 0;
+}
+
+static int
+ext2_remove(struct inode *dp, char *name)
+{
+  struct ext2_mount_data *data;
+  struct ext2_inode dip;
+  struct ext2_inode tip;
+  struct inode *ip;
+  uint off;
+  struct ext2_dirent_hdr hdr;
+  uint dev_off;
+  int was_dir;
+
+  if(dp == 0 || name == 0)
+    return -1;
+
+  data = ext2_data_for_dev(dp->dev);
+  if(data == 0)
+    return -1;
+  if(ext2_read_disk_inode(data, dp->inum, &dip) < 0)
+    return -1;
+  if((dip.i_mode & EXT2_S_IFMT) != EXT2_S_IFDIR)
+    return -1;
+
+  ip = ext2_dirlookup(dp, name, &off);
+  if(ip == 0)
+    return -1;
+  ilock(ip);
+
+  if(ext2_read_disk_inode(data, ip->inum, &tip) < 0){
+    iunlockput(ip);
+    return -1;
+  }
+
+  was_dir = ((tip.i_mode & EXT2_S_IFMT) == EXT2_S_IFDIR);
+  if(was_dir && !ext2_dir_is_empty(data, &tip)){
+    iunlockput(ip);
+    return -1;
+  }
+
+  if(ext2_read_data(data, &dip, (char*)&hdr, off, sizeof(hdr)) != sizeof(hdr)){
+    iunlockput(ip);
+    return -1;
+  }
+  if(hdr.inode == 0){
+    iunlockput(ip);
+    return -1;
+  }
+  hdr.inode = 0;
+  if(ext2_dir_dev_off(data, &dip, off, &dev_off) < 0){
+    iunlockput(ip);
+    return -1;
+  }
+  if(ext2_dev_write(data->dev, dev_off, (char*)&hdr, sizeof(hdr)) < 0){
+    iunlockput(ip);
+    return -1;
+  }
+
+  if(was_dir && dip.i_links_count > 0)
+    dip.i_links_count--;
+  acquire(&tickslock);
+  dip.i_mtime = ticks;
+  dip.i_ctime = ticks;
+  release(&tickslock);
+  if(ext2_write_disk_inode(data, dp->inum, &dip) < 0){
+    iunlockput(ip);
+    return -1;
+  }
+
+  if(tip.i_links_count > 0)
+    tip.i_links_count--;
+  if(tip.i_links_count == 0){
+    if(ext2_inode_truncate_blocks(data, &tip) < 0){
+      iunlockput(ip);
+      return -1;
+    }
+    acquire(&tickslock);
+    tip.i_dtime = ticks;
+    tip.i_ctime = ticks;
+    tip.i_mtime = ticks;
+    release(&tickslock);
+    if(ext2_write_disk_inode(data, ip->inum, &tip) < 0){
+      iunlockput(ip);
+      return -1;
+    }
+    if(ext2_free_inode(data, ip->inum, was_dir) < 0){
+      iunlockput(ip);
+      return -1;
+    }
+
+    // The ext2 backend already truncated and freed the on-disk inode.
+    // Clear the cached inode so generic iput() won't try xv6 inode teardown.
+    ip->nlink = 0;
+    ip->size = 0;
+    ip->valid = 0;
+  } else {
+    acquire(&tickslock);
+    tip.i_ctime = ticks;
+    tip.i_mtime = ticks;
+    release(&tickslock);
+    if(ext2_write_disk_inode(data, ip->inum, &tip) < 0){
+      iunlockput(ip);
+      return -1;
+    }
+
+    ip->nlink = tip.i_links_count;
+    ip->size = tip.i_size;
+  }
+
+  dp->nlink = dip.i_links_count;
+  dp->size = dip.i_size;
+
+  iunlockput(ip);
+  return 0;
+}
+
+static int
 ext2_dirlink(struct inode *dp, char *name, uint inum)
 {
   (void)dp;
   (void)name;
   (void)inum;
   return -1;
+}
+
+static int
+ext2_link(struct inode *ip, struct inode *dp, char *name)
+{
+  struct ext2_mount_data *data;
+  struct ext2_inode dip;
+  struct ext2_inode tip;
+  uchar file_type;
+  struct inode *existing;
+
+  if(ip == 0 || dp == 0 || name == 0)
+    return -1;
+  if(dp->dev != ip->dev)
+    return -1;
+
+  data = ext2_data_for_dev(dp->dev);
+  if(data == 0)
+    return -1;
+  if(ext2_read_disk_inode(data, dp->inum, &dip) < 0)
+    return -1;
+  if(ext2_read_disk_inode(data, ip->inum, &tip) < 0)
+    return -1;
+  if((dip.i_mode & EXT2_S_IFMT) != EXT2_S_IFDIR)
+    return -1;
+
+  existing = ext2_dirlookup(dp, name, 0);
+  if(existing != 0){
+    iput(existing);
+    return -1;
+  }
+
+  if((tip.i_mode & EXT2_S_IFMT) == EXT2_S_IFDIR)
+    return -1;
+  file_type = EXT2_FT_REG_FILE;
+
+  tip.i_links_count++;
+  acquire(&tickslock);
+  tip.i_ctime = ticks;
+  release(&tickslock);
+  if(ext2_write_disk_inode(data, ip->inum, &tip) < 0)
+    return -1;
+
+  if(ext2_dir_add_entry(data, &dip, name, ip->inum, file_type) < 0){
+    if(tip.i_links_count > 0)
+      tip.i_links_count--;
+    acquire(&tickslock);
+    tip.i_ctime = ticks;
+    release(&tickslock);
+    ext2_write_disk_inode(data, ip->inum, &tip);
+    return -1;
+  }
+
+  acquire(&tickslock);
+  dip.i_mtime = ticks;
+  dip.i_ctime = ticks;
+  release(&tickslock);
+  if(ext2_write_disk_inode(data, dp->inum, &dip) < 0)
+    return -1;
+
+  ip->nlink = tip.i_links_count;
+  return 0;
+}
+
+static int
+ext2_rename(struct inode *olddp, char *oldname, struct inode *newdp, char *newname)
+{
+  struct inode *ip;
+
+  if(olddp == 0 || newdp == 0 || oldname == 0 || newname == 0)
+    return -1;
+  if(olddp->dev != newdp->dev)
+    return -1;
+  if(olddp == newdp && namecmp(oldname, newname) == 0)
+    return 0;
+
+  ip = ext2_dirlookup(olddp, oldname, 0);
+  if(ip == 0)
+    return -1;
+  ilock(ip);
+  if(ip->type == T_DIR){
+    iunlockput(ip);
+    return -1;
+  }
+  iunlock(ip);
+
+  if(ext2_link(ip, newdp, newname) < 0){
+    iput(ip);
+    return -1;
+  }
+  if(ext2_remove(olddp, oldname) < 0){
+    ext2_remove(newdp, newname);
+    iput(ip);
+    return -1;
+  }
+
+  iput(ip);
+  return 0;
 }
 
 static struct inode*
@@ -1279,7 +1807,8 @@ vfs_ext2_init(struct vfs *fs)
 
   safestrcpy(fs->name, "ext2", sizeof(fs->name));
   // ext2 supports read/write and staged file/directory creation.
-  fs->caps = VFS_CAP_READ | VFS_CAP_WRITE | VFS_CAP_CREATE | VFS_CAP_MKDIR;
+  fs->caps = VFS_CAP_READ | VFS_CAP_WRITE | VFS_CAP_CREATE |
+             VFS_CAP_REMOVE | VFS_CAP_LINK | VFS_CAP_MKDIR | VFS_CAP_RENAME;
   fs->fs_data = 0;
   fs->fs_destroy = ext2_mount_destroy;
   fs->mount_init = ext2_mount_init;
@@ -1288,9 +1817,13 @@ vfs_ext2_init(struct vfs *fs)
   fs->ops.inode_put = ext2_inode_put;
   fs->vnode_ops.read = ext2_read;
   fs->vnode_ops.write = ext2_write;
+  fs->vnode_ops.truncate = ext2_truncate;
   fs->vnode_ops.stat = ext2_stat;
   fs->vnode_ops.access = ext2_access;
   fs->vnode_ops.dirlookup = ext2_dirlookup;
   fs->vnode_ops.dirlink = ext2_dirlink;
+  fs->vnode_ops.link = ext2_link;
+  fs->vnode_ops.rename = ext2_rename;
+  fs->vnode_ops.remove = ext2_remove;
   fs->vnode_ops.create = ext2_create;
 }

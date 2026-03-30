@@ -32,26 +32,53 @@ is_path_separator(char c)
 }
 
 static int
+path_effective_len(char *path)
+{
+  int n;
+
+  if(path == 0)
+    return 0;
+
+  for(n = 0; path[n]; n++)
+    ;
+
+  // Keep root path as "/".
+  while(n > 1 && path[n - 1] == '/')
+    n--;
+
+  return n;
+}
+
+static int
 mount_path_match_len(char *mount_path, char *path)
 {
   int i;
+  int mlen;
+  int plen;
 
   if(mount_path == 0 || path == 0)
     return -1;
 
-  if(mount_path[0] == '/' && mount_path[1] == 0)
+  mlen = path_effective_len(mount_path);
+  plen = path_effective_len(path);
+
+  if(mlen == 1 && mount_path[0] == '/')
     return 1;
 
-  for(i = 0; mount_path[i] && path[i]; i++){
+  if(plen < mlen)
+    return -1;
+
+  for(i = 0; i < mlen; i++){
     if(mount_path[i] != path[i])
       return -1;
   }
 
-  if(mount_path[i] != 0)
+  if(plen == mlen)
+    return mlen;
+
+  if(!is_path_separator(path[mlen]))
     return -1;
-  if(!is_path_separator(path[i]))
-    return -1;
-  return i;
+  return mlen;
 }
 
 static struct mount*
@@ -267,28 +294,33 @@ static char*
 mount_relative_path(struct mount *m, char *path)
 {
   int i;
+  int mlen;
+  int plen;
 
   if(m == 0 || path == 0)
     return 0;
 
-  if(m->path[0] == '/' && m->path[1] == 0)
+  mlen = path_effective_len(m->path);
+  plen = path_effective_len(path);
+
+  if(mlen == 1 && m->path[0] == '/')
     return path;
 
-  for(i = 0; m->path[i] && path[i]; i++){
+  if(plen < mlen)
+    return 0;
+
+  for(i = 0; i < mlen; i++){
     if(m->path[i] != path[i])
       return 0;
   }
 
-  if(m->path[i] != 0)
-    return 0;
-
-  if(path[i] == 0)
+  if(plen == mlen)
     return vfs_rootrel;
 
-  if(path[i] != '/')
+  if(path[mlen] != '/')
     return 0;
 
-  return &path[i];
+  return &path[mlen];
 }
 
 void

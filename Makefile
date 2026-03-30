@@ -229,6 +229,9 @@ _mounttest: user/mounttest
 _mount: user/mount
 	cp user/mount _mount
 
+_mv: user/mv
+	cp user/mv _mv
+
 _umount: user/umount
 	cp user/umount _umount
 
@@ -318,6 +321,7 @@ UPROGS=\
 	_mount\
 	_mounts\
 	_mounttest\
+	_mv\
 	_umount\
 	_uname\
 	_pwd\
@@ -356,7 +360,7 @@ clean:
 	kernel/**/*.o kernel/**/*.d kernel/**/*.asm \
 	user/*.o user/*.d user/*.asm user/cat user/echo user/forktest \
 	user/fsregress \
-	user/grep user/id user/init user/kill user/ln user/ls user/lsblk user/mkdir \
+	user/grep user/id user/init user/kill user/ln user/ls user/lsblk user/mkdir user/mv \
 	user/mount user/mounts user/mounttest user/umount \
 	user/uname \
 	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/sh user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login
@@ -397,6 +401,10 @@ test_ext2.img:
 	mkdir -p .ext2root
 	printf "hello world\n" > .ext2root/hello.txt
 	genext2fs -b 2048 -d .ext2root test_ext2.img
+
+ext2-reset:
+	rm -f $(EXT2IMG)
+	$(MAKE) $(EXT2IMG)
 
 qemu: fs.img xv6.img $(EXT2IMG)
 	$(QEMU) -serial mon:stdio $(QEMUOPTS)
@@ -460,4 +468,4 @@ tar:
 	cp dist/* config/.gdbinit.tmpl /tmp/xv6
 	(cd /tmp; tar cf - xv6) | gzip >xv6-rev10.tar.gz  # the next one will be 10 (9/17)
 
-.PHONY: dist-test dist
+.PHONY: dist-test dist ext2-reset

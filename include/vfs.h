@@ -16,14 +16,20 @@ struct stat;
 #define VFS_CAP_REMOVE   0x0008
 #define VFS_CAP_LINK     0x0010
 #define VFS_CAP_MKDIR    0x0020
+#define VFS_CAP_RENAME   0x0040
 
 struct vnode_ops {
   int (*read)(struct inode *ip, char *dst, uint off, uint n);
   int (*write)(struct inode *ip, char *src, uint off, uint n);
+  int (*truncate)(struct inode *ip);
   int (*stat)(struct inode *ip, struct stat *st);
   int (*access)(struct inode *ip, int mode);
   struct inode* (*dirlookup)(struct inode *dp, char *name, uint *poff);
   int (*dirlink)(struct inode *dp, char *name, uint inum);
+  int (*link)(struct inode *ip, struct inode *dp, char *name);
+  int (*remove)(struct inode *dp, char *name);
+  int (*rename)(struct inode *olddp, char *oldname,
+                struct inode *newdp, char *newname);
   struct inode* (*create)(struct inode *dp, char *name, short type,
                           short major, short minor, int uid, int gid);
 };

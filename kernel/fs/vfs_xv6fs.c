@@ -1,5 +1,10 @@
 #include "types.h"
 #include "defs.h"
+#include "fs.h"
+#include "stat.h"
+#include "spinlock.h"
+#include "sleeplock.h"
+#include "file.h"
 #include "vfs.h"
 
 static int
@@ -12,6 +17,15 @@ static int
 xv6fs_write(struct inode *ip, char *src, uint off, uint n)
 {
   return writei(ip, src, off, n);
+}
+
+static int
+xv6fs_truncate(struct inode *ip)
+{
+  if(ip == 0)
+    return -1;
+  itruncate(ip);
+  return 0;
 }
 
 static int
@@ -41,6 +55,75 @@ xv6fs_dirlink(struct inode *dp, char *name, uint inum)
   return dirlink(dp, name, inum);
 }
 
+static int
+xv6fs_link(struct inode *ip, struct inode *dp, char *name)
+{
+  if(ip == 0 || dp == 0 || name == 0)
+    return -1;
+  if(dp->dev != ip->dev)
+    return -1;
+
+  ip->nlink++;
+  iupdate(ip);
+  if(dirlink(dp, name, ip->inum) < 0){
+    ip->nlink--;
+    iupdate(ip);
+    return -1;
+  }
+  return 0;
+}
+
+static int
+xv6fs_rename(struct inode *olddp, char *oldname, struct inode *newdp, char *newname)
+{
+  struct inode *ip;
+  struct inode *exist;
+  struct dirent de;
+  uint off;
+
+  if(olddp == 0 || newdp == 0 || oldname == 0 || newname == 0)
+    return -1;
+  if(olddp->dev != newdp->dev)
+    return -1;
+  if(olddp == newdp && namecmp(oldname, newname) == 0)
+    return 0;
+
+  exist = dirlookup(newdp, newname, 0);
+  if(exist != 0){
+    iput(exist);
+    return -1;
+  }
+
+  ip = dirlookup(olddp, oldname, &off);
+  if(ip == 0)
+    return -1;
+  ilock(ip);
+  if(ip->type == T_DIR){
+    iunlockput(ip);
+    return -1;
+  }
+
+  ip->nlink++;
+  iupdate(ip);
+  if(dirlink(newdp, newname, ip->inum) < 0){
+    ip->nlink--;
+    iupdate(ip);
+    iunlockput(ip);
+    return -1;
+  }
+
+  memset(&de, 0, sizeof(de));
+  if(writei(olddp, (char*)&de, off, sizeof(de)) != sizeof(de)){
+    iunlockput(ip);
+    return -1;
+  }
+
+  ip->nlink--;
+  iupdate(ip);
+  iunlockput(ip);
+  return 0;
+}
+
 static struct inode*
 xv6fs_namei(char *path)
 {
@@ -67,7 +150,7 @@ vfs_xv6fs_init(struct vfs *fs)
 
   safestrcpy(fs->name, "xv6fs", sizeof(fs->name));
   fs->caps = VFS_CAP_READ | VFS_CAP_WRITE | VFS_CAP_CREATE |
-             VFS_CAP_REMOVE | VFS_CAP_LINK | VFS_CAP_MKDIR;
+             VFS_CAP_REMOVE | VFS_CAP_LINK | VFS_CAP_MKDIR | VFS_CAP_RENAME;
   fs->fs_data = 0;
   fs->fs_destroy = 0;
   fs->mount_init = 0;
@@ -76,8 +159,11 @@ vfs_xv6fs_init(struct vfs *fs)
   fs->ops.inode_put = xv6fs_inode_put;
   fs->vnode_ops.read = xv6fs_read;
   fs->vnode_ops.write = xv6fs_write;
+  fs->vnode_ops.truncate = xv6fs_truncate;
   fs->vnode_ops.stat = xv6fs_stat;
   fs->vnode_ops.access = xv6fs_access;
   fs->vnode_ops.dirlookup = xv6fs_dirlookup;
   fs->vnode_ops.dirlink = xv6fs_dirlink;
+  fs->vnode_ops.link = xv6fs_link;
+  fs->vnode_ops.rename = xv6fs_rename;
 }

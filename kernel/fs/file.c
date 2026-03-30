@@ -86,11 +86,20 @@ fileclose(struct file *f)
 int
 filestat(struct file *f, struct stat *st)
 {
+  const struct vnode_ops *ops;
+  int rc;
+
   if(f->type == FD_INODE){
     ilock(f->ip);
-    stati(f->ip, st);
+    ops = vfs_dev_vops(f->ip->dev);
+    if(ops && ops->stat){
+      rc = ops->stat(f->ip, st);
+    } else {
+      rc = 0;
+      stati(f->ip, st);
+    }
     iunlock(f->ip);
-    return 0;
+    return rc;
   }
   return -1;
 }

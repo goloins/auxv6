@@ -124,6 +124,162 @@ scan_dir(struct scan_target *t, int rounds, int *total_entries)
   printf(1, "fsregress: ok %s rounds=%d\n", t->path, rounds);
 }
 
+static void
+check_mnt_link_cycle(void)
+{
+  char *a;
+  char *b;
+  char *c;
+  int fd;
+  struct stat sa;
+  struct stat sb;
+  char buf[8];
+
+  a = "/mnt/.fsra";
+  b = "/mnt/.fsrb";
+  c = "/mnt/.fsrc";
+
+  fd = open("/mnt", O_RDONLY);
+  if(fd < 0){
+    printf(1, "fsregress: skip /mnt link cycle (not available)\n");
+    return;
+  }
+  close(fd);
+
+  unlink(a);
+  unlink(b);
+  unlink(c);
+
+  fd = open(a, O_CREATE | O_WRONLY | O_TRUNC);
+  if(fd < 0){
+    printf(1, "fsregress: FAIL create %s\n", a);
+    exit();
+  }
+  if(write(fd, "hi\n", 3) != 3){
+    printf(1, "fsregress: FAIL write %s\n", a);
+    close(fd);
+    exit();
+  }
+  close(fd);
+
+  if(link(a, b) < 0){
+    printf(1, "fsregress: FAIL link %s -> %s\n", a, b);
+    exit();
+  }
+
+  if(stat(a, &sa) < 0 || stat(b, &sb) < 0){
+    printf(1, "fsregress: FAIL stat link pair\n");
+    exit();
+  }
+  if(sa.ino != sb.ino || sa.nlink < 2 || sb.nlink < 2){
+    printf(1, "fsregress: FAIL bad link metadata\n");
+    exit();
+  }
+
+  if(unlink(a) < 0){
+    printf(1, "fsregress: FAIL unlink %s\n", a);
+    exit();
+  }
+
+  fd = open(b, O_RDONLY);
+  if(fd < 0){
+    printf(1, "fsregress: FAIL open survivor %s\n", b);
+    exit();
+  }
+  if(read(fd, buf, 3) != 3){
+    printf(1, "fsregress: FAIL read survivor %s\n", b);
+    close(fd);
+    exit();
+  }
+  close(fd);
+
+  if(unlink(b) < 0){
+    printf(1, "fsregress: FAIL final unlink %s\n", b);
+    exit();
+  }
+  if(stat(b, &sb) >= 0){
+    printf(1, "fsregress: FAIL stale path after unlink %s\n", b);
+    exit();
+  }
+
+  fd = open(c, O_CREATE | O_WRONLY | O_TRUNC);
+  if(fd < 0){
+    printf(1, "fsregress: FAIL recreate after unlink %s\n", c);
+    exit();
+  }
+  if(write(fd, "ok\n", 3) != 3){
+    printf(1, "fsregress: FAIL write recreate %s\n", c);
+    close(fd);
+    exit();
+  }
+  close(fd);
+  if(unlink(c) < 0){
+    printf(1, "fsregress: FAIL cleanup %s\n", c);
+    exit();
+  }
+
+  printf(1, "fsregress: ok /mnt link cycle\n");
+}
+
+static void
+check_mnt_rename_cycle(void)
+{
+  char *a;
+  char *b;
+  int fd;
+  struct stat sa;
+  struct stat sb;
+
+  a = "/mnt/.fsrra";
+  b = "/mnt/.fsrrb";
+
+  fd = open("/mnt", O_RDONLY);
+  if(fd < 0){
+    printf(1, "fsregress: skip /mnt rename cycle (not available)\n");
+    return;
+  }
+  close(fd);
+
+  unlink(a);
+  unlink(b);
+
+  fd = open(a, O_CREATE | O_WRONLY | O_TRUNC);
+  if(fd < 0){
+    printf(1, "fsregress: FAIL create %s\n", a);
+    exit();
+  }
+  if(write(fd, "rn\n", 3) != 3){
+    printf(1, "fsregress: FAIL write %s\n", a);
+    close(fd);
+    exit();
+  }
+  close(fd);
+
+  if(rename(a, b) < 0){
+    printf(1, "fsregress: FAIL rename %s -> %s\n", a, b);
+    exit();
+  }
+  if(stat(a, &sa) >= 0){
+    printf(1, "fsregress: FAIL old path still exists %s\n", a);
+    exit();
+  }
+  if(stat(b, &sb) < 0){
+    printf(1, "fsregress: FAIL missing new path %s\n", b);
+    exit();
+  }
+
+  if(rename(b, b) < 0){
+    printf(1, "fsregress: FAIL rename no-op %s\n", b);
+    exit();
+  }
+  if(unlink(b) < 0){
+    printf(1, "fsregress: FAIL cleanup %s\n", b);
+    exit();
+  }
+
+  printf(1, "fsregress: ok /mnt rename cycle\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -147,6 +303,9 @@ main(int argc, char *argv[])
 
   for(i = 0; i < sizeof(targets)/sizeof(targets[0]); i++)
     scan_dir(&targets[i], rounds, &total_entries);
+
+  check_mnt_link_cycle();
+  check_mnt_rename_cycle();
 
   printf(1, "fsregress: PASS entries=%d\n", total_entries);
   exit();

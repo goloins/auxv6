@@ -61,6 +61,7 @@ int mknod(const char*, short, short);
 int unlink(const char*);
 int fstat(int fd, struct stat*);
 int link(const char*, const char*);
+int rename(const char*, const char*);
 int mkdir(const char*);
 int chmod(const char*, int);
 int chown(const char*, int, int);
