@@ -11,27 +11,44 @@ rootdir=$1
 image=$2
 shift 2
 
+# Use fakeroot to allow chown and image tools to think they're running as root.
+# This gives files root:root ownership in the ext2 image even when building as non-root.
+use_fakeroot=false
+if command -v fakeroot >/dev/null 2>&1; then
+  use_fakeroot=true
+fi
+
 build_ext2_image() {
-  if command -v genext2fs >/dev/null 2>&1; then
-    rm -f "$image"
-    genext2fs -b 8192 -N 512 -d "$rootdir" "$image"
-    return 0
+  local mke2fs_cmd=""
+  local fakeroot_cmd=""
+
+  # Find mke2fs (usually in /sbin on Linux)
+  if [ -x /sbin/mke2fs ]; then
+    mke2fs_cmd="/sbin/mke2fs"
+  elif command -v mke2fs >/dev/null 2>&1; then
+    mke2fs_cmd="mke2fs"
   fi
 
-  if command -v mke2fs >/dev/null 2>&1; then
-    rm -f "$image"
-    mke2fs -q -t ext2 -d "$rootdir" -F "$image" 8192
-    return 0
+  if [ -z "$mke2fs_cmd" ]; then
+    echo "mke2fs/mkfs.ext2 not found (usually in /sbin on Linux)" >&2
+    return 1
   fi
 
-  if command -v mkfs.ext2 >/dev/null 2>&1; then
-    rm -f "$image"
-    mkfs.ext2 -q -t ext2 -d "$rootdir" -F "$image" 8192
-    return 0
-  fi
+  rm -f "$image"
 
-  echo "genext2fs, mke2fs, or mkfs.ext2 is required to build $image" >&2
-  return 1
+  # Use fakeroot to build with root ownership
+  if [ "$use_fakeroot" = true ]; then
+    fakeroot sh -c "chown -R 0:0 '$rootdir' && '$mke2fs_cmd' -q -t ext2 -d '$rootdir' -F '$image' 8192"
+  else
+    # Try with sudo if not using fakeroot
+    if sudo -n "$mke2fs_cmd" -q -t ext2 -d "$rootdir" -F "$image" 8192 2>/dev/null; then
+      :
+    else
+      # Fall back to running as-is (files won't be owned by root)
+      echo "warning: running mke2fs without elevated privileges; files will be owned by current user" >&2
+      "$mke2fs_cmd" -q -t ext2 -d "$rootdir" -F "$image" 8192
+    fi
+  fi
 }
 
 rm -rf "$rootdir"
