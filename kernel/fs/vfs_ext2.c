@@ -1501,9 +1501,22 @@ ext2_walk(char *path, int nameiparent, char *name)
   if(path == 0)
     return 0;
 
-  ip = ext2_make_inode(ext2_active_dev, EXT2_ROOT_INO);
-  if(ip == 0)
-    return 0;
+  if(path[0] == '/'){
+    ip = ext2_make_inode(ext2_active_dev, EXT2_ROOT_INO);
+    if(ip == 0)
+      return 0;
+  } else {
+    // Relative path - start from current working directory
+    ip = proc_cwd_idup();
+    if(ip == 0 || ext2_data_for_dev(ip->dev) == 0){
+      // cwd is not on this ext2 mount, fall back to root
+      if(ip)
+        iput(ip);
+      ip = ext2_make_inode(ext2_active_dev, EXT2_ROOT_INO);
+      if(ip == 0)
+        return 0;
+    }
+  }
 
   p = path;
   while((p = ext2_skipelem(p, elem)) != 0){
