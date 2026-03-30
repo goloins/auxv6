@@ -1236,3 +1236,167 @@ sys_pipe(void)
   fd[1] = fd1;
   return 0;
 }
+
+// lseek - reposition read/write file offset
+// Returns the new offset on success, -1 on failure.
+int
+sys_lseek(void)
+{
+  struct file *f;
+  int offset;
+  int whence;
+  int newoff;
+
+  if(argfd(0, 0, &f) < 0 || argint(1, &offset) < 0 || argint(2, &whence) < 0)
+    return -1;
+
+  // Cannot seek on pipes or sockets
+  if(f->type == FD_PIPE || f->type == FD_SOCKET)
+    return -1;
+
+  if(f->type != FD_INODE)
+    return -1;
+
+  ilock(f->ip);
+
+  switch(whence){
+  case 0: // SEEK_SET
+    newoff = offset;
+    break;
+  case 1: // SEEK_CUR
+    newoff = f->off + offset;
+    break;
+  case 2: // SEEK_END
+    newoff = f->ip->size + offset;
+    break;
+  default:
+    iunlock(f->ip);
+    return -1;
+  }
+
+  // Check for negative offset
+  if(newoff < 0){
+    iunlock(f->ip);
+    return -1;
+  }
+
+  f->off = newoff;
+  iunlock(f->ip);
+  return newoff;
+}
+
+// dup2 - duplicate a file descriptor to a specific fd number
+// Returns newfd on success, -1 on failure.
+int
+sys_dup2(void)
+{
+  struct file *f;
+  int oldfd, newfd;
+  struct proc *curproc = myproc();
+
+  if(argfd(0, &oldfd, &f) < 0 || argint(1, &newfd) < 0)
+    return -1;
+
+  // Validate newfd
+  if(newfd < 0 || newfd >= NOFILE)
+    return -1;
+
+  // If oldfd == newfd, just return newfd (no-op per POSIX)
+  if(oldfd == newfd)
+    return newfd;
+
+  // If newfd is already open, close it first
+  if(curproc->ofile[newfd] != 0){
+    fileclose(curproc->ofile[newfd]);
+    curproc->ofile[newfd] = 0;
+  }
+
+  // Duplicate the file reference
+  curproc->ofile[newfd] = f;
+  filedup(f);
+
+  return newfd;
+}
+
+// fcntl - file control
+// Implements F_DUPFD, F_GETFD, F_SETFD, F_GETFL, F_SETFL
+int
+sys_fcntl(void)
+{
+  struct file *f;
+  int fd;
+  int cmd;
+  int arg;
+  int flags;
+  struct proc *curproc = myproc();
+
+  if(argfd(0, &fd, &f) < 0 || argint(1, &cmd) < 0)
+    return -1;
+
+  switch(cmd){
+  case 0: // F_DUPFD - duplicate fd to lowest available >= arg
+    if(argint(2, &arg) < 0)
+      return -1;
+    if(arg < 0 || arg >= NOFILE)
+      return -1;
+    // Find lowest available fd >= arg
+    for(int i = arg; i < NOFILE; i++){
+      if(curproc->ofile[i] == 0){
+        curproc->ofile[i] = f;
+        filedup(f);
+        return i;
+      }
+    }
+    return -1; // No available fd
+
+  case 1: // F_GETFD - get file descriptor flags
+    // We don't currently track per-fd flags (like FD_CLOEXEC)
+    // Return 0 for now (no flags set)
+    return 0;
+
+  case 2: // F_SETFD - set file descriptor flags
+    if(argint(2, &arg) < 0)
+      return -1;
+    // We don't currently implement FD_CLOEXEC, but accept the call
+    // TODO: implement close-on-exec properly when exec is enhanced
+    return 0;
+
+  case 3: // F_GETFL - get file status flags
+    flags = 0;
+    if(f->readable && f->writable)
+      flags = O_RDWR;
+    else if(f->writable)
+      flags = O_WRONLY;
+    else
+      flags = O_RDONLY;
+    // Note: O_APPEND status isn't tracked per-file currently
+    return flags;
+
+  case 4: // F_SETFL - set file status flags
+    if(argint(2, &arg) < 0)
+      return -1;
+    // Only O_APPEND and O_NONBLOCK are typically settable
+    // We don't support O_NONBLOCK currently
+    // O_APPEND could be supported but requires file struct changes
+    // For now, accept the call silently
+    return 0;
+
+  case 1030: // F_DUPFD_CLOEXEC - duplicate with close-on-exec
+    if(argint(2, &arg) < 0)
+      return -1;
+    if(arg < 0 || arg >= NOFILE)
+      return -1;
+    for(int i = arg; i < NOFILE; i++){
+      if(curproc->ofile[i] == 0){
+        curproc->ofile[i] = f;
+        filedup(f);
+        // TODO: set FD_CLOEXEC flag when implemented
+        return i;
+      }
+    }
+    return -1;
+
+  default:
+    return -1;
+  }
+}

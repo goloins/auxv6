@@ -5,6 +5,32 @@
 #define O_APPEND  0x400
 #define O_TRUNC   0x800
 
+// Additional O_* flags for compatibility
+#define O_CREAT   O_CREATE
+#define O_EXCL    0x1000
+#define O_NONBLOCK 0x2000
+#define O_NOCTTY  0x4000
+#define O_CLOEXEC 0x8000
+
+// fcntl() commands
+#define F_DUPFD   0   // Duplicate file descriptor
+#define F_GETFD   1   // Get file descriptor flags
+#define F_SETFD   2   // Set file descriptor flags
+#define F_GETFL   3   // Get file status flags
+#define F_SETFL   4   // Set file status flags
+#define F_GETLK   5   // Get record locking info
+#define F_SETLK   6   // Set record locking info
+#define F_SETLKW  7   // Set record locking info; wait if blocked
+#define F_DUPFD_CLOEXEC 1030  // Duplicate fd with close-on-exec
+
+// File descriptor flags (for F_GETFD/F_SETFD)
+#define FD_CLOEXEC 1  // Close-on-exec flag
+
+// lseek() whence values
+#define SEEK_SET  0   // Set file offset to offset
+#define SEEK_CUR  1   // Set file offset to current + offset
+#define SEEK_END  2   // Set file offset to EOF + offset
+
 #define MNT_RDONLY 0x0001
 #define MNT_NOSUID 0x0002
 #define MNT_NODEV  0x0004

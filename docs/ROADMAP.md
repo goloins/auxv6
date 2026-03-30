@@ -88,40 +88,39 @@ These items are blocking everything else and must be done first.
 
 **Estimate:** 3-4 days
 
-### 1.2 lseek Syscall [CRITICAL]
-**Current:** No file position manipulation  
-**Impact:** Breaks ALL programs expecting to seek in files  
-**Files:** `sysfile.c`, `file.c`, `syscall.h`
+### 1.2 lseek Syscall [COMPLETE]
+**Status:** Implemented 2026-03-30  
+**Files:** `kernel/core/sysfile.c`, `include/syscall.h`, `include/fcntl.h`, `user/usys.S`  
+**Implementation:**
+- Added `SYS_lseek` (syscall 66) supporting SEEK_SET, SEEK_CUR, SEEK_END
+- Returns new offset on success, -1 on failure
+- Cannot seek on pipes or sockets (returns -1)
+- Validates for negative resulting offsets
 
-```c
-// Add to syscall.h
-#define SYS_lseek 64
+### 1.3 dup2 Syscall [COMPLETE]
+**Status:** Implemented 2026-03-30  
+**Files:** `kernel/core/sysfile.c`, `include/syscall.h`, `user/usys.S`  
+**Implementation:**
+- Added `SYS_dup2` (syscall 67) to duplicate fd to specific number
+- Closes newfd if already open (POSIX behavior)
+- Returns newfd on success, handles oldfd==newfd case correctly
 
-// Implement in sysfile.c
-int sys_lseek(void) {
-    int fd, whence;
-    off_t offset;
-    if(argint(0, &fd) < 0 || argint(1, (int*)&offset) < 0 || argint(2, &whence) < 0)
-        return -1;
-    // Implementation using myproc()->ofile[fd]
-}
-```
+### 1.4 fcntl Syscall [COMPLETE]
+**Status:** Implemented 2026-03-30  
+**Files:** `kernel/core/sysfile.c`, `include/syscall.h`, `include/fcntl.h`, `user/usys.S`  
+**Implementation:**
+- Added `SYS_fcntl` (syscall 68)
+- F_DUPFD: duplicate to lowest fd >= arg
+- F_GETFD/F_SETFD: get/set fd flags (FD_CLOEXEC stub)
+- F_GETFL/F_SETFL: get/set file status flags (O_RDONLY/O_WRONLY/O_RDWR)
+- F_DUPFD_CLOEXEC: duplicate with close-on-exec (stub)
+- Note: FD_CLOEXEC and O_APPEND not fully tracked yet
 
-**Estimate:** 1 day
-
-### 1.3 dup2 Syscall [CRITICAL]
-**Current:** Only dup() exists (dupes to lowest available fd)  
-**Impact:** Shell redirection, standard idioms broken  
-**Files:** `sysfile.c`, `syscall.h`
-
-**Estimate:** 0.5 days
-
-### 1.4 fcntl Syscall [HIGH]
-**Current:** Missing  
-**Impact:** File descriptor flags, locking, advisory locks  
-**Files:** `sysfile.c`, `fcntl.h`, `syscall.h`
-
-**Estimate:** 2 days
+**fcntl.h enhanced with:**
+- O_CREAT, O_EXCL, O_NONBLOCK, O_NOCTTY, O_CLOEXEC flags
+- F_DUPFD, F_GETFD, F_SETFD, F_GETFL, F_SETFL, F_DUPFD_CLOEXEC commands
+- FD_CLOEXEC flag
+- SEEK_SET, SEEK_CUR, SEEK_END whence values
 
 ---
 
@@ -275,9 +274,9 @@ void dma_free(void *vaddr, size_t size);
 ### 6.1 Missing Syscalls [HIGH]
 | Syscall | Priority | Complexity | Notes |
 |---------|----------|------------|-------|
-| lseek | Critical | Low | File seeking |
-| dup2 | Critical | Low | FD manipulation |
-| fcntl | High | Medium | File control |
+| ~~lseek~~ | ~~Critical~~ | ~~Low~~ | ✅ Implemented 2026-03-30 |
+| ~~dup2~~ | ~~Critical~~ | ~~Low~~ | ✅ Implemented 2026-03-30 |
+| ~~fcntl~~ | ~~High~~ | ~~Medium~~ | ✅ Implemented 2026-03-30 |
 | select/poll | High | Medium | I/O multiplexing |
 | mmap | High | High | Memory mapping |
 | ioctl | High | Medium | Device control |

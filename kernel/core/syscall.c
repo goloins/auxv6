@@ -147,6 +147,9 @@ extern int sys_devblocks(void);
 extern int sys_getdents(void);
 extern int sys_ext2fail(void);
 extern int sys_fsfault(void);
+extern int sys_lseek(void);
+extern int sys_dup2(void);
+extern int sys_fcntl(void);
 
 static int (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -214,6 +217,9 @@ static int (*syscalls[])(void) = {
 [SYS_sigaction] sys_sigaction,
 [SYS_sigreturn] sys_sigreturn,
 [SYS_alarm] sys_alarm,
+[SYS_lseek] sys_lseek,
+[SYS_dup2] sys_dup2,
+[SYS_fcntl] sys_fcntl,
 };
 
 void

@@ -64,3 +64,6 @@
 #define SYS_fsfault 63
 #define SYS_sigreturn 64
 #define SYS_alarm 65
+#define SYS_lseek 66
+#define SYS_dup2 67
+#define SYS_fcntl 68
