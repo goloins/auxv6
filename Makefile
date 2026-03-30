@@ -113,10 +113,12 @@ ifneq ($(shell $(CC) -dumpspecs 2>/dev/null | grep -e '[^f]nopie'),)
 CFLAGS += -fno-pie -nopie
 endif
 
-ROOTFS_TYPE_VALUE ?= 1
-ROOTFS_DEV_VALUE ?= 1
-EXT2ROOT_TYPE_VALUE ?= 2
-EXT2ROOT_DEV_VALUE ?= 2
+# Default: ext2 root filesystem for easier dynamic modifications
+ROOTFS_TYPE_VALUE ?= 2
+ROOTFS_DEV_VALUE ?= 2
+# Alternative: xv6 root filesystem (original default)
+XV6ROOT_TYPE_VALUE ?= 1
+XV6ROOT_DEV_VALUE ?= 1
 
 ROOTFS_CONFIG = include/rootfs_config.h
 
@@ -359,26 +361,49 @@ UPROGS=\
 fs.img: mkfs README etc.hosts etc.fstab etc.profile etc.passwd etc.groups etc.hostname $(UPROGS)
 	./mkfs fs.img README etc.hosts etc.fstab etc.profile etc.passwd etc.groups etc.hostname $(UPROGS)
 
+# EXT2 root is now the default - these targets are included for clarity
 ext2root:
-	$(MAKE) ROOTFS_TYPE_VALUE=$(EXT2ROOT_TYPE_VALUE) ROOTFS_DEV_VALUE=$(EXT2ROOT_DEV_VALUE) xv6.img $(EXT2IMG)
+	$(MAKE) xv6.img $(EXT2IMG)
 
 qemu-ext2root:
-	$(MAKE) ROOTFS_TYPE_VALUE=$(EXT2ROOT_TYPE_VALUE) ROOTFS_DEV_VALUE=$(EXT2ROOT_DEV_VALUE) xv6.img $(EXT2IMG)
+	$(MAKE) xv6.img $(EXT2IMG)
 	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 qemu-nox-ext2root:
-	$(MAKE) ROOTFS_TYPE_VALUE=$(EXT2ROOT_TYPE_VALUE) ROOTFS_DEV_VALUE=$(EXT2ROOT_DEV_VALUE) xv6.img $(EXT2IMG)
+	$(MAKE) xv6.img $(EXT2IMG)
 	$(QEMU) -nographic -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 qemu-gdb-ext2root: .gdbinit
-	$(MAKE) ROOTFS_TYPE_VALUE=$(EXT2ROOT_TYPE_VALUE) ROOTFS_DEV_VALUE=$(EXT2ROOT_DEV_VALUE) xv6.img $(EXT2IMG)
+	$(MAKE) xv6.img $(EXT2IMG)
 	@echo "*** Now run 'gdb'." 1>&2
 	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
 
 qemu-nox-gdb-ext2root: .gdbinit
-	$(MAKE) ROOTFS_TYPE_VALUE=$(EXT2ROOT_TYPE_VALUE) ROOTFS_DEV_VALUE=$(EXT2ROOT_DEV_VALUE) xv6.img $(EXT2IMG)
+	$(MAKE) xv6.img $(EXT2IMG)
 	@echo "*** Now run 'gdb'." 1>&2
 	$(QEMU) -nographic -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
+
+# XV6 root filesystem variants (original default, kept for compatibility)
+xv6root:
+	$(MAKE) ROOTFS_TYPE_VALUE=$(XV6ROOT_TYPE_VALUE) ROOTFS_DEV_VALUE=$(XV6ROOT_DEV_VALUE) xv6.img fs.img
+
+qemu-xv6root:
+	$(MAKE) ROOTFS_TYPE_VALUE=$(XV6ROOT_TYPE_VALUE) ROOTFS_DEV_VALUE=$(XV6ROOT_DEV_VALUE) xv6.img fs.img
+	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=fs.img,index=1,media=disk,format=raw -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
+qemu-nox-xv6root:
+	$(MAKE) ROOTFS_TYPE_VALUE=$(XV6ROOT_TYPE_VALUE) ROOTFS_DEV_VALUE=$(XV6ROOT_DEV_VALUE) xv6.img fs.img
+	$(QEMU) -nographic -drive file=xv6.img,index=0,media=disk,format=raw -drive file=fs.img,index=1,media=disk,format=raw -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
+qemu-gdb-xv6root: .gdbinit
+	$(MAKE) ROOTFS_TYPE_VALUE=$(XV6ROOT_TYPE_VALUE) ROOTFS_DEV_VALUE=$(XV6ROOT_DEV_VALUE) xv6.img fs.img
+	@echo "*** Now run 'gdb'." 1>&2
+	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=fs.img,index=1,media=disk,format=raw -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
+
+qemu-nox-gdb-xv6root: .gdbinit
+	$(MAKE) ROOTFS_TYPE_VALUE=$(XV6ROOT_TYPE_VALUE) ROOTFS_DEV_VALUE=$(XV6ROOT_DEV_VALUE) xv6.img fs.img
+	@echo "*** Now run 'gdb'." 1>&2
+	$(QEMU) -nographic -drive file=xv6.img,index=0,media=disk,format=raw -drive file=fs.img,index=1,media=disk,format=raw -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
 
 -include kernel/**/*.d
 -include user/*.d
@@ -439,25 +464,26 @@ ext2-reset:
 	rm -f $(EXT2IMG)
 	$(MAKE) $(EXT2IMG)
 
-qemu: fs.img xv6.img $(EXT2IMG)
-	$(QEMU) -serial mon:stdio $(QEMUOPTS)
+# Default: EXT2 root filesystem (easier to modify/mount from other systems)
+qemu: xv6.img $(EXT2IMG)
+	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 qemu-memfs: xv6memfs.img
 	$(QEMU) -drive file=xv6memfs.img,index=0,media=disk,format=raw -smp $(CPUS) -m 256
 
-qemu-nox: fs.img xv6.img $(EXT2IMG)
-	$(QEMU) -nographic $(QEMUOPTS)
+qemu-nox: xv6.img $(EXT2IMG)
+	$(QEMU) -nographic -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 .gdbinit: config/.gdbinit.tmpl
 	sed "s/localhost:1234/localhost:$(GDBPORT)/" < $^ > $@
 
-qemu-gdb: fs.img xv6.img $(EXT2IMG) .gdbinit
+qemu-gdb: xv6.img $(EXT2IMG) .gdbinit
 	@echo "*** Now run 'gdb'." 1>&2
-	$(QEMU) -serial mon:stdio $(QEMUOPTS) -S $(QEMUGDB)
+	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
 
-qemu-nox-gdb: fs.img xv6.img $(EXT2IMG) .gdbinit
+qemu-nox-gdb: xv6.img $(EXT2IMG) .gdbinit
 	@echo "*** Now run 'gdb'." 1>&2
-	$(QEMU) -nographic $(QEMUOPTS) -S $(QEMUGDB)
+	$(QEMU) -nographic -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
 
 # CUT HERE
 # prepare dist for students
@@ -501,4 +527,4 @@ tar:
 	cp dist/* config/.gdbinit.tmpl /tmp/xv6
 	(cd /tmp; tar cf - xv6) | gzip >xv6-rev10.tar.gz  # the next one will be 10 (9/17)
 
-.PHONY: dist-test dist ext2-reset ext2root qemu-ext2root qemu-nox-ext2root qemu-gdb-ext2root qemu-nox-gdb-ext2root
+.PHONY: dist-test dist ext2-reset ext2root qemu-ext2root qemu-nox-ext2root qemu-gdb-ext2root qemu-nox-gdb-ext2root xv6root qemu-xv6root qemu-nox-xv6root qemu-gdb-xv6root qemu-nox-gdb-xv6root
