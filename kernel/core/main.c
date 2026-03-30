@@ -33,6 +33,7 @@ main(void)
   binit();         // buffer cache
   fileinit();      // file table
   ideinit();       // disk
+  virtio_blk_init(); // virtio block devices
   netdev_init();   // network interfaces
   socket_init();   // socket table
   startothers();   // start other processors

@@ -61,3 +61,4 @@ include/rootfs_config.h
 .ext2root/
 .fatroot/
 user/sigtest
+virtio_boot.log

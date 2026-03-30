@@ -54,6 +54,27 @@ make_disk_nodes(void)
       ensure_node(path, M_IFBLK, 2, pdev);
     }
   }
+
+  for(unit = 0; unit < VD_DISK_UNITS; unit++){
+    dev = VD_DISK_DEV(unit);
+    if(devblocks(dev) <= 0)
+      continue;
+
+    path[0] = '/'; path[1] = 'd'; path[2] = 'e'; path[3] = 'v'; path[4] = '/';
+    path[5] = 'v'; path[6] = 'd'; path[7] = 'a' + unit; path[8] = 0;
+    ensure_node(path, M_IFBLK, 2, dev);
+
+    for(part = 1; part <= VD_PARTS_PER_DISK; part++){
+      int pdev = VD_PART_DEV(unit, part);
+      if(devblocks(pdev) <= 0)
+        continue;
+      path[0] = '/'; path[1] = 'd'; path[2] = 'e'; path[3] = 'v'; path[4] = '/';
+      path[5] = 'v'; path[6] = 'd'; path[7] = 'a' + unit;
+      path[8] = '0' + part;
+      path[9] = 0;
+      ensure_node(path, M_IFBLK, 2, pdev);
+    }
+  }
 }
 
 int

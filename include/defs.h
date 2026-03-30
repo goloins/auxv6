@@ -143,6 +143,9 @@ void            ioapicinit(void);
 void            pci_init(void);
 int             pci_format_devices(char*, int);
 
+// virtio_blk.c
+void            virtio_blk_init(void);
+
 // dma.c
 void            dma_init(void);
 void*           dma_alloc(uint, uint*);

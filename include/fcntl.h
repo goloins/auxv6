@@ -50,3 +50,12 @@
 #define HD_DISK_DEV(unit) (unit)
 #define HD_PART_BASE HD_DISK_UNITS
 #define HD_PART_DEV(unit, partno) (HD_PART_BASE + (unit) * HD_PARTS_PER_DISK + ((partno) - 1))
+
+#define HD_DEVICE_COUNT (HD_DISK_UNITS + HD_DISK_UNITS * HD_PARTS_PER_DISK)
+
+#define VD_DISK_UNITS 4
+#define VD_PARTS_PER_DISK 4
+#define VD_DISK_BASE HD_DEVICE_COUNT
+#define VD_DISK_DEV(unit) (VD_DISK_BASE + (unit))
+#define VD_PART_BASE (VD_DISK_BASE + VD_DISK_UNITS)
+#define VD_PART_DEV(unit, partno) (VD_PART_BASE + (unit) * VD_PARTS_PER_DISK + ((partno) - 1))

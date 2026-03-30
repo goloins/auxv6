@@ -32,8 +32,6 @@
 #include "pci.h"
 #include "virtio.h"
 
-static struct spinlock virtio_lock;
-
 /*
  * Read from virtio legacy I/O port configuration
  */
@@ -71,6 +69,57 @@ static void
 virtio_iowrite32(struct virtio_dev *vdev, int offset, uint32_t val)
 {
     outl(vdev->iobase + offset, val);
+}
+
+static char *
+virtio_alloc_contiguous_pages(int pages, uint32_t *phys_out)
+{
+    char *base;
+    int attempt;
+
+    if (pages <= 0)
+        return 0;
+
+    for (attempt = 0; attempt < 64; attempt++) {
+        char *allocs[8];
+        uint32_t paddrs[8];
+        int i;
+        int ok;
+
+        if (pages > (int)(sizeof(allocs) / sizeof(allocs[0])))
+            return 0;
+
+        for (i = 0; i < pages; i++) {
+            allocs[i] = kalloc();
+            if (!allocs[i]) {
+                while (--i >= 0)
+                    kfree(allocs[i]);
+                return 0;
+            }
+            memset(allocs[i], 0, PGSIZE);
+            paddrs[i] = V2P(allocs[i]);
+        }
+
+        ok = 1;
+        for (i = 1; i < pages; i++) {
+            if (paddrs[i] != paddrs[0] + i * PGSIZE) {
+                ok = 0;
+                break;
+            }
+        }
+
+        if (ok) {
+            base = allocs[0];
+            if (phys_out)
+                *phys_out = paddrs[0];
+            return base;
+        }
+
+        for (i = 0; i < pages; i++)
+            kfree(allocs[i]);
+    }
+
+    return 0;
 }
 
 /*
@@ -111,10 +160,10 @@ virtio_probe_pci(struct pci_dev *pci, struct virtio_dev *vdev)
     if (pci->vendor_id != PCI_VENDOR_VIRTIO)
         return -1;
     
-    /* Map device ID to virtio device type */
-    /* Transitional devices: Device ID 0x1000-0x103F maps to type 0x00-0x3F */
+    /* Map PCI device ID to virtio device type. */
+    /* Transitional devices use 0x1000 + virtio device ID - 1. */
     if (pci->device_id >= 0x1000 && pci->device_id <= 0x103F) {
-        vdev->device_id = pci->device_id - 0x1000;
+        vdev->device_id = pci->device_id - 0x0FFF;
     } else {
         /* Modern devices use subsystem ID */
         vdev->device_id = pci_config_read16(pci->bus, pci->slot, pci->func, 0x2E);
@@ -130,6 +179,9 @@ virtio_probe_pci(struct pci_dev *pci, struct virtio_dev *vdev)
     /* Enable I/O and bus master */
     pci_enable_io(pci);
     pci_set_master(pci);
+
+    /* Legacy virtio requires the guest page size before queue setup. */
+    virtio_iowrite32(vdev, VIRTIO_PCI_GUEST_PAGE_SIZE, PGSIZE);
     
     /* Read IRQ */
     vdev->irq = pci->irq_line;
@@ -251,19 +303,17 @@ virtq_create(struct virtio_dev *vdev, int index, int size)
     uint32_t ring_bytes = virtq_size_bytes(size);
     int pages_needed = (ring_bytes + PGSIZE - 1) / PGSIZE;
     
-    char *ring_mem = 0;
-    for (int i = 0; i < pages_needed; i++) {
-        char *p = kalloc();
-        if (!p) {
-            /* Cleanup already allocated pages */
-            /* TODO: Proper cleanup */
-            kfree((char *)vq);
-            return 0;
-        }
-        memset(p, 0, PGSIZE);
-        if (i == 0)
-            ring_mem = p;
+    uint32_t ring_paddr = 0;
+    char *ring_mem = virtio_alloc_contiguous_pages(pages_needed, &ring_paddr);
+    if (!ring_mem) {
+        cprintf("virtio: failed to allocate %d contiguous queue pages\n", pages_needed);
+        kfree((char *)vq);
+        return 0;
     }
+
+    vq->ring_mem = ring_mem;
+    vq->ring_paddr = ring_paddr;
+    vq->ring_pages = pages_needed;
     
     /* Set up ring pointers */
     vq->desc = (struct virtq_desc *)ring_mem;
@@ -294,7 +344,7 @@ virtq_create(struct virtio_dev *vdev, int index, int size)
     memset(vq->desc_state, 0, PGSIZE);
     
     /* Tell device about the queue (legacy: PFN = page frame number) */
-    virtio_iowrite32(vdev, VIRTIO_PCI_QUEUE_PFN, V2P(ring_mem) / PGSIZE);
+    virtio_iowrite32(vdev, VIRTIO_PCI_QUEUE_PFN, ring_paddr / PGSIZE);
     
     /* Store queue in device */
     if (index < 16)
@@ -321,8 +371,10 @@ virtq_destroy(struct virtqueue *vq)
     virtio_iowrite32(vq->vdev, VIRTIO_PCI_QUEUE_PFN, 0);
     
     /* Free memory */
-    if (vq->desc)
-        kfree((char *)vq->desc);
+    if (vq->ring_mem) {
+        for (int i = 0; i < vq->ring_pages; i++)
+            kfree(vq->ring_mem + i * PGSIZE);
+    }
     if (vq->desc_state)
         kfree((char *)vq->desc_state);
     

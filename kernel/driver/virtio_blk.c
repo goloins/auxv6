@@ -25,12 +25,16 @@
 
 #include "types.h"
 #include "defs.h"
+#include "fs.h"
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "buf.h"
+#include "fcntl.h"
 #include "pci.h"
 #include "virtio.h"
 #include "blockdev.h"
+
+extern int ncpu;
 
 /* Virtio block feature bits */
 #define VIRTIO_BLK_F_SIZE_MAX       (1ULL << 1)
@@ -107,6 +111,7 @@ static int virtio_blk_count = 0;
 /* Forward declarations */
 static int virtio_blk_rw(struct buf *b);
 static uint virtio_blk_nblocks(uint dev);
+static int virtio_blk_alloc_devid(void);
 
 /* Block device switch entry */
 static const struct bdevsw virtio_blk_bdevsw = {
@@ -116,7 +121,19 @@ static const struct bdevsw virtio_blk_bdevsw = {
 };
 
 /*
- * Interrupt handler
+ * IRQ handler wrapper (called from trap.c)
+ */
+static void
+virtio_blk_irq_handler(int irq, void *arg)
+{
+    struct virtio_blk_softc *sc = arg;
+    
+    /* Read and clear ISR status */
+    virtio_handle_interrupt(&sc->vdev);
+}
+
+/*
+ * Virtio ISR callback (called from virtio_handle_interrupt)
  */
 static void
 virtio_blk_intr(struct virtio_dev *vdev)
@@ -221,6 +238,20 @@ virtio_blk_nblocks(uint dev)
     return sc->capacity / (BSIZE / 512);
 }
 
+static int
+virtio_blk_alloc_devid(void)
+{
+    int unit;
+
+    for (unit = 0; unit < VD_DISK_UNITS; unit++) {
+        int dev = VD_DISK_DEV(unit);
+        if (bdev_register(dev, &virtio_blk_bdevsw) == 0)
+            return dev;
+    }
+
+    return -1;
+}
+
 /*
  * PCI probe function
  */
@@ -281,16 +312,29 @@ virtio_blk_probe(struct pci_dev *pci)
     sc->vdev.driver_data = sc;
     sc->vdev.isr_handler = virtio_blk_intr;
     
-    /* Enable interrupts */
+    /* Register IRQ handler */
+    if (irq_register(sc->vdev.irq, virtio_blk_irq_handler, sc, "virtio_blk") < 0) {
+        cprintf("virtio_blk: failed to register IRQ %d\n", sc->vdev.irq);
+        virtq_destroy(vq);
+        virtio_reset(&sc->vdev);
+        return -1;
+    }
+    
+    /* Enable interrupt routing via IOAPIC */
     pci_enable_irq(pci, ncpu - 1);
     
     /* Mark device ready */
     virtio_set_status(&sc->vdev, VIRTIO_STATUS_DRIVER_OK);
     
-    /* Register with block device layer */
-    /* TODO: Assign proper device number */
-    sc->dev_id = 10 + virtio_blk_count;  /* Arbitrary, avoid IDE devices */
-    bdev_register(sc->dev_id, &virtio_blk_bdevsw);
+    /* Register with block device layer using the first free vd* slot. */
+    sc->dev_id = virtio_blk_alloc_devid();
+    if (sc->dev_id < 0) {
+        irq_unregister(sc->vdev.irq);
+        virtq_destroy(vq);
+        virtio_reset(&sc->vdev);
+        cprintf("virtio_blk: no free block device slots\n");
+        return -1;
+    }
     bdev_set_nblocks(sc->dev_id, sc->capacity / (BSIZE / 512));
     
     virtio_blk_count++;

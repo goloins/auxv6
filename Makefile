@@ -14,6 +14,8 @@ OBJS = \
 	kernel/driver/ioapic.o\
 	kernel/driver/pci.o\
 	kernel/driver/dma.o\
+	kernel/driver/virtio.o\
+	kernel/driver/virtio_blk.o\
 	kernel/core/kalloc.o\
 	kernel/driver/kbd.o\
 	kernel/driver/lapic.o\

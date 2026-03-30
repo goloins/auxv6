@@ -135,6 +135,10 @@ struct virtqueue {
     uint16_t free_head;        /* Head of free descriptor list */
     uint16_t num_free;         /* Number of free descriptors */
     uint16_t last_used_idx;    /* Last processed used index */
+
+    char *ring_mem;            /* Base of contiguous ring allocation */
+    uint32_t ring_paddr;       /* Physical address of ring allocation */
+    int ring_pages;            /* Number of pages in ring allocation */
     
     struct virtq_desc  *desc;  /* Descriptor table */
     struct virtq_avail *avail; /* Available ring */
@@ -193,6 +197,7 @@ struct virtio_dev {
 #define VIRTIO_PCI_STATUS           0x12  /* 8-bit R/W */
 #define VIRTIO_PCI_ISR              0x13  /* 8-bit R */
 #define VIRTIO_PCI_CONFIG           0x14  /* Device-specific config */
+#define VIRTIO_PCI_GUEST_PAGE_SIZE  0x28  /* 32-bit R/W */
 
 /*
  * Function prototypes

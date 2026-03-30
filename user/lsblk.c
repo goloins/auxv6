@@ -36,13 +36,45 @@ print_one(char *name, int dev, char *kind)
            name, dev, kind, blocks);
 }
 
-int
-main(int argc, char *argv[])
+static void
+print_family(char prefix, int units, int parts_per_disk)
 {
   int unit;
   int part;
+  int dev;
   char name[10];
 
+  for(unit = 0; unit < units; unit++){
+    name[0] = prefix;
+    name[1] = 'd';
+    name[2] = 'a' + unit;
+    name[3] = 0;
+
+    if(prefix == 'h')
+      dev = HD_DISK_DEV(unit);
+    else
+      dev = VD_DISK_DEV(unit);
+    print_one(name, dev, "disk");
+
+    for(part = 1; part <= parts_per_disk; part++){
+      name[0] = prefix;
+      name[1] = 'd';
+      name[2] = 'a' + unit;
+      name[3] = '0' + part;
+      name[4] = 0;
+
+      if(prefix == 'h')
+        dev = HD_PART_DEV(unit, part);
+      else
+        dev = VD_PART_DEV(unit, part);
+      print_one(name, dev, "part");
+    }
+  }
+}
+
+int
+main(int argc, char *argv[])
+{
   if(argc != 1){
     printf(2, "usage: lsblk\n");
     exit();
@@ -53,22 +85,8 @@ main(int argc, char *argv[])
     g_nmounts = 0;
 
   printf(1, "NAME     DEV TYPE  BLOCKS  MOUNT\n");
-  for(unit = 0; unit < HD_DISK_UNITS; unit++){
-    name[0] = 'h';
-    name[1] = 'd';
-    name[2] = 'a' + unit;
-    name[3] = 0;
-    print_one(name, HD_DISK_DEV(unit), "disk");
-
-    for(part = 1; part <= HD_PARTS_PER_DISK; part++){
-      name[0] = 'h';
-      name[1] = 'd';
-      name[2] = 'a' + unit;
-      name[3] = '0' + part;
-      name[4] = 0;
-      print_one(name, HD_PART_DEV(unit, part), "part");
-    }
-  }
+  print_family('h', HD_DISK_UNITS, HD_PARTS_PER_DISK);
+  print_family('v', VD_DISK_UNITS, VD_PARTS_PER_DISK);
 
   exit();
 }

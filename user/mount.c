@@ -13,6 +13,7 @@ parse_dev_token(const char *tok)
   const char *s = tok;
   int unit;
   int part;
+  int is_virtio;
 
   if(s[0] == '/' && s[1] == 'd' && s[2] == 'e' && s[3] == 'v' && s[4] == '/')
     s += 5;
@@ -20,26 +21,27 @@ parse_dev_token(const char *tok)
   if(is_numeric(s))
     return parse_int(s);
 
-  if(s[0] != 'h' || s[1] != 'd')
+  if((s[0] != 'h' && s[0] != 'v') || s[1] != 'd')
     return -1;
+  is_virtio = (s[0] == 'v');
   unit = s[2] - 'a';
-  if(unit < 0 || unit >= HD_DISK_UNITS)
+  if(unit < 0 || unit >= (is_virtio ? VD_DISK_UNITS : HD_DISK_UNITS))
     return -1;
   s += 3;
 
   if(*s == 0)
-    return HD_DISK_DEV(unit);
+    return is_virtio ? VD_DISK_DEV(unit) : HD_DISK_DEV(unit);
 
-  if(*s < '1' || *s > '0' + HD_PARTS_PER_DISK)
+  if(*s < '1' || *s > '0' + (is_virtio ? VD_PARTS_PER_DISK : HD_PARTS_PER_DISK))
     return -1;
   part = *s - '0';
   s++;
   if(*s != 0)
     return -1;
 
-  if(part < 1 || part > HD_PARTS_PER_DISK)
+  if(part < 1 || part > (is_virtio ? VD_PARTS_PER_DISK : HD_PARTS_PER_DISK))
     return -1;
-  return HD_PART_DEV(unit, part);
+  return is_virtio ? VD_PART_DEV(unit, part) : HD_PART_DEV(unit, part);
 }
 
 static int
