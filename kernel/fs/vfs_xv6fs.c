@@ -80,6 +80,7 @@ xv6fs_rename(struct inode *olddp, char *oldname, struct inode *newdp, char *newn
   struct inode *exist;
   struct dirent de;
   uint off;
+  uint newoff;
 
   if(olddp == 0 || newdp == 0 || oldname == 0 || newname == 0)
     return -1;
@@ -88,12 +89,6 @@ xv6fs_rename(struct inode *olddp, char *oldname, struct inode *newdp, char *newn
   if(olddp == newdp && namecmp(oldname, newname) == 0)
     return 0;
 
-  exist = dirlookup(newdp, newname, 0);
-  if(exist != 0){
-    iput(exist);
-    return -1;
-  }
-
   ip = dirlookup(olddp, oldname, &off);
   if(ip == 0)
     return -1;
@@ -101,6 +96,40 @@ xv6fs_rename(struct inode *olddp, char *oldname, struct inode *newdp, char *newn
   if(ip->type == T_DIR){
     iunlockput(ip);
     return -1;
+  }
+
+  exist = dirlookup(newdp, newname, &newoff);
+  if(exist != 0){
+    ilock(exist);
+    if(exist->type == T_DIR){
+      iunlockput(exist);
+      iunlockput(ip);
+      return -1;
+    }
+    if(exist->inum == ip->inum){
+      iunlockput(exist);
+      if(olddp != newdp || namecmp(oldname, newname) != 0){
+        memset(&de, 0, sizeof(de));
+        if(writei(olddp, (char*)&de, off, sizeof(de)) != sizeof(de)){
+          iunlockput(ip);
+          return -1;
+        }
+      }
+      iunlockput(ip);
+      return 0;
+    }
+
+    memset(&de, 0, sizeof(de));
+    if(writei(newdp, (char*)&de, newoff, sizeof(de)) != sizeof(de)){
+      iunlockput(exist);
+      iunlockput(ip);
+      return -1;
+    }
+    if(exist->nlink < 1)
+      panic("xv6fs_rename: nlink < 1");
+    exist->nlink--;
+    iupdate(exist);
+    iunlockput(exist);
   }
 
   ip->nlink++;

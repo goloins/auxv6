@@ -1667,6 +1667,7 @@ static int
 ext2_rename(struct inode *olddp, char *oldname, struct inode *newdp, char *newname)
 {
   struct inode *ip;
+  struct inode *exist;
 
   if(olddp == 0 || newdp == 0 || oldname == 0 || newname == 0)
     return -1;
@@ -1684,6 +1685,34 @@ ext2_rename(struct inode *olddp, char *oldname, struct inode *newdp, char *newna
     return -1;
   }
   iunlock(ip);
+
+  exist = ext2_dirlookup(newdp, newname, 0);
+  if(exist != 0){
+    ilock(exist);
+    if(exist->type == T_DIR){
+      iunlockput(exist);
+      iput(ip);
+      return -1;
+    }
+    if(exist->inum == ip->inum){
+      iunlockput(exist);
+      if(olddp != newdp || namecmp(oldname, newname) != 0){
+        if(ext2_remove(olddp, oldname) < 0){
+          iput(ip);
+          return -1;
+        }
+      }
+      iput(ip);
+      return 0;
+    }
+    iunlock(exist);
+    if(ext2_remove(newdp, newname) < 0){
+      iput(exist);
+      iput(ip);
+      return -1;
+    }
+    iput(exist);
+  }
 
   if(ext2_link(ip, newdp, newname) < 0){
     iput(ip);

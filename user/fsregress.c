@@ -226,6 +226,7 @@ check_mnt_rename_cycle(void)
 {
   char *a;
   char *b;
+  char buf[8];
   int fd;
   struct stat sa;
   struct stat sb;
@@ -255,6 +256,18 @@ check_mnt_rename_cycle(void)
   }
   close(fd);
 
+  fd = open(b, O_CREATE | O_WRONLY | O_TRUNC);
+  if(fd < 0){
+    printf(1, "fsregress: FAIL create %s\n", b);
+    exit();
+  }
+  if(write(fd, "old\n", 4) != 4){
+    printf(1, "fsregress: FAIL write %s\n", b);
+    close(fd);
+    exit();
+  }
+  close(fd);
+
   if(rename(a, b) < 0){
     printf(1, "fsregress: FAIL rename %s -> %s\n", a, b);
     exit();
@@ -267,6 +280,17 @@ check_mnt_rename_cycle(void)
     printf(1, "fsregress: FAIL missing new path %s\n", b);
     exit();
   }
+  fd = open(b, O_RDONLY);
+  if(fd < 0){
+    printf(1, "fsregress: FAIL open overwritten path %s\n", b);
+    exit();
+  }
+  if(read(fd, buf, 3) != 3 || buf[0] != 'r' || buf[1] != 'n' || buf[2] != '\n'){
+    printf(1, "fsregress: FAIL overwrite content %s\n", b);
+    close(fd);
+    exit();
+  }
+  close(fd);
 
   if(rename(b, b) < 0){
     printf(1, "fsregress: FAIL rename no-op %s\n", b);
@@ -278,6 +302,96 @@ check_mnt_rename_cycle(void)
   }
 
   printf(1, "fsregress: ok /mnt rename cycle\n");
+}
+
+static void
+check_mnt_crossdir_rename_cycle(void)
+{
+  char *d1;
+  char *d2;
+  char *src;
+  char *dst;
+  char buf[8];
+  int fd;
+  struct stat st;
+
+  d1 = "/mnt/.fsrd1";
+  d2 = "/mnt/.fsrd2";
+  src = "/mnt/.fsrd1/src";
+  dst = "/mnt/.fsrd2/dst";
+
+  fd = open("/mnt", O_RDONLY);
+  if(fd < 0){
+    printf(1, "fsregress: skip /mnt crossdir rename (not available)\n");
+    return;
+  }
+  close(fd);
+
+  unlink(src);
+  unlink(dst);
+  unlink(d1);
+  unlink(d2);
+
+  if(mkdir(d1) < 0 || mkdir(d2) < 0){
+    printf(1, "fsregress: FAIL mkdir crossdir roots\n");
+    exit();
+  }
+
+  fd = open(src, O_CREATE | O_WRONLY | O_TRUNC);
+  if(fd < 0){
+    printf(1, "fsregress: FAIL create %s\n", src);
+    exit();
+  }
+  if(write(fd, "xy\n", 3) != 3){
+    printf(1, "fsregress: FAIL write %s\n", src);
+    close(fd);
+    exit();
+  }
+  close(fd);
+
+  fd = open(dst, O_CREATE | O_WRONLY | O_TRUNC);
+  if(fd < 0){
+    printf(1, "fsregress: FAIL create %s\n", dst);
+    exit();
+  }
+  if(write(fd, "old\n", 4) != 4){
+    printf(1, "fsregress: FAIL write %s\n", dst);
+    close(fd);
+    exit();
+  }
+  close(fd);
+
+  if(rename(src, dst) < 0){
+    printf(1, "fsregress: FAIL crossdir rename %s -> %s\n", src, dst);
+    exit();
+  }
+  if(stat(src, &st) >= 0){
+    printf(1, "fsregress: FAIL stale src after rename %s\n", src);
+    exit();
+  }
+  if(stat(dst, &st) < 0){
+    printf(1, "fsregress: FAIL missing dst after rename %s\n", dst);
+    exit();
+  }
+
+  fd = open(dst, O_RDONLY);
+  if(fd < 0){
+    printf(1, "fsregress: FAIL open dst %s\n", dst);
+    exit();
+  }
+  if(read(fd, buf, 3) != 3 || buf[0] != 'x' || buf[1] != 'y' || buf[2] != '\n'){
+    printf(1, "fsregress: FAIL dst content %s\n", dst);
+    close(fd);
+    exit();
+  }
+  close(fd);
+
+  if(unlink(dst) < 0 || unlink(d1) < 0 || unlink(d2) < 0){
+    printf(1, "fsregress: FAIL crossdir cleanup\n");
+    exit();
+  }
+
+  printf(1, "fsregress: ok /mnt crossdir rename\n");
 }
 
 int
@@ -306,6 +420,7 @@ main(int argc, char *argv[])
 
   check_mnt_link_cycle();
   check_mnt_rename_cycle();
+  check_mnt_crossdir_rename_cycle();
 
   printf(1, "fsregress: PASS entries=%d\n", total_entries);
   exit();
