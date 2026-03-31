@@ -90,6 +90,10 @@ struct virtio_blk_softc {
     uint64_t capacity;      /* In 512-byte sectors */
     uint32_t blk_size;      /* Logical block size */
     int      read_only;
+    int      has_flush;
+    int      has_discard;
+    int      has_write_zeroes;
+    uint32_t writes_since_flush;
     
     /* Block device ID (for blockdev registration) */
     uint dev_id;
@@ -108,10 +112,38 @@ struct virtio_blk_softc {
 static struct virtio_blk_softc virtio_blk_devices[MAX_VIRTIO_BLK];
 static int virtio_blk_count = 0;
 
+/*
+ * Tunable flush cadence for dirty writes.
+ * 1 = flush every write, N = flush every N writes, 0 = disable explicit flush.
+ */
+static int virtio_blk_flush_every_writes = 1;
+
 /* Forward declarations */
 static int virtio_blk_rw(struct buf *b);
 static uint virtio_blk_nblocks(uint dev);
 static int virtio_blk_alloc_devid(void);
+static struct virtio_blk_softc *virtio_blk_find_by_dev(uint dev);
+static int virtio_blk_submit_locked(struct virtio_blk_softc *sc, uint32_t type,
+                                    uint64_t sector, void *data, uint32_t data_len,
+                                    int data_is_write);
+
+int
+virtio_blk_get_flush_every_writes(void)
+{
+    return virtio_blk_flush_every_writes;
+}
+
+int
+virtio_blk_set_flush_every_writes(int value)
+{
+    if (value < 0)
+        return -1;
+    if (value > 1000000)
+        return -1;
+
+    virtio_blk_flush_every_writes = value;
+    return 0;
+}
 
 /* Block device switch entry */
 static const struct bdevsw virtio_blk_bdevsw = {
@@ -154,73 +186,129 @@ virtio_blk_intr(struct virtio_dev *vdev)
     release(&sc->lock);
 }
 
+static struct virtio_blk_softc *
+virtio_blk_find_by_dev(uint dev)
+{
+    int i;
+
+    for (i = 0; i < virtio_blk_count; i++) {
+        if (virtio_blk_devices[i].dev_id == dev)
+            return &virtio_blk_devices[i];
+    }
+
+    return 0;
+}
+
 /*
  * Block device read/write callback
  */
 static int
 virtio_blk_rw(struct buf *b)
 {
-    /* Find the device */
-    /* TODO: Proper device lookup from minor number */
-    if (virtio_blk_count == 0)
+    if (!b)
         return -1;
-    
-    struct virtio_blk_softc *sc = &virtio_blk_devices[0];
+
+    struct virtio_blk_softc *sc = virtio_blk_find_by_dev(b->dev);
+    if (!sc)
+        return -1;
+
     struct virtqueue *vq = sc->vdev.vqs[0];
     
     if (!vq)
         return -1;
     
     acquiresleep(&sc->req_lock);
-    
-    /* Build request header */
-    sc->request.hdr.type = (b->flags & B_DIRTY) ? VIRTIO_BLK_T_OUT : VIRTIO_BLK_T_IN;
-    sc->request.hdr.reserved = 0;
-    sc->request.hdr.sector = b->blockno * (BSIZE / 512);
-    sc->request.bp = b;
-    sc->request.status = 0xFF;
-    sc->request.done = 0;
-    
-    acquire(&sc->lock);
-    
-    /* Set up scatter-gather list:
-     * Header (out) -> Data (in/out) -> Status (in)
-     */
-    void *bufs[3] = { &sc->request.hdr, b->data, &sc->request.status };
-    uint32_t lens[3] = { sizeof(sc->request.hdr), BSIZE, 1 };
-    
-    int out_num, in_num;
-    if (b->flags & B_DIRTY) {
-        /* Write: header(out) + data(out) + status(in) */
-        out_num = 2;
-        in_num = 1;
-    } else {
-        /* Read: header(out) + data(in) + status(in) */
-        out_num = 1;
-        in_num = 2;
-    }
-    
-    virtq_add_buf(vq, bufs, lens, out_num, in_num, &sc->request);
-    virtq_kick(vq);
-    
-    /* Wait for completion */
-    while (!sc->request.done) {
-        sleep(&sc->request, &sc->lock);
-    }
-    
-    release(&sc->lock);
-    releasesleep(&sc->req_lock);
-    
-    /* Check status */
-    if (sc->request.status != VIRTIO_BLK_S_OK) {
-        cprintf("virtio_blk: request failed with status %d\n", sc->request.status);
+    int is_write = (b->flags & B_DIRTY) != 0;
+    uint32_t req_type = is_write ? VIRTIO_BLK_T_OUT : VIRTIO_BLK_T_IN;
+    uint64_t sector = b->blockno * (BSIZE / 512);
+
+    if (virtio_blk_submit_locked(sc, req_type, sector, b->data, BSIZE, is_write) < 0) {
+        releasesleep(&sc->req_lock);
+        cprintf("virtio_blk: data request failed dev=%d block=%d\n", b->dev, b->blockno);
         return -1;
     }
+
+    if (is_write)
+        sc->writes_since_flush++;
+
+    if (is_write && sc->has_flush && virtio_blk_flush_every_writes > 0 &&
+        sc->writes_since_flush >= (uint32_t)virtio_blk_flush_every_writes) {
+        if (virtio_blk_submit_locked(sc, VIRTIO_BLK_T_FLUSH, 0, 0, 0, 0) < 0) {
+            releasesleep(&sc->req_lock);
+            cprintf("virtio_blk: flush request failed dev=%d cadence=%d\n",
+                    b->dev, virtio_blk_flush_every_writes);
+            return -1;
+        }
+        sc->writes_since_flush = 0;
+    }
+
+    releasesleep(&sc->req_lock);
     
     /* Mark buffer as valid and not dirty */
     b->flags |= B_VALID;
     b->flags &= ~B_DIRTY;
     
+    return 0;
+}
+
+static int
+virtio_blk_submit_locked(struct virtio_blk_softc *sc, uint32_t type,
+                         uint64_t sector, void *data, uint32_t data_len,
+                         int data_is_write)
+{
+    struct virtqueue *vq = sc->vdev.vqs[0];
+    void *bufs[3];
+    uint32_t lens[3];
+    int out_num;
+    int in_num;
+
+    if (!vq)
+        return -1;
+
+    sc->request.hdr.type = type;
+    sc->request.hdr.reserved = 0;
+    sc->request.hdr.sector = sector;
+    sc->request.bp = 0;
+    sc->request.status = 0xFF;
+    sc->request.done = 0;
+
+    bufs[0] = &sc->request.hdr;
+    lens[0] = sizeof(sc->request.hdr);
+
+    if (data && data_len > 0) {
+        bufs[1] = data;
+        lens[1] = data_len;
+        bufs[2] = &sc->request.status;
+        lens[2] = 1;
+        if (data_is_write) {
+            out_num = 2;
+            in_num = 1;
+        } else {
+            out_num = 1;
+            in_num = 2;
+        }
+    } else {
+        bufs[1] = &sc->request.status;
+        lens[1] = 1;
+        out_num = 1;
+        in_num = 1;
+    }
+
+    acquire(&sc->lock);
+    if (virtq_add_buf(vq, bufs, lens, out_num, in_num, &sc->request) < 0) {
+        release(&sc->lock);
+        return -1;
+    }
+    virtq_kick(vq);
+
+    while (!sc->request.done) {
+        sleep(&sc->request, &sc->lock);
+    }
+    release(&sc->lock);
+
+    if (sc->request.status != VIRTIO_BLK_S_OK)
+        return -1;
+
     return 0;
 }
 
@@ -230,11 +318,10 @@ virtio_blk_rw(struct buf *b)
 static uint
 virtio_blk_nblocks(uint dev)
 {
-    /* TODO: Proper device lookup */
-    if (virtio_blk_count == 0)
+    struct virtio_blk_softc *sc = virtio_blk_find_by_dev(dev);
+    if (!sc)
         return 0;
-    
-    struct virtio_blk_softc *sc = &virtio_blk_devices[0];
+
     return sc->capacity / (BSIZE / 512);
 }
 
@@ -278,8 +365,12 @@ virtio_blk_probe(struct pci_dev *pci)
     /* Set ACKNOWLEDGE and DRIVER status */
     virtio_set_status(&sc->vdev, VIRTIO_STATUS_ACK | VIRTIO_STATUS_DRIVER);
     
-    /* Negotiate features */
-    uint64_t features = VIRTIO_BLK_F_BLK_SIZE;
+    /* Negotiate features. Keep optional bits so we can gate behavior by capability. */
+    uint64_t features = VIRTIO_BLK_F_RO |
+                        VIRTIO_BLK_F_BLK_SIZE |
+                        VIRTIO_BLK_F_FLUSH |
+                        VIRTIO_BLK_F_DISCARD |
+                        VIRTIO_BLK_F_WRITE_ZEROES;
     virtio_negotiate_features(&sc->vdev, features);
     
     if (virtio_finalize_features(&sc->vdev) < 0) {
@@ -297,9 +388,14 @@ virtio_blk_probe(struct pci_dev *pci)
     }
     
     sc->read_only = (sc->vdev.features & VIRTIO_BLK_F_RO) != 0;
+    sc->has_flush = (sc->vdev.features & VIRTIO_BLK_F_FLUSH) != 0;
+    sc->has_discard = (sc->vdev.features & VIRTIO_BLK_F_DISCARD) != 0;
+    sc->has_write_zeroes = (sc->vdev.features & VIRTIO_BLK_F_WRITE_ZEROES) != 0;
     
-    cprintf("virtio_blk: capacity=%d sectors, blk_size=%d, ro=%d\n",
-            (uint32_t)sc->capacity, sc->blk_size, sc->read_only);
+        cprintf("virtio_blk: capacity=%d sectors, blk_size=%d, ro=%d, flush=%d, discard=%d, write_zeroes=%d, flush_every_writes=%d\n",
+            (uint32_t)sc->capacity, sc->blk_size, sc->read_only,
+            sc->has_flush, sc->has_discard, sc->has_write_zeroes,
+            virtio_blk_flush_every_writes);
     
     /* Create virtqueue */
     struct virtqueue *vq = virtq_create(&sc->vdev, 0, 0);
@@ -327,14 +423,15 @@ virtio_blk_probe(struct pci_dev *pci)
     virtio_set_status(&sc->vdev, VIRTIO_STATUS_DRIVER_OK);
     
     /* Register with block device layer using the first free vd* slot. */
-    sc->dev_id = virtio_blk_alloc_devid();
-    if (sc->dev_id < 0) {
+    int dev_id = virtio_blk_alloc_devid();
+    if (dev_id < 0) {
         irq_unregister(sc->vdev.irq);
         virtq_destroy(vq);
         virtio_reset(&sc->vdev);
         cprintf("virtio_blk: no free block device slots\n");
         return -1;
     }
+    sc->dev_id = dev_id;
     bdev_set_nblocks(sc->dev_id, sc->capacity / (BSIZE / 512));
     
     virtio_blk_count++;

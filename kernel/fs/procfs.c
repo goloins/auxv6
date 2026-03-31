@@ -15,6 +15,7 @@
 #define PROCFS_UPTIME_INO   2
 #define PROCFS_VERSION_INO  3
 #define PROCFS_PCI_INO      4
+#define PROCFS_VBLK_FLUSH_INO 5
 #define PROCFS_VERSION_STR  "a/ux86 aux86 i686\n"
 
 struct procfs_inode {
@@ -27,13 +28,16 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_UPTIME_INO,  "uptime",  16 },
   { PROCFS_VERSION_INO, "version", 32 },
   { PROCFS_PCI_INO,     "pci",     2048 },
+  { PROCFS_VBLK_FLUSH_INO, "vblk_flush", 16 },
   { 0, 0, 0 }
 };
+
+static int procfs_writei(struct inode *ip, char *src, uint off, uint n);
 
 static uint
 procfs_root_dir_size(void)
 {
-  return 5 * sizeof(struct dirent);
+  return 6 * sizeof(struct dirent);
 }
 
 static uint
@@ -91,6 +95,10 @@ procfs_fill_inode(struct inode *ip, uint inum)
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
     ip->size = 2048;  /* Dynamic content */
+  } else if(inum == PROCFS_VBLK_FLUSH_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IWUSR | M_IRGRP | M_IROTH;
+    ip->size = 16;
   } else {
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
@@ -229,11 +237,7 @@ procfs_vread(struct inode *ip, char *dst, uint off, uint n)
 static int
 procfs_vwrite(struct inode *ip, char *src, uint off, uint n)
 {
-  (void)ip;
-  (void)src;
-  (void)off;
-  (void)n;
-  return -1;
+  return procfs_writei(ip, src, off, n);
 }
 
 static int
@@ -255,7 +259,7 @@ int
 procfs_readi(struct inode *ip, char *dst, uint off, uint n)
 {
   char buf[2048];
-  struct dirent entries[3];
+  struct dirent entries[4];
   uint len;
   uint now;
 
@@ -270,6 +274,8 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     safestrcpy(entries[1].name, "version", DIRSIZ);
     entries[2].inum = PROCFS_PCI_INO;
     safestrcpy(entries[2].name, "pci", DIRSIZ);
+    entries[3].inum = PROCFS_VBLK_FLUSH_INO;
+    safestrcpy(entries[3].name, "vblk_flush", DIRSIZ);
     return procfs_copy_data(dst, off, n, (char*)entries, sizeof(entries));
   }
   if(ip->inum == PROCFS_VERSION_INO)
@@ -277,6 +283,12 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
                             sizeof(PROCFS_VERSION_STR) - 1);
   if(ip->inum == PROCFS_PCI_INO){
     len = pci_format_devices(buf, sizeof(buf));
+    return procfs_copy_data(dst, off, n, buf, len);
+  }
+  if(ip->inum == PROCFS_VBLK_FLUSH_INO){
+    int cadence = virtio_blk_get_flush_every_writes();
+    len = procfs_write_uint(buf, cadence < 0 ? 0 : (uint)cadence);
+    buf[len++] = '\n';
     return procfs_copy_data(dst, off, n, buf, len);
   }
   if(ip->inum != PROCFS_UPTIME_INO)
@@ -291,6 +303,57 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
   return procfs_copy_data(dst, off, n, buf, len);
 }
 
+static int
+procfs_writei(struct inode *ip, char *src, uint off, uint n)
+{
+  char kbuf[32];
+  uint i;
+  uint val;
+
+  if(ip == 0 || src == 0)
+    return -1;
+  if(ip->inum != PROCFS_VBLK_FLUSH_INO)
+    return -1;
+  if(off != 0)
+    return -1;
+  if(n == 0)
+    return 0;
+  if(n >= sizeof(kbuf))
+    return -1;
+
+  memmove(kbuf, src, n);
+  kbuf[n] = 0;
+
+  val = 0;
+  i = 0;
+  while(kbuf[i] == ' ' || kbuf[i] == '\t')
+    i++;
+  if(kbuf[i] < '0' || kbuf[i] > '9')
+    return -1;
+
+  for(; kbuf[i]; i++){
+    if(kbuf[i] >= '0' && kbuf[i] <= '9'){
+      uint digit = (uint)(kbuf[i] - '0');
+      if(val > 1000000)
+        return -1;
+      val = val * 10 + digit;
+      if(val > 1000000)
+        return -1;
+      continue;
+    }
+
+    if(kbuf[i] == '\n' || kbuf[i] == '\r' || kbuf[i] == ' ' || kbuf[i] == '\t')
+      break;
+
+    return -1;
+  }
+
+  if(virtio_blk_set_flush_every_writes((int)val) < 0)
+    return -1;
+
+  return n;
+}
+
 void
 vfs_procfs_init(struct vfs *fs)
 {
@@ -298,7 +361,7 @@ vfs_procfs_init(struct vfs *fs)
     return;
 
   safestrcpy(fs->name, "procfs", sizeof(fs->name));
-  fs->caps = VFS_CAP_READ;
+  fs->caps = VFS_CAP_READ | VFS_CAP_WRITE;
   fs->fs_data = 0;
   fs->fs_destroy = 0;
   fs->mount_init = 0;

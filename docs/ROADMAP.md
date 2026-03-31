@@ -10,7 +10,20 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - Multi-filesystem support with mount table
 
 **Architecture:** x86 32-bit, single address space per process  
-**Current State:** Educational OS with working core components, but missing modern device support and complete POSIX compliance
+**Current State:** Educational OS with working core components, ext2-root boot as the default path, and a growing POSIX-style userland, but still missing several modern drivers and full POSIX compliance
+
+---
+
+## Recent Progress (2026-03-30 to 2026-03-31)
+
+- Signal delivery, `alarm()`, `SIGPIPE`, `lseek`, `dup2`, and baseline `fcntl()` support landed and are now integrated into the main syscall path.
+- PCI enumeration, IRQ registration, DMA allocation helpers, and `lspci` landed as the Tier 2 device foundation.
+- ext2 is now the default root filesystem build target, staged images are created with correct `root:root` ownership, and init is executed from the mounted root filesystem after VFS initialization.
+- Virtio infrastructure moved from scaffolding to working code: `virtio-blk` now probes, negotiates features, performs block I/O, registers with the block layer, and shows up through `lsblk` and `/dev/vd*` nodes.
+- The network stack moved beyond loopback-only behavior: Ethernet framing, ARP cache/request/reply, routing controls, virtio-net RX/TX, DHCP tooling, resolver/`nslookup`, and outbound internet ping all landed.
+- TCP now exchanges real packets with a basic three-way handshake and ACKed payload delivery; `telnet` and `netcat` were added as rough but functional userland validation tools.
+- POSIX porting work expanded substantially: new `include/posix/*` headers, broader libc-style helpers in `user/ulib.c`, formatting/dirent wrappers in `user/posix.c`, `setjmp`, and enough compatibility to experiment with a `dash` port.
+- Userland bootstrap is now more Unix-like: `init` runs `dash /etc/rc.d/rc.S`, tracks runlevels, handles `telinit` requests via `SIGHUP`, and `exec` supports `#!` interpreter scripts.
 
 ---
 
@@ -20,28 +33,30 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | Subsystem | Status | Notes |
 |-----------|--------|-------|
 | VFS Layer | 90% | Multi-backend, mount table, longest-prefix matching |
-| ext2 filesystem | 85% | ~2400 LOC, read/write, directories, inode management |
+| ext2 filesystem | 85% | Read/write, directories, inode management, default rootfs build target |
 | FAT/msdosfs | 80% | ~1650 LOC, FAT12/16/32, short/long filenames |
 | Process model | 85% | fork/exec/wait, process groups, sessions |
 | Job control | 80% | setpgid, setsid, tcsetpgrp, terminal control |
+| Signal handling | 95% | Full userspace delivery, alarm(), SIGPIPE, hardware fault mapping |
+| Bootstrapping / init | 75% | VFS-launched init, rc scripts, runlevels, telinit, shebang exec |
 | Memory management | 80% | Virtual memory, page tables, kalloc/kfree |
 
 ### ⚠️ Partially Implemented (30-60%)
 | Subsystem | Status | Notes |
 |-----------|--------|-------|
-| Signal handling | 95% | Full delivery, alarm(), SIGPIPE, hardware faults |
-| TCP/IP stack | 40% | UDP working, DNS works, TCP state machine but no actual packets |
-| Networking interfaces | 30% | BSD ifnet abstraction, loopback only |
+| TCP/IP stack | 65% | UDP works, DNS/resolver works, TCP handshake + payload exchange work, but no retransmission/teardown/flow control yet |
+| Networking interfaces | 60% | BSD ifnet abstraction, loopback, virtio-net, routing, DHCP tooling, outbound packet path |
+| POSIX compatibility layer | 60% | Broad header coverage, libc-style shims, dash port experiments, many APIs still stubbed or partial |
 | procfs | 60% | Basic process info, missing many nodes |
 
-### ❌ Missing/Stub Only
+### 🚧 Early Or Stubbed
 | Subsystem | Status | Notes |
 |-----------|--------|-------|
-| PCI subsystem | Stub | No device enumeration |
-| DMA support | None | All I/O is PIO |
-| Modern storage | None | Only IDE (PIO mode) |
-| Real NICs | None | No hardware NIC drivers |
-| Ethernet/ARP | Stub | No link layer |
+| PCI subsystem | 80% | Bus 0 enumeration, BAR decode/mapping, helper APIs, `lspci`; MSI/MSI-X still missing |
+| DMA support | 75% | Page-based DMA allocation with physical address tracking and alignment |
+| Virtio storage | 70% | Working virtio core + virtio-blk, but still single-queue/minimal-feature oriented |
+| Real NICs | 15% | `rtl8111` probe stub only; no fully working hardware NIC driver yet |
+| Modern storage | 10% | AHCI and NVMe remain stubs |
 | Symlinks | None | VFS supports but not implemented |
 
 ---
@@ -169,76 +184,177 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 
 ## Priority Tier 3: Storage Drivers (Weeks 9-12)
 
-### 3.1 Virtio-blk Driver [HIGH]
-**Status:** Stub at `kernel/driver/virtio_blk.c`  
+### 3.1 Virtio-blk Driver [PARTIAL]
+**Status:** Initial implementation landed 2026-03-31  
+**Files:** `kernel/driver/virtio.c`, `kernel/driver/virtio_blk.c`, `include/virtio.h`, `user/lsblk.c`, `user/mount.c`, `user/init.c`  
 **Value:** QEMU testing, cloud deployment  
-**Tasks:**
-- [ ] PCI detection (vendor=0x1AF4, device=0x1001)
-- [ ] Virtqueue setup
-- [ ] Feature negotiation
-- [ ] Block read/write commands
-- [ ] Integration with bdevsw
+**Implemented:**
+- [x] PCI detection (vendor=0x1AF4, device=0x1001)
+- [x] Virtqueue setup
+- [x] Feature negotiation
+- [x] Block read/write commands
+- [x] Integration with bdevsw
+
+**Current behavior:**
+- Registers virtio disks with the block layer and exposes them as `/dev/vd*`
+- `lsblk` reports virtio disks and `mount` accepts `vd*` / `vd*pN` device names
+- Init creates matching device nodes at boot when virtio disks are present
+
+**Completion plan (finish from partial to production-ready baseline):**
+- [ ] Replace global-device shortcuts with dev->softc lookup in `rw`/`nblocks` paths
+- [ ] Add explicit device capability tracking (`FLUSH`, `DISCARD`, `WRITE_ZEROES`) at probe time
+- [ ] Implement `flush` request path and wire `fsync`-style call sites where available
+- [ ] Implement discard/write-zeroes request helpers behind capability checks
+- [ ] Add error accounting and robust retry policy for transient I/O failures
+- [ ] Add optional queue-depth tuning knobs (single queue retained as default)
+
+**Definition of done:**
+- [ ] Multiple virtio disks can be attached and independently read/written/mounted
+- [ ] No hardcoded device-0 behavior remains in I/O and capacity paths
+- [ ] Flush/discard/write-zeroes are feature-gated and return deterministic errors when unsupported
+- [ ] Stress pass: repeated mount/fsck-like write cycles complete without data corruption
 
 **Dependencies:** PCI, Virtio core  
-**Estimate:** 1 week
+**Estimate:** 1-2 weeks
 
 ### 3.2 AHCI/SATA Driver [MEDIUM]
-**Status:** Stub at `kernel/driver/ahci.c`  
+**Status:** Probe + HBA/port bring-up scaffolding exists; no block I/O integration yet  
+**Files:** `kernel/driver/ahci.c`, `include/pci.h`, `include/blockdev.h`  
 **Value:** Real hardware support  
-**Tasks:**
-- [ ] AHCI HBA detection
-- [ ] Port initialization
-- [ ] FIS construction
-- [ ] Command submission/completion
-- [ ] DMA buffer management
+
+**Basic implementation plan (minimum viable AHCI):**
+- [ ] Add per-port block device registration for detected SATA disks
+- [ ] Implement single-slot DMA read/write path (non-NCQ, polling first)
+- [ ] Build/submit Register H2D FIS for `READ_DMA_EXT` / `WRITE_DMA_EXT`
+- [ ] Implement timeout + error reset flow (`PxTFD`, `PxSERR`, `PxIS`) for failed commands
+- [ ] Read `IDENTIFY DEVICE` to populate capacity and sector size for `bdev_set_nblocks`
+
+**Follow-up hardening (after basic works):**
+- [ ] Move from polling to interrupt-assisted completion
+- [ ] Support additional command slots and batched I/O
+- [ ] Add ATAPI path split (kept out of MVP)
+
+**Definition of done (basic):**
+- [ ] At least one SATA disk appears in `lsblk` as a blockdev
+- [ ] Read/write of filesystem blocks succeeds on QEMU AHCI controller
+- [ ] Mount/unmount cycle succeeds repeatedly without controller lockup
 
 **Dependencies:** PCI, DMA  
-**Estimate:** 2 weeks
+**Estimate:** 2-3 weeks
 
 ### 3.3 NVMe Driver [MEDIUM]
-**Status:** Stub at `kernel/driver/nvme.c`  
+**Status:** Controller reset + admin queue + identify scaffolding exists; no namespace I/O blockdev path yet  
+**Files:** `kernel/driver/nvme.c`, `include/pci.h`, `include/blockdev.h`  
 **Value:** Modern SSD support  
+
+**Basic implementation plan (minimum viable NVMe):**
+- [ ] Finish namespace discovery (`IDENTIFY NS`) and choose active namespace policy (nsid 1 first)
+- [ ] Create one I/O queue pair and wire queue doorbells correctly for data commands
+- [ ] Implement synchronous `READ`/`WRITE` command path using PRP1 (single-page transfers)
+- [ ] Register namespace as block device and report capacity from namespace metadata
+- [ ] Add queue timeout/completion error handling and controller reset-on-fatal fallback
+
+**Follow-up hardening (after basic works):**
+- [ ] Multi-queue per-CPU scaling
+- [ ] Flush/write-zeroes/dataset-management support
+- [ ] Interrupt-driven completions and MSI-X when available
+
+**Definition of done (basic):**
+- [ ] NVMe namespace appears in `lsblk` and can be mounted
+- [ ] Buffered block read/write path passes filesystem smoke tests
+- [ ] Controller recovers from command timeout without requiring full reboot
+
 **Dependencies:** PCI, DMA  
-**Estimate:** 2 weeks
+**Estimate:** 2-3 weeks
+
+### 3.4 Storage Bring-up Order (Recommended)
+1. Virtio-blk cleanup and feature-complete baseline (fastest path to stable storage tests)
+2. AHCI minimum viable read/write path (real hardware compatibility)
+3. NVMe minimum viable namespace I/O (modern hardware path)
+4. Shared reliability pass: timeout policy, error telemetry, and stress testing across all three drivers
+
+### 3.5 Storage Validation Matrix
+- [ ] Single-disk boot and root mount on each backend (virtio-blk, AHCI, NVMe)
+- [ ] Multi-disk enumerate/mount behavior with mixed backends
+- [ ] Large sequential read/write soak (no panic, no leaked DMA buffers)
+- [ ] Power-cycle/reboot persistence check for written data
+- [ ] Negative tests: missing device, command timeout, and media error behavior
 
 ---
 
 ## Priority Tier 4: Network Stack (Weeks 13-18)
 
-### 4.1 Ethernet Layer [HIGH]
-**Status:** Stub at `kernel/net/ethernet.c`  
+### 4.1 Ethernet Layer [COMPLETE]
+**Status:** Implemented 2026-03-31  
+**Files:** `kernel/net/ethernet.c`, `kernel/net/device.c`, `include/net.h`  
 **Tasks:**
-- [ ] Frame encapsulation/decapsulation
-- [ ] MTU handling
-- [ ] Protocol demux (ETHERTYPE_IP, ETHERTYPE_ARP)
+- [x] Frame encapsulation/decapsulation
+- [x] MTU handling
+- [x] Protocol demux (ETHERTYPE_IP, ETHERTYPE_ARP)
+
+**Implementation notes:**
+- Pads short frames, handles broadcast/directed traffic, and demultiplexes incoming frames to IP or ARP
+- Integrates with the `ifnet` output/input path instead of a loopback-only shortcut
 
 **Estimate:** 3-4 days
 
-### 4.2 ARP Implementation [HIGH]
-**Status:** Stub at `kernel/net/arp.c`  
+### 4.2 ARP Implementation [COMPLETE]
+**Status:** Implemented 2026-03-31  
+**Files:** `kernel/net/arp.c`, `user/arp.c`  
 **Tasks:**
-- [ ] ARP cache with timeout
-- [ ] ARP request/reply handling
-- [ ] Packet queuing pending resolution
+- [x] ARP cache with timeout
+- [x] ARP request/reply handling
+- [x] Packet queuing pending resolution
+
+**Implementation notes:**
+- Maintains a small ARP cache with pending vs resolved entries and timeout-based eviction
+- Queues one pending packet per unresolved destination and transmits it after resolution
+- Exposes ARP table state to userspace for inspection
 
 **Estimate:** 3-4 days
 
-### 4.3 Virtio-net Driver [HIGH]
-**Status:** Stub at `kernel/driver/virtio_net.c`  
+### 4.3 Virtio-net Driver [PARTIAL]
+**Status:** Initial implementation landed 2026-03-31  
+**Files:** `kernel/driver/virtio.c`, `kernel/driver/virtio_net.c`, `include/virtio.h`  
 **Value:** Easiest NIC to test with QEMU  
 **Dependencies:** PCI, Virtio core, Ethernet layer  
+
+**Tasks:**
+- [x] Basic TX/RX with single-buffer packets
+- [x] ifnet integration
+- [x] MAC address configuration
+- [ ] Link status / advanced feature handling
+
+**Implementation notes:**
+- Provides working RX/TX virtqueues and feeds packets into the Ethernet/IP stack
+- Good enough for DHCP, DNS, ping, and basic TCP userland testing in QEMU
+
 **Estimate:** 1 week
 
-### 4.4 TCP Implementation [MEDIUM]
-**Current:** State machine exists, no actual packet exchange  
+### 4.4 TCP Implementation [PARTIAL]
+**Current:** Actual packet exchange now works for basic client/server traffic  
 **Tasks:**
-- [ ] SYN/SYN-ACK/ACK handshake
-- [ ] Sequence number management
+- [x] SYN/SYN-ACK/ACK handshake
+- [x] Basic sequence number management
 - [ ] Retransmission
 - [ ] Flow control
 - [ ] Connection teardown
 
+**Implementation notes:**
+- `tcp_connect()` now emits SYN packets and waits for a SYN-ACK-driven transition to `ESTABLISHED`
+- `tcp_input()` handles SYN-ACK completion, ACK-only responses, and basic payload delivery into socket receive buffers
+- `telnet` and `netcat` are available as userland smoke tests; terminal synchronization and protocol coverage still need hardening
+
 **Estimate:** 3-4 weeks
+
+### 4.5 Networking Userland [ONGOING]
+**Status:** Major userland tooling landed 2026-03-31  
+**Files:** `user/ifconfig.c`, `user/route.c`, `user/arp.c`, `user/netinfo.c`, `user/netstat.c`, `user/ping.c`, `user/resolve.c`, `user/nslookup.c`, `user/v6dhcpd.c`, `user/telnet.c`, `user/netcat.c`  
+
+**Delivered:**
+- Interface inspection/configuration, route add/delete, ARP inspection, and general network introspection
+- Resolver stack, `nslookup`, and DHCP tooling
+- Improved `ping` plus basic interactive TCP tools (`telnet`, `netcat`)
 
 ---
 
@@ -290,44 +406,61 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 | getrlimit/setrlimit | Low | Medium | Resource limits |
 
 ### 6.2 Header Compliance [MEDIUM]
-**Created Stubs:**
+**Created / expanded portability headers:**
 - `stddef.h` - size_t, NULL, offsetof
 - `stdint.h` - uintXX_t, intXX_t
 - `sys/types.h` - pid_t, uid_t, off_t, etc.
 - `unistd.h` - POSIX constants
 - `stdlib.h` - Standard library
 - `string.h` - String operations
+- `posix/dirent.h` - Directory iteration APIs
+- `posix/stdio.h` - Formatting-focused stdio subset
+- `posix/stdarg.h`, `posix/setjmp.h`, `posix/ctype.h`, `posix/inttypes.h`, `posix/limits.h`, `posix/paths.h`, `posix/stdbool.h`
+- `posix/sys/stat.h`, `posix/sys/time.h`, `posix/sys/times.h`, `posix/sys/ioctl.h`, `posix/sys/param.h`, `posix/sys/resource.h`, `posix/sys/wait.h`
 
 **Still Needed:**
-- `stdio.h` - FILE operations
-- `dirent.h` - Directory entries
-- `sys/stat.h` - stat structure
 - `sys/socket.h` - Socket interface
 - `netinet/in.h` - Internet addresses
 - `arpa/inet.h` - Address conversion
+- Fuller `FILE`-style stdio / buffered stream support
 
 ### 6.3 Library Functions [LOW]
-Most library functions should be in userspace, not kernel:
-- printf/sprintf family
-- Memory functions (memcpy, memset, etc.)
-- String functions
-- stdlib functions
+Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
+- String/memory routines (`memcpy`, `memcmp`, `strstr`, `strtok_r`, etc.)
+- Basic stdlib coverage (`strtol`, `strtoul`, `qsort`, `bsearch`, `rand`, environment helpers)
+- Formatting wrappers (`vsnprintf`, `snprintf`, `sprintf`, `vsprintf`) and POSIX `dirent` translation
+
+**Still Needed:**
+- Full stdio/`FILE *` model
+- More complete socket-family and networking headers
+- Additional portability wrappers for larger third-party ports
+
+### 6.4 POSIX Porting And Init [ONGOING]
+**Status:** Significant userland progress landed 2026-03-31  
+**Files:** `user/posix.c`, `user/ulib.c`, `user/setjmp.S`, `user/init.c`, `user/runlevel.c`, `user/telinit.c`, `kernel/core/exec.c`  
+
+**Delivered:**
+- Enough libc/POSIX scaffolding to experiment with ported software such as `dash`
+- `exec()` shebang support for interpreter scripts
+- SysV-style init flow with `/etc/rc.d/rc.S`, runlevel transitions, and `telinit`/`runlevel` tooling
+- More POSIX-like `kill(pid, sig)` behavior wired into signal delivery
 
 ---
 
-## File Stubs Created
+## Key Infrastructure Added
 
 ### Drivers
 | File | Description |
 |------|-------------|
-| `kernel/driver/pci.c` | PCI bus enumeration and config access |
+| `kernel/driver/pci.c` | PCI bus enumeration, BAR decode, mapping, and helper APIs |
 | `kernel/driver/virtio.c` | Virtio framework core |
-| `kernel/driver/virtio_net.c` | Virtio network driver |
-| `kernel/driver/virtio_blk.c` | Virtio block driver |
-| `kernel/driver/e1000.c` | Intel E1000 Gigabit Ethernet |
-| `kernel/driver/pcnet.c` | AMD PCNET-PCI Ethernet |
-| `kernel/driver/ahci.c` | AHCI/SATA controller |
-| `kernel/driver/nvme.c` | NVMe SSD controller |
+| `kernel/driver/virtio_net.c` | Initial virtio network driver with RX/TX integration |
+| `kernel/driver/virtio_blk.c` | Initial virtio block driver with blockdev integration |
+| `kernel/driver/rtl8111.c` | Realtek probe stub |
+| `kernel/driver/e1000.c` | Intel E1000 scaffold |
+| `kernel/driver/pcnet.c` | AMD PCNET-PCI scaffold |
+| `kernel/driver/ahci.c` | AHCI/SATA scaffold |
+| `kernel/driver/nvme.c` | NVMe scaffold |
 
 ### Headers
 | File | Description |
@@ -340,17 +473,30 @@ Most library functions should be in userspace, not kernel:
 | `include/string.h` | String operations |
 | `include/unistd.h` | POSIX constants |
 | `include/sys/types.h` | POSIX types |
+| `include/posix/*` | Portability headers for userland ports |
 
 ### Network
 | File | Description |
 |------|-------------|
-| `kernel/net/ethernet.c` | Ethernet frame handling |
-| `kernel/net/arp.c` | ARP implementation |
+| `kernel/net/ethernet.c` | Ethernet framing, padding, and protocol demux |
+| `kernel/net/arp.c` | ARP cache, request/reply handling, and pending-packet resolution |
+
+### Userland
+| File | Description |
+|------|-------------|
+| `user/resolve.c` | DNS / hostname resolver support |
+| `user/nslookup.c` | Name resolution utility |
+| `user/v6dhcpd.c` | DHCP tooling |
+| `user/telnet.c` | Basic Telnet client |
+| `user/netcat.c` | Basic TCP/UDP client/server utility |
+| `user/posix.c` | POSIX compatibility wrappers |
+| `user/runlevel.c` | Current/previous runlevel reporting |
+| `user/telinit.c` | Runlevel transition requests |
 
 ### Filesystem
 | File | Description |
 |------|-------------|
-| `kernel/fs/vfs_isofs.c` | ISO 9660 filesystem |
+| `kernel/fs/vfs_isofs.c` | ISO 9660 filesystem scaffold |
 
 ---
 
@@ -360,21 +506,23 @@ Most library functions should be in userspace, not kernel:
 |-------|----------|-------|
 | Foundation | 4 weeks | Signal delivery, critical syscalls |
 | Device Infra | 4 weeks | PCI, interrupts, DMA |
-| Storage | 4 weeks | Virtio-blk, AHCI |
-| Networking | 6 weeks | Ethernet, ARP, virtio-net, TCP |
+| Storage | 4 weeks | Virtio-blk polish, then AHCI |
+| Networking | 6 weeks | TCP hardening, virtio-net polish, real NIC support |
 | Filesystems | 4 weeks | Symlinks, ISO9660 |
-| POSIX | 6 weeks | Syscalls, headers, compliance |
+| POSIX | 6 weeks | Missing syscalls, porting headers, libc completeness |
 | **Total** | **~28 weeks** | |
+
+Several items have already landed out of order relative to this original plan, notably virtio-blk, Ethernet/ARP, networking userland, and substantial POSIX portability work.
 
 ---
 
 ## Quick Wins (Can be done anytime)
 
-1. **Add more errno values to errno.h** - 30 minutes
-2. **Expand procfs** - Add /proc/uptime, /proc/meminfo - 2 hours each
-3. **Implement getrlimit/setrlimit** (return sane defaults) - 1 hour
-4. **Add gettimeofday syscall** - 2 hours
-5. **Add hostname syscall** - 30 minutes
+1. **Expand procfs** - Add `/proc/uptime`, `/proc/meminfo` - 2 hours each
+2. **Implement gettimeofday syscall** - 2 hours
+3. **Back real getrlimit/setrlimit syscalls behind the existing header stubs** - 1 hour
+4. **Add `sys/socket.h`, `netinet/in.h`, and `arpa/inet.h` compatibility headers** - 2-3 hours
+5. **Polish virtio-net link state / diagnostics** - 2 hours
 
 ---
 
@@ -389,11 +537,9 @@ Most library functions should be in userspace, not kernel:
 
 ## Next Steps (Recommended Order)
 
-1. **Immediately:** Fix signal delivery - this unblocks many programs
-2. **Week 1:** Implement lseek, dup2, basic fcntl
-3. **Week 2-3:** Get PCI enumeration working
-4. **Week 4:** Interrupt routing modernization
-5. **Week 5-6:** Virtio-blk driver (enables faster QEMU testing)
-6. **Week 7-8:** Ethernet + ARP layer
-7. **Week 9:** Virtio-net driver
-8. **Week 10+:** TCP fixes, then rest of roadmap
+1. **Immediately:** Harden TCP with retransmission, teardown, and better receive/window handling
+2. **Next:** Finish virtio-net polish and decide whether to prioritize a real hardware NIC driver or stay QEMU-first
+3. **Then:** Finish virtio-blk rough edges (flush/discard, multi-device cleanup) and move on to AHCI
+4. **After that:** Implement symbolic links and close VFS pathname semantics gaps
+5. **In parallel:** Continue POSIX porting with missing socket headers, stdio gaps, and targeted syscall additions (`select/poll`, `ioctl`, `gettimeofday`)
+6. **Later:** Expand procfs/devfs and keep reducing boot/userland rough edges in the SysV-style init path

@@ -146,6 +146,8 @@ int             pci_format_devices(char*, int);
 
 // virtio_blk.c
 void            virtio_blk_init(void);
+int             virtio_blk_get_flush_every_writes(void);
+int             virtio_blk_set_flush_every_writes(int value);
 
 // dma.c
 void            dma_init(void);
