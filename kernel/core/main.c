@@ -33,6 +33,7 @@ main(void)
   binit();         // buffer cache
   fileinit();      // file table
   ideinit();       // disk
+  ahci_init();     // AHCI SATA controllers
   virtio_blk_init(); // virtio block devices
   netdev_init();   // network interfaces
   socket_init();   // socket table

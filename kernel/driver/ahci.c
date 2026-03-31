@@ -32,11 +32,19 @@
 
 #include "types.h"
 #include "defs.h"
+#include "param.h"
+#include "fs.h"
 #include "spinlock.h"
 #include "sleeplock.h"
+#include "buf.h"
 #include "pci.h"
 #include "blockdev.h"
 #include "stdint.h"
+#include "fcntl.h"
+#include "memlayout.h"
+#include "mmu.h"
+
+extern int ncpu;
 
 
 /* AHCI PCI Class/Subclass */
@@ -72,6 +80,13 @@
 #define AHCI_PxCI       0x38    /* Command Issue */
 #define AHCI_PxSNTF     0x3C    /* SATA Notification */
 #define AHCI_PxFBS      0x40    /* FIS-based Switching Control */
+
+/* Port interrupt status bits */
+#define AHCI_PxIS_TFES  0x40000000  /* Task File Error Status */
+
+/* Driver timeouts for polling paths */
+#define AHCI_TIMEOUT_PORT_IDLE_US   1000000
+#define AHCI_TIMEOUT_CMD_US         1000000
 
 /* CAP bits */
 #define AHCI_CAP_NP         0x0000001F  /* Number of Ports (0-based) */
@@ -234,8 +249,11 @@ struct ahci_recv_fis {
     uint8_t reserved4[96];
 } __attribute__((packed));
 
+struct ahci_softc;
+
 /* Per-port state */
 struct ahci_port {
+    struct ahci_softc *sc;
     int port_num;
     uint32_t sig;       /* Device signature */
     int type;           /* 0=none, 1=SATA, 2=SATAPI, 3=SEMB, 4=PM */
@@ -252,6 +270,16 @@ struct ahci_port {
     /* Device info */
     uint64_t sectors;
     uint32_t sector_size;
+    int dev_id;
+    int online;
+
+    /* Bring-up diagnostics counters */
+    uint32_t io_ok;
+    uint32_t io_err;
+    uint32_t io_timeout;
+    uint32_t io_tfes;
+    uint32_t resets;
+    uint32_t identify_fail;
     
     struct sleeplock lock;
 };
@@ -279,6 +307,396 @@ struct ahci_softc {
 #define MAX_AHCI 4
 static struct ahci_softc ahci_devices[MAX_AHCI];
 static int ahci_count = 0;
+
+static uint32_t ahci_port_read(struct ahci_softc *sc, int port, int reg);
+static void ahci_port_write(struct ahci_softc *sc, int port, int reg, uint32_t val);
+static int ahci_rw(struct buf *b);
+static uint ahci_nblocks(uint dev);
+static struct ahci_port *ahci_find_port_by_dev(uint dev);
+static int ahci_identify_port(struct ahci_softc *sc, struct ahci_port *p);
+static int ahci_submit_rw(struct ahci_port *p, uint64_t lba, void *data,
+                          uint32_t data_len, int is_write);
+static int ahci_wait_cmd_done(struct ahci_softc *sc, int port, uint32_t slot_mask,
+                              int timeout_us, int *timed_out, uint32_t *is_out);
+static int ahci_port_stop(struct ahci_softc *sc, int port);
+static int ahci_port_start(struct ahci_softc *sc, int port);
+static int ahci_port_recover(struct ahci_port *p, const char *why);
+static void ahci_diag_port(struct ahci_softc *sc, int port, const char *tag);
+
+static const struct bdevsw ahci_bdevsw = {
+    .rw = ahci_rw,
+    .nblocks = ahci_nblocks,
+    .name = "ahci"
+};
+
+static struct ahci_port *
+ahci_find_port_by_dev(uint dev)
+{
+    int i;
+    int j;
+
+    for (i = 0; i < ahci_count; i++) {
+        for (j = 0; j < 32; j++) {
+            struct ahci_port *p = &ahci_devices[i].ports[j];
+            if (p->online && p->dev_id == (int)dev)
+                return p;
+        }
+    }
+
+    return 0;
+}
+
+static int
+ahci_rw(struct buf *b)
+{
+    struct ahci_port *p;
+    uint64_t lba;
+    int is_write;
+
+    if (!b)
+        return -1;
+
+    p = ahci_find_port_by_dev(b->dev);
+    if (!p)
+        return -1;
+
+    if (!p->online || p->sectors == 0)
+        return -1;
+
+    if (b->blockno >= (uint)p->sectors)
+        return -1;
+
+    lba = (uint64_t)b->blockno * (BSIZE / 512);
+    if (lba + (BSIZE / 512) > p->sectors)
+        return -1;
+
+    is_write = (b->flags & B_DIRTY) != 0;
+
+    acquiresleep(&p->lock);
+    if (ahci_submit_rw(p, lba, b->data, BSIZE, is_write) < 0) {
+        releasesleep(&p->lock);
+        cprintf("ahci: rw failed dev=%d block=%d write=%d\n",
+                b->dev, b->blockno, is_write);
+        return -1;
+    }
+    p->io_ok++;
+    releasesleep(&p->lock);
+
+    b->flags |= B_VALID;
+    b->flags &= ~B_DIRTY;
+    return 0;
+}
+
+static uint
+ahci_nblocks(uint dev)
+{
+    struct ahci_port *p = ahci_find_port_by_dev(dev);
+    if (!p)
+        return 0;
+
+    return (uint)p->sectors;
+}
+
+static int
+ahci_wait_port_idle(struct ahci_softc *sc, int port, int timeout_us)
+{
+    int waited;
+
+    for (waited = 0; waited < timeout_us; waited += 10) {
+        uint32_t tfd = ahci_port_read(sc, port, AHCI_PxTFD);
+        if ((tfd & (AHCI_PxTFD_STS_BSY | AHCI_PxTFD_STS_DRQ)) == 0)
+            return 0;
+        microdelay(10);
+    }
+
+    return -1;
+}
+
+static int
+ahci_wait_cmd_done(struct ahci_softc *sc, int port, uint32_t slot_mask,
+                   int timeout_us, int *timed_out, uint32_t *is_out)
+{
+    int waited;
+
+    if (timed_out)
+        *timed_out = 0;
+    if (is_out)
+        *is_out = 0;
+
+    for (waited = 0; waited < timeout_us; waited += 10) {
+        uint32_t is = ahci_port_read(sc, port, AHCI_PxIS);
+        uint32_t ci = ahci_port_read(sc, port, AHCI_PxCI);
+
+        if (is_out)
+            *is_out = is;
+
+        if (is & AHCI_PxIS_TFES)
+            return -1;
+        if ((ci & slot_mask) == 0)
+            return 0;
+        microdelay(10);
+    }
+
+    if (timed_out)
+        *timed_out = 1;
+    return -1;
+}
+
+static int
+ahci_port_stop(struct ahci_softc *sc, int port)
+{
+    int i;
+    uint32_t cmd;
+
+    cmd = ahci_port_read(sc, port, AHCI_PxCMD);
+    ahci_port_write(sc, port, AHCI_PxCMD, cmd & ~AHCI_PxCMD_ST);
+
+    for (i = 0; i < 1000; i++) {
+        if ((ahci_port_read(sc, port, AHCI_PxCMD) & AHCI_PxCMD_CR) == 0)
+            break;
+        microdelay(1000);
+    }
+    if (i == 1000)
+        return -1;
+
+    cmd = ahci_port_read(sc, port, AHCI_PxCMD);
+    ahci_port_write(sc, port, AHCI_PxCMD, cmd & ~AHCI_PxCMD_FRE);
+
+    for (i = 0; i < 1000; i++) {
+        if ((ahci_port_read(sc, port, AHCI_PxCMD) & AHCI_PxCMD_FR) == 0)
+            break;
+        microdelay(1000);
+    }
+    if (i == 1000)
+        return -1;
+
+    return 0;
+}
+
+static int
+ahci_port_start(struct ahci_softc *sc, int port)
+{
+    uint32_t cmd;
+
+    cmd = ahci_port_read(sc, port, AHCI_PxCMD);
+    ahci_port_write(sc, port, AHCI_PxCMD, cmd | AHCI_PxCMD_FRE);
+    cmd = ahci_port_read(sc, port, AHCI_PxCMD);
+    ahci_port_write(sc, port, AHCI_PxCMD, cmd | AHCI_PxCMD_ST);
+    return 0;
+}
+
+static int
+ahci_port_recover(struct ahci_port *p, const char *why)
+{
+    struct ahci_softc *sc;
+
+    if (!p || !p->sc)
+        return -1;
+
+    sc = p->sc;
+    p->resets++;
+    cprintf("ahci: port %d recover (%s)\n", p->port_num, why ? why : "unknown");
+    ahci_diag_port(sc, p->port_num, "before-recover");
+
+    if (ahci_port_stop(sc, p->port_num) < 0)
+        return -1;
+
+    ahci_port_write(sc, p->port_num, AHCI_PxCI, 0);
+    ahci_port_write(sc, p->port_num, AHCI_PxSACT, 0);
+    ahci_port_write(sc, p->port_num, AHCI_PxIS, 0xFFFFFFFF);
+    ahci_port_write(sc, p->port_num, AHCI_PxSERR, 0xFFFFFFFF);
+
+    if (ahci_port_start(sc, p->port_num) < 0)
+        return -1;
+
+    if (ahci_wait_port_idle(sc, p->port_num, AHCI_TIMEOUT_PORT_IDLE_US) < 0)
+        return -1;
+
+    ahci_diag_port(sc, p->port_num, "after-recover");
+    return 0;
+}
+
+static void
+ahci_diag_port(struct ahci_softc *sc, int port, const char *tag)
+{
+    if (!DBG_AHCI)
+        return;
+
+    AHCIDBG("ahci:diag port=%d tag=%s cmd=0x%x ci=0x%x sact=0x%x is=0x%x serr=0x%x tfd=0x%x ssts=0x%x\n",
+            port,
+            tag ? tag : "-",
+            ahci_port_read(sc, port, AHCI_PxCMD),
+            ahci_port_read(sc, port, AHCI_PxCI),
+            ahci_port_read(sc, port, AHCI_PxSACT),
+            ahci_port_read(sc, port, AHCI_PxIS),
+            ahci_port_read(sc, port, AHCI_PxSERR),
+            ahci_port_read(sc, port, AHCI_PxTFD),
+            ahci_port_read(sc, port, AHCI_PxSSTS));
+}
+
+static int
+ahci_identify_port(struct ahci_softc *sc, struct ahci_port *p)
+{
+    uint16_t *id;
+    uint64_t sectors;
+    uint32_t ci;
+    int timed_out;
+    uint32_t is;
+
+    if (!sc || !p || !p->cmd_list || !p->cmd_tbl[0])
+        return -1;
+
+    id = (uint16_t *)kalloc();
+    if (!id)
+        return -1;
+    memset(id, 0, PGSIZE);
+
+    if (ahci_wait_port_idle(sc, p->port_num, AHCI_TIMEOUT_PORT_IDLE_US) < 0) {
+        cprintf("ahci: port %d busy before IDENTIFY\n", p->port_num);
+        p->identify_fail++;
+        kfree((char *)id);
+        return -1;
+    }
+
+    memset(&p->cmd_list[0], 0, sizeof(p->cmd_list[0]));
+    memset(p->cmd_tbl[0], 0, sizeof(*p->cmd_tbl[0]));
+
+    p->cmd_list[0].flags = AHCI_CMD_FIS_LEN(sizeof(struct fis_reg_h2d) / 4);
+    p->cmd_list[0].prdtl = 1;
+    p->cmd_list[0].ctba = V2P(p->cmd_tbl[0]);
+    p->cmd_list[0].ctbau = 0;
+
+    p->cmd_tbl[0]->prdt[0].dba = V2P(id);
+    p->cmd_tbl[0]->prdt[0].dbau = 0;
+    p->cmd_tbl[0]->prdt[0].dbc = (512 - 1) | AHCI_PRDT_IOC;
+
+    struct fis_reg_h2d *fis = (struct fis_reg_h2d *)p->cmd_tbl[0]->cfis;
+    memset(fis, 0, sizeof(*fis));
+    fis->type = FIS_TYPE_REG_H2D;
+    fis->flags = 1 << 7;  /* Command */
+    fis->command = ATA_CMD_IDENTIFY;
+    fis->device = 0;
+    fis->countl = 1;
+
+    ahci_port_write(sc, p->port_num, AHCI_PxIS, 0xFFFFFFFF);
+
+    ci = ahci_port_read(sc, p->port_num, AHCI_PxCI);
+    ahci_port_write(sc, p->port_num, AHCI_PxCI, ci | 1);
+
+    if (ahci_wait_cmd_done(sc, p->port_num, 1, AHCI_TIMEOUT_CMD_US,
+                           &timed_out, &is) < 0) {
+        p->identify_fail++;
+        if (timed_out)
+            cprintf("ahci: port %d IDENTIFY timeout\n", p->port_num);
+        else
+            cprintf("ahci: port %d IDENTIFY taskfile error is=0x%x\n", p->port_num, is);
+        ahci_diag_port(sc, p->port_num, "identify-fail");
+        ahci_port_recover(p, "identify");
+        kfree((char *)id);
+        return -1;
+    }
+
+    sectors = ((uint64_t)id[103] << 48) |
+              ((uint64_t)id[102] << 32) |
+              ((uint64_t)id[101] << 16) |
+              ((uint64_t)id[100]);
+    if (sectors == 0) {
+        sectors = ((uint64_t)id[61] << 16) | id[60];
+    }
+
+    p->sectors = sectors;
+    p->sector_size = 512;
+
+    cprintf("ahci: port %d identify sectors=%d sector_size=%d\n",
+            p->port_num, (uint32_t)p->sectors, p->sector_size);
+
+    kfree((char *)id);
+    return p->sectors > 0 ? 0 : -1;
+}
+
+static int
+ahci_submit_rw(struct ahci_port *p, uint64_t lba, void *data,
+               uint32_t data_len, int is_write)
+{
+    struct ahci_softc *sc;
+    struct fis_reg_h2d *fis;
+    uint32_t ci;
+    int timed_out;
+    uint16_t nsectors;
+    uint32_t is;
+
+    if (!p || !p->sc || !p->cmd_list || !p->cmd_tbl[0] || !data)
+        return -1;
+    if (data_len == 0 || data_len > BSIZE)
+        return -1;
+    if ((data_len % 512) != 0)
+        return -1;
+
+    sc = p->sc;
+    nsectors = (uint16_t)(data_len / 512);
+
+    if (ahci_wait_port_idle(sc, p->port_num, AHCI_TIMEOUT_PORT_IDLE_US) < 0)
+        return -1;
+
+    AHCIDBG("ahci: cmd port=%d dev=%d lba=%d sectors=%d write=%d\n",
+            p->port_num, p->dev_id, (uint32_t)lba, (int)nsectors, is_write);
+
+    memset(&p->cmd_list[0], 0, sizeof(p->cmd_list[0]));
+    memset(p->cmd_tbl[0], 0, sizeof(*p->cmd_tbl[0]));
+
+    p->cmd_list[0].flags = AHCI_CMD_FIS_LEN(sizeof(struct fis_reg_h2d) / 4);
+    if (is_write)
+        p->cmd_list[0].flags |= AHCI_CMD_WRITE;
+    p->cmd_list[0].prdtl = 1;
+    p->cmd_list[0].ctba = V2P(p->cmd_tbl[0]);
+    p->cmd_list[0].ctbau = 0;
+
+    p->cmd_tbl[0]->prdt[0].dba = V2P(data);
+    p->cmd_tbl[0]->prdt[0].dbau = 0;
+    p->cmd_tbl[0]->prdt[0].dbc = (data_len - 1) | AHCI_PRDT_IOC;
+
+    fis = (struct fis_reg_h2d *)p->cmd_tbl[0]->cfis;
+    memset(fis, 0, sizeof(*fis));
+    fis->type = FIS_TYPE_REG_H2D;
+    fis->flags = 1 << 7;  /* Command */
+    fis->command = is_write ? ATA_CMD_WRITE_DMA_EX : ATA_CMD_READ_DMA_EX;
+    fis->device = 1 << 6;  /* LBA mode */
+    fis->lba0 = (uint8_t)(lba & 0xFF);
+    fis->lba1 = (uint8_t)((lba >> 8) & 0xFF);
+    fis->lba2 = (uint8_t)((lba >> 16) & 0xFF);
+    fis->lba3 = (uint8_t)((lba >> 24) & 0xFF);
+    fis->lba4 = (uint8_t)((lba >> 32) & 0xFF);
+    fis->lba5 = (uint8_t)((lba >> 40) & 0xFF);
+    fis->countl = (uint8_t)(nsectors & 0xFF);
+    fis->counth = (uint8_t)((nsectors >> 8) & 0xFF);
+
+    ahci_port_write(sc, p->port_num, AHCI_PxIS, 0xFFFFFFFF);
+    ahci_port_write(sc, p->port_num, AHCI_PxSERR, 0xFFFFFFFF);
+
+    ci = ahci_port_read(sc, p->port_num, AHCI_PxCI);
+    ahci_port_write(sc, p->port_num, AHCI_PxCI, ci | 1);
+
+    if (ahci_wait_cmd_done(sc, p->port_num, 1, AHCI_TIMEOUT_CMD_US,
+                           &timed_out, &is) == 0)
+        return 0;
+
+    p->io_err++;
+    if (timed_out) {
+        p->io_timeout++;
+        cprintf("ahci: port %d command timeout write=%d lba=%d\n",
+                p->port_num, is_write, (uint32_t)lba);
+        ahci_diag_port(sc, p->port_num, "cmd-timeout");
+        ahci_port_recover(p, "cmd-timeout");
+        return -1;
+    }
+
+    p->io_tfes++;
+    cprintf("ahci: port %d taskfile error is=0x%x write=%d lba=%d\n",
+            p->port_num, is, is_write, (uint32_t)lba);
+    ahci_diag_port(sc, p->port_num, "cmd-tfes");
+    ahci_port_recover(p, "cmd-tfes");
+    return -1;
+}
 
 /*
  * Read HBA register
@@ -374,7 +792,16 @@ ahci_port_init(struct ahci_softc *sc, int port)
 {
     struct ahci_port *p = &sc->ports[port];
     
+    p->sc = sc;
     p->port_num = port;
+    p->dev_id = -1;
+    p->online = 0;
+    p->io_ok = 0;
+    p->io_err = 0;
+    p->io_timeout = 0;
+    p->io_tfes = 0;
+    p->resets = 0;
+    p->identify_fail = 0;
     initsleeplock(&p->lock, "ahci_port");
     
     /* Check if device present */
@@ -440,6 +867,28 @@ ahci_port_init(struct ahci_softc *sc, int port)
     p->type = ahci_detect_device_type(p->sig);
     
     cprintf("ahci: port %d: type=%d sig=0x%x\n", port, p->type, p->sig);
+
+    if (p->type == AHCI_PORT_TYPE_SATA) {
+        int dev_id = HD_DISK_DEV(port);
+        if (dev_id >= 0 && dev_id < NDEV) {
+            if (ahci_identify_port(sc, p) == 0) {
+                if (bdev_register(dev_id, &ahci_bdevsw) == 0) {
+                    p->dev_id = dev_id;
+                    p->online = 1;
+                    if (p->sectors > 0)
+                        bdev_set_nblocks(dev_id, (uint)p->sectors);
+                    cprintf("ahci: port %d registered as dev=%d blocks=%d\n",
+                            port, dev_id, (uint32_t)p->sectors);
+                } else {
+                    cprintf("ahci: port %d failed bdev_register dev=%d\n", port, dev_id);
+                }
+            } else {
+                cprintf("ahci: port %d identify failed\n", port);
+            }
+        } else {
+            cprintf("ahci: port %d has no valid dev slot\n", port);
+        }
+    }
     
     return 0;
 }

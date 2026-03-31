@@ -66,10 +66,15 @@ void            panic(char*) __attribute__((noreturn));
 #define DBG_IDE 1
 #endif
 
+#ifndef DBG_AHCI
+#define DBG_AHCI 0
+#endif
+
 #define VFSDBG(...)   do { if(DBG_VFS) cprintf(__VA_ARGS__); } while(0)
 #define MOUNTDBG(...) do { if(DBG_MOUNT) cprintf(__VA_ARGS__); } while(0)
 #define EXT2DBG(...)  do { if(DBG_EXT2) cprintf(__VA_ARGS__); } while(0)
 #define IDEDBG(...)   do { if(DBG_IDE) cprintf(__VA_ARGS__); } while(0)
+#define AHCIDBG(...)  do { if(DBG_AHCI) cprintf(__VA_ARGS__); } while(0)
 
 // exec.c
 int             exec(char*, char**);
@@ -134,6 +139,9 @@ void            vfs_procfs_init(struct vfs*);
 void            ideinit(void);
 void            ideintr(void);
 void            iderw(struct buf*);
+
+// ahci.c
+void            ahci_init(void);
 
 // ioapic.c
 void            ioapicenable(int irq, int cpu);
