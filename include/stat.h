@@ -22,14 +22,14 @@
 #define M_IXOTH 00001
 
 struct stat {
-  short type;  // Type of file
-  int dev;     // File system's disk device
-  uint ino;    // Inode number
-  short major; // Major device number (T_DEV)
-  short minor; // Minor device number (T_DEV)
-  short nlink; // Number of links to file
-  short uid;   // Owner user ID
-  short gid;   // Owner group ID
-  ushort mode; // Permission bits
-  uint size;   // Size of file in bytes
+  short st_type;   // Type of file (auxv6: T_FILE, T_DIR, T_DEV)
+  int st_dev;      // File system's disk device
+  uint st_ino;     // Inode number
+  short st_major;  // Major device number (T_DEV)
+  short st_minor;  // Minor device number (T_DEV)
+  short st_nlink;  // Number of links to file
+  short st_uid;    // Owner user ID
+  short st_gid;    // Owner group ID
+  ushort st_mode;  // File type and permission bits
+  uint st_size;    // Size of file in bytes
 };

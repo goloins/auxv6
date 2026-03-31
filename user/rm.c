@@ -23,7 +23,7 @@ rm_path(char *path, int recursive)
   if(stat(path, &st) < 0)
     return -1;
 
-  if(st.type != T_DIR)
+  if(st.st_type != T_DIR)
     return unlink(path);
 
   if(!recursive)

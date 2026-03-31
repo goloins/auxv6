@@ -1825,23 +1825,23 @@ ext2_stat(struct inode *ip, struct stat *st)
   if(ext2_read_disk_inode(data, ip->inum, &dip) < 0)
     return -1;
 
-  st->type = ext2_mode_to_type(dip.i_mode);
-  st->dev = ip->dev;
-  st->ino = ip->inum;
+  st->st_type = ext2_mode_to_type(dip.i_mode);
+  st->st_dev = ip->dev;
+  st->st_ino = ip->inum;
   major = 0;
   minor = 0;
-  if(st->type == T_DEV)
+  if(st->st_type == T_DEV)
     ext2_decode_dev(dip.i_block[0], &major, &minor);
-  st->major = major;
-  st->minor = minor;
-  st->nlink = dip.i_links_count;
-  st->uid = dip.i_uid;
-  st->gid = dip.i_gid;
-  if(st->type == T_DEV)
-    st->mode = (dip.i_mode & M_IFMT) | (dip.i_mode & 07777);
+  st->st_major = major;
+  st->st_minor = minor;
+  st->st_nlink = dip.i_links_count;
+  st->st_uid = dip.i_uid;
+  st->st_gid = dip.i_gid;
+  if(st->st_type == T_DEV)
+    st->st_mode = (dip.i_mode & M_IFMT) | (dip.i_mode & 07777);
   else
-    st->mode = dip.i_mode & 07777;
-  st->size = dip.i_size;
+    st->st_mode = dip.i_mode & 07777;
+  st->st_size = dip.i_size;
   return 0;
 }
 

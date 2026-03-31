@@ -1302,9 +1302,9 @@ wakeup(void *chan)
 // Process won't exit until it returns
 // to user space (see trap in trap.c).
 int
-kill(int pid)
+kill(int pid, int sig)
 {
-  return proc_kill_with_signal(pid, SIGKILL);
+  return proc_kill_with_signal(pid, sig);
 }
 
 int

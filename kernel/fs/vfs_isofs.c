@@ -301,16 +301,16 @@ isofs_stat(struct vnode *vp, struct stat *st)
 {
     struct isofs_inode *ip = vp->data;
     
-    st->dev = ip->mp->dev;
-    st->ino = ip->extent;
-    st->type = (ip->flags & ISO_FLAG_DIRECTORY) ? T_DIR : T_FILE;
-    st->nlink = 1;
-    st->size = ip->size;
+    st->st_dev = ip->mp->dev;
+    st->st_ino = ip->extent;
+    st->st_type = (ip->flags & ISO_FLAG_DIRECTORY) ? T_DIR : T_FILE;
+    st->st_nlink = 1;
+    st->st_size = ip->size;
     
     /* ISO 9660 doesn't have traditional permissions */
-    st->mode = (ip->flags & ISO_FLAG_DIRECTORY) ? 0555 : 0444;
-    st->uid = 0;
-    st->gid = 0;
+    st->st_mode = (ip->flags & ISO_FLAG_DIRECTORY) ? 0555 : 0444;
+    st->st_uid = 0;
+    st->st_gid = 0;
     
     return 0;
 }

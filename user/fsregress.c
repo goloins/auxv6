@@ -64,7 +64,7 @@ scan_dir(struct scan_target *t, int rounds, int *total_entries)
       exit();
     }
 
-    if(fstat(fd, &st) < 0 || st.type != T_DIR){
+    if(fstat(fd, &st) < 0 || st.st_type != T_DIR){
       printf(1, "fsregress: FAIL not a dir %s\n", t->path);
       close(fd);
       exit();
@@ -171,7 +171,7 @@ check_mnt_link_cycle(void)
     printf(1, "fsregress: FAIL stat link pair\n");
     exit();
   }
-  if(sa.ino != sb.ino || sa.nlink < 2 || sb.nlink < 2){
+  if(sa.st_ino != sb.st_ino || sa.st_nlink < 2 || sb.st_nlink < 2){
     printf(1, "fsregress: FAIL bad link metadata\n");
     exit();
   }
@@ -439,7 +439,7 @@ check_mnt_dir_rename_cycle(void)
     printf(1, "fsregress: FAIL stale src dir after rename %s\n", src);
     exit();
   }
-  if(stat(dst, &st) < 0 || st.type != T_DIR){
+  if(stat(dst, &st) < 0 || st.st_type != T_DIR){
     printf(1, "fsregress: FAIL missing dst dir after rename %s\n", dst);
     exit();
   }
@@ -1074,7 +1074,7 @@ check_mnt_churn_cycle(void)
       printf(1, "fsregress: FAIL churn stat iter=%d\n", i);
       exit();
     }
-    if(s1.ino != s2.ino || s1.nlink < 2){
+    if(s1.st_ino != s2.st_ino || s1.st_nlink < 2){
       printf(1, "fsregress: FAIL churn metadata iter=%d\n", i);
       exit();
     }
@@ -1207,12 +1207,12 @@ check_mnt_devnode_cycle(void)
     printf(1, "fsregress: FAIL stat dev %s\n", cpath);
     exit();
   }
-  if(st.type != T_DEV){
+  if(st.st_type != T_DEV){
     printf(1, "fsregress: FAIL wrong type dev %s\n", cpath);
     exit();
   }
-  if((st.mode & M_IFMT) != M_IFCHR || st.major != 1 || st.minor != 7){
-    printf(1, "fsregress: FAIL bad dev ids major=%d minor=%d\n", st.major, st.minor);
+  if((st.st_mode & M_IFMT) != M_IFCHR || st.st_major != 1 || st.st_minor != 7){
+    printf(1, "fsregress: FAIL bad dev ids major=%d minor=%d\n", st.st_major, st.st_minor);
     exit();
   }
 
@@ -1232,8 +1232,8 @@ check_mnt_devnode_cycle(void)
       printf(1, "fsregress: FAIL stat block dev %s\n", bpath);
       exit();
     }
-    if(st.type != T_DEV || (st.mode & M_IFMT) != M_IFBLK || st.major != 2 || st.minor != dev){
-      printf(1, "fsregress: FAIL bad block dev metadata major=%d minor=%d mode=%x\n", st.major, st.minor, st.mode);
+    if(st.st_type != T_DEV || (st.st_mode & M_IFMT) != M_IFBLK || st.st_major != 2 || st.st_minor != dev){
+      printf(1, "fsregress: FAIL bad block dev metadata major=%d minor=%d mode=%x\n", st.st_major, st.st_minor, st.st_mode);
       exit();
     }
     fd = open(bpath, O_RDONLY);

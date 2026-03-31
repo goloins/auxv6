@@ -70,3 +70,4 @@ include/rootfs_config.h
 .ext2root/
 .fatroot/
 virtio_boot.log
+ports/

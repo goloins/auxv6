@@ -17,9 +17,9 @@ ensure_node(const char *path, int mode, short major, short minor)
   fd = open(path, O_RDONLY);
   if(fd >= 0){
     close(fd);
-    if(stat(path, &st) == 0 && st.type == T_DEV &&
-       st.major == major && st.minor == minor &&
-       (st.mode & M_IFMT) == (mode & M_IFMT))
+    if(stat(path, &st) == 0 && st.st_type == T_DEV &&
+       st.st_major == major && st.st_minor == minor &&
+       (st.st_mode & M_IFMT) == (mode & M_IFMT))
       return;
     unlink(path);
   }

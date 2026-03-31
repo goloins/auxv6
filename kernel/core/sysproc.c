@@ -102,10 +102,11 @@ int
 sys_kill(void)
 {
   int pid;
+  int sig;
 
-  if(argint(0, &pid) < 0)
+  if(argint(0, &pid) < 0 || argint(1, &sig) < 0)
     return -1;
-  return kill(pid);
+  return kill(pid, sig);
 }
 
 int

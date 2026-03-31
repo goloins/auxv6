@@ -75,4 +75,18 @@ struct sigframe {
   uchar sf_trampoline[8];
 };
 
+/* POSIX sigset manipulation — inline, locale-safe, no header dependency */
+static inline void sigemptyset(sigset_t *s)              { *s = 0; }
+static inline void sigfillset(sigset_t *s)               { *s = ~0U; }
+static inline void sigaddset(sigset_t *s, int sig)       { *s |= SIGBIT(sig); }
+static inline void sigdelset(sigset_t *s, int sig)       { *s &= ~SIGBIT(sig); }
+static inline int  sigismember(const sigset_t *s, int sig) { return !!(*s & SIGBIT(sig)); }
+
+/* sigprocmask is declared in unistd.h / user.h; prototype here for kernel use */
+#ifndef KERNEL
+int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
+int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
+int sigsuspend(const sigset_t *mask);
+#endif
+
 #endif

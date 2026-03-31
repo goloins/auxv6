@@ -191,7 +191,7 @@ tags: $(OBJS) kernel/boot/entryother.S user/_init
 kernel/core/vectors.S: tools/vectors.pl
 	./tools/vectors.pl > kernel/core/vectors.S
 
-ULIB = user/ulib.o user/usys.o user/printf.o user/umalloc.o user/resolve.o
+ULIB = user/ulib.o user/usys.o user/printf.o user/umalloc.o user/resolve.o user/posix.o
 
 # sh is close to xv6 MAXFILE; compile with -Os to keep the binary under limit.
 user/sh.o: user/sh.c

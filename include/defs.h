@@ -200,7 +200,7 @@ int             cpuid(void);
 void            exit(void);
 int             fork(void);
 int             growproc(int);
-int             kill(int);
+int             kill(int pid, int sig);
 int             proc_kill_with_signal(int pid, int signo);
 int             proc_getppid(void);
 int             proc_getpgrp(void);

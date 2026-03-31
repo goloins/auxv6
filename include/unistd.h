@@ -110,6 +110,7 @@ extern int optopt;
 
 /* Process creation and control */
 pid_t   fork(void);
+#define vfork fork          /* no vfork in auxv6; fork is safe here */
 int     execve(const char *path, char *const argv[], char *const envp[]);
 int     execv(const char *path, char *const argv[]);
 int     execvp(const char *file, char *const argv[]);
@@ -203,5 +204,39 @@ int     getopt(int argc, char *const argv[], const char *optstring);
 int     nice(int inc);
 unsigned int    swab(const void *from, void *to, ssize_t n);
 int     chroot(const char *path);
+
+/*
+ * Signals — declared here for programs that include unistd.h only.
+ * Full declarations live in signal.h.
+ */
+#ifndef _SIGNAL_H
+#include "signal.h"
+#endif
+
+/* kill() is declared in user.h; mirror it here for POSIX consumers */
+int     kill(pid_t pid, int sig);
+
+/* killpg — send signal to all members of a process group */
+static inline int killpg(int pgid, int sig) {
+  return kill(-pgid, sig);
+}
+
+/*
+ * tcsetpgrp / tcgetpgrp — POSIX 2-argument wrappers over the auxv6
+ * 1-argument versions that ignore the fd (global tty pgrp).
+ */
+#ifndef _USER_H   /* avoid double-declaration when user.h pulled in first */
+int     tcsetpgrp(int pgid);    /* auxv6 native */
+int     tcgetpgrp(void);        /* auxv6 native */
+#endif
+
+static inline int tcsetpgrp_posix(int fd, pid_t pgrp) { (void)fd; return tcsetpgrp((int)pgrp); }
+static inline pid_t tcgetpgrp_posix(int fd)            { (void)fd; return (pid_t)tcgetpgrp(); }
+
+/* For ported code that uses the standard names via macro override */
+#ifdef _POSIX_COMPAT_TC
+# define tcsetpgrp(fd, pgrp)  tcsetpgrp_posix((fd), (pgrp))
+# define tcgetpgrp(fd)        tcgetpgrp_posix((fd))
+#endif
 
 #endif /* _UNISTD_H */

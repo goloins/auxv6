@@ -133,7 +133,7 @@ check_growth_and_truncate(void)
 
   if(stat(path, &st) < 0)
     fail("stat", path);
-  if(st.size != sizeof(writebuf))
+  if(st.st_size != sizeof(writebuf))
     fail("stat size", path);
 
   fd = open(path, O_RDONLY);
@@ -166,7 +166,7 @@ check_growth_and_truncate(void)
 
   if(stat(path, &st) < 0)
     fail("post-truncate stat", path);
-  if(st.size != 0)
+  if(st.st_size != 0)
     fail("post-truncate size", path);
 
   if(unlink(path) < 0)

@@ -211,9 +211,9 @@ ls(char *path)
     return;
   }
 
-  switch(st.type){
+  switch(st.st_type){
   case T_FILE:
-    printf(1, "%s %d %s %s %s %d%d%d%d\n", fmtname(path), st.type, uid_to_name(st.uid), gid_to_name(st.gid), fmtsize(st.size), (st.mode>>9)&7, (st.mode>>6)&7, (st.mode>>3)&7, st.mode&7);
+    printf(1, "%s %d %s %s %s %d%d%d%d\n", fmtname(path), st.st_type, uid_to_name(st.st_uid), gid_to_name(st.st_gid), fmtsize(st.st_size), (st.st_mode>>9)&7, (st.st_mode>>6)&7, (st.st_mode>>3)&7, st.st_mode&7);
     break;
 
   case T_DIR:
@@ -243,7 +243,7 @@ ls(char *path)
           printf(1, "ls: cannot stat %s\n", buf);
           continue;
         }
-        printf(1, "%s %d %s %s %s %d%d%d%d\n", fmtname(buf), st.type, uid_to_name(st.uid), gid_to_name(st.gid), fmtsize(st.size), (st.mode>>9)&7, (st.mode>>6)&7, (st.mode>>3)&7, st.mode&7);
+        printf(1, "%s %d %s %s %s %d%d%d%d\n", fmtname(buf), st.st_type, uid_to_name(st.st_uid), gid_to_name(st.st_gid), fmtsize(st.st_size), (st.st_mode>>9)&7, (st.st_mode>>6)&7, (st.st_mode>>3)&7, st.st_mode&7);
       }
     }
     break;

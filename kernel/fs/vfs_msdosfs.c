@@ -1472,16 +1472,16 @@ msdos_stat(struct inode *ip, struct stat *st)
 {
   if(ip == 0 || st == 0)
     return -1;
-  st->type = ip->type;
-  st->dev = ip->dev;
-  st->ino = ip->inum;
-  st->major = ip->major;
-  st->minor = ip->minor;
-  st->nlink = ip->nlink;
-  st->uid = ip->uid;
-  st->gid = ip->gid;
-  st->mode = ip->mode;
-  st->size = ip->size;
+  st->st_type = ip->type;
+  st->st_dev = ip->dev;
+  st->st_ino = ip->inum;
+  st->st_major = ip->major;
+  st->st_minor = ip->minor;
+  st->st_nlink = ip->nlink;
+  st->st_uid = ip->uid;
+  st->st_gid = ip->gid;
+  st->st_mode = ip->mode;
+  st->st_size = ip->size;
   return 0;
 }
 
