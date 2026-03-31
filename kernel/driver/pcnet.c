@@ -586,7 +586,7 @@ pcnet_probe(struct pci_dev *pci)
 void
 pcnet_init(void)
 {
-    cprintf("pcnet: initializing driver\n");
+    BOOTDBG("pcnet: initializing driver\n");
     
     /* Search for PCNET PCI devices */
     for (int i = 0; i < pci_device_count(); i++) {

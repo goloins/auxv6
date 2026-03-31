@@ -328,7 +328,7 @@ virtio_net_read_mac(struct virtio_net_softc *sc)
         sc->mac[i] = virtio_config_read8(&sc->vdev, i);
     }
     
-    cprintf("virtio_net: MAC %x:%x:%x:%x:%x:%x\n",
+    BOOTDBG("virtio_net: MAC %x:%x:%x:%x:%x:%x\n",
             sc->mac[0], sc->mac[1], sc->mac[2],
             sc->mac[3], sc->mac[4], sc->mac[5]);
 }
@@ -447,7 +447,7 @@ virtio_net_init(void)
 {
     int found;
 
-    cprintf("virtio_net: initializing driver\n");
+    BOOTDBG("virtio_net: initializing driver\n");
     found = 0;
 
     /* Look for virtio-net PCI devices */

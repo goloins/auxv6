@@ -248,7 +248,7 @@ pci_probe_function(uint8_t bus, uint8_t slot, uint8_t func)
         }
     }
     
-    cprintf("pci %d:%d.%d: %x:%x class %x:%x irq %d\n",
+    BOOTDBG("pci %d:%d.%d: %x:%x class %x:%x irq %d\n",
             bus, slot, func, vendor, device,
             dev->class_code, dev->subclass, dev->irq_line);
     
@@ -284,7 +284,7 @@ pci_enumerate(void)
     
     release(&pci_lock);
     
-    cprintf("pci: found %d devices\n", pci_ndevices);
+    BOOTDBG("pci: found %d devices\n", pci_ndevices);
     return pci_ndevices;
 }
 
@@ -298,7 +298,7 @@ pci_init(void)
     pci_ndevices = 0;
     pci_ndrivers = 0;
     
-    cprintf("pci: initializing PCI bus driver\n");
+    BOOTDBG("pci: initializing PCI bus driver\n");
     
     pci_enumerate();
     

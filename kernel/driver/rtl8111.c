@@ -477,7 +477,7 @@ rtl8111_probe(struct pci_dev *dev)
     
     sc->regs = (volatile uint8_t *)regs;
     
-    cprintf("rtl8111: found %x at %d:%d.%d irq=%d regs=%p\n",
+    BOOTDBG("rtl8111: found %x at %d:%d.%d irq=%d regs=%p\n",
             dev->device_id, dev->bus, dev->slot, dev->func,
             dev->irq_line, regs);
     
@@ -541,7 +541,7 @@ rtl8111_init(void)
     int i;
     struct pci_dev *dev;
 
-    cprintf("rtl8111: initializing driver\n");
+    BOOTDBG("rtl8111: initializing driver\n");
     for (i = 0; i < pci_device_count(); i++) {
         dev = pci_get_device(i);
         if (rtl8111_match(dev))

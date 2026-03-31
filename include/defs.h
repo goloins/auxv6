@@ -50,25 +50,37 @@ int             console_get_termios(struct termios *tp);
 int             console_set_termios(const struct termios *tp, int optional_actions);
 void            panic(char*) __attribute__((noreturn));
 
+// Master debug flag - set to 1 to enable boot diagnostics and subsystem logging.
+// Controlled via -DAUXV6_DEBUG=1 or by editing here.
+#ifndef AUXV6_DEBUG
+#define AUXV6_DEBUG 0
+#endif
+
 // Debug logging toggles (set to 0 to compile out noisy diagnostics).
+// By default these follow AUXV6_DEBUG, but can be overridden individually.
 #ifndef DBG_VFS
-#define DBG_VFS 1
+#define DBG_VFS AUXV6_DEBUG
 #endif
 
 #ifndef DBG_MOUNT
-#define DBG_MOUNT 1
+#define DBG_MOUNT AUXV6_DEBUG
 #endif
 
 #ifndef DBG_EXT2
-#define DBG_EXT2 1
+#define DBG_EXT2 AUXV6_DEBUG
 #endif
 
 #ifndef DBG_IDE
-#define DBG_IDE 1
+#define DBG_IDE AUXV6_DEBUG
 #endif
 
 #ifndef DBG_AHCI
 #define DBG_AHCI 0
+#endif
+
+// Boot-time verbosity flag - gates PCI discovery, device enumeration details, etc.
+#ifndef AUXV6_BOOTINFO
+#define AUXV6_BOOTINFO AUXV6_DEBUG
 #endif
 
 #define VFSDBG(...)   do { if(DBG_VFS) cprintf(__VA_ARGS__); } while(0)
@@ -76,6 +88,9 @@ void            panic(char*) __attribute__((noreturn));
 #define EXT2DBG(...)  do { if(DBG_EXT2) cprintf(__VA_ARGS__); } while(0)
 #define IDEDBG(...)   do { if(DBG_IDE) cprintf(__VA_ARGS__); } while(0)
 #define AHCIDBG(...)  do { if(DBG_AHCI) cprintf(__VA_ARGS__); } while(0)
+
+// Boot information macro - for verbose discovery and enumeration details
+#define BOOTDBG(...)  do { if(AUXV6_BOOTINFO) cprintf(__VA_ARGS__); } while(0)
 
 // exec.c
 int             exec(char*, char**);

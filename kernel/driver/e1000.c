@@ -569,7 +569,7 @@ e1000_probe(struct pci_dev *pci)
 void
 e1000_init(void)
 {
-    cprintf("e1000: initializing driver\n");
+    BOOTDBG("e1000: initializing driver\n");
     
     /* Search for E1000 PCI devices */
     for (int i = 0; i < pci_device_count(); i++) {

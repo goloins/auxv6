@@ -56,7 +56,7 @@ irq_register(int irq, irq_handler_t handler, void *arg, const char *name)
   irq_handlers[irq].name = name;
   release(&irq_lock);
   
-  cprintf("irq: registered IRQ %d for %s\n", irq, name);
+  BOOTDBG("irq: registered IRQ %d for %s\n", irq, name);
   return 0;
 }
 

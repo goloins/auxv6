@@ -122,7 +122,7 @@ i226_probe(struct pci_dev *dev)
     sc->status = i226_read(sc, I226_STATUS);
     i226_read_mac(sc);
 
-    cprintf("i226: found at %d:%d.%d devid=%x rev=%d irq=%d ctrl=%x status=%x\n",
+    BOOTDBG("i226: found at %d:%d.%d devid=%x rev=%d irq=%d ctrl=%x status=%x\n",
             dev->bus, dev->slot, dev->func,
             dev->device_id, dev->revision, dev->irq_line,
             i226_read(sc, I226_CTRL), sc->status);
@@ -158,7 +158,7 @@ i226_init(void)
     int i;
     struct pci_dev *dev;
 
-    cprintf("i226: initializing driver stub\n");
+    BOOTDBG("i226: initializing driver stub\n");
 
     for (i = 0; i < pci_device_count(); i++) {
         dev = pci_get_device(i);

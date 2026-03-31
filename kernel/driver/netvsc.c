@@ -198,8 +198,8 @@ netvsc_generate_mac(struct netvsc_softc *sc, int unit)
 void
 netvsc_init(void)
 {
-    cprintf("netvsc: initializing Hyper-V network driver (stub)\n");
-    cprintf("netvsc: requires VMBus infrastructure (not implemented)\n");
+    BOOTDBG("netvsc: initializing Hyper-V network driver (stub)\n");
+    BOOTDBG("netvsc: requires VMBus infrastructure (not implemented)\n");
     
     /*
      * Real implementation would:

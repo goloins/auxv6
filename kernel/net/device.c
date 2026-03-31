@@ -53,7 +53,7 @@ if_register(struct ifnet *ifp)
 	if_list = ifp;
 	release(&if_lock);
 
-	cprintf("net: attached %s (if%d)\n", ifp->if_xname, ifp->if_index);
+	BOOTDBG("net: attached %s (if%d)\n", ifp->if_xname, ifp->if_index);
 	return 0;
 }
 

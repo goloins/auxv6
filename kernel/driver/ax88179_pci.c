@@ -121,7 +121,7 @@ ax88179_probe(struct pci_dev *dev)
     sc->status = ax88179_read(sc, AX88179_STATUS);
     ax88179_read_mac(sc);
 
-    cprintf("ax88179: found at %d:%d.%d vendor=%x devid=%x rev=%d irq=%d ctrl=%x status=%x\n",
+    BOOTDBG("ax88179: found at %d:%d.%d vendor=%x devid=%x rev=%d irq=%d ctrl=%x status=%x\n",
             dev->bus, dev->slot, dev->func,
             dev->vendor_id, dev->device_id, dev->revision, dev->irq_line,
             ax88179_read(sc, AX88179_CTRL), sc->status);
@@ -157,7 +157,7 @@ ax88179_pci_init(void)
     int i;
     struct pci_dev *dev;
 
-    cprintf("ax88179: initializing PCI driver stub\n");
+    BOOTDBG("ax88179: initializing PCI driver stub\n");
 
     for (i = 0; i < pci_device_count(); i++) {
         dev = pci_get_device(i);

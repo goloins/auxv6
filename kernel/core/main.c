@@ -59,7 +59,7 @@ mpenter(void)
 static void
 mpmain(void)
 {
-  cprintf("cpu%d: starting %d\n", cpuid(), cpuid());
+  BOOTDBG("cpu%d: starting %d\n", cpuid(), cpuid());
   idtinit();       // load idt register
   xchg(&(mycpu()->started), 1); // tell startothers() we're up
   scheduler();     // start running processes

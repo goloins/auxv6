@@ -148,7 +148,7 @@ loop_init(void)
   }
 
   loop_inited = 1;
-  cprintf("loop: initialized %d loop devices (minor %d-%d)\n",
+  BOOTDBG("loop: initialized %d loop devices (minor %d-%d)\n",
           NLOOP, LOOP_DEV_BASE, LOOP_DEV_BASE + NLOOP - 1);
 }
 

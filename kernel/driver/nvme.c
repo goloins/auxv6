@@ -833,7 +833,7 @@ nvme_probe(struct pci_dev *pci)
 void
 nvme_init(void)
 {
-    cprintf("nvme: initializing driver\n");
+    BOOTDBG("nvme: initializing driver\n");
     
     /* Search for NVMe PCI devices */
     for (int i = 0; i < pci_device_count(); i++) {

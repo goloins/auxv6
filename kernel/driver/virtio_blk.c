@@ -447,7 +447,7 @@ virtio_blk_probe(struct pci_dev *pci)
 void
 virtio_blk_init(void)
 {
-    cprintf("virtio_blk: initializing driver\n");
+    BOOTDBG("virtio_blk: initializing driver\n");
     
     /* Look for virtio-blk PCI devices */
     for (int i = 0; i < pci_device_count(); i++) {

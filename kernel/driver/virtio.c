@@ -189,7 +189,7 @@ virtio_probe_pci(struct pci_dev *pci, struct virtio_dev *vdev)
     /* Reset device */
     virtio_reset(vdev);
     
-    cprintf("virtio: found device type %d at %d:%d.%d io=0x%x irq=%d\n",
+    BOOTDBG("virtio: found device type %d at %d:%d.%d io=0x%x irq=%d\n",
             vdev->device_id, pci->bus, pci->slot, pci->func,
             vdev->iobase, vdev->irq);
     
@@ -352,7 +352,7 @@ virtq_create(struct virtio_dev *vdev, int index, int size)
     if (index >= vdev->nvqs)
         vdev->nvqs = index + 1;
     
-    cprintf("virtio: created queue %d with %d entries\n", index, size);
+    BOOTDBG("virtio: created queue %d with %d entries\n", index, size);
     
     return vq;
 }

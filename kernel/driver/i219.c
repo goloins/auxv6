@@ -134,7 +134,7 @@ i219_probe(struct pci_dev *dev)
     sc->status = i219_read(sc, I219_STATUS);
     i219_read_mac(sc);
 
-    cprintf("i219: found at %d:%d.%d devid=%x rev=%d irq=%d ctrl=%x status=%x\n",
+    BOOTDBG("i219: found at %d:%d.%d devid=%x rev=%d irq=%d ctrl=%x status=%x\n",
             dev->bus, dev->slot, dev->func,
             dev->device_id, dev->revision, dev->irq_line,
             i219_read(sc, I219_CTRL), sc->status);
@@ -170,7 +170,7 @@ i219_init(void)
     int i;
     struct pci_dev *dev;
 
-    cprintf("i219: initializing driver stub\n");
+    BOOTDBG("i219: initializing driver stub\n");
 
     for (i = 0; i < pci_device_count(); i++) {
         dev = pci_get_device(i);

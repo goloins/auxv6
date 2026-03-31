@@ -1120,7 +1120,7 @@ ahci_probe(struct pci_dev *pci)
 void
 ahci_init(void)
 {
-    cprintf("ahci: initializing driver\n");
+    BOOTDBG("ahci: initializing driver\n");
     
     /* Search for AHCI PCI devices */
     for (int i = 0; i < pci_device_count(); i++) {
