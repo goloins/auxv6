@@ -35,9 +35,15 @@
 #include "defs.h"
 #include "spinlock.h"
 #include "sleeplock.h"
+#include "fs.h"
+#include "buf.h"
 #include "pci.h"
 #include "blockdev.h"
 #include "stdint.h" 
+#include "fcntl.h"
+#include "memlayout.h"
+
+extern int ncpu;
 
 /* NVMe Register Offsets */
 #define NVME_REG_CAP        0x00    /* Controller Capabilities (64-bit) */
@@ -236,6 +242,7 @@ struct nvme_softc {
     uint32_t nsid;          /* Currently active namespace */
     uint64_t nsze;          /* Namespace size in blocks */
     uint32_t lba_size;      /* Logical block size */
+    uint64_t nblocks_512;   /* Capacity normalized to 512-byte blocks */
     
     /* Block device ID */
     uint dev_id;
@@ -245,6 +252,17 @@ struct nvme_softc {
 #define MAX_NVME 4
 static struct nvme_softc nvme_devices[MAX_NVME];
 static int nvme_count = 0;
+
+static int nvme_rw(struct buf *b);
+static uint nvme_nblocks(uint dev);
+static struct nvme_softc *nvme_find_by_dev(uint dev);
+static int nvme_identify_namespace(struct nvme_softc *sc, uint32_t nsid);
+
+static const struct bdevsw nvme_bdevsw = {
+    .rw = nvme_rw,
+    .nblocks = nvme_nblocks,
+    .name = "nvme"
+};
 
 /*
  * Read controller register (32-bit)
@@ -449,6 +467,100 @@ nvme_identify(struct nvme_softc *sc, uint32_t nsid, uint32_t cns, void *data)
     return nvme_poll_completion(&sc->admin_q, 1, 0);
 }
 
+static struct nvme_softc *
+nvme_find_by_dev(uint dev)
+{
+    for (int i = 0; i < nvme_count; i++) {
+        if (nvme_devices[i].dev_id == dev)
+            return &nvme_devices[i];
+    }
+    return 0;
+}
+
+static int
+nvme_rw(struct buf *b)
+{
+    struct nvme_softc *sc;
+
+    if (!b)
+        return -1;
+
+    sc = nvme_find_by_dev(b->dev);
+    if (!sc || sc->nsid == 0)
+        return -1;
+
+    /* Tier 3 next step: wire an I/O queue and READ/WRITE command path. */
+    return -1;
+}
+
+static uint
+nvme_nblocks(uint dev)
+{
+    struct nvme_softc *sc;
+
+    sc = nvme_find_by_dev(dev);
+    if (!sc)
+        return 0;
+
+    if (sc->nblocks_512 > 0xFFFFFFFFULL)
+        return 0xFFFFFFFFU;
+    return (uint)sc->nblocks_512;
+}
+
+static int
+nvme_identify_namespace(struct nvme_softc *sc, uint32_t nsid)
+{
+    struct nvme_id_ns *idns;
+    uint8_t lbaf_index;
+    uint8_t lbads;
+    uint64_t lba_count;
+    int shift;
+
+    idns = (struct nvme_id_ns *)kalloc();
+    if (!idns)
+        return -1;
+    memset(idns, 0, 4096);
+
+    if (nvme_identify(sc, nsid, 0, idns) < 0) {
+        cprintf("nvme: identify namespace %d failed\n", nsid);
+        return -1;
+    }
+
+    lbaf_index = idns->flbas & 0x0F;
+    if (lbaf_index > idns->nlbaf || lbaf_index >= 16) {
+        cprintf("nvme: invalid lbaf index %d\n", lbaf_index);
+        return -1;
+    }
+
+    lbads = idns->lbaf[lbaf_index * 4 + 2];
+    if (lbads < 9 || lbads > 31) {
+        cprintf("nvme: unsupported lba size shift %d\n", lbads);
+        return -1;
+    }
+
+    lba_count = idns->ncap ? idns->ncap : idns->nsze;
+    if (lba_count == 0) {
+        cprintf("nvme: namespace %d reports zero capacity\n", nsid);
+        return -1;
+    }
+
+    sc->nsid = nsid;
+    sc->nsze = idns->nsze;
+    sc->lba_size = 1U << lbads;
+
+    sc->nblocks_512 = lba_count;
+    shift = (int)lbads - 9;
+    if (shift > 0)
+        sc->nblocks_512 <<= shift;
+    else if (shift < 0)
+        sc->nblocks_512 >>= -shift;
+
+    cprintf("nvme: nsid=%d lba=%d bytes blocks512=%d\n",
+            sc->nsid, sc->lba_size, (uint32_t)sc->nblocks_512);
+
+    return 0;
+}
+
 /*
  * Initialize controller
  */
@@ -513,6 +625,10 @@ nvme_init_controller(struct nvme_softc *sc)
     memmove(sn, sc->id_ctrl->sn, 20); sn[20] = 0;
     memmove(mn, sc->id_ctrl->mn, 40); mn[40] = 0;
     cprintf("nvme: model=%s serial=%s\n", mn, sn);
+
+    /* Tier 3 step 1: choose namespace 1 first and extract capacity metadata. */
+    if (nvme_identify_namespace(sc, 1) < 0)
+        cprintf("nvme: no usable namespace discovered yet\n");
     
     return 0;
 }
@@ -528,6 +644,7 @@ nvme_probe(struct pci_dev *pci)
     
     struct nvme_softc *sc = &nvme_devices[nvme_count];
     memset(sc, 0, sizeof(*sc));
+    sc->dev_id = (uint)-1;
     initlock(&sc->lock, "nvme");
     sc->pci = pci;
     
@@ -555,6 +672,20 @@ nvme_probe(struct pci_dev *pci)
     /* Enable interrupts */
     nvme_write32(sc, NVME_REG_INTMC, 0xFFFFFFFF);
     pci_enable_irq(pci, ncpu - 1);
+
+    if (sc->nsid != 0 && nvme_count < ND_DISK_UNITS) {
+        uint dev_id = ND_DISK_DEV(nvme_count);
+        if (bdev_register(dev_id, &nvme_bdevsw) == 0) {
+            uint blocks = sc->nblocks_512 > 0xFFFFFFFFULL ?
+                          0xFFFFFFFFU : (uint)sc->nblocks_512;
+            sc->dev_id = dev_id;
+            if (blocks > 0)
+                bdev_set_nblocks(dev_id, blocks);
+            cprintf("nvme: registered dev=%d blocks=%d\n", dev_id, blocks);
+        } else {
+            cprintf("nvme: failed bdev_register dev=%d\n", dev_id);
+        }
+    }
     
     nvme_count++;
     

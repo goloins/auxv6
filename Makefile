@@ -17,6 +17,7 @@ OBJS = \
 	kernel/driver/virtio.o\
 	kernel/driver/virtio_blk.o\
 	kernel/driver/ahci.o\
+	kernel/driver/nvme.o\
 	kernel/driver/virtio_net.o\
 	kernel/driver/rtl8111.o\
 	kernel/core/kalloc.o\

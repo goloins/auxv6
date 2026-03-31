@@ -52,8 +52,10 @@ print_family(char prefix, int units, int parts_per_disk)
 
     if(prefix == 'h')
       dev = HD_DISK_DEV(unit);
-    else
+    else if(prefix == 'v')
       dev = VD_DISK_DEV(unit);
+    else
+      dev = ND_DISK_DEV(unit);
     print_one(name, dev, "disk");
 
     for(part = 1; part <= parts_per_disk; part++){
@@ -87,6 +89,7 @@ main(int argc, char *argv[])
   printf(1, "NAME     DEV TYPE  BLOCKS  MOUNT\n");
   print_family('h', HD_DISK_UNITS, HD_PARTS_PER_DISK);
   print_family('v', VD_DISK_UNITS, VD_PARTS_PER_DISK);
+  print_family('n', ND_DISK_UNITS, 0);
 
   exit();
 }

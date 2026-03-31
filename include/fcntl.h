@@ -59,3 +59,7 @@
 #define VD_DISK_DEV(unit) (VD_DISK_BASE + (unit))
 #define VD_PART_BASE (VD_DISK_BASE + VD_DISK_UNITS)
 #define VD_PART_DEV(unit, partno) (VD_PART_BASE + (unit) * VD_PARTS_PER_DISK + ((partno) - 1))
+
+#define ND_DISK_UNITS 4
+#define ND_DISK_BASE (VD_PART_BASE + VD_DISK_UNITS * VD_PARTS_PER_DISK)
+#define ND_DISK_DEV(unit) (ND_DISK_BASE + (unit))

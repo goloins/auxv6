@@ -34,6 +34,7 @@ main(void)
   fileinit();      // file table
   ideinit();       // disk
   ahci_init();     // AHCI SATA controllers
+  nvme_init();     // NVMe controllers
   virtio_blk_init(); // virtio block devices
   netdev_init();   // network interfaces
   socket_init();   // socket table

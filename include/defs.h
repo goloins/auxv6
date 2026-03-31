@@ -145,6 +145,9 @@ void            ahci_init(void);
 int             ahci_get_tune(char *buf, int max);
 int             ahci_set_tune(const char *buf, int n);
 
+// nvme.c
+void            nvme_init(void);
+
 // ioapic.c
 void            ioapicenable(int irq, int cpu);
 extern uchar    ioapicid;

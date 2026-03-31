@@ -184,8 +184,8 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 
 ## Priority Tier 3: Storage Drivers (Weeks 9-12)
 
-### 3.1 Virtio-blk Driver [PARTIAL]
-**Status:** Initial implementation landed 2026-03-31  
+### 3.1 Virtio-blk Driver [ADVANCED PARTIAL]
+**Status:** Multi-device cleanup + capability tracking + flush cadence tuning landed 2026-03-31  
 **Files:** `kernel/driver/virtio.c`, `kernel/driver/virtio_blk.c`, `include/virtio.h`, `user/lsblk.c`, `user/mount.c`, `user/init.c`  
 **Value:** QEMU testing, cloud deployment  
 **Implemented:**
@@ -201,54 +201,56 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 - Init creates matching device nodes at boot when virtio disks are present
 
 **Completion plan (finish from partial to production-ready baseline):**
-- [ ] Replace global-device shortcuts with dev->softc lookup in `rw`/`nblocks` paths
-- [ ] Add explicit device capability tracking (`FLUSH`, `DISCARD`, `WRITE_ZEROES`) at probe time
-- [ ] Implement `flush` request path and wire `fsync`-style call sites where available
+- [x] Replace global-device shortcuts with dev->softc lookup in `rw`/`nblocks` paths
+- [x] Add explicit device capability tracking (`FLUSH`, `DISCARD`, `WRITE_ZEROES`) at probe time
+- [x] Implement `flush` request path and wire `fsync`-style call sites where available
 - [ ] Implement discard/write-zeroes request helpers behind capability checks
 - [ ] Add error accounting and robust retry policy for transient I/O failures
+- [x] Add runtime flush cadence tuning (`/proc/vblk_flush`) for write-heavy workloads
 - [ ] Add optional queue-depth tuning knobs (single queue retained as default)
 
 **Definition of done:**
-- [ ] Multiple virtio disks can be attached and independently read/written/mounted
-- [ ] No hardcoded device-0 behavior remains in I/O and capacity paths
+- [x] Multiple virtio disks can be attached and independently read/written/mounted
+- [x] No hardcoded device-0 behavior remains in I/O and capacity paths
 - [ ] Flush/discard/write-zeroes are feature-gated and return deterministic errors when unsupported
 - [ ] Stress pass: repeated mount/fsck-like write cycles complete without data corruption
 
 **Dependencies:** PCI, Virtio core  
 **Estimate:** 1-2 weeks
 
-### 3.2 AHCI/SATA Driver [MEDIUM]
-**Status:** Probe + HBA/port bring-up scaffolding exists; no block I/O integration yet  
+### 3.2 AHCI/SATA Driver [ADVANCED PARTIAL]
+**Status:** SATA identify + blockdev registration + polling DMA read/write + timeout/recover diagnostics landed; interrupt and queue-depth work still pending  
 **Files:** `kernel/driver/ahci.c`, `include/pci.h`, `include/blockdev.h`  
 **Value:** Real hardware support  
 
 **Basic implementation plan (minimum viable AHCI):**
-- [ ] Add per-port block device registration for detected SATA disks
-- [ ] Implement single-slot DMA read/write path (non-NCQ, polling first)
-- [ ] Build/submit Register H2D FIS for `READ_DMA_EXT` / `WRITE_DMA_EXT`
-- [ ] Implement timeout + error reset flow (`PxTFD`, `PxSERR`, `PxIS`) for failed commands
-- [ ] Read `IDENTIFY DEVICE` to populate capacity and sector size for `bdev_set_nblocks`
+- [x] Add per-port block device registration for detected SATA disks
+- [x] Implement single-slot DMA read/write path (non-NCQ, polling first)
+- [x] Build/submit Register H2D FIS for `READ_DMA_EXT` / `WRITE_DMA_EXT`
+- [x] Implement timeout + error reset flow (`PxTFD`, `PxSERR`, `PxIS`) for failed commands
+- [x] Read `IDENTIFY DEVICE` to populate capacity and sector size for `bdev_set_nblocks`
 
 **Follow-up hardening (after basic works):**
 - [ ] Move from polling to interrupt-assisted completion
 - [ ] Support additional command slots and batched I/O
 - [ ] Add ATAPI path split (kept out of MVP)
+- [x] Add runtime AHCI timeout/counter tuning and observability (`/proc/ahci_tune`)
 
 **Definition of done (basic):**
-- [ ] At least one SATA disk appears in `lsblk` as a blockdev
-- [ ] Read/write of filesystem blocks succeeds on QEMU AHCI controller
+- [x] At least one SATA disk appears in `lsblk` as a blockdev
+- [x] Read/write of filesystem blocks succeeds on QEMU AHCI controller
 - [ ] Mount/unmount cycle succeeds repeatedly without controller lockup
 
 **Dependencies:** PCI, DMA  
 **Estimate:** 2-3 weeks
 
 ### 3.3 NVMe Driver [MEDIUM]
-**Status:** Controller reset + admin queue + identify scaffolding exists; no namespace I/O blockdev path yet  
+**Status:** Controller reset + admin queue + identify scaffolding exists; namespace-1 discovery/capacity parsing is now wired, but I/O queue + data path are still pending  
 **Files:** `kernel/driver/nvme.c`, `include/pci.h`, `include/blockdev.h`  
 **Value:** Modern SSD support  
 
 **Basic implementation plan (minimum viable NVMe):**
-- [ ] Finish namespace discovery (`IDENTIFY NS`) and choose active namespace policy (nsid 1 first)
+- [x] Finish namespace discovery (`IDENTIFY NS`) and choose active namespace policy (nsid 1 first)
 - [ ] Create one I/O queue pair and wire queue doorbells correctly for data commands
 - [ ] Implement synchronous `READ`/`WRITE` command path using PRP1 (single-page transfers)
 - [ ] Register namespace as block device and report capacity from namespace metadata
