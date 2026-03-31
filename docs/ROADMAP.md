@@ -14,7 +14,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 
 ---
 
-## Recent Progress (2026-03-30 to 2026-04-01)
+## Recent Progress (2026-03-30 to 2026-03-31)
 
 - Signal delivery, `alarm()`, `SIGPIPE`, `lseek`, `dup2`, and baseline `fcntl()` support landed and are now integrated into the main syscall path.
 - PCI enumeration, IRQ registration, DMA allocation helpers, and `lspci` landed as the Tier 2 device foundation.
@@ -22,8 +22,12 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - Virtio infrastructure moved from scaffolding to working code: `virtio-blk` now probes, negotiates features, performs block I/O, registers with the block layer, and shows up through `lsblk` and `/dev/vd*` nodes.
 - The network stack moved beyond loopback-only behavior: Ethernet framing, ARP cache/request/reply, routing controls, virtio-net RX/TX, DHCP tooling, resolver/`nslookup`, and outbound internet ping all landed.
 - TCP now exchanges real packets with a basic three-way handshake and ACKed payload delivery; `telnet` and `netcat` were added as rough but functional userland validation tools.
+- Symbolic link kernel plumbing landed: `symlink()`, `readlink()`, and `lstat()` syscalls are wired up, VFS gained symlink capabilities, and ext2 now supports fast symlink creation and target reads.
+- Loop devices landed as a new storage/mounting bridge: 8 loop block devices can now be backed by regular files through new `loopsetup`, `loopteardown`, and `loopstatus` syscalls, with `losetup` userspace support.
+- ISO 9660 moved from a broken stub to a working read-only filesystem with real VFS integration, primary volume descriptor parsing, directory traversal, case-insensitive lookup, and file reads via loop-mounted images.
 - POSIX porting work expanded substantially: new `include/posix/*` headers, broader libc-style helpers in `user/ulib.c`, formatting/dirent wrappers in `user/posix.c`, `setjmp`, and enough compatibility to experiment with a `dash` port.
 - Userland bootstrap is now more Unix-like: `init` runs `dash /etc/rc.d/rc.S`, tracks runlevels, handles `telinit` requests via `SIGHUP`, and `exec` supports `#!` interpreter scripts.
+- procfs gained more than basic process plumbing: `/proc/uptime`, `/proc/pci`, `/proc/vblk_flush`, and `/proc/ahci_tune` now exist for observability and runtime tuning.
 - **NVMe driver** now has I/O queue creation and synchronous READ/WRITE command support via PRP1 (single-page transfers).
 - **E1000 driver** (Intel Gigabit Ethernet) now has full ifnet integration with TX/RX descriptor rings, IRQ handling, and proper network interface registration.
 - **PCNET driver** (AMD PCNET-PCI II) now has full ifnet integration with TX/RX rings, initialization block, and IRQ handling.
@@ -53,7 +57,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | TCP/IP stack | 80% | UDP works, DNS/resolver works, TCP handshake + data + retransmission + teardown work; flow control still basic |
 | Networking interfaces | 60% | BSD ifnet abstraction, loopback, virtio-net, routing, DHCP tooling, outbound packet path |
 | POSIX compatibility layer | 60% | Broad header coverage, libc-style shims, dash port experiments, many APIs still stubbed or partial |
-| procfs | 60% | Basic process info, missing many nodes |
+| procfs | 70% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`; still sparse overall |
 
 ### 🚧 Early Or Stubbed
 | Subsystem | Status | Notes |
@@ -63,8 +67,9 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | Virtio storage | 70% | Working virtio core + virtio-blk, but still single-queue/minimal-feature oriented |
 | Real NICs | 60% | E1000, PCNET, RTL8111 have full ifnet integration; VMXnet3, Hyper-V netvsc are stubs |
 | Modern storage | 40% | AHCI has polling DMA read/write; NVMe has I/O queue and basic RW path |
-| Symlinks | 60% | Syscalls and ext2 support done; path resolution pending |
-| ISO 9660 | 10% | Stub exists with wrong VFS API; needs rewrite |
+| Loop devices | 80% | 8 block devices backed by regular files, status/setup/teardown syscalls, `losetup` utility |
+| Symlinks | 65% | Syscalls, VFS hooks, and ext2 fast symlink support done; pathname following still pending |
+| ISO 9660 | 85% | Working read-only implementation with VFS integration and loop-mount testing |
 | Btrfs | None | Planned read-only support |
 | NFS | None | Planned; requires XDR/RPC infrastructure |
 | mdev | None | Planned userspace device node manager |
@@ -468,55 +473,62 @@ Phase 4 - Userspace:
 
 **Estimate:** 2-3 more days for path resolution
 
-### 5.2 ISO 9660 (CD-ROM) [MEDIUM]
-**Status:** Stub exists at `kernel/fs/vfs_isofs.c` but uses wrong VFS API pattern  
+### 5.2 ISO 9660 (CD-ROM) [MEDIUM] - MOSTLY COMPLETE
+**Status:** Working read-only implementation landed 2026-03-31  
 **Value:** Read ISO images, distribution media, installation CDs  
 **Root Support:** Not required - mount only  
+**Files:** `kernel/fs/vfs_isofs.c`, `kernel/driver/loop.c`, `user/isotest.c`  
 
-**Current State:**
-- Volume descriptor structures: ✅ Defined correctly
-- Directory record structures: ✅ Defined correctly
-- VFS integration: ❌ Uses obsolete `struct vnode *` API, needs inode-based rewrite
+**Completed:**
+- [x] Inode-based VFS integration matching the current auxv6 VFS model
+- [x] `isofs_mount_init()` reads the primary volume descriptor and root directory record
+- [x] 2048-byte ISO sector reads over 512-byte block devices
+- [x] Root inode synthesis and pathname traversal
+- [x] Directory lookup for `.` / `..` and ordinary entries
+- [x] Case-insensitive name matching
+- [x] Stripping `;1`-style version suffixes during lookup
+- [x] Read-only file I/O and stat support
+- [x] Loop-mounted image testing path via `losetup` and `isotest`
 
-**Implementation Plan:**
+**Remaining Work:**
+- [ ] Multi-extent file support (`ISO_FLAG_MULTI`)
+- [ ] Rock Ridge extensions (PX/NM/SL records for POSIX attrs, long names, symlinks)
+- [ ] Joliet support for alternate filename encoding
 
-Phase 1 - Rewrite VFS Integration:
-- [ ] Convert to inode-based API (like ext2)
-- [ ] Implement `isofs_mount_init()` - read primary volume descriptor
-- [ ] Implement `isofs_root_inode()` - return root directory inode
-- [ ] Implement inode cache for isofs inodes
+**Definition of done (basic):** ✅ Achieved
+- [x] `mount -t isofs /dev/loop0 /mnt/cdrom` succeeds
+- [x] `ls /mnt/cdrom` shows root directory contents
+- [x] `cat /mnt/cdrom/FILE.TXT` reads file data correctly
+- [x] Path traversal into subdirectories works
 
-Phase 2 - Block Device Integration:
-- [ ] Implement `isofs_read_sectors()` via block device layer
-- [ ] Handle 2048-byte ISO sectors on 512-byte block devices (4:1 mapping)
+**Estimate:** 2-4 more days for follow-up compatibility work, not for basic support
 
-Phase 3 - Directory Operations:
-- [ ] Implement `isofs_dirlookup()` - search directory for name
-- [ ] Implement `isofs_namei()` - full path resolution
-- [ ] Handle "." and ".." entries (encoded as 0x00 and 0x01)
-- [ ] Case-insensitive name matching
-- [ ] Strip version numbers (";1") from filenames
+### 5.3 Loop Devices [MEDIUM] - COMPLETE
+**Status:** Implemented 2026-03-31  
+**Value:** Mount ISO and disk images without dedicated hardware  
+**Files:** `kernel/driver/loop.c`, `kernel/core/sysfile.c`, `user/losetup.c`, `user/isotest.c`, `user/mount.c`  
 
-Phase 4 - File Operations:
-- [ ] Implement `isofs_read()` - read file data from extents
-- [ ] Implement `isofs_stat()` - return file attributes
-- [ ] Handle multi-extent files (ISO_FLAG_MULTI)
+**Completed:**
+- [x] `/dev/loop0` through `/dev/loop7` block devices
+- [x] Backing regular file support via inode/VFS-backed reads and writes
+- [x] `loopsetup()` syscall for attach/configure
+- [x] `loopteardown()` syscall for detach
+- [x] `loopstatus()` syscall for status queries
+- [x] `losetup` userspace utility for list/setup/detach/first-free workflows
+- [x] `mount` userspace support for `loopN` device names
+- [x] End-to-end ISO test utility (`isotest`)
 
-Phase 5 - Rock Ridge Extensions (Optional):
-- [ ] Parse System Use area in directory records
-- [ ] Extract POSIX attributes (PX record)
-- [ ] Extract long filenames (NM record)
-- [ ] Extract symlink targets (SL record)
+**Remaining Work:**
+- [ ] Busy-device safety policy for mounted loop devices
+- [ ] Richer status reporting (backing pathname, offset, flags)
+- [ ] Partition-awareness helpers beyond manual offset/nblocks setup
 
-**Definition of done (basic):**
-- `mount -t isofs /dev/cd0 /mnt/cdrom` succeeds
-- `ls /mnt/cdrom` shows root directory contents
-- `cat /mnt/cdrom/FILE.TXT` reads file data correctly
-- Path traversal into subdirectories works
+**Definition of done (current milestone):** ✅ Achieved
+- [x] Loop devices register with the block layer
+- [x] Backing files can be attached and detached from userspace
+- [x] Mounted filesystems can be read through loop devices
 
-**Estimate:** 1-2 weeks
-
-### 5.3 Btrfs Read-Only Support [LOW]
+### 5.4 Btrfs Read-Only Support [LOW]
 **Status:** Not started  
 **Value:** Read modern Linux filesystems, data recovery, interop  
 **Root Support:** Not required - mount only  
@@ -557,7 +569,7 @@ Phase 4 - Filesystem Operations:
 
 **Estimate:** 2-3 weeks
 
-### 5.4 mdev - Device Node Manager [LOW]
+### 5.5 mdev - Device Node Manager [LOW]
 **Status:** Not started  
 **Value:** Replaces manual device node creation, enables hotplug  
 **Files:** `user/mdev.c` (new)
@@ -595,7 +607,7 @@ null             0:0      666
 
 **Estimate:** 3-4 days
 
-### 5.5 NFS Client [MEDIUM-HIGH]
+### 5.6 NFS Client [MEDIUM-HIGH]
 **Status:** Not started - requires RPC/XDR infrastructure  
 **Value:** Network filesystem access, diskless boot potential  
 **Root Support:** Not required initially - mount only  
@@ -608,7 +620,7 @@ null             0:0      666
 |-----------|--------|------------|
 | UDP | ✅ Working | Primary transport for NFS v3 |
 | TCP | ✅ Basic (single segment) | Limited bandwidth but functional |
-| sendto/recvfrom | ❌ Missing | Need for UDP-based NFS |
+| sendto/recvfrom | ❌ Missing | Need for UDP-based NFS userspace/client plumbing |
 | XDR library | ❌ Missing | Required for RPC encoding |
 | RPC client | ❌ Missing | Required for NFS calls |
 
@@ -699,9 +711,9 @@ Phase 6 - Write Support (Optional):
 - `posix/sys/stat.h`, `posix/sys/time.h`, `posix/sys/times.h`, `posix/sys/ioctl.h`, `posix/sys/param.h`, `posix/sys/resource.h`, `posix/sys/wait.h`
 
 **Still Needed:**
-- `sys/socket.h` - Socket interface
 - `netinet/in.h` - Internet addresses
 - `arpa/inet.h` - Address conversion
+- A more complete user-visible socket API surface around the existing `socket.h`
 - Fuller `FILE`-style stdio / buffered stream support
 
 ### 6.3 Library Functions [LOW]
@@ -743,6 +755,7 @@ Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
 | `kernel/driver/netvsc.c` | Microsoft Hyper-V NetVSC paravirtualized NIC stub |
 | `kernel/driver/ahci.c` | AHCI/SATA driver with polling DMA read/write |
 | `kernel/driver/nvme.c` | NVMe driver with I/O queue and basic RW path |
+| `kernel/driver/loop.c` | Loop block device driver for mounting images through regular files |
 
 ### Headers
 | File | Description |
@@ -771,6 +784,8 @@ Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
 | `user/v6dhcpd.c` | DHCP tooling |
 | `user/telnet.c` | Basic Telnet client |
 | `user/netcat.c` | Basic TCP/UDP client/server utility |
+| `user/losetup.c` | Loop device list/setup/detach utility |
+| `user/isotest.c` | ISO 9660 and loop-device smoke test utility |
 | `user/posix.c` | POSIX compatibility wrappers |
 | `user/runlevel.c` | Current/previous runlevel reporting |
 | `user/telinit.c` | Runlevel transition requests |
@@ -778,7 +793,7 @@ Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
 ### Filesystem
 | File | Description |
 |------|-------------|
-| `kernel/fs/vfs_isofs.c` | ISO 9660 filesystem (stub, needs rewrite) |
+| `kernel/fs/vfs_isofs.c` | ISO 9660 read-only filesystem with current VFS integration |
 | `kernel/fs/vfs_btrfs.c` | Btrfs read-only support (planned) |
 | `kernel/fs/vfs_nfs.c` | NFS v3 client (planned) |
 | `kernel/net/xdr.c` | XDR encoding/decoding for RPC (planned) |
@@ -805,10 +820,10 @@ Several items have already landed out of order relative to this original plan, n
 
 ## Quick Wins (Can be done anytime)
 
-1. **Expand procfs** - Add `/proc/uptime`, `/proc/meminfo` - 2 hours each
+1. **Expand procfs further** - Add `/proc/meminfo` and richer process/system nodes - 2 hours for basic files
 2. **Implement gettimeofday syscall** - 2 hours
 3. **Back real getrlimit/setrlimit syscalls behind the existing header stubs** - 1 hour
-4. **Add `sys/socket.h`, `netinet/in.h`, and `arpa/inet.h` compatibility headers** - 2-3 hours
+4. **Add `netinet/in.h` and `arpa/inet.h` compatibility headers, then flesh out userspace socket declarations** - 2-3 hours
 5. **Polish virtio-net link state / diagnostics** - 2 hours
 
 ---
@@ -825,9 +840,10 @@ Several items have already landed out of order relative to this original plan, n
 ## Next Steps (Recommended Order)
 
 1. ~~**Immediately:** Harden TCP with retransmission, teardown, and better receive/window handling~~ **DONE 2026-03-31**
-2. **Now:** Implement symbolic links - highest-impact Tier 5 item, unblocks ln -s, ls -l, and many POSIX expectations
-3. **Next:** Finish ISO 9660 filesystem - rewrite stub to proper VFS API, enable ISO image mounting
-4. **Then:** Begin XDR/RPC infrastructure as foundation for NFS client
-5. **In parallel:** Continue POSIX porting with missing socket headers (need `sendto`/`recvfrom` for NFS over UDP)
-6. **Storage polish:** Finish virtio-blk discard/write-zeroes, address AHCI multi-device
-7. **Later:** Btrfs read-only stub, mdev utility for device node management
+2. **Now:** Finish symlink pathname resolution so `open()` follows symlinks and `lstat()` can explicitly avoid doing so
+3. ~~**Next:** Finish ISO 9660 filesystem - rewrite stub to proper VFS API, enable ISO image mounting~~ **DONE 2026-03-31**
+4. **Next:** Harden the loop-device path with busy-device checks and better status/reporting
+5. **Then:** Begin XDR/RPC infrastructure as foundation for NFS client
+6. **In parallel:** Continue POSIX porting with `sendto`/`recvfrom`, `netinet/in.h`, and `arpa/inet.h` for NFS over UDP
+7. **Storage polish:** Finish virtio-blk discard/write-zeroes, address AHCI multi-device
+8. **Later:** Btrfs read-only stub, mdev utility for device node management
