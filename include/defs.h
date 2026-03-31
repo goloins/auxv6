@@ -215,6 +215,8 @@ int             pipealloc(struct file**, struct file**);
 void            pipeclose(struct pipe*, int);
 int             piperead(struct pipe*, char*, int);
 int             pipewrite(struct pipe*, char*, int);
+int             pipe_readable(struct pipe*);
+int             pipe_writable(struct pipe*);
 
 //PAGEBREAK: 16
 // proc.c
@@ -331,6 +333,8 @@ int             sys_fsfault(void);
 int             sys_loopsetup(void);
 int             sys_loopteardown(void);
 int             sys_loopstatus(void);
+int             sys_select(void);
+int             sys_poll(void);
 
 // timer.c
 void            timerinit(void);
@@ -390,6 +394,7 @@ int             sys_netifsetaddr(void);
 int             socket_deliver(struct sockaddr_in*, struct sockaddr_in*, char*, uint);
 int             socket_deliver_raw(uchar, struct sockaddr_in*, struct sockaddr_in*, char*, uint);
 int             socket_stream_connect(struct socket*, struct sockaddr_in*);
+void            socket_poll_events(struct socket*, int*, int*, int*);
 
 // net device layer
 void            netdev_init(void);

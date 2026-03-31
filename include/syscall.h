@@ -77,3 +77,5 @@
 #define SYS_loopsetup 76
 #define SYS_loopteardown 77
 #define SYS_loopstatus 78
+#define SYS_select 79
+#define SYS_poll 80

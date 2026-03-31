@@ -1075,3 +1075,44 @@ getfd_socket(int fd)
   
   return 0;
 }
+
+void
+socket_poll_events(struct socket *s, int *readable, int *writable, int *error)
+{
+  int rd;
+  int wr;
+  int err;
+
+  if(s == 0)
+    return;
+
+  acquire(&socket_lock);
+
+  rd = 0;
+  wr = 0;
+  err = 0;
+
+  if(s->state == SOCK_CLOSED)
+    err = 1;
+
+  if(s->type == SOCK_STREAM && s->state == SOCK_LISTEN)
+    rd = (s->qlen > 0);
+  else
+    rd = (s->recv_len > 0);
+
+  if(s->type == SOCK_STREAM)
+    wr = (s->state == SOCK_ESTAB && s->tcp.state == TCPS_ESTABLISHED);
+  else if(s->type == SOCK_DGRAM)
+    wr = (s->state == SOCK_BOUND || s->state == SOCK_CONNECT || s->state == SOCK_ESTAB);
+  else if(s->type == SOCK_RAW)
+    wr = (s->state == SOCK_BOUND || s->state == SOCK_CONNECT);
+
+  if(readable)
+    *readable = rd;
+  if(writable)
+    *writable = wr;
+  if(error)
+    *error = err;
+
+  release(&socket_lock);
+}

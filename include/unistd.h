@@ -20,6 +20,8 @@
 #define _UNISTD_H
 
 #include "sys/types.h"
+#include "sys/select.h"
+#include "poll.h"
 #include "stddef.h"
 
 /* POSIX version identification */
@@ -151,6 +153,9 @@ off_t   lseek(int fd, off_t offset, int whence);
 int     dup(int oldfd);
 int     dup2(int oldfd, int newfd);
 int     pipe(int pipefd[2]);
+int     select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
+               struct timeval *timeout);
+int     poll(struct pollfd *fds, nfds_t nfds, int timeout);
 int     access(const char *path, int mode);
 int     faccessat(int fd, const char *path, int mode, int flag);
 int     unlink(const char *path);

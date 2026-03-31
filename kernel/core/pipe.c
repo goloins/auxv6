@@ -131,3 +131,25 @@ piperead(struct pipe *p, char *addr, int n)
   release(&p->lock);
   return i;
 }
+
+int
+pipe_readable(struct pipe *p)
+{
+  int ready;
+
+  acquire(&p->lock);
+  ready = (p->nread != p->nwrite) || (p->writeopen == 0);
+  release(&p->lock);
+  return ready;
+}
+
+int
+pipe_writable(struct pipe *p)
+{
+  int ready;
+
+  acquire(&p->lock);
+  ready = (p->nwrite < p->nread + PIPESIZE) || (p->readopen == 0);
+  release(&p->lock);
+  return ready;
+}

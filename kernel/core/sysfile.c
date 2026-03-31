@@ -33,6 +33,27 @@ static int inode_is_root_user(void);
 static struct inode* vfs_resolve(char *path);
 static struct inode* vfs_resolve_parent(char *path, char *name);
 
+#define SELECT_BITS_PER_WORD (8 * sizeof(uint))
+#define SELECT_WORDS ((NOFILE + SELECT_BITS_PER_WORD - 1) / SELECT_BITS_PER_WORD)
+
+#define POLLIN   0x0001
+#define POLLPRI  0x0002
+#define POLLOUT  0x0004
+#define POLLERR  0x0008
+#define POLLHUP  0x0010
+#define POLLNVAL 0x0020
+
+struct ktimeval {
+  int tv_sec;
+  int tv_usec;
+};
+
+struct kpollfd {
+  int fd;
+  short events;
+  short revents;
+};
+
 static int
 create_default_mode(short type)
 {
@@ -281,6 +302,175 @@ fdalloc(struct file *f)
     }
   }
   return -1;
+}
+
+static int
+fd_ready_events(struct file *f)
+{
+  int rd;
+  int wr;
+  int err;
+  int events;
+
+  if(f == 0)
+    return POLLNVAL;
+
+  events = 0;
+  switch(f->type){
+  case FD_INODE:
+    if(f->readable)
+      events |= POLLIN;
+    if(f->writable)
+      events |= POLLOUT;
+    break;
+  case FD_PIPE:
+    rd = pipe_readable(f->pipe);
+    wr = pipe_writable(f->pipe);
+    if(f->readable && rd)
+      events |= POLLIN;
+    if(f->writable && wr)
+      events |= POLLOUT;
+    if(f->readable && !rd)
+      events |= POLLHUP;
+    break;
+  case FD_SOCKET:
+    rd = 0;
+    wr = 0;
+    err = 0;
+    socket_poll_events(f->socket, &rd, &wr, &err);
+    if(f->readable && rd)
+      events |= POLLIN;
+    if(f->writable && wr)
+      events |= POLLOUT;
+    if(err)
+      events |= POLLERR;
+    break;
+  default:
+    events |= POLLNVAL;
+    break;
+  }
+
+  return events;
+}
+
+static int
+poll_scan(struct kpollfd *fds, int nfds)
+{
+  int i;
+  int ready;
+  int revents;
+  int mask;
+  int fd;
+  struct proc *p;
+  struct file *f;
+
+  ready = 0;
+  p = myproc();
+
+  for(i = 0; i < nfds; i++){
+    revents = 0;
+    fd = fds[i].fd;
+
+    if(fd < 0){
+      fds[i].revents = 0;
+      continue;
+    }
+
+    if(fd >= NOFILE || p->ofile[fd] == 0){
+      revents = POLLNVAL;
+    } else {
+      f = p->ofile[fd];
+      mask = fd_ready_events(f);
+      revents = mask & (fds[i].events | POLLERR | POLLHUP | POLLNVAL);
+    }
+
+    fds[i].revents = (short)revents;
+    if(revents)
+      ready++;
+  }
+
+  return ready;
+}
+
+static int
+select_set_has(int *set, int fd)
+{
+  int word;
+  int bit;
+
+  word = fd / SELECT_BITS_PER_WORD;
+  bit = fd % SELECT_BITS_PER_WORD;
+  return (set[word] & (1U << bit)) != 0;
+}
+
+static void
+select_set_add(int *set, int fd)
+{
+  int word;
+  int bit;
+
+  word = fd / SELECT_BITS_PER_WORD;
+  bit = fd % SELECT_BITS_PER_WORD;
+  set[word] |= (1U << bit);
+}
+
+static int
+select_scan(int nfds, int *in_read, int *in_write, int *in_except,
+            int *out_read, int *out_write, int *out_except)
+{
+  int fd;
+  int ready;
+  int mask;
+  struct proc *p;
+  struct file *f;
+
+  ready = 0;
+  p = myproc();
+
+  memset(out_read, 0, SELECT_WORDS * sizeof(int));
+  memset(out_write, 0, SELECT_WORDS * sizeof(int));
+  memset(out_except, 0, SELECT_WORDS * sizeof(int));
+
+  for(fd = 0; fd < nfds; fd++){
+    if((!in_read || !select_set_has(in_read, fd)) &&
+       (!in_write || !select_set_has(in_write, fd)) &&
+       (!in_except || !select_set_has(in_except, fd)))
+      continue;
+
+    if(fd >= NOFILE || p->ofile[fd] == 0){
+      if(in_except && select_set_has(in_except, fd)){
+        select_set_add(out_except, fd);
+        ready++;
+      }
+      continue;
+    }
+
+    f = p->ofile[fd];
+    mask = fd_ready_events(f);
+
+    if(in_read && select_set_has(in_read, fd) && (mask & (POLLIN | POLLHUP | POLLERR))){
+      select_set_add(out_read, fd);
+      ready++;
+    }
+    if(in_write && select_set_has(in_write, fd) && (mask & (POLLOUT | POLLERR))){
+      select_set_add(out_write, fd);
+      ready++;
+    }
+    if(in_except && select_set_has(in_except, fd) && (mask & (POLLERR | POLLNVAL))){
+      select_set_add(out_except, fd);
+      ready++;
+    }
+  }
+
+  return ready;
+}
+
+static int
+timeout_ms_to_ticks(int timeout_ms)
+{
+  if(timeout_ms <= 0)
+    return 0;
+  return (timeout_ms + 9) / 10;
 }
 
 int
@@ -1243,6 +1433,180 @@ sys_pipe(void)
   fd[0] = fd0;
   fd[1] = fd1;
   return 0;
+}
+
+int
+sys_poll(void)
+{
+  int nfds;
+  int timeout_ms;
+  struct kpollfd *ufds;
+  int timeout_ticks;
+  uint start;
+  uint now;
+  int ready;
+
+  if(argint(1, &nfds) < 0 || argint(2, &timeout_ms) < 0)
+    return -1;
+  if(nfds < 0)
+    return -1;
+  if(nfds == 0)
+    ufds = 0;
+  else {
+    if(argptr(0, (char**)&ufds, nfds * sizeof(*ufds)) < 0)
+      return -1;
+  }
+
+  if(timeout_ms < 0)
+    timeout_ticks = -1;
+  else
+    timeout_ticks = timeout_ms_to_ticks(timeout_ms);
+
+  acquire(&tickslock);
+  start = ticks;
+  release(&tickslock);
+
+  for(;;){
+    ready = poll_scan(ufds, nfds);
+    if(ready > 0)
+      return ready;
+    if(timeout_ms == 0)
+      return 0;
+    if(myproc()->killed)
+      return -1;
+
+    if(timeout_ticks >= 0){
+      acquire(&tickslock);
+      now = ticks;
+      if(now - start >= (uint)timeout_ticks){
+        release(&tickslock);
+        return 0;
+      }
+      sleep(&ticks, &tickslock);
+      release(&tickslock);
+    } else {
+      acquire(&tickslock);
+      sleep(&ticks, &tickslock);
+      release(&tickslock);
+    }
+  }
+}
+
+int
+sys_select(void)
+{
+  int nfds;
+  int read_addr;
+  int write_addr;
+  int except_addr;
+  int timeout_addr;
+  int in_read[SELECT_WORDS];
+  int in_write[SELECT_WORDS];
+  int in_except[SELECT_WORDS];
+  int out_read[SELECT_WORDS];
+  int out_write[SELECT_WORDS];
+  int out_except[SELECT_WORDS];
+  int timeout_ticks;
+  int timeout_ms;
+  uint start;
+  uint now;
+  int ready;
+  struct ktimeval *tv;
+
+  if(argint(0, &nfds) < 0 || argint(1, &read_addr) < 0 || argint(2, &write_addr) < 0 ||
+     argint(3, &except_addr) < 0 || argint(4, &timeout_addr) < 0)
+    return -1;
+
+  if(nfds < 0 || nfds > NOFILE)
+    return -1;
+
+  memset(in_read, 0, sizeof(in_read));
+  memset(in_write, 0, sizeof(in_write));
+  memset(in_except, 0, sizeof(in_except));
+
+  if(read_addr){
+    if((uint)read_addr >= myproc()->sz || (uint)read_addr + sizeof(in_read) > myproc()->sz)
+      return -1;
+    memmove(in_read, (void*)read_addr, sizeof(in_read));
+  }
+  if(write_addr){
+    if((uint)write_addr >= myproc()->sz || (uint)write_addr + sizeof(in_write) > myproc()->sz)
+      return -1;
+    memmove(in_write, (void*)write_addr, sizeof(in_write));
+  }
+  if(except_addr){
+    if((uint)except_addr >= myproc()->sz || (uint)except_addr + sizeof(in_except) > myproc()->sz)
+      return -1;
+    memmove(in_except, (void*)except_addr, sizeof(in_except));
+  }
+
+  timeout_ticks = -1;
+  if(timeout_addr){
+    if((uint)timeout_addr >= myproc()->sz || (uint)timeout_addr + sizeof(*tv) > myproc()->sz)
+      return -1;
+    tv = (struct ktimeval*)timeout_addr;
+    if(tv->tv_sec < 0 || tv->tv_usec < 0 || tv->tv_usec >= 1000000)
+      return -1;
+    timeout_ms = tv->tv_sec * 1000 + (tv->tv_usec + 999) / 1000;
+    timeout_ticks = timeout_ms_to_ticks(timeout_ms);
+  }
+
+  acquire(&tickslock);
+  start = ticks;
+  release(&tickslock);
+
+  for(;;){
+    ready = select_scan(nfds,
+                        read_addr ? in_read : 0,
+                        write_addr ? in_write : 0,
+                        except_addr ? in_except : 0,
+                        out_read,
+                        out_write,
+                        out_except);
+    if(ready > 0){
+      if(read_addr)
+        memmove((void*)read_addr, out_read, sizeof(out_read));
+      if(write_addr)
+        memmove((void*)write_addr, out_write, sizeof(out_write));
+      if(except_addr)
+        memmove((void*)except_addr, out_except, sizeof(out_except));
+      return ready;
+    }
+
+    if(timeout_addr && timeout_ticks == 0){
+      if(read_addr)
+        memset((void*)read_addr, 0, sizeof(out_read));
+      if(write_addr)
+        memset((void*)write_addr, 0, sizeof(out_write));
+      if(except_addr)
+        memset((void*)except_addr, 0, sizeof(out_except));
+      return 0;
+    }
+
+    if(myproc()->killed)
+      return -1;
+
+    if(timeout_ticks >= 0){
+      acquire(&tickslock);
+      now = ticks;
+      if(now - start >= (uint)timeout_ticks){
+        release(&tickslock);
+        if(read_addr)
+          memset((void*)read_addr, 0, sizeof(out_read));
+        if(write_addr)
+          memset((void*)write_addr, 0, sizeof(out_write));
+        if(except_addr)
+          memset((void*)except_addr, 0, sizeof(out_except));
+        return 0;
+      }
+      sleep(&ticks, &tickslock);
+      release(&tickslock);
+    } else {
+      acquire(&tickslock);
+      sleep(&ticks, &tickslock);
+      release(&tickslock);
+    }
+  }
 }
 
 // lseek - reposition read/write file offset

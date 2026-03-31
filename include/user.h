@@ -5,9 +5,12 @@ struct stat;
 struct dirent;
 struct rtcdate;
 struct sockaddr_in;
+struct pollfd;
 #include "signal.h"
 #include "wait.h"
 #include "termios.h"
+#include "sys/select.h"
+#include "poll.h"
 
 typedef struct {
 	int si_signo;
@@ -108,6 +111,9 @@ int lstat(const char *path, struct stat *st);
 int loopsetup(int loopnum, const char *path, int offset, int nblocks);
 int loopteardown(int loopnum);
 int loopstatus(int loopnum, uint *backing_inum, uint *nblocks);
+int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
+		   struct timeval *timeout);
+int poll(struct pollfd *fds, nfds_t nfds, int timeout);
 int getpid(void);
 int getppid(void);
 int getpgrp(void);

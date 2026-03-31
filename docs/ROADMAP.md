@@ -24,6 +24,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - TCP now exchanges real packets with a basic three-way handshake and ACKed payload delivery; `telnet` and `netcat` were added as rough but functional userland validation tools.
 - Symbolic link kernel plumbing landed: `symlink()`, `readlink()`, and `lstat()` syscalls are wired up, VFS gained symlink capabilities, and ext2 now supports fast symlink creation and target reads.
 - Loop devices landed as a new storage/mounting bridge: 8 loop block devices can now be backed by regular files through new `loopsetup`, `loopteardown`, and `loopstatus` syscalls, with `losetup` userspace support.
+- Baseline I/O multiplexing landed with `select()` and `poll()` syscalls, including fd readiness across inode files, pipes, and sockets plus timeout handling.
 - ISO 9660 moved from a broken stub to a working read-only filesystem with real VFS integration, primary volume descriptor parsing, directory traversal, case-insensitive lookup, and file reads via loop-mounted images.
 - POSIX porting work expanded substantially: new `include/posix/*` headers, broader libc-style helpers in `user/ulib.c`, formatting/dirent wrappers in `user/posix.c`, `setjmp`, and enough compatibility to experiment with a `dash` port.
 - Userland bootstrap is now more Unix-like: `init` runs `dash /etc/rc.d/rc.S`, tracks runlevels, handles `telinit` requests via `SIGHUP`, and `exec` supports `#!` interpreter scripts.
@@ -720,7 +721,7 @@ Phase 6 - Write Support (Optional):
 | ~~lseek~~ | ~~Critical~~ | ~~Low~~ | ✅ Implemented 2026-03-30 |
 | ~~dup2~~ | ~~Critical~~ | ~~Low~~ | ✅ Implemented 2026-03-30 |
 | ~~fcntl~~ | ~~High~~ | ~~Medium~~ | ✅ Implemented 2026-03-30 |
-| select/poll | High | Medium | I/O multiplexing |
+| select/poll | High | Medium | ✅ Baseline implementation landed 2026-03-31; event semantics and precision timeout behavior can be refined |
 | mmap | High | High | Memory mapping |
 | ioctl | High | Medium | Device control |
 | stat/lstat | Medium | Low | Complete stat info |

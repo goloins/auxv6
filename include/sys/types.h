@@ -43,6 +43,10 @@ typedef int             id_t;       /* Generic ID type */
 /* Socket types */
 typedef unsigned int    socklen_t;  /* Socket address length */
 typedef int             sa_family_t;/* Address family */
+#ifndef _NFDS_T
+#define _NFDS_T
+typedef unsigned int    nfds_t;     /* Number of fds in poll() */
+#endif
 
 /* Pthread types (placeholder - not yet implemented) */
 typedef unsigned int    pthread_t;
