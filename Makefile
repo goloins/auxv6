@@ -455,7 +455,7 @@ qemu-nox-gdb-xv6root: .gdbinit
 -include **/*.d
 
 clean: 
-	rm -f *.tex *.dvi *.idx *.aux *.log *.ind *.ilg \
+	rm -rf *.tex *.dvi *.idx *.aux *.log *.ind *.ilg \
 	*.o *.d *.asm *.sym kernel/core/vectors.S bootblock entryother \
 	aux.kern xv6.img fs.img kernelmemfs \
 	xv6memfs.img mkfs .gdbinit $(ROOTFS_CONFIG) \

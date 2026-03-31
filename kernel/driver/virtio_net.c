@@ -287,7 +287,6 @@ virtio_net_rx_complete(struct virtio_net_softc *sc)
                     memmove(m->data, slot->data + sizeof(struct virtio_net_hdr), pkt_len);
                     m->len = pkt_len;
                     m->rcvif = &sc->ifp;
-                    if_input(&sc->ifp, m);
                 }
             }
         }
