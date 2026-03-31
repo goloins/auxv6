@@ -71,3 +71,6 @@
 #define SYS_arpinfo 70
 #define SYS_routedel 71
 #define SYS_getsid 72
+#define SYS_symlink 73
+#define SYS_readlink 74
+#define SYS_lstat 75

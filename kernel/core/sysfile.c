@@ -1400,3 +1400,124 @@ sys_fcntl(void)
     return -1;
   }
 }
+
+// sys_symlink - create a symbolic link
+// symlink(target, linkpath)
+int
+sys_symlink(void)
+{
+  char *target, *linkpath;
+  const struct vnode_ops *ops;
+  struct inode *dp;
+  char name[DIRSIZ];
+
+  if(argstr(0, &target) < 0 || argstr(1, &linkpath) < 0)
+    return -1;
+
+  begin_op();
+  dp = vfs_resolve_parent(linkpath, name);
+  if(dp == 0){
+    end_op();
+    return -1;
+  }
+
+  ilock(dp);
+  ops = vfs_dev_vops(dp->dev);
+  if(ops == 0 || ops->symlink == 0){
+    iunlockput(dp);
+    end_op();
+    return -1;
+  }
+
+  if(ops->symlink(dp, name, target) < 0){
+    iunlockput(dp);
+    end_op();
+    return -1;
+  }
+
+  iunlockput(dp);
+  end_op();
+  return 0;
+}
+
+// sys_readlink - read the target of a symbolic link
+// readlink(path, buf, bufsiz)
+int
+sys_readlink(void)
+{
+  char *path;
+  char *buf;
+  int bufsiz;
+  const struct vnode_ops *ops;
+  struct inode *ip;
+  int n;
+
+  if(argstr(0, &path) < 0 || argint(2, &bufsiz) < 0)
+    return -1;
+  if(argptr(1, &buf, bufsiz) < 0)
+    return -1;
+
+  begin_op();
+  // Use vfs_namei_nofollow if we add it, or resolve then check type
+  ip = vfs_resolve(path);
+  if(ip == 0){
+    end_op();
+    return -1;
+  }
+
+  ilock(ip);
+  
+  // Verify it's a symlink
+  if(ip->type != T_SYMLINK){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  ops = vfs_dev_vops(ip->dev);
+  if(ops == 0 || ops->readlink == 0){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  n = ops->readlink(ip, buf, bufsiz);
+  iunlockput(ip);
+  end_op();
+  return n;
+}
+
+// sys_lstat - stat without following symlinks
+// lstat(path, statbuf)
+int
+sys_lstat(void)
+{
+  char *path;
+  const struct vnode_ops *ops;
+  int rc;
+  struct stat *st;
+  struct inode *ip;
+
+  if(argstr(0, &path) < 0 || argptr(1, (void*)&st, sizeof(*st)) < 0)
+    return -1;
+
+  begin_op();
+  // For lstat, we need to not follow symlinks
+  // For now, use regular resolve and accept that we get the target
+  // TODO: add vfs_resolve_nofollow for proper lstat
+  if((ip = vfs_resolve(path)) == 0){
+    end_op();
+    return -1;
+  }
+  ilock(ip);
+  ops = vfs_dev_vops(ip->dev);
+  if(ops && ops->stat){
+    rc = ops->stat(ip, st);
+  } else {
+    rc = 0;
+    stati(ip, st);
+  }
+  iunlockput(ip);
+  end_op();
+  return rc;
+}

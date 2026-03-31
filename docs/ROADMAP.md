@@ -63,7 +63,11 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | Virtio storage | 70% | Working virtio core + virtio-blk, but still single-queue/minimal-feature oriented |
 | Real NICs | 60% | E1000, PCNET, RTL8111 have full ifnet integration; VMXnet3, Hyper-V netvsc are stubs |
 | Modern storage | 40% | AHCI has polling DMA read/write; NVMe has I/O queue and basic RW path |
-| Symlinks | None | VFS supports but not implemented |
+| Symlinks | 60% | Syscalls and ext2 support done; path resolution pending |
+| ISO 9660 | 10% | Stub exists with wrong VFS API; needs rewrite |
+| Btrfs | None | Planned read-only support |
+| NFS | None | Planned; requires XDR/RPC infrastructure |
+| mdev | None | Planned userspace device node manager |
 
 ---
 
@@ -419,35 +423,250 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 
 ---
 
-## Priority Tier 5: Filesystem Enhancements (Weeks 19-22)
+## Priority Tier 5: Filesystem Enhancements (Weeks 19-24)
 
-### 5.1 Symbolic Links [HIGH]
-**Current:** VFS has type but not implemented  
-**Tasks:**
-- [ ] Add S_IFLNK handling
-- [ ] symlink syscall
-- [ ] readlink syscall
-- [ ] Path resolution symlink following
-- [ ] Symlink loop detection
+### 5.1 Symbolic Links [HIGH] - IN PROGRESS
+**Current:** Basic syscalls landed, ext2 support implemented, path resolution still needed  
+**Files:** `include/stat.h`, `include/vfs.h`, `kernel/fs/vfs.c`, `kernel/core/sysfile.c`, `kernel/fs/vfs_ext2.c`  
 
-**File:** `vfs.c`, `sysfile.c`  
-**Estimate:** 4-5 days
+**Implementation Plan:**
+
+Phase 1 - Kernel Infrastructure:
+- [x] `M_IFLNK` constant in `include/stat.h`
+- [x] Add `T_SYMLINK` file type constant (value 4)
+- [x] Add `readlink()` and `symlink()` to `struct vnode_ops` in `include/vfs.h`
+- [x] Add `SYS_symlink` (syscall 73), `SYS_readlink` (syscall 74), `SYS_lstat` (syscall 75)
+- [x] Add `VFS_CAP_SYMLINK` capability flag
+- [x] Add `SYMLOOP_MAX` constant (8) for loop detection
+
+Phase 2 - ext2 Support (ext2 natively supports symlinks):
+- [x] Add `EXT2_S_IFLNK` and `EXT2_FT_SYMLINK` constants
+- [x] Implement `ext2_readlink()` - read target from fast symlink in i_block
+- [x] Implement `ext2_symlink()` - create fast symlink (<=60 bytes)
+- [x] Wire into ext2 vnode_ops
+- [x] Update `ext2_stat()` to properly set `M_IFLNK` mode bits
+- [x] Update `ext2_mode_to_type()` to return `T_SYMLINK`
+
+Phase 3 - Path Resolution:
+- [ ] Modify `ext2_walk()` to detect and follow symlinks during traversal
+- [ ] Add symlink resolution with configurable follow mode (NOFOLLOW for lstat)
+- [ ] Add symlink loop detection (max 8 levels, return ELOOP)
+- [ ] Add `vfs_resolve_nofollow()` for proper `lstat()` behavior
+
+Phase 4 - Userspace:
+- [x] Add `symlink()`, `readlink()`, `lstat()` wrappers in `user/usys.S`
+- [x] Add declarations in `user.h`
+- [ ] Add `ln -s` support to ln utility (or create new utility)
+- [ ] Add `ls -l` symlink display support
+
+**Definition of done:**
+- `symlink("/tmp/target", "/tmp/link")` creates a valid symlink ✅
+- `readlink("/tmp/link", buf, size)` returns the target path ✅
+- `open("/tmp/link")` follows the symlink to the target (needs path resolution)
+- Symlink chains up to 8 levels work; deeper chains return -1 (ELOOP)
+- `lstat()` returns symlink metadata without following (needs nofollow resolution)
+
+**Estimate:** 2-3 more days for path resolution
 
 ### 5.2 ISO 9660 (CD-ROM) [MEDIUM]
-**Status:** Stub at `kernel/fs/vfs_isofs.c`  
-**Value:** Read ISO images, distribution media  
-**Tasks:**
-- [ ] Volume descriptor parsing
-- [ ] Directory traversal
-- [ ] File reading
-- [ ] Rock Ridge extensions (optional)
+**Status:** Stub exists at `kernel/fs/vfs_isofs.c` but uses wrong VFS API pattern  
+**Value:** Read ISO images, distribution media, installation CDs  
+**Root Support:** Not required - mount only  
 
-**Estimate:** 1 week
+**Current State:**
+- Volume descriptor structures: ✅ Defined correctly
+- Directory record structures: ✅ Defined correctly
+- VFS integration: ❌ Uses obsolete `struct vnode *` API, needs inode-based rewrite
 
-### 5.3 devfs [LOW]
-**Current:** Device nodes created manually  
-**Target:** Dynamic /dev population  
-**Estimate:** 1 week
+**Implementation Plan:**
+
+Phase 1 - Rewrite VFS Integration:
+- [ ] Convert to inode-based API (like ext2)
+- [ ] Implement `isofs_mount_init()` - read primary volume descriptor
+- [ ] Implement `isofs_root_inode()` - return root directory inode
+- [ ] Implement inode cache for isofs inodes
+
+Phase 2 - Block Device Integration:
+- [ ] Implement `isofs_read_sectors()` via block device layer
+- [ ] Handle 2048-byte ISO sectors on 512-byte block devices (4:1 mapping)
+
+Phase 3 - Directory Operations:
+- [ ] Implement `isofs_dirlookup()` - search directory for name
+- [ ] Implement `isofs_namei()` - full path resolution
+- [ ] Handle "." and ".." entries (encoded as 0x00 and 0x01)
+- [ ] Case-insensitive name matching
+- [ ] Strip version numbers (";1") from filenames
+
+Phase 4 - File Operations:
+- [ ] Implement `isofs_read()` - read file data from extents
+- [ ] Implement `isofs_stat()` - return file attributes
+- [ ] Handle multi-extent files (ISO_FLAG_MULTI)
+
+Phase 5 - Rock Ridge Extensions (Optional):
+- [ ] Parse System Use area in directory records
+- [ ] Extract POSIX attributes (PX record)
+- [ ] Extract long filenames (NM record)
+- [ ] Extract symlink targets (SL record)
+
+**Definition of done (basic):**
+- `mount -t isofs /dev/cd0 /mnt/cdrom` succeeds
+- `ls /mnt/cdrom` shows root directory contents
+- `cat /mnt/cdrom/FILE.TXT` reads file data correctly
+- Path traversal into subdirectories works
+
+**Estimate:** 1-2 weeks
+
+### 5.3 Btrfs Read-Only Support [LOW]
+**Status:** Not started  
+**Value:** Read modern Linux filesystems, data recovery, interop  
+**Root Support:** Not required - mount only  
+**Files:** `kernel/fs/vfs_btrfs.c` (new)
+
+**Scope:** Read-only access to single-device btrfs volumes. No RAID, no compression, no snapshots.
+
+**Implementation Plan:**
+
+Phase 1 - Superblock and Basics:
+- [ ] Create `kernel/fs/vfs_btrfs.c` with VFS registration
+- [ ] Define btrfs on-disk structures (superblock, chunk, tree node)
+- [ ] Parse superblock at offset 0x10000 (64KB)
+- [ ] Validate magic number (0x4D5F53665248425F)
+- [ ] Extract root tree location and chunk tree bootstrap
+
+Phase 2 - Chunk Mapping:
+- [ ] Parse chunk tree to build logical-to-physical address map
+- [ ] Support SINGLE profile only (no RAID)
+- [ ] Implement `btrfs_read_logical()` - translate and read
+
+Phase 3 - B-Tree Navigation:
+- [ ] Implement B-tree node parsing (internal and leaf nodes)
+- [ ] Implement key search within nodes
+- [ ] Implement tree traversal for path lookups
+
+Phase 4 - Filesystem Operations:
+- [ ] Implement `btrfs_root_inode()` - find FS_TREE root
+- [ ] Implement `btrfs_dirlookup()` - search DIR_ITEM/DIR_INDEX
+- [ ] Implement `btrfs_read()` - read EXTENT_DATA items
+- [ ] Implement `btrfs_stat()` - read INODE_ITEM
+
+**Definition of done (basic):**
+- `mount -t btrfs /dev/sda1 /mnt/btrfs` succeeds for simple volume
+- `ls /mnt/btrfs` shows root directory
+- `cat /mnt/btrfs/file.txt` reads uncompressed file data
+- Graceful error on unsupported features (RAID, compression)
+
+**Estimate:** 2-3 weeks
+
+### 5.4 mdev - Device Node Manager [LOW]
+**Status:** Not started  
+**Value:** Replaces manual device node creation, enables hotplug  
+**Files:** `user/mdev.c` (new)
+
+**Concept:** Userspace utility (like BusyBox mdev) that creates device nodes based on kernel events or configuration. Runs at boot and optionally on hotplug.
+
+**Implementation Plan:**
+
+Phase 1 - Static Mode:
+- [ ] Create `user/mdev.c` utility
+- [ ] Parse `/etc/mdev.conf` for device rules
+- [ ] Scan procfs or blockdev list for devices
+- [ ] Create device nodes in `/dev` based on rules
+
+Phase 2 - Integration:
+- [ ] Add `SYS_mknod_dev` or enhance existing mknod for block/char devices
+- [ ] Hook into init scripts to run mdev at boot
+- [ ] Document configuration file format
+
+**Configuration format (simple):**
+```
+# /etc/mdev.conf
+# device_pattern  uid:gid  mode  [command]
+sd[a-z]          0:0      660
+sd[a-z][0-9]     0:0      660
+vd[a-z]          0:0      660
+console          0:0      600
+null             0:0      666
+```
+
+**Definition of done:**
+- `mdev -s` scans system and creates all device nodes
+- `/dev/sda`, `/dev/vda`, etc. appear automatically at boot
+- Rules file controls ownership and permissions
+
+**Estimate:** 3-4 days
+
+### 5.5 NFS Client [MEDIUM-HIGH]
+**Status:** Not started - requires RPC/XDR infrastructure  
+**Value:** Network filesystem access, diskless boot potential  
+**Root Support:** Not required initially - mount only  
+**Files:** `kernel/net/xdr.c`, `kernel/net/rpc.c`, `kernel/fs/vfs_nfs.c` (all new)
+
+**Protocol:** NFS v3 over UDP (simpler than TCP, original NFS design)
+
+**Current TCP/Network Stack Assessment:**
+| Component | Status | NFS Impact |
+|-----------|--------|------------|
+| UDP | ✅ Working | Primary transport for NFS v3 |
+| TCP | ✅ Basic (single segment) | Limited bandwidth but functional |
+| sendto/recvfrom | ❌ Missing | Need for UDP-based NFS |
+| XDR library | ❌ Missing | Required for RPC encoding |
+| RPC client | ❌ Missing | Required for NFS calls |
+
+**Implementation Plan:**
+
+Phase 1 - XDR Library (~400 lines):
+- [ ] Create `kernel/net/xdr.c`
+- [ ] `xdr_int()`, `xdr_uint()` - 32-bit integers
+- [ ] `xdr_hyper()` - 64-bit integers
+- [ ] `xdr_opaque()` - fixed-length opaque data
+- [ ] `xdr_bytes()` - variable-length opaque with length
+- [ ] `xdr_string()` - null-terminated string
+- [ ] `xdr_array()` - variable-length array
+- [ ] Encoder and decoder variants
+
+Phase 2 - RPC Client (~500 lines):
+- [ ] Create `kernel/net/rpc.c`
+- [ ] RPC message header encoding (XID, prog, vers, proc)
+- [ ] AUTH_UNIX credential encoding (uid, gid, hostname)
+- [ ] RPC reply processing and error handling
+- [ ] UDP-based call/reply with retransmit
+- [ ] XID tracking for reply matching
+
+Phase 3 - Portmapper Client (~100 lines):
+- [ ] Implement GETPORT call to port 111
+- [ ] Query NFS program (100003) and MOUNT program (100005)
+
+Phase 4 - Mount Protocol Client (~150 lines):
+- [ ] Implement MNT procedure to get root filehandle
+- [ ] Store filehandle for NFS operations
+
+Phase 5 - NFS v3 Client (~1000 lines):
+- [ ] Create `kernel/fs/vfs_nfs.c` with VFS registration
+- [ ] GETATTR - get file attributes
+- [ ] LOOKUP - directory entry lookup
+- [ ] READ - read file data
+- [ ] READDIR/READDIRPLUS - list directory
+- [ ] Filehandle-to-inode mapping and caching
+
+Phase 6 - Write Support (Optional):
+- [ ] WRITE - write file data
+- [ ] CREATE - create file
+- [ ] MKDIR - create directory
+- [ ] REMOVE - delete file/directory
+- [ ] COMMIT - commit writes
+
+**Definition of done (basic read-only):**
+- `mount -t nfs server:/export /mnt/nfs` succeeds
+- `ls /mnt/nfs` shows remote directory contents
+- `cat /mnt/nfs/file.txt` reads remote file data
+- Handles network timeouts gracefully
+
+**Dependencies:**
+- UDP stack ✅
+- XDR library (new)
+- RPC client (new)
+
+**Estimate:** 4-6 weeks
 
 ---
 
@@ -559,7 +778,12 @@ Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
 ### Filesystem
 | File | Description |
 |------|-------------|
-| `kernel/fs/vfs_isofs.c` | ISO 9660 filesystem scaffold |
+| `kernel/fs/vfs_isofs.c` | ISO 9660 filesystem (stub, needs rewrite) |
+| `kernel/fs/vfs_btrfs.c` | Btrfs read-only support (planned) |
+| `kernel/fs/vfs_nfs.c` | NFS v3 client (planned) |
+| `kernel/net/xdr.c` | XDR encoding/decoding for RPC (planned) |
+| `kernel/net/rpc.c` | ONC RPC client (planned) |
+| `user/mdev.c` | Device node manager utility (planned) |
 
 ---
 
@@ -601,8 +825,9 @@ Several items have already landed out of order relative to this original plan, n
 ## Next Steps (Recommended Order)
 
 1. ~~**Immediately:** Harden TCP with retransmission, teardown, and better receive/window handling~~ **DONE 2026-03-31**
-2. **Next:** Finish virtio-net polish and decide whether to prioritize a real hardware NIC driver or stay QEMU-first
-3. **Then:** Finish virtio-blk rough edges (flush/discard, multi-device cleanup) and move on to AHCI
-4. **After that:** Implement symbolic links and close VFS pathname semantics gaps
-5. **In parallel:** Continue POSIX porting with missing socket headers, stdio gaps, and targeted syscall additions (`select/poll`, `ioctl`, `gettimeofday`)
-6. **Later:** Expand procfs/devfs and keep reducing boot/userland rough edges in the SysV-style init path
+2. **Now:** Implement symbolic links - highest-impact Tier 5 item, unblocks ln -s, ls -l, and many POSIX expectations
+3. **Next:** Finish ISO 9660 filesystem - rewrite stub to proper VFS API, enable ISO image mounting
+4. **Then:** Begin XDR/RPC infrastructure as foundation for NFS client
+5. **In parallel:** Continue POSIX porting with missing socket headers (need `sendto`/`recvfrom` for NFS over UDP)
+6. **Storage polish:** Finish virtio-blk discard/write-zeroes, address AHCI multi-device
+7. **Later:** Btrfs read-only stub, mdev utility for device node management

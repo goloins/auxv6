@@ -17,6 +17,9 @@ struct stat;
 #define VFS_CAP_LINK     0x0010
 #define VFS_CAP_MKDIR    0x0020
 #define VFS_CAP_RENAME   0x0040
+#define VFS_CAP_SYMLINK  0x0080
+
+#define SYMLOOP_MAX      8   // Maximum symlink depth during path resolution
 
 struct vnode_ops {
   int (*read)(struct inode *ip, char *dst, uint off, uint n);
@@ -38,6 +41,9 @@ struct vnode_ops {
   struct inode* (*create)(struct inode *dp, char *name, short type,
                           short major, short minor, int mode,
                           int uid, int gid);
+  // Symlink operations
+  int (*readlink)(struct inode *ip, char *buf, uint size);
+  int (*symlink)(struct inode *dp, char *name, char *target);
 };
 
 struct vfs_ops {

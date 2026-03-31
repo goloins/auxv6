@@ -154,6 +154,9 @@ extern int sys_fsfault(void);
 extern int sys_lseek(void);
 extern int sys_dup2(void);
 extern int sys_fcntl(void);
+extern int sys_symlink(void);
+extern int sys_readlink(void);
+extern int sys_lstat(void);
 
 static int (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -228,6 +231,9 @@ static int (*syscalls[])(void) = {
 [SYS_lseek] sys_lseek,
 [SYS_dup2] sys_dup2,
 [SYS_fcntl] sys_fcntl,
+[SYS_symlink] sys_symlink,
+[SYS_readlink] sys_readlink,
+[SYS_lstat] sys_lstat,
 };
 
 void

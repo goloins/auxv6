@@ -96,11 +96,16 @@ struct ext2_inode {
 #define EXT2_S_IFDIR 0x4000
 #define EXT2_S_IFCHR 0x2000
 #define EXT2_S_IFBLK 0x6000
+#define EXT2_S_IFLNK 0xA000
 
 #define EXT2_FT_REG_FILE 1
 #define EXT2_FT_DIR      2
 #define EXT2_FT_CHRDEV   3
 #define EXT2_FT_BLKDEV   4
+#define EXT2_FT_SYMLINK  7
+
+// Fast symlink threshold - symlinks <= 60 bytes are stored in i_block
+#define EXT2_FAST_SYMLINK_MAX 60
 
 #define EXT2_DIRENT_MIN_SIZE 8
 
@@ -1188,6 +1193,8 @@ ext2_mode_to_type(ushort mode)
   case EXT2_S_IFCHR:
   case EXT2_S_IFBLK:
     return T_DEV;
+  case EXT2_S_IFLNK:
+    return T_SYMLINK;
   case EXT2_S_IFREG:
   default:
     return T_FILE;
@@ -1837,10 +1844,25 @@ ext2_stat(struct inode *ip, struct stat *st)
   st->st_nlink = dip.i_links_count;
   st->st_uid = dip.i_uid;
   st->st_gid = dip.i_gid;
-  if(st->st_type == T_DEV)
-    st->st_mode = (dip.i_mode & M_IFMT) | (dip.i_mode & 07777);
-  else
-    st->st_mode = dip.i_mode & 07777;
+  // Set mode with proper file type bits
+  switch(dip.i_mode & EXT2_S_IFMT){
+  case EXT2_S_IFDIR:
+    st->st_mode = M_IFDIR | (dip.i_mode & 07777);
+    break;
+  case EXT2_S_IFCHR:
+    st->st_mode = M_IFCHR | (dip.i_mode & 07777);
+    break;
+  case EXT2_S_IFBLK:
+    st->st_mode = M_IFBLK | (dip.i_mode & 07777);
+    break;
+  case EXT2_S_IFLNK:
+    st->st_mode = M_IFLNK | (dip.i_mode & 07777);
+    break;
+  case EXT2_S_IFREG:
+  default:
+    st->st_mode = M_IFREG | (dip.i_mode & 07777);
+    break;
+  }
   st->st_size = dip.i_size;
   return 0;
 }
@@ -1882,6 +1904,124 @@ ext2_setattr(struct inode *ip,
 
   if(ext2_write_disk_inode(data, ip->inum, &dip) < 0)
     return -1;
+
+  return 0;
+}
+
+// Read the target of a symbolic link
+// Returns number of bytes read, or -1 on error
+static int
+ext2_readlink(struct inode *ip, char *buf, uint size)
+{
+  struct ext2_mount_data *data;
+  struct ext2_inode dip;
+  uint len;
+
+  if(ip == 0 || buf == 0 || size == 0)
+    return -1;
+
+  data = ext2_data_for_dev(ip->dev);
+  if(data == 0)
+    return -1;
+  if(ext2_read_disk_inode(data, ip->inum, &dip) < 0)
+    return -1;
+
+  // Must be a symlink
+  if((dip.i_mode & EXT2_S_IFMT) != EXT2_S_IFLNK)
+    return -1;
+
+  len = dip.i_size;
+  if(len > size)
+    len = size;
+
+  // Fast symlink: target stored directly in i_block array
+  // This is used when size <= 60 bytes (size of i_block)
+  if(dip.i_size <= EXT2_FAST_SYMLINK_MAX){
+    memmove(buf, (char*)dip.i_block, len);
+    return len;
+  }
+
+  // Slow symlink: target stored in data blocks
+  return ext2_read_data(data, &dip, buf, 0, len);
+}
+
+// Create a symbolic link
+// dp is the parent directory, name is the link name, target is what it points to
+static int
+ext2_symlink(struct inode *dp, char *name, char *target)
+{
+  struct ext2_mount_data *data;
+  struct ext2_inode parent_dip;
+  struct ext2_inode link_dip;
+  uint link_inum;
+  uint target_len;
+  struct inode *existing;
+
+  if(dp == 0 || name == 0 || target == 0)
+    return -1;
+
+  target_len = strlen(target);
+  if(target_len == 0 || target_len > 1023)  // Reasonable limit
+    return -1;
+
+  data = ext2_data_for_dev(dp->dev);
+  if(data == 0)
+    return -1;
+
+  // Read parent directory inode
+  if(ext2_read_disk_inode(data, dp->inum, &parent_dip) < 0)
+    return -1;
+  if((parent_dip.i_mode & EXT2_S_IFMT) != EXT2_S_IFDIR)
+    return -1;
+
+  // Check if name already exists using ext2_dirlookup
+  existing = ext2_dirlookup(dp, name, 0);
+  if(existing != 0){
+    iput(existing);
+    return -1;  // Name exists
+  }
+
+  // Allocate a new inode for the symlink
+  if(ext2_alloc_inode(data, &link_inum) < 0)
+    return -1;
+
+  // Initialize the symlink inode
+  memset(&link_dip, 0, sizeof(link_dip));
+  link_dip.i_mode = EXT2_S_IFLNK | 0777;  // Symlinks typically have 0777 perms
+  // Use dp's uid/gid as fallback (inherits from parent)
+  link_dip.i_uid = dp->uid;
+  link_dip.i_gid = dp->gid;
+  link_dip.i_links_count = 1;
+  link_dip.i_size = target_len;
+  acquire(&tickslock);
+  link_dip.i_atime = ticks;
+  link_dip.i_ctime = ticks;
+  link_dip.i_mtime = ticks;
+  release(&tickslock);
+
+  // Store the target
+  if(target_len <= EXT2_FAST_SYMLINK_MAX){
+    // Fast symlink: store directly in i_block
+    memmove((char*)link_dip.i_block, target, target_len);
+    link_dip.i_blocks = 0;  // No data blocks used
+  } else {
+    // Slow symlink: need to allocate a data block
+    // For simplicity, only support fast symlinks initially
+    ext2_free_inode(data, link_inum, 0);
+    return -1;  // TODO: implement slow symlinks
+  }
+
+  // Write the symlink inode
+  if(ext2_write_disk_inode(data, link_inum, &link_dip) < 0){
+    ext2_free_inode(data, link_inum, 0);
+    return -1;
+  }
+
+  // Add directory entry for the symlink
+  if(ext2_dir_add_entry(data, &parent_dip, name, link_inum, EXT2_FT_SYMLINK) < 0){
+    ext2_free_inode(data, link_inum, 0);
+    return -1;
+  }
 
   return 0;
 }
@@ -2424,7 +2564,8 @@ vfs_ext2_init(struct vfs *fs)
   safestrcpy(fs->name, "ext2", sizeof(fs->name));
   // ext2 supports read/write and staged file/directory creation.
   fs->caps = VFS_CAP_READ | VFS_CAP_WRITE | VFS_CAP_CREATE |
-             VFS_CAP_REMOVE | VFS_CAP_LINK | VFS_CAP_MKDIR | VFS_CAP_RENAME;
+             VFS_CAP_REMOVE | VFS_CAP_LINK | VFS_CAP_MKDIR | VFS_CAP_RENAME |
+             VFS_CAP_SYMLINK;
   fs->fs_data = 0;
   fs->fs_destroy = ext2_mount_destroy;
   fs->mount_init = ext2_mount_init;
@@ -2445,4 +2586,6 @@ vfs_ext2_init(struct vfs *fs)
   fs->vnode_ops.faultctl = ext2_fault_inject_set;
   fs->vnode_ops.remove = ext2_remove;
   fs->vnode_ops.create = ext2_create;
+  fs->vnode_ops.readlink = ext2_readlink;
+  fs->vnode_ops.symlink = ext2_symlink;
 }

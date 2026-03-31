@@ -195,6 +195,14 @@ tcp_retransmit_check(struct socket *s, struct ifnet *ifp)
 	if(ifp == 0 || (ifp->if_flags & IFF_LOOPBACK))
 		return 0;
 
+	// Initialize for safety
+	seq = 0;
+	ack = 0;
+	data = 0;
+	len = 0;
+	memset(&src, 0, sizeof(src));
+	memset(&dst, 0, sizeof(dst));
+
 	acquire(&socket_lock);
 	
 	if(s->tcp.state != TCPS_ESTABLISHED && s->tcp.state != TCPS_FIN_WAIT_1)
@@ -211,6 +219,11 @@ tcp_retransmit_check(struct socket *s, struct ifnet *ifp)
 	
 	// Timeout expired
 	s->tcp.retransmits++;
+	seq = s->tcp.unacked_seq;
+	ack = s->tcp.rcv_nxt;
+	memmove(&src, &s->local_addr, sizeof(src));
+	memmove(&dst, &s->remote_addr, sizeof(dst));
+	
 	if(s->tcp.retransmits > TCP_MAX_RETRANSMIT) {
 		// Give up - reset connection
 		do_reset = 1;
@@ -224,10 +237,6 @@ tcp_retransmit_check(struct socket *s, struct ifnet *ifp)
 		do_retransmit = 1;
 		data = s->tcp.unacked_buf;
 		len = s->tcp.unacked_len;
-		seq = s->tcp.unacked_seq;
-		ack = s->tcp.rcv_nxt;
-		memmove(&src, &s->local_addr, sizeof(src));
-		memmove(&dst, &s->remote_addr, sizeof(dst));
 		
 		// Exponential backoff
 		s->tcp.rto *= 2;
