@@ -1037,31 +1037,6 @@ msdos_walk(char *path, int nameiparent, char *name)
     if(namecmp(elem, ".") == 0)
       continue;
 
-    // Handle ".." at mount root - cross to underlying filesystem and continue
-    // looking up ".." there to get the actual parent directory
-    if(namecmp(elem, "..") == 0 && ip->inum == ROOTINO){
-      struct inode *mountpoint;
-      mountpoint = vfs_mount_crossover(ip, 0);
-      if(mountpoint){
-        const struct vnode_ops *ops;
-        iput(ip);
-        // Now look up ".." in the underlying filesystem
-        ops = vfs_dev_vops(mountpoint->dev);
-        if(ops && ops->dirlookup){
-          ilock(mountpoint);
-          next = ops->dirlookup(mountpoint, "..", 0);
-          iunlockput(mountpoint);
-          if(next == 0)
-            return 0;
-          ip = next;
-          continue;
-        }
-        // Fallback: just use mountpoint (shouldn't happen)
-        ip = mountpoint;
-        continue;
-      }
-    }
-
     next = msdos_dirlookup(ip, elem, 0);
     if(next == 0){
       iput(ip);

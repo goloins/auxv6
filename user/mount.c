@@ -21,6 +21,10 @@ parse_dev_token(const char *tok)
   if(is_numeric(s))
     return parse_int(s);
 
+  /* Handle loop devices: loopN -> 40+N */
+  if(s[0] == 'l' && s[1] == 'o' && s[2] == 'o' && s[3] == 'p' && s[4] >= '0' && s[4] <= '7' && s[5] == 0)
+    return 40 + (s[4] - '0');
+
   if((s[0] != 'h' && s[0] != 'v' && s[0] != 'n') || s[1] != 'd')
     return -1;
   family = s[0];

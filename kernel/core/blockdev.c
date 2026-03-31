@@ -197,9 +197,10 @@ bdevrw(struct buf *b)
   is_part = bdevtable.dev[b->dev].is_part;
   release(&bdevtable.lock);
 
-  if(ops == 0 || ops->rw == 0)
+  if(ops == 0 || ops->rw == 0){
+    cprintf("bdevrw: no ops for dev=%d\n", b->dev);
     return -1;
-
+  }
   if(!is_part)
     return ops->rw(b);
 

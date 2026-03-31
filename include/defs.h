@@ -133,8 +133,7 @@ int             vfs_dev_faultctl(uint, int, int);
 void            vfs_xv6fs_init(struct vfs*);
 void            vfs_ext2_init(struct vfs*);
 void            vfs_msdosfs_init(struct vfs*);
-void            vfs_procfs_init(struct vfs*);
-
+void            vfs_procfs_init(struct vfs*);void            vfs_isofs_init(struct vfs*);
 // ide.c
 void            ideinit(void);
 void            ideintr(void);
@@ -170,6 +169,14 @@ uint            dma_virt_to_phys(void*);
 void*           dma_alloc_aligned(uint, uint, uint*);
 void            dma_sync_for_device(void*, uint);
 void            dma_sync_for_cpu(void*, uint);
+
+// loop.c
+void            loop_init(void);
+int             loop_setup(int loopnum, struct inode *ip, uint offset, uint nblocks);
+int             loop_teardown(int loopnum);
+int             loop_status(int loopnum, uint *backing_inum, uint *nblocks);
+int             loop_devnum(int loopnum);
+int             loop_find_free(void);
 
 // kalloc.c
 char*           kalloc(void);
@@ -321,6 +328,9 @@ int             sys_waitpid(void);
 int             sys_rename(void);
 int             sys_ext2fail(void);
 int             sys_fsfault(void);
+int             sys_loopsetup(void);
+int             sys_loopteardown(void);
+int             sys_loopstatus(void);
 
 // timer.c
 void            timerinit(void);

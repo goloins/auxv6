@@ -94,6 +94,7 @@ bget(uint dev, uint blockno)
 }
 
 // Return a locked buf with the contents of the indicated block.
+// Return a locked buf with the contents of the indicated block.
 struct buf*
 bread(uint dev, uint blockno)
 {
@@ -101,12 +102,13 @@ bread(uint dev, uint blockno)
 
   b = bget(dev, blockno);
   if((b->flags & B_VALID) == 0) {
-    if(bdevrw(b) < 0)
+    if(bdevrw(b) < 0){
+      cprintf("bread: failed dev=%d blockno=%d\n", dev, blockno);
       panic("bread: no block device");
+    }
   }
   return b;
 }
-
 // Write b's contents to disk.  Must be locked.
 void
 bwrite(struct buf *b)

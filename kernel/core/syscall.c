@@ -157,6 +157,9 @@ extern int sys_fcntl(void);
 extern int sys_symlink(void);
 extern int sys_readlink(void);
 extern int sys_lstat(void);
+extern int sys_loopsetup(void);
+extern int sys_loopteardown(void);
+extern int sys_loopstatus(void);
 
 static int (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -234,6 +237,9 @@ static int (*syscalls[])(void) = {
 [SYS_symlink] sys_symlink,
 [SYS_readlink] sys_readlink,
 [SYS_lstat] sys_lstat,
+[SYS_loopsetup] sys_loopsetup,
+[SYS_loopteardown] sys_loopteardown,
+[SYS_loopstatus] sys_loopstatus,
 };
 
 void

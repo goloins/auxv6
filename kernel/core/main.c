@@ -36,6 +36,7 @@ main(void)
   ahci_init();     // AHCI SATA controllers
   nvme_init();     // NVMe controllers
   virtio_blk_init(); // virtio block devices
+  loop_init();     // loop block devices
   netdev_init();   // network interfaces
   socket_init();   // socket table
   startothers();   // start other processors

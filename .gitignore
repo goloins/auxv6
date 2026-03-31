@@ -42,6 +42,8 @@ user/mkdir
 user/mount
 user/mounts
 user/mounttest
+user/losetup
+user/isotest
 user/mv
 user/umount
 user/uname

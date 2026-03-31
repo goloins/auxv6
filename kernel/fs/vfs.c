@@ -14,6 +14,99 @@ static int vfs_ready;
 static uint vfs_rootdev = ROOTFS_DEV;
 static char vfs_rootrel[] = "/";
 
+static int
+vfs_path_split_leading_dotdot(char *path, char **tail)
+{
+  char *p;
+
+  if(path == 0 || tail == 0)
+    return 0;
+
+  p = path;
+  while(*p == '/')
+    p++;
+  if(!(p[0] == '.' && p[1] == '.' && (p[2] == 0 || p[2] == '/')))
+    return 0;
+
+  p += 2;
+  while(*p == '/')
+    p++;
+  *tail = p;
+  return 1;
+}
+
+static int
+vfs_mount_parent_path_locked(struct mount *m, char *out, int outsz)
+{
+  int len;
+
+  if(m == 0 || out == 0 || outsz < 2)
+    return -1;
+
+  safestrcpy(out, m->path, outsz);
+  len = strlen(out);
+  while(len > 1 && out[len - 1] == '/')
+    out[--len] = 0;
+
+  while(len > 1 && out[len - 1] != '/')
+    len--;
+
+  if(len <= 1){
+    out[0] = '/';
+    out[1] = 0;
+  } else {
+    out[len - 1] = 0;
+  }
+
+  return 0;
+}
+
+static int
+vfs_rewrite_mount_root_dotdot_locked(struct mount *m, char *path,
+                                     char *out, int outsz)
+{
+  char *tail;
+  char parent[VFS_MOUNT_PATH_MAX];
+  int plen;
+  int tlen;
+
+  if(m == 0 || path == 0 || out == 0 || outsz <= 0)
+    return -1;
+
+  if(vfs_path_split_leading_dotdot(path, &tail) == 0)
+    return -1;
+
+  if(vfs_mount_parent_path_locked(m, parent, sizeof(parent)) < 0)
+    return -1;
+
+  plen = strlen(parent);
+  tlen = strlen(tail);
+
+  if(tlen == 0){
+    if(plen + 1 > outsz)
+      return -1;
+    safestrcpy(out, parent, outsz);
+    return 0;
+  }
+
+  if(parent[0] == '/' && parent[1] == 0){
+    if(1 + tlen + 1 > outsz)
+      return -1;
+    out[0] = '/';
+    memmove(out + 1, tail, tlen);
+    out[1 + tlen] = 0;
+    return 0;
+  }
+
+  if(plen + 1 + tlen + 1 > outsz)
+    return -1;
+  memmove(out, parent, plen);
+  out[plen] = '/';
+  memmove(out + plen + 1, tail, tlen);
+  out[plen + 1 + tlen] = 0;
+  return 0;
+}
+
 static void
 vfs_root_configure(struct vfs *fs)
 {
@@ -147,6 +240,7 @@ vfs_attach_mount_locked(struct vfs *fs, int dev, int flags, char *path,
   mounts[slot].dev = dev;
   mounts[slot].flags = flags;
   mounts[slot].caps = fs->caps;
+  mounts[slot].root_inum = mountpoint ? mountpoint->inum : ROOTINO;
   safestrcpy(mounts[slot].path, path, sizeof(mounts[slot].path));
   mounts[slot].mountpoint = mountpoint;
   mounts[slot].fs_data = fs_data;
@@ -176,6 +270,7 @@ vfs_mount_register_inode(struct vfs *fs, int dev, int flags, char *path, struct 
   mounts[slot].dev = dev;
   mounts[slot].flags = flags;
   mounts[slot].caps = fs->caps;
+  mounts[slot].root_inum = ROOTINO;
   safestrcpy(mounts[slot].path, path, sizeof(mounts[slot].path));
   // Keep fs null until mount_init finishes so lookup paths skip this slot.
   mounts[slot].fs = 0;
@@ -201,6 +296,7 @@ vfs_mount_register_inode(struct vfs *fs, int dev, int flags, char *path, struct 
       mounts[slot].dev = 0;
       mounts[slot].flags = 0;
       mounts[slot].caps = 0;
+      mounts[slot].root_inum = 0;
       mounts[slot].path[0] = 0;
       mounts[slot].mountpoint = 0;
       mounts[slot].fs = 0;
@@ -209,6 +305,24 @@ vfs_mount_register_inode(struct vfs *fs, int dev, int flags, char *path, struct 
       return -1;
     }
     fs_data = mctx.fs_data;
+  }
+
+  {
+    struct inode *rootip;
+    rootip = 0;
+    if(fs->ops.root_inode)
+      rootip = fs->ops.root_inode();
+    else if(fs->ops.namei)
+      rootip = fs->ops.namei("/");
+    if(rootip){
+      acquire(&vfslock);
+      mounts[slot].root_inum = rootip->inum;
+      release(&vfslock);
+      if(fs->ops.inode_put)
+        fs->ops.inode_put(rootip);
+      else
+        iput(rootip);
+    }
   }
 
   acquire(&vfslock);
@@ -293,6 +407,7 @@ vfs_unmount(char *path)
         m->dev = 0;
         m->flags = 0;
         m->caps = 0;
+        m->root_inum = 0;
         m->path[0] = 0;
         m->mountpoint = 0;
         m->fs = 0;
@@ -494,8 +609,8 @@ vfs_mount_crossover(struct inode *ip, char *name)
     // Skip root mount
     if(m->path[0] == '/' && m->path[1] == 0)
       continue;
-    // Check if this mount's device matches and ip is at ROOTINO
-    if((uint)m->dev == ip->dev && ip->inum == ROOTINO){
+    // Check if this mount's device matches and ip is this fs mount root.
+    if((uint)m->dev == ip->dev && ip->inum == m->root_inum){
       // Found the mount - get the mountpoint from underlying fs
       mp = m->mountpoint;
       if(mp)
@@ -546,16 +661,23 @@ int
 vfs_lookup(char *path, struct vnode *vn)
 {
   struct inode *ip;
+  struct inode *cwdip;
   struct inode* (*lookup)(char *path);
   uint cwddev;
   struct mount *m;
   char *relpath;
+  char rewritten[128];
 
   if(path == 0 || vn == 0)
     return -1;
 
   vn->ip = 0;
   vn->mnt = 0;
+
+  cwdip = 0;
+  rewritten[0] = 0;
+  if(path[0] != '/')
+    cwdip = proc_cwd_idup();
 
   acquire(&vfslock);
   if(vfs_ready == 0){
@@ -582,17 +704,43 @@ vfs_lookup(char *path, struct vnode *vn)
       m = select_mount_locked("/");
     if(m == 0){
       release(&vfslock);
+      if(cwdip)
+        iput(cwdip);
       return -1;
     }
     relpath = path;
+
+    // Centralized mount-root '..' handling for relative lookups.
+    if(cwdip && m->path[0] == '/' && !(m->path[1] == 0) &&
+       cwdip->dev == (uint)m->dev && cwdip->inum == m->root_inum){
+      if(vfs_rewrite_mount_root_dotdot_locked(m, path, rewritten,
+                                              sizeof(rewritten)) == 0){
+        m = select_mount_locked(rewritten);
+        if(m == 0){
+          release(&vfslock);
+          iput(cwdip);
+          return -1;
+        }
+        relpath = mount_relative_path(m, rewritten);
+        if(relpath == 0){
+          release(&vfslock);
+          iput(cwdip);
+          return -1;
+        }
+      }
+    }
   }
   if(m->fs->ops.namei == 0){
     release(&vfslock);
+    if(cwdip)
+      iput(cwdip);
     return -1;
   }
   lookup = m->fs->ops.namei;
   vn->mnt = m;
   release(&vfslock);
+  if(cwdip)
+    iput(cwdip);
 
   ip = lookup(relpath);
   if(ip == 0){
@@ -619,16 +767,23 @@ int
 vfs_lookup_parent(char *path, char *name, struct vnode *vn)
 {
   struct inode *ip;
+  struct inode *cwdip;
   struct inode* (*lookup_parent)(char *path, char *name);
   uint cwddev;
   struct mount *m;
   char *relpath;
+  char rewritten[128];
 
   if(path == 0 || name == 0 || vn == 0)
     return -1;
 
   vn->ip = 0;
   vn->mnt = 0;
+
+  cwdip = 0;
+  rewritten[0] = 0;
+  if(path[0] != '/')
+    cwdip = proc_cwd_idup();
 
   acquire(&vfslock);
   if(vfs_ready == 0){
@@ -655,17 +810,43 @@ vfs_lookup_parent(char *path, char *name, struct vnode *vn)
       m = select_mount_locked("/");
     if(m == 0){
       release(&vfslock);
+      if(cwdip)
+        iput(cwdip);
       return -1;
     }
     relpath = path;
+
+    // Centralized mount-root '..' handling for relative parent lookups.
+    if(cwdip && m->path[0] == '/' && !(m->path[1] == 0) &&
+       cwdip->dev == (uint)m->dev && cwdip->inum == m->root_inum){
+      if(vfs_rewrite_mount_root_dotdot_locked(m, path, rewritten,
+                                              sizeof(rewritten)) == 0){
+        m = select_mount_locked(rewritten);
+        if(m == 0){
+          release(&vfslock);
+          iput(cwdip);
+          return -1;
+        }
+        relpath = mount_relative_path(m, rewritten);
+        if(relpath == 0){
+          release(&vfslock);
+          iput(cwdip);
+          return -1;
+        }
+      }
+    }
   }
   if(m->fs->ops.nameiparent == 0){
     release(&vfslock);
+    if(cwdip)
+      iput(cwdip);
     return -1;
   }
   lookup_parent = m->fs->ops.nameiparent;
   vn->mnt = m;
   release(&vfslock);
+  if(cwdip)
+    iput(cwdip);
 
   ip = lookup_parent(relpath, name);
   if(ip == 0){

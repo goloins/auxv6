@@ -68,6 +68,7 @@ struct mount {
   int dev;
   int flags;
   uint caps;
+  uint root_inum;
   char path[VFS_MOUNT_PATH_MAX];
   struct inode *mountpoint;
   struct vfs *fs;
@@ -106,6 +107,5 @@ void* vfs_dev_fs_data(uint dev);
 void vfs_xv6fs_init(struct vfs *fs);
 void vfs_ext2_init(struct vfs *fs);
 void vfs_msdosfs_init(struct vfs *fs);
-void vfs_procfs_init(struct vfs *fs);
-
+void vfs_procfs_init(struct vfs *fs);void vfs_isofs_init(struct vfs *fs);
 #endif

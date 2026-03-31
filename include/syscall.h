@@ -74,3 +74,6 @@
 #define SYS_symlink 73
 #define SYS_readlink 74
 #define SYS_lstat 75
+#define SYS_loopsetup 76
+#define SYS_loopteardown 77
+#define SYS_loopstatus 78

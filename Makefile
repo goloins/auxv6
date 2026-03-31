@@ -10,6 +10,7 @@ OBJS = \
 	kernel/fs/procfs.o\
 	kernel/fs/vfs_ext2.o\
 	kernel/fs/vfs_msdosfs.o\
+	kernel/fs/vfs_isofs.o\
 	kernel/driver/ide.o\
 	kernel/driver/ioapic.o\
 	kernel/driver/pci.o\
@@ -24,6 +25,7 @@ OBJS = \
 	kernel/driver/rtl8111.o\
 	kernel/driver/vmxnet3.o\
 	kernel/driver/netvsc.o\
+	kernel/driver/loop.o\
 	kernel/core/kalloc.o\
 	kernel/driver/kbd.o\
 	kernel/driver/lapic.o\
@@ -374,6 +376,12 @@ _wc: user/wc
 _zombie: user/zombie
 	cp user/zombie _zombie
 
+_losetup: user/losetup
+	cp user/losetup _losetup
+
+_isotest: user/isotest
+	cp user/isotest _isotest
+
 _dash: ports/dash-0.5.12/Makefile.auxv6 user/ulib.o user/usys.o user/printf.o user/umalloc.o user/resolve.o user/posix.o user/setjmp.o
 	$(MAKE) -f ports/dash-0.5.12/Makefile.auxv6
 	cp ports/dash-0.5.12/_dash _dash
@@ -438,6 +446,8 @@ UPROGS=\
 	_usertests\
 	_wc\
 	_zombie\
+	_losetup\
+	_isotest\
 	_dash\
 
 # Old-init fallback set for machines without ports/dash.
@@ -515,6 +525,7 @@ clean:
 	$(USER_STAGE_DIR) \
 	user/runlevel user/telinit \
 	user/mount user/mounts user/mounttest user/umount \
+	user/losetup user/isotest \
 	user/uname \
 	_dhcp \
 	user/ifconfig user/netstat user/route user/arp user/rarp user/ip \

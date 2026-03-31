@@ -1147,6 +1147,10 @@ sys_mount(void)
   } else if(memcmp(fstype_buf, "msdosfs", 8) == 0 ||
             memcmp(fstype_buf, "fat", 4) == 0) {
     vfs_msdosfs_init(fs);
+  } else if(memcmp(fstype_buf, "isofs", 6) == 0 ||
+            memcmp(fstype_buf, "iso9660", 8) == 0 ||
+            memcmp(fstype_buf, "cd9660", 7) == 0) {
+    vfs_isofs_init(fs);
   } else {
     kfree((void*)fs);
     return -1;
@@ -1161,6 +1165,10 @@ sys_mount(void)
     dev = has_dev_override ? dev_override : ROOTDEV;
   else if(memcmp(fstype_buf, "msdosfs", 8) == 0 ||
           memcmp(fstype_buf, "fat", 4) == 0)
+    dev = has_dev_override ? dev_override : DISK_DEV(3);
+  else if(memcmp(fstype_buf, "isofs", 6) == 0 ||
+          memcmp(fstype_buf, "iso9660", 8) == 0 ||
+          memcmp(fstype_buf, "cd9660", 7) == 0)
     dev = has_dev_override ? dev_override : DISK_DEV(3);
 
   if(vfs_register_mount(fs, dev, mount_flags, path_buf) < 0){
@@ -1520,4 +1528,69 @@ sys_lstat(void)
   iunlockput(ip);
   end_op();
   return rc;
+}
+
+int
+sys_loopsetup(void)
+{
+  int loopnum;
+  char *path;
+  int offset;
+  int nblocks;
+  struct inode *ip;
+
+  if(argint(0, &loopnum) < 0)
+    return -1;
+  if(argstr(1, &path) < 0)
+    return -1;
+  if(argint(2, &offset) < 0)
+    return -1;
+  if(argint(3, &nblocks) < 0)
+    return -1;
+
+  // Open the backing file
+  begin_op();
+  if((ip = vfs_namei(path)) == 0){
+    end_op();
+    return -1;
+  }
+  end_op();
+
+  // Setup the loop device
+  if(loop_setup(loopnum, ip, offset, nblocks) < 0){
+    iput(ip);
+    return -1;
+  }
+
+  // loop_setup takes a reference, we can release ours
+  iput(ip);
+  return 0;
+}
+
+int
+sys_loopteardown(void)
+{
+  int loopnum;
+
+  if(argint(0, &loopnum) < 0)
+    return -1;
+
+  return loop_teardown(loopnum);
+}
+
+int
+sys_loopstatus(void)
+{
+  int loopnum;
+  uint *backing_inum;
+  uint *nblocks;
+
+  if(argint(0, &loopnum) < 0)
+    return -1;
+  if(argptr(1, (void*)&backing_inum, sizeof(*backing_inum)) < 0)
+    return -1;
+  if(argptr(2, (void*)&nblocks, sizeof(*nblocks)) < 0)
+    return -1;
+
+  return loop_status(loopnum, backing_inum, nblocks);
 }
