@@ -249,6 +249,12 @@ _lspci: user/lspci
 _mkdir: user/mkdir
 	cp user/mkdir _mkdir
 
+_netcat: user/netcat
+	cp user/netcat _netcat
+
+_telnet: user/telnet
+	cp user/telnet _telnet
+
 _mounts: user/mounts
 	cp user/mounts _mounts
 
@@ -391,6 +397,8 @@ UPROGS=\
 	_netinfo\
 	_ifconfig\
 	_netstat\
+	_netcat\
+	_telnet\
 	_route\
 	_arp\
 	_rarp\
