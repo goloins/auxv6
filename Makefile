@@ -235,6 +235,9 @@ _grep: user/grep
 _init: user/init
 	cp user/init _init
 
+_v6init: user/v6init
+	cp user/v6init _v6init
+
 _id: user/id
 	cp user/id _id
 
@@ -433,6 +436,9 @@ UPROGS=\
 	_zombie\
 	_dash\
 
+# Old-init fallback set for machines without ports/dash.
+UPROGS_OLDINIT = $(filter-out _dash _init,$(UPROGS)) _v6init
+
 fs.img: mkfs README etc.hosts etc.fstab etc.profile etc.passwd etc.groups etc.hostname $(UPROGS)
 	./mkfs fs.img README etc.hosts etc.fstab etc.profile etc.passwd etc.groups etc.hostname $(UPROGS)
 
@@ -490,9 +496,12 @@ clean:
 	aux.kern xv6.img fs.img kernelmemfs \
 	xv6memfs.img mkfs .gdbinit $(ROOTFS_CONFIG) \
 	test_ext2.img \
+	test_ext2_oldinit.img \
 	test_fat.img \
 	$(UPROGS) \
+	$(UPROGS_OLDINIT) \
 	.ext2root \
+	.ext2root-oldinit \
 	.fatroot \
 	kernel/**/*.o kernel/**/*.d kernel/**/*.asm \
 	user/*.o user/*.d user/*.asm user/cat user/echo \
@@ -506,7 +515,7 @@ clean:
 	_dhcp \
 	user/ifconfig user/netstat user/route user/arp user/rarp user/ip \
 	user/dhcp user/v6dhcpd user/nslookup \
-	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/lspci
+	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/lspci user/v6init
 
 # make a printout
 FILES = $(shell grep -v '^\#' tools/runoff.list)
@@ -547,6 +556,9 @@ QEMUOPTS = -drive file=fs.img,index=1,media=disk,format=raw -drive file=xv6.img,
 test_ext2.img: tools/stage-ext2-root.sh README etc.hosts $(EXT2ROOT_FSTAB) etc.profile etc.rc.S etc.rc.0 etc.rc.1 etc.rc.2 etc.rc.3 etc.rc.6 etc.passwd etc.groups etc.hostname etc.resolv.conf $(UPROGS)
 	sh tools/stage-ext2-root.sh .ext2root $(EXT2IMG) README etc.hosts $(EXT2ROOT_FSTAB) etc.profile etc.rc.S etc.rc.0 etc.rc.1 etc.rc.2 etc.rc.3 etc.rc.6 etc.passwd etc.groups etc.hostname etc.resolv.conf $(UPROGS)
 
+test_ext2_oldinit.img: tools/stage-ext2-root.sh README etc.hosts $(EXT2ROOT_FSTAB) etc.profile etc.passwd etc.groups etc.hostname etc.resolv.conf $(UPROGS_OLDINIT)
+	sh tools/stage-ext2-root.sh .ext2root-oldinit test_ext2_oldinit.img README etc.hosts $(EXT2ROOT_FSTAB) etc.profile etc.passwd etc.groups etc.hostname etc.resolv.conf $(UPROGS_OLDINIT)
+
 test_fat.img: tools/stage-fat-root.sh
 	sh tools/stage-fat-root.sh $(FATROOT_STAGE) $(FATIMG)
 
@@ -561,6 +573,9 @@ fat-reset:
 # Default: EXT2 root filesystem (easier to modify/mount from other systems)
 qemu: xv6.img $(EXT2IMG)
 	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
+qemu-oldinit: xv6.img test_ext2_oldinit.img
+	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=test_ext2_oldinit.img,index=2,media=disk,format=raw $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 qemu-memfs: xv6memfs.img
 	$(QEMU) -drive file=xv6memfs.img,index=0,media=disk,format=raw $(QEMUNETOPTS) -smp $(CPUS) -m 256
@@ -627,4 +642,4 @@ tar:
 	cp dist/* config/.gdbinit.tmpl /tmp/xv6
 	(cd /tmp; tar cf - xv6) | gzip >xv6-rev10.tar.gz  # the next one will be 10 (9/17)
 
-.PHONY: dist-test dist ext2-reset fat-reset ext2root qemu-ext2root qemu-nox-ext2root qemu-gdb-ext2root qemu-nox-gdb-ext2root xv6root qemu-xv6root qemu-nox-xv6root qemu-gdb-xv6root qemu-nox-gdb-xv6root qemu-fat qemu-nox-fat
+.PHONY: dist-test dist ext2-reset fat-reset ext2root qemu-ext2root qemu-nox-ext2root qemu-gdb-ext2root qemu-nox-gdb-ext2root xv6root qemu-xv6root qemu-nox-xv6root qemu-gdb-xv6root qemu-nox-gdb-xv6root qemu-fat qemu-nox-fat qemu-oldinit

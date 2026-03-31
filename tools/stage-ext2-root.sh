@@ -82,6 +82,11 @@ for src in "$@"; do
       install -m 0755 "$src" "$rootdir/init"
       install -m 0755 "$src" "$rootdir/bin/init"
       ;;
+    _v6init)
+      install -m 0755 "$src" "$rootdir/init"
+      install -m 0755 "$src" "$rootdir/bin/init"
+      install -m 0755 "$src" "$rootdir/bin/v6init"
+      ;;
     _sh)
       install -m 0755 "$src" "$rootdir/bin/6sh"
       install -m 0755 "$src" "$rootdir/bin/sh"
