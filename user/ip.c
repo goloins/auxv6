@@ -65,6 +65,8 @@ usage(void)
   printf(2, "       ip route show\n");
   printf(2, "       ip route add default via <gateway> dev <ifname>\n");
   printf(2, "       ip route add <dst>/<prefix> via <gateway|-> dev <ifname>\n");
+  printf(2, "       ip route del default dev <ifname>\n");
+  printf(2, "       ip route del <dst>/<prefix> dev <ifname>\n");
   exit();
 }
 
@@ -148,6 +150,44 @@ main(int argc, char *argv[])
     }
     if(routeadd(dst & mask, mask, gw, ifp->if_addr, ifp->if_index) < 0) {
       printf(2, "ip: routeadd failed\n");
+      exit();
+    }
+    show_routes();
+    exit();
+  }
+
+  if(argc == 6 && strcmp(argv[1], "route") == 0 && strcmp(argv[2], "del") == 0 &&
+     strcmp(argv[3], "default") == 0 && strcmp(argv[4], "dev") == 0) {
+    nif = net_load_ifs(ifs, NETIFINFO_MAX);
+    if(nif < 0)
+      exit();
+    ifp = net_find_if(ifs, nif, argv[5]);
+    if(ifp == 0) {
+      printf(2, "ip: unknown interface %s\n", argv[5]);
+      exit();
+    }
+    if(routedel(0, 0, ifp->if_index) < 0) {
+      printf(2, "ip: routedel failed\n");
+      exit();
+    }
+    show_routes();
+    exit();
+  }
+
+  if(argc == 6 && strcmp(argv[1], "route") == 0 && strcmp(argv[2], "del") == 0 &&
+     strcmp(argv[4], "dev") == 0) {
+    nif = net_load_ifs(ifs, NETIFINFO_MAX);
+    if(nif < 0)
+      exit();
+    if(net_parse_cidr(argv[3], &dst, &mask) < 0)
+      usage();
+    ifp = net_find_if(ifs, nif, argv[5]);
+    if(ifp == 0) {
+      printf(2, "ip: unknown interface %s\n", argv[5]);
+      exit();
+    }
+    if(routedel(dst & mask, mask, ifp->if_index) < 0) {
+      printf(2, "ip: routedel failed\n");
       exit();
     }
     show_routes();
