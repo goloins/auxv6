@@ -25,6 +25,7 @@ netdev_init(void)
 	loopback_attach();
 	virtio_net_init();
 	e1000_init();
+	i219_init();
 	pcnet_init();
 	rtl8111_init();
 	vmxnet3_init();

@@ -34,6 +34,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - **RTL8111 driver** (Realtek Gigabit Ethernet) promoted from probe stub to full implementation with descriptor-based TX/RX, IRQ handling, and ifnet integration.
 - **VMXnet3 driver** stub added for VMware paravirtualized NIC support (PCI detection, BAR mapping, MAC address reading).
 - **Hyper-V NetVSC driver** stub added for Microsoft Hyper-V synthetic network adapter (requires VMBus infrastructure for full implementation).
+- **Intel I219-V driver** stub added for PCH-integrated Intel Ethernet (BSD-style attach skeleton with PCI probe, BAR mapping, MAC/link readout, and ifnet registration).
 
 ---
 
@@ -65,7 +66,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | PCI subsystem | 80% | Bus 0 enumeration, BAR decode/mapping, helper APIs, `lspci`; MSI/MSI-X still missing |
 | DMA support | 75% | Page-based DMA allocation with physical address tracking and alignment |
 | Virtio storage | 70% | Working virtio core + virtio-blk, but still single-queue/minimal-feature oriented |
-| Real NICs | 60% | E1000, PCNET, RTL8111 have full ifnet integration; VMXnet3, Hyper-V netvsc are stubs |
+| Real NICs | 60% | E1000, PCNET, RTL8111 have full ifnet integration; VMXnet3, Hyper-V netvsc, and Intel I219-V are stubs |
 | Modern storage | 40% | AHCI has polling DMA read/write; NVMe has I/O queue and basic RW path |
 | Loop devices | 80% | 8 block devices backed by regular files, status/setup/teardown syscalls, `losetup` utility |
 | Symlinks | 65% | Syscalls, VFS hooks, and ext2 fast symlink support done; pathname following still pending |
@@ -349,8 +350,8 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 **Estimate:** 1 week
 
 ### 4.3a Real Hardware NIC Drivers [PARTIAL]
-**Status:** E1000, PCNET, RTL8111 have full ifnet integration; VMXnet3 and netvsc are stubs  
-**Files:** `kernel/driver/e1000.c`, `kernel/driver/pcnet.c`, `kernel/driver/rtl8111.c`, `kernel/driver/vmxnet3.c`, `kernel/driver/netvsc.c`  
+**Status:** E1000, PCNET, RTL8111 have full ifnet integration; VMXnet3, netvsc, and Intel I219-V are stubs  
+**Files:** `kernel/driver/e1000.c`, `kernel/driver/i219.c`, `kernel/driver/pcnet.c`, `kernel/driver/rtl8111.c`, `kernel/driver/vmxnet3.c`, `kernel/driver/netvsc.c`  
 **Value:** Support for real hardware and additional VM platforms  
 
 **E1000 (Intel Gigabit Ethernet) [IMPLEMENTED]:**
@@ -388,6 +389,14 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 - [ ] TX/RX queue setup
 - [ ] Full ifnet integration
 
+**I219-V (Intel Ethernet Connection (7) I219-V) [STUB]:**
+- [x] PCI detection for common I219-LM/V IDs (vendor 0x8086)
+- [x] BAR0 MMIO mapping and command register enablement
+- [x] Basic MAC address read from RAL/RAH and link-state sampling
+- [x] BSD-style ifnet attach as `wmX` with stub output callback
+- [ ] Descriptor rings, RX/TX datapath, and interrupt-driven completion
+- [ ] PHY/MDIO bring-up and e1000e/ICH-specific reset/quirk handling
+
 **NetVSC (Hyper-V Synthetic NIC) [STUB]:**
 - [x] RNDIS protocol structures defined
 - [ ] VMBus infrastructure (blocking dependency)
@@ -400,6 +409,7 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 - RTL8111: Common on real hardware (laptops, desktops)
 - VMXnet3: High-performance VMware option (needs more work)
 - NetVSC: Requires VMBus transport layer not yet implemented
+- I219-V: Common integrated Intel desktop NIC; attach path exists, datapath still TODO
 
 ### 4.4 TCP Implementation [PARTIAL]
 **Current:** Full state machine with retransmission and graceful teardown  
@@ -749,6 +759,7 @@ Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
 | `kernel/driver/virtio_net.c` | Initial virtio network driver with RX/TX integration |
 | `kernel/driver/virtio_blk.c` | Initial virtio block driver with blockdev integration |
 | `kernel/driver/e1000.c` | Intel E1000 Gigabit Ethernet with full ifnet integration |
+| `kernel/driver/i219.c` | Intel I219-V/e1000e-style attach stub (PCI match, MMIO map, MAC/link read, ifnet registration) |
 | `kernel/driver/pcnet.c` | AMD PCNET-PCI II with full ifnet integration |
 | `kernel/driver/rtl8111.c` | Realtek RTL8111/8168 Gigabit Ethernet with full ifnet integration |
 | `kernel/driver/vmxnet3.c` | VMware VMXnet3 paravirtualized NIC stub |
