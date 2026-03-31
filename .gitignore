@@ -28,6 +28,9 @@ user/grep
 user/init
 user/netcat
 user/telnet
+user/runlevel
+user/telinit
+user/.stage/
 user/id
 user/kill
 user/login

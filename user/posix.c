@@ -93,6 +93,30 @@ emit_str(char *buf, int *posp, int size, const char *s, int slen,
 }
 
 static void
+u64_divmod_small(unsigned long long n, unsigned base,
+                 unsigned long long *q_out, unsigned *r_out)
+{
+  unsigned long long q;
+  unsigned long long r;
+  int i;
+
+  q = 0;
+  r = 0;
+  for(i = 63; i >= 0; i--){
+    r = (r << 1) | ((n >> i) & 1ULL);
+    if(r >= (unsigned long long)base){
+      r -= (unsigned long long)base;
+      q |= (1ULL << i);
+    }
+  }
+
+  if(q_out)
+    *q_out = q;
+  if(r_out)
+    *r_out = (unsigned)r;
+}
+
+static void
 emit_uint(char *buf, int *posp, int size, unsigned long long v,
           int base, int upper, int neg, int left, int width,
           int zero_pad, int have_prec, int prec, int alt, int blank, int plus)
@@ -112,7 +136,13 @@ emit_uint(char *buf, int *posp, int size, unsigned long long v,
     tmp[dn++] = '0';
   } else {
     unsigned long long t = v;
-    while(t > 0) { tmp[dn++] = digits[t % base]; t /= base; }
+    while(t > 0) {
+      unsigned rem;
+      unsigned long long q;
+      u64_divmod_small(t, (unsigned)base, &q, &rem);
+      tmp[dn++] = digits[rem];
+      t = q;
+    }
   }
 
   /* Build prefix */

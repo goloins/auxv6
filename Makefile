@@ -196,6 +196,8 @@ kernel/core/vectors.S: tools/vectors.pl
 
 ULIB = user/ulib.o user/usys.o user/printf.o user/umalloc.o user/resolve.o user/posix.o
 
+USER_STAGE_DIR = user/.stage
+
 # sh is close to xv6 MAXFILE; compile with -Os to keep the binary under limit.
 user/sh.o: user/sh.c
 	$(CC) $(CFLAGS) -Os -c -o $@ $<
@@ -208,6 +210,12 @@ user/%: user/%.o $(ULIB)
 	$(LD) $(LDFLAGS) -N -e main -Ttext 0 -o $@ $^ $(LIBGCC)
 	$(OBJDUMP) -S $@ > $(basename $@).asm
 	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(basename $@).sym
+
+$(USER_STAGE_DIR):
+	mkdir -p $(USER_STAGE_DIR)
+
+$(USER_STAGE_DIR)/%: user/%.o $(ULIB) | $(USER_STAGE_DIR)
+	$(LD) $(LDFLAGS) -N -e main -Ttext 0 -o $@ $^ $(LIBGCC)
 
 _cat: user/cat
 	cp user/cat _cat
@@ -251,17 +259,17 @@ _lspci: user/lspci
 _mkdir: user/mkdir
 	cp user/mkdir _mkdir
 
-_netcat: user/netcat
-	cp user/netcat _netcat
+_netcat: $(USER_STAGE_DIR)/netcat
+	cp $(USER_STAGE_DIR)/netcat _netcat
 
-_telnet: user/telnet
-	cp user/telnet _telnet
+_telnet: $(USER_STAGE_DIR)/telnet
+	cp $(USER_STAGE_DIR)/telnet _telnet
 
-_runlevel: user/runlevel
-	cp user/runlevel _runlevel
+_runlevel: $(USER_STAGE_DIR)/runlevel
+	cp $(USER_STAGE_DIR)/runlevel _runlevel
 
-_telinit: user/telinit
-	cp user/telinit _telinit
+_telinit: $(USER_STAGE_DIR)/telinit
+	cp $(USER_STAGE_DIR)/telinit _telinit
 
 _mounts: user/mounts
 	cp user/mounts _mounts
@@ -491,6 +499,8 @@ clean:
 	user/fatregress \
 	user/fsregress \
 	user/grep user/id user/init user/kill user/ln user/ls user/lsblk user/mkdir user/mv \
+	$(USER_STAGE_DIR) \
+	user/runlevel user/telinit \
 	user/mount user/mounts user/mounttest user/umount \
 	user/uname \
 	_dhcp \
