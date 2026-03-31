@@ -165,6 +165,9 @@ trap(struct trapframe *tf)
       release(&tickslock);
       // Check all processes for expired alarms
       proc_check_alarms(ticks);
+      // TCP slow timer - every 10 ticks (100ms)
+      if((ticks % 10) == 0)
+        tcp_slowtimo();
     }
     lapiceoi();
     break;

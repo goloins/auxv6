@@ -1025,10 +1025,37 @@ sys_netifsetaddr(void)
 void
 socket_close(struct socket *s)
 {
+  struct ifnet *ifp;
+  uint route_src;
+
   if(!s) return;
-  acquire(&socket_lock);
-  s->state = SOCK_CLOSED;
-  release(&socket_lock);
+  
+  // For TCP sockets, initiate graceful close if connected
+  if(s->type == SOCK_STREAM && s->family == AF_INET) {
+    acquire(&socket_lock);
+    if(s->tcp.state == TCPS_ESTABLISHED || s->tcp.state == TCPS_CLOSE_WAIT) {
+      // Find interface for this connection
+      ifp = route_lookup(s->remote_addr.sin_addr, &route_src, 0);
+      release(&socket_lock);
+      if(ifp) {
+        tcp_close(s, ifp);
+      }
+    } else {
+      // Not in a state that needs FIN, just mark closed
+      if(s->tcp.unacked_buf) {
+        kfree(s->tcp.unacked_buf);
+        s->tcp.unacked_buf = 0;
+      }
+      s->tcp.state = TCPS_CLOSED;
+      s->state = SOCK_CLOSED;
+      release(&socket_lock);
+    }
+  } else {
+    acquire(&socket_lock);
+    s->state = SOCK_CLOSED;
+    release(&socket_lock);
+  }
+  
   socket_deref(s);
 }
 

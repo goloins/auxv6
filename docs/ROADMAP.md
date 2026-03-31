@@ -50,7 +50,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 ### ⚠️ Partially Implemented (30-60%)
 | Subsystem | Status | Notes |
 |-----------|--------|-------|
-| TCP/IP stack | 65% | UDP works, DNS/resolver works, TCP handshake + payload exchange work, but no retransmission/teardown/flow control yet |
+| TCP/IP stack | 80% | UDP works, DNS/resolver works, TCP handshake + data + retransmission + teardown work; flow control still basic |
 | Networking interfaces | 60% | BSD ifnet abstraction, loopback, virtio-net, routing, DHCP tooling, outbound packet path |
 | POSIX compatibility layer | 60% | Broad header coverage, libc-style shims, dash port experiments, many APIs still stubbed or partial |
 | procfs | 60% | Basic process info, missing many nodes |
@@ -393,13 +393,13 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 - NetVSC: Requires VMBus transport layer not yet implemented
 
 ### 4.4 TCP Implementation [PARTIAL]
-**Current:** Actual packet exchange now works for basic client/server traffic  
+**Current:** Full state machine with retransmission and graceful teardown  
 **Tasks:**
 - [x] SYN/SYN-ACK/ACK handshake
 - [x] Basic sequence number management
-- [ ] Retransmission
-- [ ] Flow control
-- [ ] Connection teardown
+- [x] Retransmission (single-segment, exponential backoff)
+- [ ] Flow control (window advertisement exists, not full)
+- [x] Connection teardown (FIN/ACK, TIME_WAIT)
 
 **Implementation notes:**
 - `tcp_connect()` now emits SYN packets and waits for a SYN-ACK-driven transition to `ESTABLISHED`
@@ -600,7 +600,7 @@ Several items have already landed out of order relative to this original plan, n
 
 ## Next Steps (Recommended Order)
 
-1. **Immediately:** Harden TCP with retransmission, teardown, and better receive/window handling
+1. ~~**Immediately:** Harden TCP with retransmission, teardown, and better receive/window handling~~ **DONE 2026-03-31**
 2. **Next:** Finish virtio-net polish and decide whether to prioritize a real hardware NIC driver or stay QEMU-first
 3. **Then:** Finish virtio-blk rough edges (flush/discard, multi-device cleanup) and move on to AHCI
 4. **After that:** Implement symbolic links and close VFS pathname semantics gaps

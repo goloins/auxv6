@@ -50,11 +50,34 @@ struct sockaddr_in {
 
 struct tcpcb {
   uint state;
-  uint iss;
-  uint snd_nxt;
-  uint irs;
-  uint rcv_nxt;
+  uint iss;           // Initial send sequence number
+  uint irs;           // Initial receive sequence number
+  uint snd_una;       // Oldest unacknowledged sequence number
+  uint snd_nxt;       // Next sequence number to send
+  uint rcv_nxt;       // Next sequence number expected to receive
+  uint rcv_wnd;       // Receive window size
+  
+  // Retransmission
+  uint rto;           // Retransmission timeout (ticks)
+  uint rtt_est;       // Smoothed RTT estimate (ticks)
+  uint retransmits;   // Number of retransmissions attempted
+  uint last_send;     // Tick count of last send (for RTT and retransmit)
+  
+  // Unacked data buffer for retransmission (simplified: single segment)
+  char *unacked_buf;  // Buffer of unacked data (null if none)
+  uint unacked_len;   // Length of unacked data
+  uint unacked_seq;   // Sequence number of unacked data
+  
+  // Teardown
+  uint fin_seq;       // Sequence number of our FIN (if sent)
+  uint time_wait_start; // Tick when TIME_WAIT started
 };
+
+#define TCP_RTO_INIT     100   // Initial RTO: ~1 second at 100Hz
+#define TCP_RTO_MIN      20    // Minimum RTO: 200ms
+#define TCP_RTO_MAX      6000  // Maximum RTO: 60 seconds
+#define TCP_TIME_WAIT_TICKS 12000 // 2*MSL = 2 minutes at 100Hz
+#define TCP_MAX_RETRANSMIT 5  // Max retransmits before giving up
 
 #define SOCKET_LISTENQ_MAX 16
 

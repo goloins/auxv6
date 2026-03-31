@@ -13,9 +13,12 @@
 
 #define TCP_HDR_LEN 20
 #define TCP_CONNECT_TIMEOUT_TICKS 300
+#define TCP_MAX_SEGMENT_DATA (MBUF_SIZE - TCP_HDR_LEN - 40)
 
 extern struct socket sockets[NSOCKET];
 extern struct spinlock socket_lock;
+extern struct spinlock tickslock;
+extern uint ticks;
 
 static uint tcp_iss = 50000;
 static ushort tcp_next_ephemeral = 45000;
@@ -97,6 +100,189 @@ tcp_send_segment(struct ifnet *ifp, struct sockaddr_in *src, struct sockaddr_in 
 	th->csum = net_htons(tcp_checksum(src->sin_addr, dst->sin_addr, buf, seglen));
 
 	return ip_output(ifp, NET_IP_TCP, src->sin_addr, dst->sin_addr, buf, seglen);
+}
+
+// Sequence number comparison (handles wraparound)
+// Returns true if a <= b in sequence space
+static int
+tcp_seq_leq(uint a, uint b)
+{
+	return (int)(a - b) <= 0;
+}
+
+// TCP close - initiate graceful shutdown
+// Called when socket is being closed
+int
+tcp_close(struct socket *s, struct ifnet *ifp)
+{
+	struct sockaddr_in src, dst;
+	int send_fin = 0;
+	uint fin_seq;
+	uint ack_ack;
+
+	if(s == 0 || s->type != SOCK_STREAM)
+		return -1;
+	if(ifp == 0 || (ifp->if_flags & IFF_LOOPBACK))
+		return 0;  // Loopback handled elsewhere
+
+	acquire(&socket_lock);
+	
+	switch(s->tcp.state) {
+	case TCPS_ESTABLISHED:
+		// Active close: send FIN, move to FIN_WAIT_1
+		s->tcp.fin_seq = s->tcp.snd_nxt;
+		s->tcp.snd_nxt++;
+		s->tcp.state = TCPS_FIN_WAIT_1;
+		send_fin = 1;
+		break;
+		
+	case TCPS_CLOSE_WAIT:
+		// Passive close: peer already sent FIN, send ours
+		s->tcp.fin_seq = s->tcp.snd_nxt;
+		s->tcp.snd_nxt++;
+		s->tcp.state = TCPS_LAST_ACK;
+		send_fin = 1;
+		break;
+		
+	case TCPS_SYN_SENT:
+		// Haven't connected yet, just reset
+		s->tcp.state = TCPS_CLOSED;
+		s->state = SOCK_CLOSED;
+		break;
+		
+	default:
+		// Already closing or closed
+		break;
+	}
+	
+	if(send_fin) {
+		fin_seq = s->tcp.fin_seq;
+		ack_ack = s->tcp.rcv_nxt;
+		memmove(&src, &s->local_addr, sizeof(src));
+		memmove(&dst, &s->remote_addr, sizeof(dst));
+	}
+	
+	// Free any unacked buffer
+	if(s->tcp.unacked_buf) {
+		kfree(s->tcp.unacked_buf);
+		s->tcp.unacked_buf = 0;
+	}
+	
+	release(&socket_lock);
+	
+	if(send_fin) {
+		tcp_send_segment(ifp, &src, &dst, fin_seq, ack_ack, 
+			TCP_FLAG_FIN | TCP_FLAG_ACK, 0, 0);
+	}
+	
+	return 0;
+}
+
+// Retransmit timeout check - called periodically
+// Returns 1 if a timeout occurred and was handled
+int
+tcp_retransmit_check(struct socket *s, struct ifnet *ifp)
+{
+	struct sockaddr_in src, dst;
+	char *data;
+	uint len, seq, ack;
+	uint now;
+	int do_retransmit = 0;
+	int do_reset = 0;
+
+	if(s == 0 || s->type != SOCK_STREAM)
+		return 0;
+	if(ifp == 0 || (ifp->if_flags & IFF_LOOPBACK))
+		return 0;
+
+	acquire(&socket_lock);
+	
+	if(s->tcp.state != TCPS_ESTABLISHED && s->tcp.state != TCPS_FIN_WAIT_1)
+		goto out;
+	if(s->tcp.unacked_buf == 0)
+		goto out;
+
+	acquire(&tickslock);
+	now = ticks;
+	release(&tickslock);
+	
+	if(now - s->tcp.last_send < s->tcp.rto)
+		goto out;
+	
+	// Timeout expired
+	s->tcp.retransmits++;
+	if(s->tcp.retransmits > TCP_MAX_RETRANSMIT) {
+		// Give up - reset connection
+		do_reset = 1;
+		kfree(s->tcp.unacked_buf);
+		s->tcp.unacked_buf = 0;
+		s->tcp.state = TCPS_CLOSED;
+		s->state = SOCK_CLOSED;
+		wakeup(s);
+	} else {
+		// Retransmit
+		do_retransmit = 1;
+		data = s->tcp.unacked_buf;
+		len = s->tcp.unacked_len;
+		seq = s->tcp.unacked_seq;
+		ack = s->tcp.rcv_nxt;
+		memmove(&src, &s->local_addr, sizeof(src));
+		memmove(&dst, &s->remote_addr, sizeof(dst));
+		
+		// Exponential backoff
+		s->tcp.rto *= 2;
+		if(s->tcp.rto > TCP_RTO_MAX)
+			s->tcp.rto = TCP_RTO_MAX;
+		
+		acquire(&tickslock);
+		s->tcp.last_send = ticks;
+		release(&tickslock);
+	}
+
+out:
+	release(&socket_lock);
+	
+	if(do_retransmit) {
+		tcp_send_segment(ifp, &src, &dst, seq, ack, 
+			TCP_FLAG_ACK | TCP_FLAG_PSH, data, len);
+		return 1;
+	}
+	
+	if(do_reset) {
+		// Send RST
+		tcp_send_segment(ifp, &src, &dst, seq, ack, TCP_FLAG_RST, 0, 0);
+	}
+	
+	return 0;
+}
+
+// TIME_WAIT cleanup - called periodically
+void
+tcp_timewait_check(struct socket *s)
+{
+	uint now;
+
+	if(s == 0 || s->type != SOCK_STREAM)
+		return;
+
+	acquire(&socket_lock);
+	
+	if(s->tcp.state != TCPS_TIME_WAIT) {
+		release(&socket_lock);
+		return;
+	}
+
+	acquire(&tickslock);
+	now = ticks;
+	release(&tickslock);
+	
+	if(now - s->tcp.time_wait_start >= TCP_TIME_WAIT_TICKS) {
+		s->tcp.state = TCPS_CLOSED;
+		s->state = SOCK_CLOSED;
+		wakeup(s);
+	}
+	
+	release(&socket_lock);
 }
 
 static ushort
@@ -190,9 +376,24 @@ tcp_connect(struct ifnet *ifp, struct socket *s, struct sockaddr_in *dst)
 	s->state = SOCK_CONNECT;
 	s->tcp.state = TCPS_SYN_SENT;
 	s->tcp.iss = tcp_iss++;
+	s->tcp.snd_una = s->tcp.iss;
 	s->tcp.snd_nxt = s->tcp.iss + 1;
 	s->tcp.irs = 0;
 	s->tcp.rcv_nxt = 0;
+	s->tcp.rcv_wnd = 4096;
+	s->tcp.rto = TCP_RTO_INIT;
+	s->tcp.rtt_est = 0;
+	s->tcp.retransmits = 0;
+	s->tcp.unacked_buf = 0;
+	s->tcp.unacked_len = 0;
+	s->tcp.unacked_seq = 0;
+	s->tcp.fin_seq = 0;
+	s->tcp.time_wait_start = 0;
+	
+	acquire(&tickslock);
+	s->tcp.last_send = ticks;
+	release(&tickslock);
+	
 	memmove(&src, &s->local_addr, sizeof(src));
 	release(&socket_lock);
 
@@ -255,6 +456,10 @@ tcp_output(struct ifnet *ifp, struct sockaddr_in *src,
 		return (int)len;
 	}
 
+	// Clamp to max segment size
+	if(len > TCP_MAX_SEGMENT_DATA)
+		len = TCP_MAX_SEGMENT_DATA;
+
 	seq = 0;
 	ack = 0;
 	acquire(&socket_lock);
@@ -274,9 +479,24 @@ tcp_output(struct ifnet *ifp, struct sockaddr_in *src,
 			continue;
 		if(s->local_addr.sin_addr != 0 && s->local_addr.sin_addr != src->sin_addr)
 			continue;
+		
 		seq = s->tcp.snd_nxt;
 		ack = s->tcp.rcv_nxt;
 		s->tcp.snd_nxt += len;
+		
+		// Track unacked data for potential retransmission
+		// Simplified: only keep one outstanding segment
+		if(s->tcp.unacked_buf == 0) {
+			s->tcp.unacked_buf = kalloc();
+			if(s->tcp.unacked_buf) {
+				memmove(s->tcp.unacked_buf, payload, len);
+				s->tcp.unacked_len = len;
+				s->tcp.unacked_seq = seq;
+				acquire(&tickslock);
+				s->tcp.last_send = ticks;
+				release(&tickslock);
+			}
+		}
 		break;
 	}
 	release(&socket_lock);
@@ -300,12 +520,13 @@ tcp_input(struct ifnet *ifp, struct ip_hdr *ip, char *payload, uint len)
 	uint hlen;
 	uint plen;
 	uint seq;
-	uint ack;
+	uint ack_num;
 	uchar flags;
 	uint copylen;
 	int need_ack;
 	uint ack_seq;
 	uint ack_ack;
+	uchar ack_flags;
 
 	if(ifp == 0 || ip == 0 || payload == 0)
 		return;
@@ -318,7 +539,7 @@ tcp_input(struct ifnet *ifp, struct ip_hdr *ip, char *payload, uint len)
 		return;
 
 	seq = net_ntohl(th->seq);
-	ack = net_ntohl(th->ack);
+	ack_num = net_ntohl(th->ack);
 	flags = th->flags;
 	plen = len - hlen;
 
@@ -335,19 +556,68 @@ tcp_input(struct ifnet *ifp, struct ip_hdr *ip, char *payload, uint len)
 	need_ack = 0;
 	ack_seq = 0;
 	ack_ack = 0;
+	ack_flags = TCP_FLAG_ACK;
 
 	acquire(&socket_lock);
 	s = tcp_find_client_socket_locked(&src, &dst);
 	if(s == 0) {
 		release(&socket_lock);
+		// Send RST for packets to non-existent connections
+		if(!(flags & TCP_FLAG_RST)) {
+			tcp_send_segment(ifp, &dst, &src, ack_num, seq + plen + 
+				((flags & TCP_FLAG_SYN) ? 1 : 0) + ((flags & TCP_FLAG_FIN) ? 1 : 0),
+				TCP_FLAG_RST | TCP_FLAG_ACK, 0, 0);
+		}
 		return;
 	}
 
-	if(s->tcp.state == TCPS_SYN_SENT) {
+	// Handle RST - always reset connection
+	if(flags & TCP_FLAG_RST) {
+		if(s->tcp.unacked_buf) {
+			kfree(s->tcp.unacked_buf);
+			s->tcp.unacked_buf = 0;
+		}
+		s->tcp.state = TCPS_CLOSED;
+		s->state = SOCK_CLOSED;
+		wakeup(s);
+		release(&socket_lock);
+		return;
+	}
+
+	// Process ACK - free unacked data if acknowledged
+	if((flags & TCP_FLAG_ACK) && s->tcp.unacked_buf) {
+		// Check if ACK covers our unacked data
+		if(tcp_seq_leq(s->tcp.unacked_seq + s->tcp.unacked_len, ack_num)) {
+			kfree(s->tcp.unacked_buf);
+			s->tcp.unacked_buf = 0;
+			s->tcp.unacked_len = 0;
+			s->tcp.snd_una = ack_num;
+			s->tcp.retransmits = 0;
+			
+			// Update RTT estimate (simplified)
+			acquire(&tickslock);
+			uint rtt = ticks - s->tcp.last_send;
+			release(&tickslock);
+			if(s->tcp.rtt_est == 0)
+				s->tcp.rtt_est = rtt;
+			else
+				s->tcp.rtt_est = (s->tcp.rtt_est * 7 + rtt) / 8;
+			s->tcp.rto = s->tcp.rtt_est * 2;
+			if(s->tcp.rto < TCP_RTO_MIN)
+				s->tcp.rto = TCP_RTO_MIN;
+			if(s->tcp.rto > TCP_RTO_MAX)
+				s->tcp.rto = TCP_RTO_MAX;
+		}
+	}
+
+	switch(s->tcp.state) {
+	case TCPS_SYN_SENT:
+		// Expecting SYN-ACK
 		if((flags & (TCP_FLAG_SYN | TCP_FLAG_ACK)) == (TCP_FLAG_SYN | TCP_FLAG_ACK) &&
-		   ack == s->tcp.snd_nxt) {
+		   ack_num == s->tcp.snd_nxt) {
 			s->tcp.irs = seq;
 			s->tcp.rcv_nxt = seq + 1;
+			s->tcp.snd_una = ack_num;
 			s->tcp.state = TCPS_ESTABLISHED;
 			s->state = SOCK_ESTAB;
 			need_ack = 1;
@@ -355,41 +625,147 @@ tcp_input(struct ifnet *ifp, struct ip_hdr *ip, char *payload, uint len)
 			ack_ack = s->tcp.rcv_nxt;
 			wakeup(s);
 		}
-		release(&socket_lock);
-		if(need_ack)
-			tcp_send_segment(ifp, &dst, &src, ack_seq, ack_ack, TCP_FLAG_ACK, 0, 0);
-		return;
-	}
+		break;
 
-	if(s->tcp.state != TCPS_ESTABLISHED) {
-		release(&socket_lock);
-		return;
-	}
+	case TCPS_ESTABLISHED:
+		// Process incoming data
+		if(plen > 0) {
+			if(seq == s->tcp.rcv_nxt && s->recv_buf && s->recv_cap > s->recv_len) {
+				copylen = plen;
+				if(copylen > s->recv_cap - s->recv_len)
+					copylen = s->recv_cap - s->recv_len;
+				memmove(s->recv_buf + s->recv_len, payload + hlen, copylen);
+				s->recv_len += copylen;
+				s->tcp.rcv_nxt += copylen;
+				memmove(&s->remote_addr, &src, sizeof(src));
+				wakeup(s);
+			}
+			need_ack = 1;
+		}
+		
+		// Handle FIN from peer (passive close)
+		if(flags & TCP_FLAG_FIN) {
+			s->tcp.rcv_nxt = seq + plen + 1;  // FIN consumes a sequence number
+			s->tcp.state = TCPS_CLOSE_WAIT;
+			need_ack = 1;
+			wakeup(s);  // Wake up any readers to see EOF
+		}
+		
+		if(need_ack) {
+			ack_seq = s->tcp.snd_nxt;
+			ack_ack = s->tcp.rcv_nxt;
+		}
+		break;
 
-	if(plen > 0) {
-		if(seq == s->tcp.rcv_nxt && s->recv_buf && s->recv_cap > s->recv_len) {
-			copylen = plen;
-			if(copylen > s->recv_cap - s->recv_len)
-				copylen = s->recv_cap - s->recv_len;
-			memmove(s->recv_buf + s->recv_len, payload + hlen, copylen);
-			s->recv_len += copylen;
-			s->tcp.rcv_nxt += copylen;
-			memmove(&s->remote_addr, &src, sizeof(src));
+	case TCPS_FIN_WAIT_1:
+		// We sent FIN, waiting for ACK and/or peer's FIN
+		if((flags & TCP_FLAG_ACK) && ack_num == s->tcp.fin_seq + 1) {
+			// Our FIN was ACKed
+			s->tcp.snd_una = ack_num;
+			if(flags & TCP_FLAG_FIN) {
+				// Simultaneous close: FIN+ACK, go to TIME_WAIT
+				s->tcp.rcv_nxt = seq + plen + 1;
+				s->tcp.state = TCPS_TIME_WAIT;
+				acquire(&tickslock);
+				s->tcp.time_wait_start = ticks;
+				release(&tickslock);
+				need_ack = 1;
+			} else {
+				// Just ACK, go to FIN_WAIT_2
+				s->tcp.state = TCPS_FIN_WAIT_2;
+			}
+		} else if(flags & TCP_FLAG_FIN) {
+			// Peer's FIN without ACKing ours (simultaneous close)
+			s->tcp.rcv_nxt = seq + plen + 1;
+			need_ack = 1;
+			// Stay in FIN_WAIT_1 until our FIN is ACKed
+		}
+		if(need_ack) {
+			ack_seq = s->tcp.snd_nxt;
+			ack_ack = s->tcp.rcv_nxt;
+		}
+		break;
+
+	case TCPS_FIN_WAIT_2:
+		// Our FIN was ACKed, waiting for peer's FIN
+		if(flags & TCP_FLAG_FIN) {
+			s->tcp.rcv_nxt = seq + plen + 1;
+			s->tcp.state = TCPS_TIME_WAIT;
+			acquire(&tickslock);
+			s->tcp.time_wait_start = ticks;
+			release(&tickslock);
+			need_ack = 1;
+			ack_seq = s->tcp.snd_nxt;
+			ack_ack = s->tcp.rcv_nxt;
+		}
+		break;
+
+	case TCPS_CLOSE_WAIT:
+		// Peer sent FIN, we haven't closed yet - just ACK anything
+		if(plen > 0 || (flags & TCP_FLAG_FIN)) {
+			need_ack = 1;
+			ack_seq = s->tcp.snd_nxt;
+			ack_ack = s->tcp.rcv_nxt;
+		}
+		break;
+
+	case TCPS_LAST_ACK:
+		// We sent FIN after CLOSE_WAIT, waiting for ACK
+		if((flags & TCP_FLAG_ACK) && ack_num == s->tcp.fin_seq + 1) {
+			s->tcp.state = TCPS_CLOSED;
+			s->state = SOCK_CLOSED;
 			wakeup(s);
 		}
-		need_ack = 1;
-		ack_seq = s->tcp.snd_nxt;
-		ack_ack = s->tcp.rcv_nxt;
-	}
+		break;
 
-	if(flags & TCP_FLAG_RST) {
-		s->tcp.state = TCPS_CLOSED;
-		s->state = SOCK_CLOSED;
-		wakeup(s);
+	case TCPS_TIME_WAIT:
+		// Handle retransmitted FINs
+		if(flags & TCP_FLAG_FIN) {
+			need_ack = 1;
+			ack_seq = s->tcp.snd_nxt;
+			ack_ack = s->tcp.rcv_nxt;
+		}
+		break;
 	}
 
 	release(&socket_lock);
 
 	if(need_ack)
-		tcp_send_segment(ifp, &dst, &src, ack_seq, ack_ack, TCP_FLAG_ACK, 0, 0);
+		tcp_send_segment(ifp, &dst, &src, ack_seq, ack_ack, ack_flags, 0, 0);
+}
+
+// Called from timer interrupt every 100ms (every 10 ticks at 100Hz)
+// Handles retransmission timeouts and TIME_WAIT cleanup
+void
+tcp_slowtimo(void)
+{
+	int i;
+	struct socket *s;
+	struct ifnet *ifp;
+	uint route_src;
+	
+	for(i = 0; i < NSOCKET; i++) {
+		s = &sockets[i];
+		
+		// Quick check without lock
+		if(s->ref == 0)
+			continue;
+		if(s->family != AF_INET || s->type != SOCK_STREAM)
+			continue;
+		
+		// Check TIME_WAIT timeout
+		if(s->tcp.state == TCPS_TIME_WAIT) {
+			tcp_timewait_check(s);
+			continue;
+		}
+		
+		// Check retransmit timeout
+		if(s->tcp.state == TCPS_ESTABLISHED || s->tcp.state == TCPS_FIN_WAIT_1) {
+			// Find interface to use
+			ifp = route_lookup(s->remote_addr.sin_addr, &route_src, 0);
+			if(ifp) {
+				tcp_retransmit_check(s, ifp);
+			}
+		}
+	}
 }
