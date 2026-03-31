@@ -9,8 +9,10 @@
 #ifndef _SYS_STAT_H
 #define _SYS_STAT_H
 
-#include "stat.h"
-#include "sys/types.h"
+/* Chain to include/sys/stat.h (which wraps include/stat.h) */
+#include_next <sys/stat.h>
+/* Pull in mode_t and friends */
+#include <sys/types.h>
 
 /* POSIX S_IF* aliases for auxv6 M_IF* constants */
 #define S_IFMT   M_IFMT

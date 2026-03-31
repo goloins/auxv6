@@ -90,3 +90,26 @@ malloc(uint nbytes)
         return 0;
   }
 }
+
+void*
+realloc(void *ptr, uint nbytes)
+{
+  Header *bp;
+  uint oldbytes;
+  void *new;
+
+  if(!ptr)
+    return malloc(nbytes);
+  if(!nbytes){
+    free(ptr);
+    return 0;
+  }
+  bp = (Header*)ptr - 1;
+  oldbytes = (bp->s.size - 1) * sizeof(Header);
+  new = malloc(nbytes);
+  if(!new)
+    return 0;
+  memmove(new, ptr, oldbytes < nbytes ? oldbytes : nbytes);
+  free(ptr);
+  return new;
+}

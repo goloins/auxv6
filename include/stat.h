@@ -32,4 +32,7 @@ struct stat {
   short st_gid;    // Owner group ID
   ushort st_mode;  // File type and permission bits
   uint st_size;    // Size of file in bytes
+  int st_atime;    // Time of last access (seconds since epoch; 0 if not tracked)
+  int st_mtime;    // Time of last modification (seconds since epoch; 0 if not tracked)
+  int st_ctime;    // Time of status change (seconds since epoch; 0 if not tracked)
 };

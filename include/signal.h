@@ -41,12 +41,16 @@
 
 typedef uint sigset_t;
 
+/* sig_atomic_t: type that can be read/written atomically on i386 */
+typedef int sig_atomic_t;
+
 #define SIG_BLOCK   0
 #define SIG_UNBLOCK 1
 #define SIG_SETMASK 2
 
 #define SIG_DFL ((void(*)(int))0)
 #define SIG_IGN ((void(*)(int))1)
+#define SIG_ERR ((void(*)(int))-1)
 
 struct sigaction {
   void (*sa_handler)(int);
@@ -87,6 +91,7 @@ static inline int  sigismember(const sigset_t *s, int sig) { return !!(*s & SIGB
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
 int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
 int sigsuspend(const sigset_t *mask);
+void (*signal(int signum, void (*handler)(int)))(int);
 #endif
 
 #endif

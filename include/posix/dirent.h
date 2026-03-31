@@ -41,6 +41,7 @@ int            closedir(DIR *dirp);
 void           rewinddir(DIR *dirp);
 
 /* 64-bit aliases — auxv6 has no large-file distinction */
+#define dirent64    dirent          /* struct dirent64 = struct dirent */
 #define readdir64   readdir
 #define opendir64   opendir
 #define closedir64  closedir

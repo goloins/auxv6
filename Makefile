@@ -113,6 +113,7 @@ CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 &
 ASFLAGS = -m32 -gdwarf-2 -Wa,-divide
 # FreeBSD ld wants ``elf_i386_fbsd''
 LDFLAGS += -m $(shell $(LD) -V | grep elf_i386 2>/dev/null | head -n 1)
+LIBGCC := $(shell $(CC) -m32 -print-libgcc-file-name)
 
 # Disable PIE when possible (for Ubuntu 16.10 toolchain)
 ifneq ($(shell $(CC) -dumpspecs 2>/dev/null | grep -e '[^f]no-pie'),)
@@ -202,7 +203,7 @@ user/usertests.o: user/usertests.c
 	$(CC) $(CFLAGS) -Os -c -o $@ $<
 
 user/%: user/%.o $(ULIB)
-	$(LD) $(LDFLAGS) -N -e main -Ttext 0 -o $@ $^
+	$(LD) $(LDFLAGS) -N -e main -Ttext 0 -o $@ $^ $(LIBGCC)
 	$(OBJDUMP) -S $@ > $(basename $@).asm
 	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(basename $@).sym
 
@@ -211,9 +212,6 @@ _cat: user/cat
 
 _echo: user/echo
 	cp user/echo _echo
-
-_forktest: user/forktest
-	cp user/forktest _forktest
 
 _fatregress: user/fatregress
 	cp user/fatregress _fatregress
@@ -347,11 +345,9 @@ _wc: user/wc
 _zombie: user/zombie
 	cp user/zombie _zombie
 
-user/forktest: user/forktest.o user/ulib.o user/usys.o
-	# forktest has less library code linked in - needs to be small
-	# in order to be able to max out the proc table.
-	$(LD) $(LDFLAGS) -N -e main -Ttext 0 -o user/forktest user/forktest.o user/ulib.o user/usys.o
-	$(OBJDUMP) -S user/forktest > forktest.asm
+_dash: ports/dash-0.5.12/Makefile.auxv6 user/ulib.o user/usys.o user/printf.o user/umalloc.o user/resolve.o user/posix.o user/setjmp.o
+	$(MAKE) -f ports/dash-0.5.12/Makefile.auxv6
+	cp ports/dash-0.5.12/_dash _dash
 
 mkfs: tools/mkfs.c include/fs.h
 	gcc -Werror -Wall -o mkfs tools/mkfs.c
@@ -365,7 +361,6 @@ mkfs: tools/mkfs.c include/fs.h
 UPROGS=\
 	_cat\
 	_echo\
-	_forktest\
 	_fatregress\
 	_fsregress\
 	_grep\
@@ -410,6 +405,7 @@ UPROGS=\
 	_usertests\
 	_wc\
 	_zombie\
+	_dash\
 
 fs.img: mkfs README etc.hosts etc.fstab etc.profile etc.passwd etc.groups etc.hostname $(UPROGS)
 	./mkfs fs.img README etc.hosts etc.fstab etc.profile etc.passwd etc.groups etc.hostname $(UPROGS)
@@ -473,7 +469,7 @@ clean:
 	.ext2root \
 	.fatroot \
 	kernel/**/*.o kernel/**/*.d kernel/**/*.asm \
-	user/*.o user/*.d user/*.asm user/cat user/echo user/forktest \
+	user/*.o user/*.d user/*.asm user/cat user/echo \
 	user/fatregress \
 	user/fsregress \
 	user/grep user/id user/init user/kill user/ln user/ls user/lsblk user/mkdir user/mv \
@@ -568,7 +564,7 @@ qemu-nox-gdb: xv6.img $(EXT2IMG) .gdbinit
 # check in that version.
 
 EXTRA=\
-	tools/mkfs.c tools/stage-fat-root.sh user/ulib.c include/user.h user/cat.c user/echo.c user/fatregress.c user/forktest.c user/grep.c user/kill.c\
+	tools/mkfs.c tools/stage-fat-root.sh user/ulib.c include/user.h user/cat.c user/echo.c user/fatregress.c user/grep.c user/kill.c\
 	user/id.c user/login.c user/ln.c user/ls.c user/fsregress.c user/mkdir.c user/mount.c user/mounts.c user/mounttest.c user/umount.c user/passwd.c user/pwd.c user/chmod.c user/chown.c user/chgrp.c user/rm.c user/netinfo.c user/stressfs.c user/su.c user/usertests.c user/wc.c user/whoami.c user/zombie.c\
 	user/printf.c user/umalloc.c\
 	README etc.hosts etc.fstab etc.profile etc.passwd etc.hostname config/dot-bochsrc tools/*.pl tools/toc.* tools/runoff tools/runoff1 tools/runoff.list\

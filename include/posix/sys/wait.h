@@ -7,6 +7,7 @@
 #ifndef _SYS_WAIT_H
 #define _SYS_WAIT_H
 
-#include "wait.h"
+/* Chain to include/sys/wait.h (which wraps include/wait.h) */
+#include_next <sys/wait.h>
 
 #endif /* _SYS_WAIT_H */

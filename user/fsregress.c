@@ -502,7 +502,7 @@ check_mnt_indirect_write_cycle(void)
   }
   close(fd);
 
-  if(stat(p, &st) < 0 || st.size != 20 * 1024){
+  if(stat(p, &st) < 0 || st.st_size != 20 * 1024){
     printf(1, "fsregress: FAIL size after indirect write %s\n", p);
     exit();
   }
@@ -581,7 +581,7 @@ check_mnt_indirect_edge_cycle(void)
   }
   close(fd);
 
-  if(stat(p, &st) < 0 || st.size != 13 * 1024){
+  if(stat(p, &st) < 0 || st.st_size != 13 * 1024){
     printf(1, "fsregress: FAIL boundary size %s\n", p);
     exit();
   }
@@ -625,7 +625,7 @@ check_mnt_indirect_edge_cycle(void)
   }
   close(fd);
 
-  if(stat(p, &st) < 0 || st.size != 1024){
+  if(stat(p, &st) < 0 || st.st_size != 1024){
     printf(1, "fsregress: FAIL boundary trunc size %s\n", p);
     exit();
   }
@@ -707,7 +707,7 @@ check_mnt_append_boundary_cycle(void)
   }
   close(fd);
 
-  if(stat(p, &st) < 0 || st.size != 14 * 1024){
+  if(stat(p, &st) < 0 || st.st_size != 14 * 1024){
     printf(1, "fsregress: FAIL append size %s\n", p);
     exit();
   }
@@ -794,7 +794,7 @@ check_mnt_write_fail_rollback_cycle(void)
   }
   close(fd);
 
-  if(stat(p, &st) < 0 || st.size != 0){
+  if(stat(p, &st) < 0 || st.st_size != 0){
     printf(1, "fsregress: FAIL rollback size %s\n", p);
     exit();
   }
@@ -811,7 +811,7 @@ check_mnt_write_fail_rollback_cycle(void)
   }
   close(fd);
 
-  if(stat(p, &st) < 0 || st.size != sizeof(buf)){
+  if(stat(p, &st) < 0 || st.st_size != sizeof(buf)){
     printf(1, "fsregress: FAIL rollback final size %s\n", p);
     exit();
   }
@@ -987,7 +987,7 @@ check_mnt_indirect_capacity_cycle(void)
   }
   close(fd);
 
-  if(stat(p, &st) < 0 || st.size != max_blocks * 1024){
+  if(stat(p, &st) < 0 || st.st_size != max_blocks * 1024){
     printf(1, "fsregress: FAIL capacity size %s\n", p);
     exit();
   }
@@ -1150,7 +1150,7 @@ check_mnt_generic_fsfault_cycle(void)
   }
   close(fd);
 
-  if(stat(p, &st) < 0 || st.size != 0){
+  if(stat(p, &st) < 0 || st.st_size != 0){
     printf(1, "fsregress: FAIL generic fsfault rollback size %s\n", p);
     exit();
   }

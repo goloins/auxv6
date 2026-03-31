@@ -8,7 +8,8 @@
 #ifndef _POSIX_SYS_TYPES_H
 #define _POSIX_SYS_TYPES_H
 
-#include "sys/types.h"
+/* Chain to include/sys/types.h (skipping this file) */
+#include_next <sys/types.h>
 
 /* ssize_t is signed counterpart of size_t */
 #ifndef _SSIZE_T

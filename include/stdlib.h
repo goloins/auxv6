@@ -48,7 +48,9 @@ double      atof(const char *nptr);
 int         atoi(const char *nptr);
 long        atol(const char *nptr);
 long long   atoll(const char *nptr);
-double      strtod(const char *nptr, char **endptr);
+/* strtod intentionally absent: auxv6 has no float support. Callers
+ * that need it must provide their own (e.g. dash's system.h stub). */
+/* double strtod(const char *nptr, char **endptr); */
 float       strtof(const char *nptr, char **endptr);
 long double strtold(const char *nptr, char **endptr);
 long        strtol(const char *nptr, char **endptr, int base);
@@ -151,5 +153,8 @@ int         mkostemp(char *template, int flags);
  * Path resolution
  */
 char       *realpath(const char *path, char *resolved_path);
+
+/* Global environment variable array (initialised in user/posix.c) */
+extern char **environ;
 
 #endif /* _STDLIB_H */
