@@ -433,6 +433,8 @@ void            tcp_slowtimo(void);
 void            virtio_net_init(void);
 void            e1000_init(void);
 void            i219_init(void);
+void            i226_init(void);
+void            ax88179_pci_init(void);
 void            pcnet_init(void);
 void            rtl8111_init(void);
 void            vmxnet3_init(void);

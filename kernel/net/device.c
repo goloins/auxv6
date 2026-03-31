@@ -26,6 +26,8 @@ netdev_init(void)
 	virtio_net_init();
 	e1000_init();
 	i219_init();
+	i226_init();
+	ax88179_pci_init();
 	pcnet_init();
 	rtl8111_init();
 	vmxnet3_init();

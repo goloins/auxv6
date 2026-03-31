@@ -35,6 +35,8 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - **VMXnet3 driver** stub added for VMware paravirtualized NIC support (PCI detection, BAR mapping, MAC address reading).
 - **Hyper-V NetVSC driver** stub added for Microsoft Hyper-V synthetic network adapter (requires VMBus infrastructure for full implementation).
 - **Intel I219-V driver** stub added for PCH-integrated Intel Ethernet (BSD-style attach skeleton with PCI probe, BAR mapping, MAC/link readout, and ifnet registration).
+- **Intel I226-V driver** stub added for Intel 2.5GbE bring-up (IGC-style PCI attach skeleton, BAR mapping, MAC/link readout, ifnet registration).
+- **ASIX AX88179 PCI driver** stub added as a PCI-only scaffold (explicitly avoiding xHCI/USB for now).
 
 ---
 
@@ -66,7 +68,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | PCI subsystem | 80% | Bus 0 enumeration, BAR decode/mapping, helper APIs, `lspci`; MSI/MSI-X still missing |
 | DMA support | 75% | Page-based DMA allocation with physical address tracking and alignment |
 | Virtio storage | 70% | Working virtio core + virtio-blk, but still single-queue/minimal-feature oriented |
-| Real NICs | 60% | E1000, PCNET, RTL8111 have full ifnet integration; VMXnet3, Hyper-V netvsc, and Intel I219-V are stubs |
+| Real NICs | 60% | E1000, PCNET, RTL8111 have full ifnet integration; VMXnet3, Hyper-V netvsc, Intel I219-V, Intel I226-V, and ASIX AX88179 PCI are stubs |
 | Modern storage | 40% | AHCI has polling DMA read/write; NVMe has I/O queue and basic RW path |
 | Loop devices | 80% | 8 block devices backed by regular files, status/setup/teardown syscalls, `losetup` utility |
 | Symlinks | 65% | Syscalls, VFS hooks, and ext2 fast symlink support done; pathname following still pending |
@@ -350,8 +352,8 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 **Estimate:** 1 week
 
 ### 4.3a Real Hardware NIC Drivers [PARTIAL]
-**Status:** E1000, PCNET, RTL8111 have full ifnet integration; VMXnet3, netvsc, and Intel I219-V are stubs  
-**Files:** `kernel/driver/e1000.c`, `kernel/driver/i219.c`, `kernel/driver/pcnet.c`, `kernel/driver/rtl8111.c`, `kernel/driver/vmxnet3.c`, `kernel/driver/netvsc.c`  
+**Status:** E1000, PCNET, RTL8111 have full ifnet integration; VMXnet3, netvsc, Intel I219-V, Intel I226-V, and ASIX AX88179 PCI are stubs  
+**Files:** `kernel/driver/e1000.c`, `kernel/driver/i219.c`, `kernel/driver/i226.c`, `kernel/driver/ax88179_pci.c`, `kernel/driver/pcnet.c`, `kernel/driver/rtl8111.c`, `kernel/driver/vmxnet3.c`, `kernel/driver/netvsc.c`  
 **Value:** Support for real hardware and additional VM platforms  
 
 **E1000 (Intel Gigabit Ethernet) [IMPLEMENTED]:**
@@ -397,6 +399,22 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 - [ ] Descriptor rings, RX/TX datapath, and interrupt-driven completion
 - [ ] PHY/MDIO bring-up and e1000e/ICH-specific reset/quirk handling
 
+**I226-V (Intel Ethernet Controller I226-V) [STUB]:**
+- [x] PCI detection for common I226 LM/V/IT IDs (vendor 0x8086)
+- [x] BAR0 MMIO mapping and command register enablement
+- [x] Basic MAC address read from RAL/RAH and link-state sampling
+- [x] BSD-style ifnet attach as `igcX` with stub output callback
+- [ ] Descriptor rings, RX/TX datapath, and interrupt-driven completion
+- [ ] PHY/NVM handling and IGC-family reset/clock/quirk sequencing
+
+**AX88179 (ASIX, PCI-only scaffold) [STUB]:**
+- [x] PCI-only probe path scaffold (no xHCI/USB dependency)
+- [x] BAR0 MMIO mapping and basic register sampling
+- [x] Basic MAC address read from RAL/RAH-style offsets used by the stub
+- [x] ifnet attach as `axpX` with stub output callback
+- [ ] Validate/lock final PCI IDs for target board implementation
+- [ ] Implement RX/TX datapath, interrupts, and ASIX-specific register model
+
 **NetVSC (Hyper-V Synthetic NIC) [STUB]:**
 - [x] RNDIS protocol structures defined
 - [ ] VMBus infrastructure (blocking dependency)
@@ -410,6 +428,8 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 - VMXnet3: High-performance VMware option (needs more work)
 - NetVSC: Requires VMBus transport layer not yet implemented
 - I219-V: Common integrated Intel desktop NIC; attach path exists, datapath still TODO
+- I226-V: Intel 2.5GbE path scaffolded as an igc-style attach, datapath still TODO
+- AX88179 (PCI): PCI-only scaffold requested; intentionally not tied to USB/xHCI yet
 
 ### 4.4 TCP Implementation [PARTIAL]
 **Current:** Full state machine with retransmission and graceful teardown  
@@ -760,6 +780,8 @@ Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
 | `kernel/driver/virtio_blk.c` | Initial virtio block driver with blockdev integration |
 | `kernel/driver/e1000.c` | Intel E1000 Gigabit Ethernet with full ifnet integration |
 | `kernel/driver/i219.c` | Intel I219-V/e1000e-style attach stub (PCI match, MMIO map, MAC/link read, ifnet registration) |
+| `kernel/driver/i226.c` | Intel I226-V/igc-style attach stub (PCI match, MMIO map, MAC/link read, ifnet registration) |
+| `kernel/driver/ax88179_pci.c` | ASIX AX88179 PCI-only stub scaffold (no xHCI/USB dependency) |
 | `kernel/driver/pcnet.c` | AMD PCNET-PCI II with full ifnet integration |
 | `kernel/driver/rtl8111.c` | Realtek RTL8111/8168 Gigabit Ethernet with full ifnet integration |
 | `kernel/driver/vmxnet3.c` | VMware VMXnet3 paravirtualized NIC stub |

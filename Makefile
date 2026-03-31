@@ -22,6 +22,8 @@ OBJS = \
 	kernel/driver/virtio_net.o\
 	kernel/driver/e1000.o\
 	kernel/driver/i219.o\
+	kernel/driver/i226.o\
+	kernel/driver/ax88179_pci.o\
 	kernel/driver/pcnet.o\
 	kernel/driver/rtl8111.o\
 	kernel/driver/vmxnet3.o\
