@@ -314,6 +314,16 @@ sys_getpgrp(void)
 }
 
 int
+sys_getsid(void)
+{
+  int pid;
+
+  if(argint(0, &pid) < 0)
+    return -1;
+  return proc_getsid(pid);
+}
+
+int
 sys_getuid(void)
 {
   return proc_getuid();

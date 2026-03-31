@@ -167,7 +167,8 @@ int     fchown(int fd, uid_t owner, gid_t group);
 int     lchown(const char *path, uid_t owner, gid_t group);
 int     chdir(const char *path);
 int     fchdir(int fd);
-char   *getcwd(char *buf, size_t size);
+char   *__posix_getcwd(char *buf, size_t size);
+#define getcwd(buf, size) __posix_getcwd((buf), (size))
 int     truncate(const char *path, off_t length);
 int     ftruncate(int fd, off_t length);
 int     fsync(int fd);

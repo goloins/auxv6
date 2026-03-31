@@ -105,6 +105,7 @@ int fcntl(int fd, int cmd, ...);
 int getpid(void);
 int getppid(void);
 int getpgrp(void);
+int getsid(int pid);
 int getuid(void);
 int getgid(void);
 int getcwd(char*, int);

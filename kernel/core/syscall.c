@@ -95,6 +95,7 @@ extern int sys_wait4(void);
 extern int sys_waitid(void);
 extern int sys_getppid(void);
 extern int sys_getpgrp(void);
+extern int sys_getsid(void);
 extern int sys_getuid(void);
 extern int sys_getgid(void);
 extern int sys_getcwd(void);
@@ -171,6 +172,7 @@ static int (*syscalls[])(void) = {
 [SYS_getpid]  sys_getpid,
 [SYS_getppid] sys_getppid,
 [SYS_getpgrp] sys_getpgrp,
+[SYS_getsid]  sys_getsid,
 [SYS_getuid]  sys_getuid,
 [SYS_getgid]  sys_getgid,
 [SYS_getcwd]  sys_getcwd,

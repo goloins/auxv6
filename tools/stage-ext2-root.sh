@@ -72,6 +72,7 @@ cleanup_rootdir
 install -d -m 0755 "$rootdir"
 install -d -m 0755 "$rootdir/bin" "$rootdir/sbin" "$rootdir/etc" "$rootdir/dev"
 install -d -m 0755 "$rootdir/home" "$rootdir/home/aux" "$rootdir/proc" "$rootdir/mnt"
+install -d -m 0755 "$rootdir/etc/rc.d"
 install -d -m 0700 "$rootdir/root"
 
 for src in "$@"; do
@@ -108,6 +109,24 @@ for src in "$@"; do
       ;;
     etc.profile)
       install -m 0644 "$src" "$rootdir/etc/profile"
+      ;;
+    etc.rc.S)
+      install -m 0755 "$src" "$rootdir/etc/rc.d/rc.S"
+      ;;
+    etc.rc.0)
+      install -m 0755 "$src" "$rootdir/etc/rc.d/rc.0"
+      ;;
+    etc.rc.1)
+      install -m 0755 "$src" "$rootdir/etc/rc.d/rc.1"
+      ;;
+    etc.rc.2)
+      install -m 0755 "$src" "$rootdir/etc/rc.d/rc.2"
+      ;;
+    etc.rc.3)
+      install -m 0755 "$src" "$rootdir/etc/rc.d/rc.3"
+      ;;
+    etc.rc.6)
+      install -m 0755 "$src" "$rootdir/etc/rc.d/rc.6"
       ;;
     etc.passwd)
       install -m 0644 "$src" "$rootdir/etc/passwd"

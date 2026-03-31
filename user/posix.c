@@ -18,6 +18,30 @@
 #include "../include/posix/dirent.h"
 #include "../include/posix/stdarg.h"
 
+#ifndef AT_FDCWD
+#define AT_FDCWD (-100)
+#endif
+
+#ifndef AT_EACCESS
+#define AT_EACCESS 0x200
+#endif
+
+#ifndef F_OK
+#define F_OK 0
+#endif
+
+#ifndef X_OK
+#define X_OK 1
+#endif
+
+#ifndef W_OK
+#define W_OK 2
+#endif
+
+#ifndef R_OK
+#define R_OK 4
+#endif
+
 /* malloc/free/open/close/etc. all come from user.h above */
 
 /* -------------------------------------------------------------------------
@@ -418,6 +442,151 @@ sysconf(int name)
 static char *_posix_empty_env[] = { 0 };
 char **environ = _posix_empty_env;
 
+static const char posix_default_path[] = "/:/bin:/sbin";
+
+int *
+__errno_location(void)
+{
+  return &errno;
+}
+
+static void
+posix_fixup_mode_from_type(struct stat *st)
+{
+  int ftype;
+
+  if(st == 0)
+    return;
+  if((st->st_mode & M_IFMT) != 0)
+    return;
+
+  ftype = 0;
+  switch(st->st_type){
+  case T_FILE:
+    ftype = M_IFREG;
+    break;
+  case T_DIR:
+    ftype = M_IFDIR;
+    break;
+  case T_DEV:
+    ftype = M_IFCHR;
+    break;
+  default:
+    break;
+  }
+  st->st_mode = (st->st_mode & 07777) | ftype;
+}
+
+static const char *
+posix_getenv(const char *name)
+{
+  int namelen;
+  char **envp;
+
+  if(name == 0)
+    return 0;
+
+  namelen = strlen(name);
+  for(envp = environ; envp && *envp; envp++){
+    if(strncmp(*envp, name, namelen) == 0 && (*envp)[namelen] == '=')
+      return *envp + namelen + 1;
+  }
+  return 0;
+}
+
+static int
+posix_exec_access_mode(const struct stat *st, int mode)
+{
+  int bits;
+
+  if(st == 0)
+    return -1;
+  if(mode == F_OK)
+    return 0;
+
+  if(geteuid() == 0){
+    if((mode & X_OK) && ((st->st_mode & M_IFMT) != M_IFDIR) &&
+       (st->st_mode & (M_IXUSR | M_IXGRP | M_IXOTH)) == 0)
+      return -1;
+    return 0;
+  }
+
+  if(geteuid() == st->st_uid)
+    bits = (st->st_mode >> 6) & 07;
+  else if(getegid() == st->st_gid)
+    bits = (st->st_mode >> 3) & 07;
+  else
+    bits = st->st_mode & 07;
+
+  if((mode & R_OK) && (bits & 04) == 0)
+    return -1;
+  if((mode & W_OK) && (bits & 02) == 0)
+    return -1;
+  if((mode & X_OK) && (bits & 01) == 0)
+    return -1;
+  return 0;
+}
+
+int
+__posix_stat(const char *path, struct stat *buf)
+{
+  errno = 0;
+  if(stat(path, buf) < 0){
+    if(errno == 0)
+      errno = ENOENT;
+    return -1;
+  }
+  posix_fixup_mode_from_type(buf);
+  return 0;
+}
+
+int
+__posix_fstat(int fd, struct stat *buf)
+{
+  errno = 0;
+  if(fstat(fd, buf) < 0){
+    if(errno == 0)
+      errno = EBADF;
+    return -1;
+  }
+  posix_fixup_mode_from_type(buf);
+  return 0;
+}
+
+int
+__posix_lstat(const char *path, struct stat *buf)
+{
+  return __posix_stat(path, buf);
+}
+
+static int
+posix_build_path(char *dst, int dstsz, const char *dir, const char *file)
+{
+  int dlen;
+  int flen;
+
+  if(dst == 0 || dstsz <= 0 || file == 0)
+    return -1;
+
+  if(dir == 0 || *dir == '\0'){
+    flen = strlen(file);
+    if(flen + 1 > dstsz)
+      return -1;
+    memmove(dst, file, flen + 1);
+    return 0;
+  }
+
+  dlen = strlen(dir);
+  flen = strlen(file);
+  if(dlen + 1 + flen + 1 > dstsz)
+    return -1;
+  memmove(dst, dir, dlen);
+  if(dlen > 0 && dir[dlen - 1] != '/')
+    dst[dlen++] = '/';
+  memmove(dst + dlen, file, flen + 1);
+  return 0;
+}
+
 /* -------------------------------------------------------------------------
  * Signal / exec POSIX wrappers
  * ------------------------------------------------------------------------- */
@@ -452,6 +621,22 @@ raise(int sig)
   return kill(getpid(), sig);
 }
 
+char *
+__posix_getcwd(char *buf, size_t size)
+{
+  if(buf == 0 || size == 0){
+    errno = EINVAL;
+    return 0;
+  }
+  errno = 0;
+  if(getcwd(buf, (int)size) < 0){
+    if(errno == 0)
+      errno = ENOENT;
+    return 0;
+  }
+  return buf;
+}
+
 /*
  * execve() — execute a program with environment.
  * auxv6's exec(path, argv) ignores envp at the kernel level; we update
@@ -460,8 +645,121 @@ raise(int sig)
 int
 execve(const char *path, char *const argv[], char *const envp[])
 {
+  struct stat st;
+
   if(envp) environ = (char**)envp;
-  return exec((char*)path, (char**)argv);
+  if(path == 0 || *path == '\0'){
+    errno = ENOENT;
+    return -1;
+  }
+
+  if(__posix_stat(path, &st) < 0)
+    return -1;
+
+  errno = 0;
+  if(exec((char*)path, (char**)argv) < 0){
+    if(errno == 0)
+      errno = ENOEXEC;
+    return -1;
+  }
+  return 0;
+}
+
+int
+execv(const char *path, char *const argv[])
+{
+  return execve(path, argv, environ);
+}
+
+int
+execvp(const char *file, char *const argv[])
+{
+  const char *path;
+  const char *elem;
+  const char *next;
+  char candidate[256];
+  int saw_eacces;
+
+  if(file == 0 || *file == '\0'){
+    errno = ENOENT;
+    return -1;
+  }
+  if(strchr(file, '/'))
+    return execve(file, argv, environ);
+
+  path = posix_getenv("PATH");
+  if(path == 0 || *path == '\0')
+    path = posix_default_path;
+
+  saw_eacces = 0;
+  while(*path){
+    struct stat st;
+
+    elem = path;
+    next = strchr(path, ':');
+    if(next == 0)
+      next = path + strlen(path);
+    if(next == elem){
+      if(posix_build_path(candidate, sizeof(candidate), 0, file) == 0){
+        if(__posix_stat(candidate, &st) == 0)
+          return execve(candidate, argv, environ);
+        if(errno == EACCES)
+          saw_eacces = 1;
+      }
+    } else {
+      char dir[256];
+      int dlen = next - elem;
+
+      if(dlen < (int)sizeof(dir)){
+        memmove(dir, elem, dlen);
+        dir[dlen] = '\0';
+        if(posix_build_path(candidate, sizeof(candidate), dir, file) == 0){
+          if(__posix_stat(candidate, &st) == 0)
+            return execve(candidate, argv, environ);
+          if(errno == EACCES)
+            saw_eacces = 1;
+        }
+      } else {
+        saw_eacces = 1;
+      }
+    }
+    path = *next ? next + 1 : next;
+  }
+
+  errno = saw_eacces ? EACCES : ENOENT;
+  return -1;
+}
+
+int
+faccessat(int fd, const char *path, int mode, int flag)
+{
+  struct stat st;
+
+  if(fd != AT_FDCWD){
+    errno = ENOSYS;
+    return -1;
+  }
+  if((flag & ~AT_EACCESS) != 0){
+    errno = EINVAL;
+    return -1;
+  }
+  if((mode & ~(F_OK | R_OK | W_OK | X_OK)) != 0){
+    errno = EINVAL;
+    return -1;
+  }
+  if(__posix_stat(path, &st) < 0)
+    return -1;
+  if(posix_exec_access_mode(&st, mode) < 0){
+    errno = EACCES;
+    return -1;
+  }
+  return 0;
+}
+
+int
+access(const char *path, int mode)
+{
+  return faccessat(AT_FDCWD, path, mode, 0);
 }
 
 /*

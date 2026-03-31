@@ -1330,6 +1330,31 @@ proc_getpgrp(void)
 }
 
 int
+proc_getsid(int pid)
+{
+  struct proc *curproc;
+  struct proc *p;
+
+  curproc = myproc();
+  if(curproc == 0)
+    return -1;
+
+  if(pid == 0)
+    return curproc->sid;
+
+  acquire(&ptable.lock);
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+    if(p->state != UNUSED && p->pid == pid) {
+      int sid = p->sid;
+      release(&ptable.lock);
+      return sid;
+    }
+  }
+  release(&ptable.lock);
+  return -1;
+}
+
+int
 proc_getuid(void)
 {
   struct proc *p;

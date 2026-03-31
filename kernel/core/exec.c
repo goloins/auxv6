@@ -10,8 +10,70 @@
 #include "fs.h"
 #include "vfs.h"
 
+#define EXEC_SHEBANG_LINE_MAX 128
+#define EXEC_SHEBANG_MAX_DEPTH 2
+
+static int
+is_shebang_space(char c)
+{
+  return c == ' ' || c == '\t' || c == '\r';
+}
+
+// Returns 1 when a valid shebang line is parsed, 0 when there is no shebang,
+// and -1 for malformed shebangs.
+static int
+parse_shebang(const char *line, int n, char *interp, uint interp_sz,
+              char *interp_arg, uint interp_arg_sz, int *has_interp_arg)
+{
+  int i, j;
+
+  if(n < 2 || line[0] != '#' || line[1] != '!')
+    return 0;
+
+  i = 2;
+  while(i < n && is_shebang_space(line[i]))
+    i++;
+  if(i >= n || line[i] == '\n' || line[i] == 0)
+    return -1;
+
+  for(j = 0; i < n && line[i] != 0 && line[i] != '\n' &&
+           !is_shebang_space(line[i]); i++){
+    if((uint)(j + 1) >= interp_sz)
+      return -1;
+    interp[j++] = line[i];
+  }
+  if(j == 0)
+    return -1;
+  interp[j] = 0;
+
+  while(i < n && is_shebang_space(line[i]))
+    i++;
+  if(i >= n || line[i] == 0 || line[i] == '\n'){
+    *has_interp_arg = 0;
+    return 1;
+  }
+
+  for(j = 0; i < n && line[i] != 0 && line[i] != '\n' &&
+           !is_shebang_space(line[i]); i++){
+    if((uint)(j + 1) >= interp_arg_sz)
+      return -1;
+    interp_arg[j++] = line[i];
+  }
+  if(j == 0)
+    return -1;
+  interp_arg[j] = 0;
+
+  while(i < n && is_shebang_space(line[i]))
+    i++;
+  if(i < n && line[i] != 0 && line[i] != '\n')
+    return -1;
+
+  *has_interp_arg = 1;
+  return 1;
+}
+
 int
-exec(char *path, char **argv)
+exec_internal(char *path, char **argv, int depth)
 {
   char *s, *last;
   int i, off;
@@ -22,6 +84,10 @@ exec(char *path, char **argv)
   struct elfhdr elf;
   struct inode *ip;
   struct proghdr ph;
+  char shebang_line[EXEC_SHEBANG_LINE_MAX];
+  char interp[EXEC_SHEBANG_LINE_MAX];
+  char interp_arg[EXEC_SHEBANG_LINE_MAX];
+  char *script_argv[MAXARG+3];
   pde_t *pgdir, *oldpgdir;
   struct proc *curproc = myproc();
 
@@ -47,8 +113,40 @@ exec(char *path, char **argv)
   // Check ELF header
   if(read_fn(ip, (char*)&elf, 0, sizeof(elf)) != sizeof(elf))
     goto bad;
-  if(elf.magic != ELF_MAGIC)
-    goto bad;
+  if(elf.magic != ELF_MAGIC){
+    int shebang_n, shebang_rc, has_interp_arg, aidx, argi;
+
+    if(depth >= EXEC_SHEBANG_MAX_DEPTH)
+      goto bad;
+
+    memset(shebang_line, 0, sizeof(shebang_line));
+    shebang_n = read_fn(ip, shebang_line, 0, sizeof(shebang_line) - 1);
+    if(shebang_n <= 0)
+      goto bad;
+    shebang_line[shebang_n] = 0;
+
+    shebang_rc = parse_shebang(shebang_line, shebang_n, interp, sizeof(interp),
+                               interp_arg, sizeof(interp_arg), &has_interp_arg);
+    if(shebang_rc <= 0)
+      goto bad;
+
+    aidx = 0;
+    script_argv[aidx++] = interp;
+    if(has_interp_arg)
+      script_argv[aidx++] = interp_arg;
+    script_argv[aidx++] = path;
+    for(argi = 1; argv[argi]; argi++){
+      if(aidx >= MAXARG)
+        goto bad;
+      script_argv[aidx++] = argv[argi];
+    }
+    script_argv[aidx] = 0;
+
+    iunlockput(ip);
+    end_op();
+    ip = 0;
+    return exec_internal(interp, script_argv, depth + 1);
+  }
 
   if((pgdir = setupkvm()) == 0)
     goto bad;
@@ -126,4 +224,10 @@ exec(char *path, char **argv)
     end_op();
   }
   return -1;
+}
+
+int
+exec(char *path, char **argv)
+{
+  return exec_internal(path, argv, 0);
 }

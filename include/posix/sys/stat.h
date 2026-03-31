@@ -52,20 +52,19 @@
 #define S_ISLNK(m)  (((m) & S_IFMT) == S_IFLNK)
 #define S_ISSOCK(m) (((m) & S_IFMT) == S_IFSOCK)
 
-/*
- * stat64/fstat64 - auxv6 has no large-file distinction; alias to the
- * standard calls.  Ported Linux software uses these names.
- */
+/* POSIX wrappers in user/posix.c translate auxv6's generic -1 returns into errno. */
+int __posix_stat(const char *path, struct stat *buf);
+int __posix_fstat(int fd, struct stat *buf);
+int __posix_lstat(const char *path, struct stat *buf);
+
+#define stat(path, buf)   __posix_stat((path), (buf))
+#define fstat(fd, buf)    __posix_fstat((fd), (buf))
+#define lstat(path, buf)  __posix_lstat((path), (buf))
+
+/* auxv6 has no large-file distinction. */
 #define stat64   stat
 #define fstat64  fstat
 #define lstat64  lstat
-
-/* lstat: auxv6 has no symlinks; fall back to stat */
-#define lstat(path, buf) stat((path), (buf))
-
-/* Function declarations */
-int stat(const char *path, struct stat *buf);
-int fstat(int fd, struct stat *buf);
 
 /* umask - not yet a real syscall; stub returns 0 */
 #ifndef _UMASK_DECLARED

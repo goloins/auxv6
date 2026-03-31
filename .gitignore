@@ -26,6 +26,8 @@ user/fatregress
 user/fsregress
 user/grep
 user/init
+user/netcat
+user/telnet
 user/id
 user/kill
 user/login
