@@ -18,6 +18,15 @@
 				"aux.kern"
 			],
 			"isBackground": false
+		},
+		{
+			"label": "build-aux-kern",
+			"type": "shell",
+			"command": "make",
+			"args": [
+				"aux.kern"
+			],
+			"isBackground": false
 		}
 	]
 }

@@ -16,6 +16,7 @@
 #define PROCFS_VERSION_INO  3
 #define PROCFS_PCI_INO      4
 #define PROCFS_VBLK_FLUSH_INO 5
+#define PROCFS_AHCI_TUNE_INO 6
 #define PROCFS_VERSION_STR  "a/ux86 aux86 i686\n"
 
 struct procfs_inode {
@@ -29,6 +30,7 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_VERSION_INO, "version", 32 },
   { PROCFS_PCI_INO,     "pci",     2048 },
   { PROCFS_VBLK_FLUSH_INO, "vblk_flush", 16 },
+  { PROCFS_AHCI_TUNE_INO, "ahci_tune", 2048 },
   { 0, 0, 0 }
 };
 
@@ -37,7 +39,7 @@ static int procfs_writei(struct inode *ip, char *src, uint off, uint n);
 static uint
 procfs_root_dir_size(void)
 {
-  return 6 * sizeof(struct dirent);
+  return 7 * sizeof(struct dirent);
 }
 
 static uint
@@ -99,6 +101,10 @@ procfs_fill_inode(struct inode *ip, uint inum)
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IWUSR | M_IRGRP | M_IROTH;
     ip->size = 16;
+  } else if(inum == PROCFS_AHCI_TUNE_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IWUSR | M_IRGRP | M_IROTH;
+    ip->size = 2048;
   } else {
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
@@ -259,7 +265,7 @@ int
 procfs_readi(struct inode *ip, char *dst, uint off, uint n)
 {
   char buf[2048];
-  struct dirent entries[4];
+  struct dirent entries[5];
   uint len;
   uint now;
 
@@ -276,6 +282,8 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     safestrcpy(entries[2].name, "pci", DIRSIZ);
     entries[3].inum = PROCFS_VBLK_FLUSH_INO;
     safestrcpy(entries[3].name, "vblk_flush", DIRSIZ);
+    entries[4].inum = PROCFS_AHCI_TUNE_INO;
+    safestrcpy(entries[4].name, "ahci_tune", DIRSIZ);
     return procfs_copy_data(dst, off, n, (char*)entries, sizeof(entries));
   }
   if(ip->inum == PROCFS_VERSION_INO)
@@ -289,6 +297,13 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     int cadence = virtio_blk_get_flush_every_writes();
     len = procfs_write_uint(buf, cadence < 0 ? 0 : (uint)cadence);
     buf[len++] = '\n';
+    return procfs_copy_data(dst, off, n, buf, len);
+  }
+  if(ip->inum == PROCFS_AHCI_TUNE_INO){
+    int r = ahci_get_tune(buf, sizeof(buf));
+    if(r < 0)
+      return -1;
+    len = (uint)r;
     return procfs_copy_data(dst, off, n, buf, len);
   }
   if(ip->inum != PROCFS_UPTIME_INO)
@@ -312,7 +327,7 @@ procfs_writei(struct inode *ip, char *src, uint off, uint n)
 
   if(ip == 0 || src == 0)
     return -1;
-  if(ip->inum != PROCFS_VBLK_FLUSH_INO)
+  if(ip->inum != PROCFS_VBLK_FLUSH_INO && ip->inum != PROCFS_AHCI_TUNE_INO)
     return -1;
   if(off != 0)
     return -1;
@@ -323,6 +338,12 @@ procfs_writei(struct inode *ip, char *src, uint off, uint n)
 
   memmove(kbuf, src, n);
   kbuf[n] = 0;
+
+  if(ip->inum == PROCFS_AHCI_TUNE_INO){
+    if(ahci_set_tune(kbuf, n) < 0)
+      return -1;
+    return n;
+  }
 
   val = 0;
   i = 0;
@@ -348,10 +369,13 @@ procfs_writei(struct inode *ip, char *src, uint off, uint n)
     return -1;
   }
 
-  if(virtio_blk_set_flush_every_writes((int)val) < 0)
-    return -1;
+  if(ip->inum == PROCFS_VBLK_FLUSH_INO){
+    if(virtio_blk_set_flush_every_writes((int)val) < 0)
+      return -1;
+    return n;
+  }
 
-  return n;
+  return -1;
 }
 
 void

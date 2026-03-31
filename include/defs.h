@@ -142,6 +142,8 @@ void            iderw(struct buf*);
 
 // ahci.c
 void            ahci_init(void);
+int             ahci_get_tune(char *buf, int max);
+int             ahci_set_tune(const char *buf, int n);
 
 // ioapic.c
 void            ioapicenable(int irq, int cpu);

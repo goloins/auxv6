@@ -308,6 +308,9 @@ struct ahci_softc {
 static struct ahci_softc ahci_devices[MAX_AHCI];
 static int ahci_count = 0;
 
+static int ahci_cmd_timeout_us = AHCI_TIMEOUT_CMD_US;
+static int ahci_idle_timeout_us = AHCI_TIMEOUT_PORT_IDLE_US;
+
 static uint32_t ahci_port_read(struct ahci_softc *sc, int port, int reg);
 static void ahci_port_write(struct ahci_softc *sc, int port, int reg, uint32_t val);
 static int ahci_rw(struct buf *b);
@@ -322,6 +325,112 @@ static int ahci_port_stop(struct ahci_softc *sc, int port);
 static int ahci_port_start(struct ahci_softc *sc, int port);
 static int ahci_port_recover(struct ahci_port *p, const char *why);
 static void ahci_diag_port(struct ahci_softc *sc, int port, const char *tag);
+static void ahci_reset_all_stats(void);
+static int ahci_append_str(char *buf, int max, int pos, const char *s);
+static int ahci_append_uint(char *buf, int max, int pos, uint v);
+
+int
+ahci_get_tune(char *buf, int max)
+{
+    int pos;
+    int i;
+    int j;
+
+    if (!buf || max <= 0)
+        return -1;
+
+    pos = 0;
+    pos = ahci_append_str(buf, max, pos, "cmd_timeout_us=");
+    pos = ahci_append_uint(buf, max, pos, (uint)ahci_cmd_timeout_us);
+    pos = ahci_append_str(buf, max, pos, "\n");
+
+    pos = ahci_append_str(buf, max, pos, "idle_timeout_us=");
+    pos = ahci_append_uint(buf, max, pos, (uint)ahci_idle_timeout_us);
+    pos = ahci_append_str(buf, max, pos, "\n");
+
+    pos = ahci_append_str(buf, max, pos, "dbg_build=");
+    pos = ahci_append_uint(buf, max, pos, (uint)DBG_AHCI);
+    pos = ahci_append_str(buf, max, pos, "\n");
+
+    for (i = 0; i < ahci_count; i++) {
+        for (j = 0; j < 32; j++) {
+            struct ahci_port *p = &ahci_devices[i].ports[j];
+            if (!p->online)
+                continue;
+
+            pos = ahci_append_str(buf, max, pos, "hba=");
+            pos = ahci_append_uint(buf, max, pos, (uint)i);
+            pos = ahci_append_str(buf, max, pos, " port=");
+            pos = ahci_append_uint(buf, max, pos, (uint)p->port_num);
+            pos = ahci_append_str(buf, max, pos, " dev=");
+            pos = ahci_append_uint(buf, max, pos, (uint)p->dev_id);
+            pos = ahci_append_str(buf, max, pos, " ok=");
+            pos = ahci_append_uint(buf, max, pos, p->io_ok);
+            pos = ahci_append_str(buf, max, pos, " err=");
+            pos = ahci_append_uint(buf, max, pos, p->io_err);
+            pos = ahci_append_str(buf, max, pos, " timeout=");
+            pos = ahci_append_uint(buf, max, pos, p->io_timeout);
+            pos = ahci_append_str(buf, max, pos, " tfes=");
+            pos = ahci_append_uint(buf, max, pos, p->io_tfes);
+            pos = ahci_append_str(buf, max, pos, " resets=");
+            pos = ahci_append_uint(buf, max, pos, p->resets);
+            pos = ahci_append_str(buf, max, pos, " identify_fail=");
+            pos = ahci_append_uint(buf, max, pos, p->identify_fail);
+            pos = ahci_append_str(buf, max, pos, "\n");
+
+            if (pos >= max - 1)
+                return pos;
+        }
+    }
+
+    return pos;
+}
+
+int
+ahci_set_tune(const char *buf, int n)
+{
+    uint v;
+    int i;
+
+    if (!buf || n <= 0)
+        return -1;
+
+    if (n >= 32)
+        n = 31;
+
+    if (n >= 15 && memcmp(buf, "cmd_timeout_us=", 15) == 0) {
+        v = 0;
+        for (i = 15; i < n; i++) {
+            if (buf[i] < '0' || buf[i] > '9')
+                break;
+            v = v * 10 + (uint)(buf[i] - '0');
+        }
+        if (v < 1000 || v > 30000000)
+            return -1;
+        ahci_cmd_timeout_us = (int)v;
+        return 0;
+    }
+
+    if (n >= 16 && memcmp(buf, "idle_timeout_us=", 16) == 0) {
+        v = 0;
+        for (i = 16; i < n; i++) {
+            if (buf[i] < '0' || buf[i] > '9')
+                break;
+            v = v * 10 + (uint)(buf[i] - '0');
+        }
+        if (v < 1000 || v > 30000000)
+            return -1;
+        ahci_idle_timeout_us = (int)v;
+        return 0;
+    }
+
+    if (n >= 13 && memcmp(buf, "reset_stats=1", 13) == 0) {
+        ahci_reset_all_stats();
+        return 0;
+    }
+
+    return -1;
+}
 
 static const struct bdevsw ahci_bdevsw = {
     .rw = ahci_rw,
@@ -509,7 +618,7 @@ ahci_port_recover(struct ahci_port *p, const char *why)
     if (ahci_port_start(sc, p->port_num) < 0)
         return -1;
 
-    if (ahci_wait_port_idle(sc, p->port_num, AHCI_TIMEOUT_PORT_IDLE_US) < 0)
+    if (ahci_wait_port_idle(sc, p->port_num, ahci_idle_timeout_us) < 0)
         return -1;
 
     ahci_diag_port(sc, p->port_num, "after-recover");
@@ -534,6 +643,56 @@ ahci_diag_port(struct ahci_softc *sc, int port, const char *tag)
             ahci_port_read(sc, port, AHCI_PxSSTS));
 }
 
+static void
+ahci_reset_all_stats(void)
+{
+    int i;
+    int j;
+
+    for (i = 0; i < ahci_count; i++) {
+        for (j = 0; j < 32; j++) {
+            struct ahci_port *p = &ahci_devices[i].ports[j];
+            p->io_ok = 0;
+            p->io_err = 0;
+            p->io_timeout = 0;
+            p->io_tfes = 0;
+            p->resets = 0;
+            p->identify_fail = 0;
+        }
+    }
+}
+
+static int
+ahci_append_str(char *buf, int max, int pos, const char *s)
+{
+    while (s && *s && pos < max - 1)
+        buf[pos++] = *s++;
+    if (pos < max)
+        buf[pos] = 0;
+    return pos;
+}
+
+static int
+ahci_append_uint(char *buf, int max, int pos, uint v)
+{
+    char tmp[16];
+    int len;
+    int i;
+
+    len = 0;
+    do {
+        tmp[len++] = '0' + (v % 10);
+        v /= 10;
+    } while (v > 0 && len < (int)sizeof(tmp));
+
+    for (i = len - 1; i >= 0 && pos < max - 1; i--)
+        buf[pos++] = tmp[i];
+
+    if (pos < max)
+        buf[pos] = 0;
+    return pos;
+}
+
 static int
 ahci_identify_port(struct ahci_softc *sc, struct ahci_port *p)
 {
@@ -551,7 +710,7 @@ ahci_identify_port(struct ahci_softc *sc, struct ahci_port *p)
         return -1;
     memset(id, 0, PGSIZE);
 
-    if (ahci_wait_port_idle(sc, p->port_num, AHCI_TIMEOUT_PORT_IDLE_US) < 0) {
+    if (ahci_wait_port_idle(sc, p->port_num, ahci_idle_timeout_us) < 0) {
         cprintf("ahci: port %d busy before IDENTIFY\n", p->port_num);
         p->identify_fail++;
         kfree((char *)id);
@@ -583,7 +742,7 @@ ahci_identify_port(struct ahci_softc *sc, struct ahci_port *p)
     ci = ahci_port_read(sc, p->port_num, AHCI_PxCI);
     ahci_port_write(sc, p->port_num, AHCI_PxCI, ci | 1);
 
-    if (ahci_wait_cmd_done(sc, p->port_num, 1, AHCI_TIMEOUT_CMD_US,
+    if (ahci_wait_cmd_done(sc, p->port_num, 1, ahci_cmd_timeout_us,
                            &timed_out, &is) < 0) {
         p->identify_fail++;
         if (timed_out)
@@ -635,7 +794,7 @@ ahci_submit_rw(struct ahci_port *p, uint64_t lba, void *data,
     sc = p->sc;
     nsectors = (uint16_t)(data_len / 512);
 
-    if (ahci_wait_port_idle(sc, p->port_num, AHCI_TIMEOUT_PORT_IDLE_US) < 0)
+    if (ahci_wait_port_idle(sc, p->port_num, ahci_idle_timeout_us) < 0)
         return -1;
 
     AHCIDBG("ahci: cmd port=%d dev=%d lba=%d sectors=%d write=%d\n",
@@ -676,7 +835,7 @@ ahci_submit_rw(struct ahci_port *p, uint64_t lba, void *data,
     ci = ahci_port_read(sc, p->port_num, AHCI_PxCI);
     ahci_port_write(sc, p->port_num, AHCI_PxCI, ci | 1);
 
-    if (ahci_wait_cmd_done(sc, p->port_num, 1, AHCI_TIMEOUT_CMD_US,
+    if (ahci_wait_cmd_done(sc, p->port_num, 1, ahci_cmd_timeout_us,
                            &timed_out, &is) == 0)
         return 0;
 
