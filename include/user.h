@@ -1,3 +1,6 @@
+#ifndef _USER_H_
+#define _USER_H_
+
 struct stat;
 struct dirent;
 struct rtcdate;
@@ -19,6 +22,10 @@ typedef struct {
 #define NETIFINFO_NAME_MAX 16
 #define NETIFINFO_MAX 16
 #define ROUTEINFO_MAX 32
+#define ARPINFO_MAX 32
+
+#define ARP_FLAG_PENDING  0x1
+#define ARP_FLAG_RESOLVED 0x2
 
 struct mountinfo {
   int dev;
@@ -30,6 +37,9 @@ struct mountinfo {
 struct netifinfo {
 	uint if_index;
 	char if_name[NETIFINFO_NAME_MAX];
+	uint if_addr;
+	uint if_netmask;
+	uchar if_hwaddr[6];
 	uint if_mtu;
 	uint if_flags;
 };
@@ -40,6 +50,14 @@ struct routeinfo {
 	uint rt_gateway;
 	uint rt_src;
 	uint rt_flags;
+	uint if_index;
+};
+
+struct arpinfo {
+	uint ai_ip;
+	uchar ai_mac[6];
+	uint ai_flags;
+	uint ai_expires;
 	uint if_index;
 };
 
@@ -70,7 +88,9 @@ int chown(const char*, int, int);
 int mountinfo(struct mountinfo *out, int max);
 int netifinfo(struct netifinfo *out, int max);
 int routeinfo(struct routeinfo *out, int max);
+int arpinfo(struct arpinfo *out, int max);
 int routeadd(uint dst, uint mask, uint gateway, uint src, int ifindex);
+int netifsetaddr(int ifindex, uint addr, uint mask);
 int mount(const char *path, const char *fstype, int flags);
 int umount(const char *path);
 int devblocks(int dev);
@@ -127,3 +147,5 @@ void* malloc(uint);
 void free(void*);
 int atoi(const char*);
 char* readpass(char*, int);
+
+#endif

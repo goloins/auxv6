@@ -7,6 +7,7 @@
 #define MBUF_SIZE 2048
 #define IFNAMSIZ 16
 #define MAXNETIF 16
+#define ETH_ADDR_LEN 6
 
 // Protocol IDs
 #define NET_PROTO_IP   0x0800
@@ -16,10 +17,40 @@
 
 // Interface flags (subset, BSD-style naming)
 #define IFF_UP        0x1
+#define IFF_BROADCAST 0x2
 #define IFF_LOOPBACK  0x8
+#define IFF_RUNNING   0x40
 
 // Route flags.
 #define RTF_UP        0x1
+#define RTF_GATEWAY   0x2
+
+static inline ushort
+net_htons(ushort x)
+{
+  return (ushort)(((x & 0x00ff) << 8) | ((x >> 8) & 0x00ff));
+}
+
+static inline ushort
+net_ntohs(ushort x)
+{
+  return net_htons(x);
+}
+
+static inline uint
+net_htonl(uint x)
+{
+  return ((x & 0x000000ffU) << 24) |
+         ((x & 0x0000ff00U) << 8) |
+         ((x & 0x00ff0000U) >> 8) |
+         ((x & 0xff000000U) >> 24);
+}
+
+static inline uint
+net_ntohl(uint x)
+{
+  return net_htonl(x);
+}
 
 struct mbuf {
   char data[MBUF_SIZE];
@@ -34,11 +65,16 @@ struct sockaddr_in;
 // Minimal IPv4 header for loopback stack development.
 struct ip_hdr {
   uchar vhl;
-  uchar proto;
+  uchar tos;
   ushort len;
+  ushort id;
+  ushort off;
+  uchar ttl;
+  uchar proto;
+  ushort sum;
   uint src;
   uint dst;
-};
+} __attribute__((packed));
 
 // Minimal UDP header for loopback stack development.
 struct udp_hdr {
@@ -46,7 +82,7 @@ struct udp_hdr {
   ushort dst_port;
   ushort len;
   ushort csum;
-};
+} __attribute__((packed));
 
 // Minimal TCP header skeleton for future transport implementation.
 struct tcp_hdr {
@@ -59,7 +95,7 @@ struct tcp_hdr {
   ushort win;
   ushort csum;
   ushort urg;
-};
+} __attribute__((packed));
 
 // Minimal ICMP echo header.
 struct icmp_hdr {
@@ -68,7 +104,7 @@ struct icmp_hdr {
   ushort csum;
   ushort ident;
   ushort seq;
-};
+} __attribute__((packed));
 
 #define ICMP_ECHO_REPLY 0
 #define ICMP_ECHO       8
@@ -84,6 +120,10 @@ struct ifnet {
   char if_xname[IFNAMSIZ];
   uint if_mtu;
   uint if_flags;
+    uint if_addr;
+    uint if_netmask;
+    uchar if_hwaddr[ETH_ADDR_LEN];
+    void *if_softc;
   struct ifnet_ops *if_ops;
   void (*if_input)(struct ifnet *ifp, struct mbuf *m);
   struct ifnet *if_next;
@@ -101,6 +141,9 @@ struct route {
 struct netif_info {
   uint if_index;
   char if_name[IFNAMSIZ];
+    uint if_addr;
+    uint if_netmask;
+    uchar if_hwaddr[ETH_ADDR_LEN];
   uint if_mtu;
   uint if_flags;
 };
@@ -114,6 +157,14 @@ struct route_info {
   uint if_index;
 };
 
+struct arp_info {
+  uint ai_ip;
+  uchar ai_mac[ETH_ADDR_LEN];
+  uint ai_flags;
+  uint ai_expires;
+  uint if_index;
+};
+
 // Core network device layer.
 void netdev_init(void);
 int if_register(struct ifnet *ifp);
@@ -124,15 +175,25 @@ struct ifnet* if_next(struct ifnet *ifp);
 int if_dump(struct netif_info *out, int max);
 int if_output(struct ifnet *ifp, struct mbuf *m);
 void if_input(struct ifnet *ifp, struct mbuf *m);
+int if_set_addr(struct ifnet *ifp, uint addr, uint mask);
+int if_set_addr_byindex(uint ifindex, uint addr, uint mask);
 
 // Routing table.
 void route_init(void);
 int route_add(uint dst, uint mask, uint gateway, uint src, struct ifnet *ifp, uint flags);
+int route_delete(uint dst, uint mask, struct ifnet *ifp);
 struct ifnet* route_lookup(uint dst, uint *src, uint *gateway);
 int route_dump(struct route_info *out, int max);
 
 // Built-in interfaces.
 void loopback_attach(void);
+void arp_init(void);
+int arp_resolve(struct ifnet *ifp, uint ip, uchar *mac, struct mbuf *pending);
+int arp_dump(struct arp_info *out, int max);
+void arp_input(struct ifnet *ifp, struct mbuf *m);
+int ether_output(struct ifnet *ifp, struct mbuf *m, const uchar *dst, ushort type);
+int ether_output_ip(struct ifnet *ifp, struct mbuf *m, uint next_hop);
+void ether_input(struct ifnet *ifp, struct mbuf *m);
 
 // IP layer.
 int ip_output(struct ifnet *ifp, uchar proto, uint src, uint dst,

@@ -18,6 +18,8 @@ union header {
 
 typedef union header Header;
 
+#define MORECORE_MIN_HEADERS (4096 / sizeof(Header))
+
 static Header base;
 static Header *freep;
 
@@ -49,8 +51,8 @@ morecore(uint nu)
   char *p;
   Header *hp;
 
-  if(nu < 4096)
-    nu = 4096;
+  if(nu < MORECORE_MIN_HEADERS)
+    nu = MORECORE_MIN_HEADERS;
   p = sbrk(nu * sizeof(Header));
   if(p == (char*)-1)
     return 0;

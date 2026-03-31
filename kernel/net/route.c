@@ -53,6 +53,12 @@ route_add(uint dst, uint mask, uint gateway, uint src, struct ifnet *ifp, uint f
 	slot = 0;
 	acquire(&rtable.lock);
 	for(i = 0; i < NROUTE; i++){
+		if(rtable.tab[i].rt_ifp == ifp &&
+		   rtable.tab[i].rt_dst == dst &&
+		   rtable.tab[i].rt_mask == mask){
+			slot = &rtable.tab[i];
+			break;
+		}
 		if((rtable.tab[i].rt_flags & RTF_UP) == 0){
 			slot = &rtable.tab[i];
 			break;
@@ -72,6 +78,38 @@ route_add(uint dst, uint mask, uint gateway, uint src, struct ifnet *ifp, uint f
 	
 	release(&rtable.lock);
 	return 0;
+}
+
+int
+route_delete(uint dst, uint mask, struct ifnet *ifp)
+{
+	int i;
+	struct route *rt;
+
+	if(ifp == 0)
+		return -1;
+
+	acquire(&rtable.lock);
+	for(i = 0; i < NROUTE; i++){
+		rt = &rtable.tab[i];
+		if((rt->rt_flags & RTF_UP) == 0)
+			continue;
+		if(rt->rt_ifp != ifp)
+			continue;
+		if(rt->rt_dst != dst || rt->rt_mask != mask)
+			continue;
+		rt->rt_dst = 0;
+		rt->rt_mask = 0;
+		rt->rt_gateway = 0;
+		rt->rt_src = 0;
+		rt->rt_flags = 0;
+		rt->rt_ifp = 0;
+		release(&rtable.lock);
+		return 0;
+	}
+	release(&rtable.lock);
+
+	return -1;
 }
 
 struct ifnet*

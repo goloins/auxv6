@@ -8,10 +8,11 @@ tcp_connect(struct ifnet *ifp, struct socket *s, struct sockaddr_in *dst)
 {
 	int state;
 
-	(void)ifp;
 	if(s == 0 || dst == 0)
 		return -1;
 	if(s->type != SOCK_STREAM)
+		return -1;
+	if(ifp == 0 || (ifp->if_flags & IFF_LOOPBACK) == 0)
 		return -1;
 
 	// Minimal control path skeleton:
@@ -29,11 +30,11 @@ int
 tcp_output(struct ifnet *ifp, struct sockaddr_in *src,
 					 struct sockaddr_in *dst, char *payload, uint len)
 {
-	(void)ifp;
-
 	if(src == 0 || dst == 0 || payload == 0)
 		return -1;
 	if(src->sin_port == 0 || dst->sin_port == 0)
+		return -1;
+	if(ifp == 0 || (ifp->if_flags & IFF_LOOPBACK) == 0)
 		return -1;
 
 	// For now, stream payload delivery reuses socket-level demux.

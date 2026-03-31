@@ -142,7 +142,9 @@ extern int sys_accept(void);
 extern int sys_recvtimeout(void);
 extern int sys_netifinfo(void);
 extern int sys_routeinfo(void);
+extern int sys_arpinfo(void);
 extern int sys_routeadd(void);
+extern int sys_netifsetaddr(void);
 extern int sys_devblocks(void);
 extern int sys_getdents(void);
 extern int sys_ext2fail(void);
@@ -208,7 +210,9 @@ static int (*syscalls[])(void) = {
 [SYS_recvtimeout] sys_recvtimeout,
 [SYS_netifinfo] sys_netifinfo,
 [SYS_routeinfo] sys_routeinfo,
+[SYS_arpinfo] sys_arpinfo,
 [SYS_routeadd] sys_routeadd,
+[SYS_netifsetaddr] sys_netifsetaddr,
 [SYS_devblocks] sys_devblocks,
 [SYS_getdents] sys_getdents,
 [SYS_ext2fail] sys_ext2fail,

@@ -27,6 +27,8 @@ loopback_attach(void)
 	safestrcpy(lo_if.if_xname, "lo0", sizeof(lo_if.if_xname));
 	lo_if.if_mtu = MBUF_SIZE;
 	lo_if.if_flags = IFF_UP | IFF_LOOPBACK;
+		lo_if.if_addr = 0x7f000001;
+		lo_if.if_netmask = 0xff000000;
 	lo_if.if_ops = &lo_ops;
 	lo_if.if_input = ip_input;
 

@@ -16,6 +16,8 @@ OBJS = \
 	kernel/driver/dma.o\
 	kernel/driver/virtio.o\
 	kernel/driver/virtio_blk.o\
+	kernel/driver/virtio_net.o\
+	kernel/driver/rtl8111.o\
 	kernel/core/kalloc.o\
 	kernel/driver/kbd.o\
 	kernel/driver/lapic.o\
@@ -41,6 +43,8 @@ OBJS = \
 	kernel/net/device.o\
 	kernel/net/route.o\
 	kernel/net/loopback.o\
+	kernel/net/ethernet.o\
+	kernel/net/arp.o\
 	kernel/net/ip.o\
 	kernel/net/icmp.o\
 	kernel/net/udp.o\
@@ -292,6 +296,24 @@ _ping: user/ping
 _netinfo: user/netinfo
 	cp user/netinfo _netinfo
 
+_ifconfig: user/ifconfig
+	cp user/ifconfig _ifconfig
+
+_netstat: user/netstat
+	cp user/netstat _netstat
+
+_route: user/route
+	cp user/route _route
+
+_arp: user/arp
+	cp user/arp _arp
+
+_rarp: user/rarp
+	cp user/rarp _rarp
+
+_ip: user/ip
+	cp user/ip _ip
+
 _passwd: user/passwd
 	cp user/passwd _passwd
 
@@ -365,6 +387,12 @@ UPROGS=\
 	_tcptest\
 	_ping\
 	_netinfo\
+	_ifconfig\
+	_netstat\
+	_route\
+	_arp\
+	_rarp\
+	_ip\
 	_passwd\
 	_chmod\
 	_chown\
@@ -443,6 +471,7 @@ clean:
 	user/grep user/id user/init user/kill user/ln user/ls user/lsblk user/mkdir user/mv \
 	user/mount user/mounts user/mounttest user/umount \
 	user/uname \
+	user/ifconfig user/netstat user/route user/arp user/rarp user/ip \
 	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/lspci
 
 # make a printout
@@ -478,7 +507,8 @@ FATROOT_STAGE ?= .fatroot
 # qemu* targets already depend on $(EXT2IMG), so always attach it as index=2.
 EXT2QEMU = -drive file=$(EXT2IMG)$(comma)index=2$(comma)media=disk$(comma)format=raw
 FATQEMU = -drive file=$(FATIMG)$(comma)index=3$(comma)media=disk$(comma)format=raw
-QEMUOPTS = -drive file=fs.img,index=1,media=disk,format=raw -drive file=xv6.img,index=0,media=disk,format=raw $(EXT2QEMU) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+QEMUNETOPTS ?= -netdev user,id=auxnet0 -device virtio-net-pci,netdev=auxnet0,mac=52:54:00:12:34:56,disable-modern=on
+QEMUOPTS = -drive file=fs.img,index=1,media=disk,format=raw -drive file=xv6.img,index=0,media=disk,format=raw $(EXT2QEMU) $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 test_ext2.img: tools/stage-ext2-root.sh README etc.hosts $(EXT2ROOT_FSTAB) etc.profile etc.passwd etc.groups etc.hostname $(UPROGS)
 	sh tools/stage-ext2-root.sh .ext2root $(EXT2IMG) README etc.hosts $(EXT2ROOT_FSTAB) etc.profile etc.passwd etc.groups etc.hostname $(UPROGS)
@@ -496,30 +526,30 @@ fat-reset:
 
 # Default: EXT2 root filesystem (easier to modify/mount from other systems)
 qemu: xv6.img $(EXT2IMG)
-	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw -smp $(CPUS) -m 512 $(QEMUEXTRA)
+	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 qemu-memfs: xv6memfs.img
-	$(QEMU) -drive file=xv6memfs.img,index=0,media=disk,format=raw -smp $(CPUS) -m 256
+	$(QEMU) -drive file=xv6memfs.img,index=0,media=disk,format=raw $(QEMUNETOPTS) -smp $(CPUS) -m 256
 
 qemu-nox: xv6.img $(EXT2IMG)
-	$(QEMU) -nographic -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw -smp $(CPUS) -m 512 $(QEMUEXTRA)
+	$(QEMU) -nographic -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 qemu-fat: xv6.img $(EXT2IMG) $(FATIMG)
-	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(FATQEMU) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(FATQEMU) $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 qemu-nox-fat: xv6.img $(EXT2IMG) $(FATIMG)
-	$(QEMU) -nographic -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(FATQEMU) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+	$(QEMU) -nographic -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(FATQEMU) $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 .gdbinit: config/.gdbinit.tmpl
 	sed "s/localhost:1234/localhost:$(GDBPORT)/" < $^ > $@
 
 qemu-gdb: xv6.img $(EXT2IMG) .gdbinit
 	@echo "*** Now run 'gdb'." 1>&2
-	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
+	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS) -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
 
 qemu-nox-gdb: xv6.img $(EXT2IMG) .gdbinit
 	@echo "*** Now run 'gdb'." 1>&2
-	$(QEMU) -nographic -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
+	$(QEMU) -nographic -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS) -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
 
 # CUT HERE
 # prepare dist for students

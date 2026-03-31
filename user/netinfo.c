@@ -11,6 +11,30 @@ print_ipv4(uint ip)
          ip & 0xff);
 }
 
+static void
+print_mac(uchar *mac)
+{
+  int i;
+  int nonzero;
+
+  nonzero = 0;
+  for(i = 0; i < 6; i++) {
+    if(mac[i] != 0)
+      nonzero = 1;
+  }
+  if(!nonzero) {
+    printf(1, "-\n");
+    return;
+  }
+
+  for(i = 0; i < 6; i++) {
+    if(i > 0)
+      printf(1, ":");
+    printf(1, "%02x", mac[i]);
+  }
+  printf(1, "\n");
+}
+
 static int
 parse_ipv4(const char *s, uint *out)
 {
@@ -61,30 +85,42 @@ dump_state(void)
   char *ifname;
   int i;
   int j;
-  int n;
+  int nif;
+  int nrt;
 
-  n = netifinfo(ifs, NETIFINFO_MAX);
-  if(n < 0) {
+  nif = netifinfo(ifs, NETIFINFO_MAX);
+  if(nif < 0) {
     printf(2, "netinfo: netifinfo failed\n");
     return;
   }
 
-  printf(1, "Interfaces (%d):\n", n);
-  for(i = 0; i < n; i++) {
-      printf(1, "  %s (if%d) mtu=%d flags=0x%x\n",
-        ifs[i].if_name, ifs[i].if_index, ifs[i].if_mtu, ifs[i].if_flags);
+  printf(1, "Interfaces (%d):\n", nif);
+  for(i = 0; i < nif; i++) {
+    printf(1, "  %s (if%d) mtu=%d flags=0x%x addr=",
+      ifs[i].if_name, ifs[i].if_index, ifs[i].if_mtu, ifs[i].if_flags);
+    if(ifs[i].if_addr)
+      print_ipv4(ifs[i].if_addr);
+    else
+      printf(1, "-");
+    printf(1, " mask=");
+    if(ifs[i].if_netmask)
+      print_ipv4(ifs[i].if_netmask);
+    else
+      printf(1, "-");
+    printf(1, " mac=");
+    print_mac(ifs[i].if_hwaddr);
   }
 
-  n = routeinfo(rts, ROUTEINFO_MAX);
-  if(n < 0) {
+  nrt = routeinfo(rts, ROUTEINFO_MAX);
+  if(nrt < 0) {
     printf(2, "netinfo: routeinfo failed\n");
     return;
   }
 
-  printf(1, "Routes (%d):\n", n);
-  for(i = 0; i < n; i++) {
+  printf(1, "Routes (%d):\n", nrt);
+  for(i = 0; i < nrt; i++) {
     ifname = "?";
-    for(j = 0; j < n; j++) {
+    for(j = 0; j < nif; j++) {
       if(ifs[j].if_index == rts[i].if_index) {
         ifname = ifs[j].if_name;
         break;
@@ -106,6 +142,7 @@ dump_state(void)
 int
 main(int argc, char *argv[])
 {
+  uint addr;
   uint dst;
   uint mask;
   uint gw;
@@ -117,8 +154,31 @@ main(int argc, char *argv[])
     exit();
   }
 
+  if(argc == 5 && strcmp(argv[1], "addr") == 0) {
+    if(parse_ipv4(argv[3], &addr) < 0 ||
+       parse_ipv4(argv[4], &mask) < 0) {
+      printf(2, "netinfo: invalid IPv4 value\n");
+      exit();
+    }
+
+    ifindex = atoi(argv[2]);
+    if(ifindex <= 0) {
+      printf(2, "netinfo: invalid ifindex\n");
+      exit();
+    }
+
+    if(netifsetaddr(ifindex, addr, mask) < 0) {
+      printf(2, "netinfo: netifsetaddr failed\n");
+      exit();
+    }
+
+    dump_state();
+    exit();
+  }
+
   if(argc != 7 || strcmp(argv[1], "add") != 0) {
     printf(2, "usage: netinfo\n");
+    printf(2, "       netinfo addr <ifindex> <addr> <mask>\n");
     printf(2, "       netinfo add <dst> <mask> <gw|-> <src|-> <ifindex>\n");
     exit();
   }

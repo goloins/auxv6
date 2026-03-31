@@ -3,6 +3,44 @@
 #include "../include/socket.h"
 #include "../include/net.h"
 
+static int
+parse_ipv4(const char *s, uint *out)
+{
+  int i;
+  int part;
+  uint ip;
+
+  if(s == 0 || out == 0)
+    return -1;
+
+  ip = 0;
+  for(i = 0; i < 4; i++) {
+    if(*s < '0' || *s > '9')
+      return -1;
+
+    part = 0;
+    while(*s >= '0' && *s <= '9') {
+      part = part * 10 + (*s - '0');
+      if(part > 255)
+        return -1;
+      s++;
+    }
+
+    ip = (ip << 8) | (uint)part;
+    if(i < 3) {
+      if(*s != '.')
+        return -1;
+      s++;
+    }
+  }
+
+  if(*s != '\0')
+    return -1;
+
+  *out = ip;
+  return 0;
+}
+
 static ushort
 icmp_csum(void *buf, uint len)
 {
@@ -58,6 +96,7 @@ main(int argc, char *argv[])
   uint max_cyc;
   uint sum_cyc;
   uint avg_cyc;
+  uint dst_addr;
   char buf[128];
   int pid;
   struct sockaddr_in dst;
@@ -67,8 +106,15 @@ main(int argc, char *argv[])
   } pkt;
   struct icmp_hdr *rh;
 
-  (void)argc;
-  (void)argv;
+  dst_addr = INADDR_LOOPBACK;
+  if(argc > 2) {
+    printf(2, "usage: ping [ipv4]\n");
+    exit();
+  }
+  if(argc == 2 && parse_ipv4(argv[1], &dst_addr) < 0) {
+    printf(2, "ping: invalid IPv4 address\n");
+    exit();
+  }
 
   fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
   if(fd < 0) {
@@ -78,7 +124,7 @@ main(int argc, char *argv[])
 
   memset(&dst, 0, sizeof(dst));
   dst.sin_family = AF_INET;
-  dst.sin_addr = INADDR_LOOPBACK;
+  dst.sin_addr = dst_addr;
 
   if(connect(fd, &dst, sizeof(dst)) < 0) {
     printf(1, "ping: connect failed\n");

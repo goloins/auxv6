@@ -21,7 +21,10 @@ netdev_init(void)
 	if_list = 0;
 	if_next_index = 1;
 	route_init();
+	arp_init();
 	loopback_attach();
+	virtio_net_init();
+	rtl8111_init();
 }
 
 int
@@ -121,6 +124,9 @@ if_dump(struct netif_info *out, int max)
 		out[n].if_index = ifp->if_index;
 		out[n].if_mtu = ifp->if_mtu;
 		out[n].if_flags = ifp->if_flags;
+		out[n].if_addr = ifp->if_addr;
+		out[n].if_netmask = ifp->if_netmask;
+		memmove(out[n].if_hwaddr, ifp->if_hwaddr, sizeof(out[n].if_hwaddr));
 		safestrcpy(out[n].if_name, ifp->if_xname, sizeof(out[n].if_name));
 		n++;
 	}
@@ -152,6 +158,44 @@ if_input(struct ifnet *ifp, struct mbuf *m)
 		ifp->if_input(ifp, m);
 	else
 		mbuf_free(m);
+}
+
+int
+if_set_addr(struct ifnet *ifp, uint addr, uint mask)
+{
+	uint old_addr;
+	uint old_mask;
+
+	if(ifp == 0)
+		return -1;
+
+	acquire(&if_lock);
+	old_addr = ifp->if_addr;
+	old_mask = ifp->if_netmask;
+	ifp->if_addr = addr;
+	ifp->if_netmask = mask;
+	release(&if_lock);
+
+	if(old_addr != 0 && old_mask != 0 &&
+	   (old_addr != addr || old_mask != mask))
+		route_delete(old_addr & old_mask, old_mask, ifp);
+
+	if(addr != 0 && mask != 0)
+		return route_add(addr & mask, mask, 0, addr, ifp, RTF_UP);
+
+	return 0;
+}
+
+int
+if_set_addr_byindex(uint ifindex, uint addr, uint mask)
+{
+	struct ifnet *ifp;
+
+	ifp = if_byindex(ifindex);
+	if(ifp == 0)
+		return -1;
+
+	return if_set_addr(ifp, addr, mask);
 }
 
 struct mbuf*

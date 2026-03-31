@@ -18,9 +18,9 @@ udp_output(struct ifnet *ifp, struct sockaddr_in *src,
 		return -1;
 
 	uh = (struct udp_hdr*)buf;
-	uh->src_port = src->sin_port;
-	uh->dst_port = dst->sin_port;
-	uh->len = (ushort)(hlen + len);
+	uh->src_port = net_htons(src->sin_port);
+	uh->dst_port = net_htons(dst->sin_port);
+	uh->len = net_htons((ushort)(hlen + len));
 	uh->csum = 0;
 
 	if(len > 0)
@@ -47,20 +47,20 @@ udp_input(struct ifnet *ifp, struct ip_hdr *ip, char *payload, uint len)
 		return;
 
 	uh = (struct udp_hdr*)payload;
-	if(uh->len < hlen || uh->len > len)
+	if(net_ntohs(uh->len) < hlen || net_ntohs(uh->len) > len)
 		return;
 
-	dlen = uh->len - hlen;
+	dlen = net_ntohs(uh->len) - hlen;
 
 	memset(&src, 0, sizeof(src));
 	src.sin_family = AF_INET;
-	src.sin_port = uh->src_port;
-	src.sin_addr = ip->src;
+	src.sin_port = net_ntohs(uh->src_port);
+	src.sin_addr = net_ntohl(ip->src);
 
 	memset(&dst, 0, sizeof(dst));
 	dst.sin_family = AF_INET;
-	dst.sin_port = uh->dst_port;
-	dst.sin_addr = ip->dst;
+	dst.sin_port = net_ntohs(uh->dst_port);
+	dst.sin_addr = net_ntohl(ip->dst);
 
 	socket_deliver(&src, &dst, payload + hlen, dlen);
 }

@@ -51,7 +51,24 @@ build_ext2_image() {
   fi
 }
 
-rm -rf "$rootdir"
+cleanup_rootdir() {
+  if [ ! -e "$rootdir" ]; then
+    return 0
+  fi
+
+  if rm -rf "$rootdir" 2>/dev/null; then
+    return 0
+  fi
+
+  if sudo -n rm -rf "$rootdir" 2>/dev/null; then
+    return 0
+  fi
+
+  echo "failed to remove $rootdir; check ownership/permissions" >&2
+  return 1
+}
+
+cleanup_rootdir
 install -d -m 0755 "$rootdir"
 install -d -m 0755 "$rootdir/bin" "$rootdir/sbin" "$rootdir/etc" "$rootdir/dev"
 install -d -m 0755 "$rootdir/home" "$rootdir/home/aux" "$rootdir/proc" "$rootdir/mnt"

@@ -311,11 +311,8 @@ socket_deliver_raw(uchar proto, struct sockaddr_in *src, struct sockaddr_in *dst
       continue;
     if(sockets[i].protocol != 0 && sockets[i].protocol != proto)
       continue;
-    if(sockets[i].state == SOCK_CONNECT) {
-      if(sockets[i].remote_addr.sin_addr != src->sin_addr)
-        continue;
-    }
-    if(sockets[i].local_addr.sin_addr != INADDR_ANY &&
+    if(sockets[i].state == SOCK_BOUND &&
+       sockets[i].local_addr.sin_addr != INADDR_ANY &&
        sockets[i].local_addr.sin_addr != dst->sin_addr)
       continue;
     rs = &sockets[i];
@@ -875,6 +872,7 @@ sys_recvtimeout(void)
     }
 
     sleep(&ticks, &tickslock);
+    release(&tickslock);
 
     acquire(&socket_lock);
   }
@@ -926,6 +924,22 @@ sys_routeinfo(void)
 }
 
 int
+sys_arpinfo(void)
+{
+  struct arp_info *out;
+  int max;
+
+  if(argint(1, &max) < 0)
+    return -1;
+  if(max <= 0)
+    return -1;
+  if(argptr(0, (char**)&out, max * sizeof(*out)) < 0)
+    return -1;
+
+  return arp_dump(out, max);
+}
+
+int
 sys_routeadd(void)
 {
   int dst;
@@ -943,7 +957,23 @@ sys_routeadd(void)
   if(ifp == 0)
     return -1;
 
-  return route_add((uint)dst, (uint)mask, (uint)gateway, (uint)src, ifp, RTF_UP);
+  return route_add((uint)dst, (uint)mask, (uint)gateway, (uint)src, ifp,
+                   RTF_UP | (gateway ? RTF_GATEWAY : 0));
+}
+
+int
+sys_netifsetaddr(void)
+{
+  int ifindex;
+  int addr;
+  int mask;
+
+  if(argint(0, &ifindex) < 0 || argint(1, &addr) < 0 || argint(2, &mask) < 0)
+    return -1;
+  if(ifindex <= 0)
+    return -1;
+
+  return if_set_addr_byindex((uint)ifindex, (uint)addr, (uint)mask);
 }
 
 // close(fd) syscall - we'll handle sockets in the existing close
