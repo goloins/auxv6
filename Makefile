@@ -191,7 +191,7 @@ tags: $(OBJS) kernel/boot/entryother.S user/_init
 kernel/core/vectors.S: tools/vectors.pl
 	./tools/vectors.pl > kernel/core/vectors.S
 
-ULIB = user/ulib.o user/usys.o user/printf.o user/umalloc.o
+ULIB = user/ulib.o user/usys.o user/printf.o user/umalloc.o user/resolve.o
 
 # sh is close to xv6 MAXFILE; compile with -Os to keep the binary under limit.
 user/sh.o: user/sh.c
@@ -293,6 +293,9 @@ _tcptest: user/tcptest
 _ping: user/ping
 	cp user/ping _ping
 
+_nslookup: user/nslookup
+	cp user/nslookup _nslookup
+
 _netinfo: user/netinfo
 	cp user/netinfo _netinfo
 
@@ -389,6 +392,7 @@ UPROGS=\
 	_whoami\
 	_tcptest\
 	_ping\
+	_nslookup\
 	_netinfo\
 	_ifconfig\
 	_netstat\
@@ -477,7 +481,7 @@ clean:
 	user/uname \
 	_dhcp \
 	user/ifconfig user/netstat user/route user/arp user/rarp user/ip \
-	user/dhcp user/v6dhcpd \
+	user/dhcp user/v6dhcpd user/nslookup \
 	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/lspci
 
 # make a printout
@@ -516,8 +520,8 @@ FATQEMU = -drive file=$(FATIMG)$(comma)index=3$(comma)media=disk$(comma)format=r
 QEMUNETOPTS ?= -netdev user,id=auxnet0 -device virtio-net-pci,netdev=auxnet0,mac=52:54:00:12:34:56,disable-modern=on
 QEMUOPTS = -drive file=fs.img,index=1,media=disk,format=raw -drive file=xv6.img,index=0,media=disk,format=raw $(EXT2QEMU) $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
-test_ext2.img: tools/stage-ext2-root.sh README etc.hosts $(EXT2ROOT_FSTAB) etc.profile etc.passwd etc.groups etc.hostname $(UPROGS)
-	sh tools/stage-ext2-root.sh .ext2root $(EXT2IMG) README etc.hosts $(EXT2ROOT_FSTAB) etc.profile etc.passwd etc.groups etc.hostname $(UPROGS)
+test_ext2.img: tools/stage-ext2-root.sh README etc.hosts $(EXT2ROOT_FSTAB) etc.profile etc.passwd etc.groups etc.hostname etc.resolv.conf $(UPROGS)
+	sh tools/stage-ext2-root.sh .ext2root $(EXT2IMG) README etc.hosts $(EXT2ROOT_FSTAB) etc.profile etc.passwd etc.groups etc.hostname etc.resolv.conf $(UPROGS)
 
 test_fat.img: tools/stage-fat-root.sh
 	sh tools/stage-fat-root.sh $(FATROOT_STAGE) $(FATIMG)

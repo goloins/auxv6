@@ -47,6 +47,7 @@ user/sockettest
 user/su
 user/tcptest
 user/ping
+user/nslookup
 user/netinfo
 user/ifconfig
 user/netstat

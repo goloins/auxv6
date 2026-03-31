@@ -148,5 +148,8 @@ void* malloc(uint);
 void free(void*);
 int atoi(const char*);
 char* readpass(char*, int);
+int resolve_ipv4(const char *name, uint *out);
+int dns_nameservers(uint *servers, int max);
+int dns_lookup_ipv4(const char *name, uint server, uint *out);
 
 #endif

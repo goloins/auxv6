@@ -118,6 +118,9 @@ for src in "$@"; do
     etc.hostname)
       install -m 0644 "$src" "$rootdir/etc/hostname"
       ;;
+    etc.resolv.conf)
+      install -m 0644 "$src" "$rootdir/etc/resolv.conf"
+      ;;
     *)
       install -m 0644 "$src" "$rootdir/$base"
       ;;

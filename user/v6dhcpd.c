@@ -18,7 +18,6 @@
 #define DHCP_OPTION_PAD         0
 #define DHCP_OPTION_SUBNET_MASK 1
 #define DHCP_OPTION_ROUTER      3
-#define DHCP_OPTION_DNS         6
 #define DHCP_OPTION_REQ_IP      50
 #define DHCP_OPTION_LEASE       51
 #define DHCP_OPTION_MSG_TYPE    53
@@ -276,7 +275,7 @@ static int
 dhcp_build_discover(struct dhcp_packet *pkt, uint xid, uchar *mac)
 {
   uchar client_id[7];
-  uchar req_list[5];
+  uchar req_list[4];
   uchar type;
   int off;
 
@@ -292,9 +291,8 @@ dhcp_build_discover(struct dhcp_packet *pkt, uint xid, uchar *mac)
 
   req_list[0] = DHCP_OPTION_SUBNET_MASK;
   req_list[1] = DHCP_OPTION_ROUTER;
-  req_list[2] = DHCP_OPTION_DNS;
-  req_list[3] = DHCP_OPTION_SERVER_ID;
-  req_list[4] = DHCP_OPTION_LEASE;
+  req_list[2] = DHCP_OPTION_SERVER_ID;
+  req_list[3] = DHCP_OPTION_LEASE;
   off = dhcp_add_option(pkt->options, off, DHCP_OPTION_PARAM_REQ, sizeof(req_list), req_list);
 
   pkt->options[off++] = DHCP_OPTION_END;
@@ -306,7 +304,7 @@ dhcp_build_request(struct dhcp_packet *pkt, uint xid, uchar *mac,
                    uint req_ip, uint server_id, uint ciaddr)
 {
   uchar client_id[7];
-  uchar req_list[5];
+  uchar req_list[4];
   uchar type;
   uint be;
   int off;
@@ -334,9 +332,8 @@ dhcp_build_request(struct dhcp_packet *pkt, uint xid, uchar *mac,
 
   req_list[0] = DHCP_OPTION_SUBNET_MASK;
   req_list[1] = DHCP_OPTION_ROUTER;
-  req_list[2] = DHCP_OPTION_DNS;
-  req_list[3] = DHCP_OPTION_SERVER_ID;
-  req_list[4] = DHCP_OPTION_LEASE;
+  req_list[2] = DHCP_OPTION_SERVER_ID;
+  req_list[3] = DHCP_OPTION_LEASE;
   off = dhcp_add_option(pkt->options, off, DHCP_OPTION_PARAM_REQ, sizeof(req_list), req_list);
 
   pkt->options[off++] = DHCP_OPTION_END;

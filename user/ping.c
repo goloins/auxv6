@@ -92,11 +92,13 @@ main(int argc, char *argv[])
   int max_rtt;
   int sum_rtt;
   int avg_rtt;
+  int elapsed;
   uint min_cyc;
   uint max_cyc;
   uint sum_cyc;
   uint avg_cyc;
   uint dst_addr;
+  int used_resolver;
   char buf[128];
   int pid;
   struct sockaddr_in dst;
@@ -107,13 +109,28 @@ main(int argc, char *argv[])
   struct icmp_hdr *rh;
 
   dst_addr = INADDR_LOOPBACK;
+  used_resolver = 0;
   if(argc > 2) {
-    printf(2, "usage: ping [ipv4]\n");
+    printf(2, "usage: ping [ipv4-or-hostname]\n");
     exit();
   }
-  if(argc == 2 && parse_ipv4(argv[1], &dst_addr) < 0) {
-    printf(2, "ping: invalid IPv4 address\n");
-    exit();
+  if(argc == 2) {
+    if(parse_ipv4(argv[1], &dst_addr) < 0) {
+      if(resolve_ipv4(argv[1], &dst_addr) < 0) {
+        printf(2, "ping: cannot resolve %s\n", argv[1]);
+        exit();
+      }
+      used_resolver = 1;
+    }
+  }
+
+  if(used_resolver) {
+    printf(1, "%s resolves to ", argv[1]);
+    printf(1, "%d.%d.%d.%d\n",
+           (dst_addr >> 24) & 0xff,
+           (dst_addr >> 16) & 0xff,
+           (dst_addr >> 8) & 0xff,
+           dst_addr & 0xff);
   }
 
   fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
@@ -160,43 +177,52 @@ main(int argc, char *argv[])
       exit();
     }
 
-    n = recvtimeout(fd, buf, sizeof(buf), timeout_ticks);
-    c1 = rdtsc32();
-    t1 = uptime();
-    if(n <= 0) {
+    matched = 0;
+    for(;;) {
+      elapsed = uptime() - t0;
+      if(elapsed >= timeout_ticks)
+        break;
+
+      n = recvtimeout(fd, buf, sizeof(buf), timeout_ticks - elapsed);
+      c1 = rdtsc32();
+      t1 = uptime();
+      if(n <= 0)
+        break;
+
+      // Raw sockets are byte-stream buffers here; scan for any matching echo reply.
+      for(off = 0; off + (int)sizeof(struct icmp_hdr) <= n; off++) {
+        rh = (struct icmp_hdr*)(buf + off);
+        if(rh->type == ICMP_ECHO_REPLY && rh->ident == (ushort)pid && rh->seq == (ushort)i) {
+          rtt = t1 - t0;
+          cyc = c1 - c0;
+          if(received == 0 || rtt < min_rtt)
+            min_rtt = rtt;
+          if(received == 0 || rtt > max_rtt)
+            max_rtt = rtt;
+          sum_rtt += rtt;
+          if(received == 0 || cyc < min_cyc)
+            min_cyc = cyc;
+          if(received == 0 || cyc > max_cyc)
+            max_cyc = cyc;
+          sum_cyc += cyc;
+          received++;
+
+          if(rtt == 0)
+            printf(1, "ping: PASS bytes=%d seq=%d time=<1 tick cycles=%u\n", n, rh->seq, cyc);
+          else
+            printf(1, "ping: PASS bytes=%d seq=%d time=%d ticks cycles=%u\n", n, rh->seq, rtt, cyc);
+          matched = 1;
+          break;
+        }
+      }
+      if(matched)
+        break;
+    }
+
+    if(!matched) {
       printf(1, "ping: timeout seq=%d\n", i);
       continue;
     }
-
-    matched = 0;
-    // Raw sockets are byte-stream buffers here; scan for any matching echo reply.
-    for(off = 0; off + (int)sizeof(struct icmp_hdr) <= n; off++) {
-      rh = (struct icmp_hdr*)(buf + off);
-      if(rh->type == ICMP_ECHO_REPLY && rh->ident == (ushort)pid && rh->seq == (ushort)i) {
-        rtt = t1 - t0;
-        cyc = c1 - c0;
-        if(received == 0 || rtt < min_rtt)
-          min_rtt = rtt;
-        if(received == 0 || rtt > max_rtt)
-          max_rtt = rtt;
-        sum_rtt += rtt;
-        if(received == 0 || cyc < min_cyc)
-          min_cyc = cyc;
-        if(received == 0 || cyc > max_cyc)
-          max_cyc = cyc;
-        sum_cyc += cyc;
-        received++;
-
-        if(rtt == 0)
-          printf(1, "ping: PASS bytes=%d seq=%d time=<1 tick cycles=%u\n", n, rh->seq, cyc);
-        else
-          printf(1, "ping: PASS bytes=%d seq=%d time=%d ticks cycles=%u\n", n, rh->seq, rtt, cyc);
-        matched = 1;
-        break;
-      }
-    }
-    if(!matched)
-      printf(1, "ping: no matching echo reply seq=%d\n", i);
 
     if(i < npings)
       sleep(10);

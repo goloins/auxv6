@@ -304,6 +304,8 @@ socket_deliver_raw(uchar proto, struct sockaddr_in *src, struct sockaddr_in *dst
   rs = 0;
   copylen = 0;
   acquire(&socket_lock);
+
+  // Prefer connected raw sockets so packets are delivered to the intended peer.
   for(i = 0; i < NSOCKET; i++) {
     if(sockets[i].ref == 0)
       continue;
@@ -311,12 +313,35 @@ socket_deliver_raw(uchar proto, struct sockaddr_in *src, struct sockaddr_in *dst
       continue;
     if(sockets[i].protocol != 0 && sockets[i].protocol != proto)
       continue;
+    if(sockets[i].state != SOCK_CONNECT)
+      continue;
+    if(sockets[i].remote_addr.sin_addr != 0 &&
+       sockets[i].remote_addr.sin_addr != src->sin_addr)
+      continue;
+    if(sockets[i].local_addr.sin_addr != INADDR_ANY &&
+       sockets[i].local_addr.sin_addr != dst->sin_addr)
+      continue;
+    rs = &sockets[i];
+    break;
+  }
+
+  if(rs == 0) {
+  for(i = 0; i < NSOCKET; i++) {
+    if(sockets[i].ref == 0)
+      continue;
+    if(sockets[i].family != AF_INET || sockets[i].type != SOCK_RAW)
+      continue;
+    if(sockets[i].protocol != 0 && sockets[i].protocol != proto)
+      continue;
+    if(sockets[i].state != SOCK_BOUND && sockets[i].state != SOCK_CLOSED)
+      continue;
     if(sockets[i].state == SOCK_BOUND &&
        sockets[i].local_addr.sin_addr != INADDR_ANY &&
        sockets[i].local_addr.sin_addr != dst->sin_addr)
       continue;
     rs = &sockets[i];
     break;
+  }
   }
 
   if(rs && rs->recv_buf && rs->recv_cap > rs->recv_len) {
