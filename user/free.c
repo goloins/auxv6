@@ -1,7 +1,7 @@
 #include "types.h"
 #include "user.h"
 #include "fcntl.h"
-
+static char *human_kb(int kb);
 static int
 read_text(const char *path, char *buf, int max)
 {
@@ -79,7 +79,7 @@ main(int argc, char *argv[])
     exit();
   }
 
-  used_kb = total_kb - free_kb;
+    used_kb = total_kb - free_kb;
   if(used_kb < 0)
     used_kb = 0;
 
@@ -88,8 +88,49 @@ main(int argc, char *argv[])
     printf(1, "Mem:    %11d %11d %11d\n", total_kb, used_kb, free_kb);
   } else {
     printf(1, "              total        used        free\n");
-    printf(1, "Mem:    %11dK %11dK %11dK\n", total_kb, used_kb, free_kb);
+    printf(1, "Mem:    %11s %11s %11s\n",
+      human_kb(total_kb), human_kb(used_kb), human_kb(free_kb));
   }
 
   exit();
+}
+
+static char hbuf[3][16];
+static int  hbuf_idx;
+
+static char *
+human_kb(int kb)
+{
+  char *buf;
+  int   val;
+  char  unit;
+  int   i;
+
+  buf = hbuf[hbuf_idx % 3];
+  hbuf_idx++;
+
+  if(kb >= 1024 * 1024){
+    val  = kb / (1024 * 1024);
+    unit = 'G';
+  } else if(kb >= 1024){
+    val  = kb / 1024;
+    unit = 'M';
+  } else {
+    val  = kb;
+    unit = 'K';
+  }
+
+  /* manual itoa+unit — no snprintf in userspace */
+  i = 14;
+  buf[15] = 0;
+  buf[i--] = unit;
+  if(val == 0){
+    buf[i--] = '0';
+  } else {
+    while(val > 0){
+      buf[i--] = '0' + (val % 10);
+      val /= 10;
+    }
+  }
+  return &buf[i + 1];
 }
