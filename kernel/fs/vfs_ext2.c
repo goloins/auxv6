@@ -202,6 +202,25 @@ ext2_data_for_dev(uint dev)
   return data;
 }
 
+int
+ext2_block_usage(uint dev, uint *total_blocks, uint *free_blocks, uint *block_size)
+{
+  struct ext2_mount_data *data;
+
+  data = ext2_data_for_dev(dev);
+  if(data == 0)
+    return -1;
+
+  if(total_blocks)
+    *total_blocks = data->sb.s_blocks_count;
+  if(free_blocks)
+    *free_blocks = data->sb.s_free_blocks_count;
+  if(block_size)
+    *block_size = data->block_size;
+
+  return 0;
+}
+
 static int
 ext2_inode_disk_offset(struct ext2_mount_data *data, uint inum, uint *off)
 {

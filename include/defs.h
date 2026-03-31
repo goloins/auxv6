@@ -4,6 +4,7 @@ struct file;
 struct inode;
 struct pipe;
 struct proc;
+struct procinfo_k;
 struct rtcdate;
 struct spinlock;
 struct sleeplock;
@@ -130,6 +131,8 @@ int             vfs_dev_has_cap(uint, uint);
 const struct vnode_ops* vfs_dev_vops(uint);
 void*           vfs_dev_fs_data(uint);
 int             vfs_dev_faultctl(uint, int, int);
+int             ext2_block_usage(uint dev, uint *total_blocks, uint *free_blocks,
+								 uint *block_size);
 void            vfs_xv6fs_init(struct vfs*);
 void            vfs_ext2_init(struct vfs*);
 void            vfs_msdosfs_init(struct vfs*);
@@ -183,6 +186,7 @@ char*           kalloc(void);
 void            kfree(char*);
 void            kinit1(void*, void*);
 void            kinit2(void*, void*);
+void            kalloc_meminfo(uint *total_pages, uint *free_pages);
 
 // kbd.c
 void            kbdintr(void);
@@ -255,6 +259,7 @@ void            pinit(void);
 int             proc_has_cwd_on_dev(uint dev);
 uint            proc_cwd_dev(void);
 struct inode*   proc_cwd_idup(void);
+int             proc_snapshot(struct procinfo_k *out, int max);
 void            procdump(void);
 void            scheduler(void) __attribute__((noreturn));
 void            sched(void);

@@ -37,6 +37,9 @@ user/login
 user/ln
 user/ls
 user/lsblk
+user/free
+user/df
+user/ps
 user/lspci
 user/mkdir
 user/mount

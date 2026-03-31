@@ -1554,6 +1554,36 @@ proc_kill_with_signal(int pid, int signo)
   return delivered > 0 ? 0 : -1;
 }
 
+int
+proc_snapshot(struct procinfo_k *out, int max)
+{
+  struct proc *p;
+  int n;
+
+  if(out == 0 || max <= 0)
+    return -1;
+
+  n = 0;
+  acquire(&ptable.lock);
+  for(p = ptable.proc; p < &ptable.proc[NPROC] && n < max; p++){
+    if(p->state == UNUSED || p->pid <= 0)
+      continue;
+    out[n].pid = p->pid;
+    out[n].ppid = p->ppid;
+    out[n].pgid = p->pgid;
+    out[n].sid = p->sid;
+    out[n].uid = p->uid;
+    out[n].gid = p->gid;
+    out[n].state = p->state;
+    out[n].sz = p->sz;
+    safestrcpy(out[n].name, p->name, sizeof(out[n].name));
+    n++;
+  }
+  release(&ptable.lock);
+
+  return n;
+}
+
 //PAGEBREAK: 36
 // Print a process listing to console.  For debugging.
 // Runs when user types ^P on console.

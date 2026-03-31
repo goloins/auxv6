@@ -1,6 +1,8 @@
 #include "types.h"
 #include "defs.h"
 #include "param.h"
+#include "mmu.h"
+#include "proc.h"
 #include "stat.h"
 #include "spinlock.h"
 #include "sleeplock.h"
@@ -17,6 +19,9 @@
 #define PROCFS_PCI_INO      4
 #define PROCFS_VBLK_FLUSH_INO 5
 #define PROCFS_AHCI_TUNE_INO 6
+#define PROCFS_MEMINFO_INO  7
+#define PROCFS_PS_INO       8
+#define PROCFS_MOUNTSTATS_INO 9
 #define PROCFS_VERSION_STR  "a/ux86 aux86 i686\n"
 
 struct procfs_inode {
@@ -31,15 +36,71 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_PCI_INO,     "pci",     2048 },
   { PROCFS_VBLK_FLUSH_INO, "vblk_flush", 16 },
   { PROCFS_AHCI_TUNE_INO, "ahci_tune", 2048 },
+  { PROCFS_MEMINFO_INO, "meminfo", 128 },
+  { PROCFS_PS_INO, "ps", 2048 },
+  { PROCFS_MOUNTSTATS_INO, "mountstats", 1024 },
   { 0, 0, 0 }
 };
 
 static int procfs_writei(struct inode *ip, char *src, uint off, uint n);
+static uint procfs_write_uint(char *buf, uint value);
 
 static uint
 procfs_root_dir_size(void)
 {
-  return 7 * sizeof(struct dirent);
+  return 10 * sizeof(struct dirent);
+}
+
+static int
+procfs_buf_putc(char *buf, uint max, uint *len, char c)
+{
+  if(*len >= max)
+    return -1;
+  buf[*len] = c;
+  (*len)++;
+  return 0;
+}
+
+static int
+procfs_buf_puts(char *buf, uint max, uint *len, const char *s)
+{
+  uint i;
+
+  for(i = 0; s[i]; i++){
+    if(procfs_buf_putc(buf, max, len, s[i]) < 0)
+      return -1;
+  }
+  return 0;
+}
+
+static int
+procfs_buf_putu(char *buf, uint max, uint *len, uint v)
+{
+  char tmp[16];
+  uint n;
+  uint i;
+
+  n = procfs_write_uint(tmp, v);
+  for(i = 0; i < n; i++){
+    if(procfs_buf_putc(buf, max, len, tmp[i]) < 0)
+      return -1;
+  }
+  return 0;
+}
+
+static const char*
+procfs_state_name(int state)
+{
+  switch(state){
+  case UNUSED:   return "unused";
+  case EMBRYO:   return "embryo";
+  case SLEEPING: return "sleep";
+  case RUNNABLE: return "runnable";
+  case RUNNING:  return "running";
+  case STOPPED:  return "stopped";
+  case ZOMBIE:   return "zombie";
+  default:       return "?";
+  }
 }
 
 static uint
@@ -265,7 +326,17 @@ int
 procfs_readi(struct inode *ip, char *dst, uint off, uint n)
 {
   char buf[2048];
-  struct dirent entries[5];
+  struct dirent entries[8];
+  struct procinfo_k pinfo[NPROC];
+  struct vfs_mount_info mins[VFS_MOUNTS_MAX];
+  uint total_pages;
+  uint free_pages;
+  uint total_blocks;
+  uint free_blocks;
+  uint block_size;
+  int pm;
+  int mm;
+  int i;
   uint len;
   uint now;
 
@@ -284,6 +355,12 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     safestrcpy(entries[3].name, "vblk_flush", DIRSIZ);
     entries[4].inum = PROCFS_AHCI_TUNE_INO;
     safestrcpy(entries[4].name, "ahci_tune", DIRSIZ);
+    entries[5].inum = PROCFS_MEMINFO_INO;
+    safestrcpy(entries[5].name, "meminfo", DIRSIZ);
+    entries[6].inum = PROCFS_PS_INO;
+    safestrcpy(entries[6].name, "ps", DIRSIZ);
+    entries[7].inum = PROCFS_MOUNTSTATS_INO;
+    safestrcpy(entries[7].name, "mountstats", DIRSIZ);
     return procfs_copy_data(dst, off, n, (char*)entries, sizeof(entries));
   }
   if(ip->inum == PROCFS_VERSION_INO)
@@ -304,6 +381,119 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     if(r < 0)
       return -1;
     len = (uint)r;
+    return procfs_copy_data(dst, off, n, buf, len);
+  }
+  if(ip->inum == PROCFS_MEMINFO_INO){
+    total_pages = 0;
+    free_pages = 0;
+    kalloc_meminfo(&total_pages, &free_pages);
+
+    len = 0;
+    if(procfs_buf_puts(buf, sizeof(buf), &len, "MemTotal: ") < 0)
+      return -1;
+    if(procfs_buf_putu(buf, sizeof(buf), &len, total_pages * (PGSIZE / 1024)) < 0)
+      return -1;
+    if(procfs_buf_puts(buf, sizeof(buf), &len, " kB\n") < 0)
+      return -1;
+    if(procfs_buf_puts(buf, sizeof(buf), &len, "MemFree: ") < 0)
+      return -1;
+    if(procfs_buf_putu(buf, sizeof(buf), &len, free_pages * (PGSIZE / 1024)) < 0)
+      return -1;
+    if(procfs_buf_puts(buf, sizeof(buf), &len, " kB\n") < 0)
+      return -1;
+    return procfs_copy_data(dst, off, n, buf, len);
+  }
+  if(ip->inum == PROCFS_PS_INO){
+    pm = proc_snapshot(pinfo, NPROC);
+    if(pm < 0)
+      return -1;
+
+    len = 0;
+    if(procfs_buf_puts(buf, sizeof(buf), &len,
+                       "PID PPID PGID SID UID GID STAT SZ NAME\n") < 0)
+      return -1;
+
+    for(i = 0; i < pm; i++){
+      if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)pinfo[i].pid) < 0)
+        break;
+      if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+        break;
+      if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)pinfo[i].ppid) < 0)
+        break;
+      if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+        break;
+      if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)pinfo[i].pgid) < 0)
+        break;
+      if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+        break;
+      if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)pinfo[i].sid) < 0)
+        break;
+      if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+        break;
+      if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)pinfo[i].uid) < 0)
+        break;
+      if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+        break;
+      if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)pinfo[i].gid) < 0)
+        break;
+      if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+        break;
+      if(procfs_buf_puts(buf, sizeof(buf), &len, procfs_state_name(pinfo[i].state)) < 0)
+        break;
+      if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+        break;
+      if(procfs_buf_putu(buf, sizeof(buf), &len, pinfo[i].sz) < 0)
+        break;
+      if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+        break;
+      if(procfs_buf_puts(buf, sizeof(buf), &len, pinfo[i].name) < 0)
+        break;
+      if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+        break;
+    }
+    return procfs_copy_data(dst, off, n, buf, len);
+  }
+  if(ip->inum == PROCFS_MOUNTSTATS_INO){
+    mm = vfs_get_mounts(mins, VFS_MOUNTS_MAX);
+    if(mm < 0)
+      return -1;
+
+    len = 0;
+    if(procfs_buf_puts(buf, sizeof(buf), &len, "dev path type total free bsize\n") < 0)
+      return -1;
+
+    for(i = 0; i < mm; i++){
+      total_blocks = bdev_nblocks((uint)mins[i].dev);
+      free_blocks = 0;
+      block_size = BSIZE;
+      if(ext2_block_usage((uint)mins[i].dev, &total_blocks, &free_blocks, &block_size) < 0)
+        free_blocks = 0;
+
+      if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)mins[i].dev) < 0)
+        break;
+      if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+        break;
+      if(procfs_buf_puts(buf, sizeof(buf), &len, mins[i].path) < 0)
+        break;
+      if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+        break;
+      if(procfs_buf_puts(buf, sizeof(buf), &len, mins[i].fstype) < 0)
+        break;
+      if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+        break;
+      if(procfs_buf_putu(buf, sizeof(buf), &len, total_blocks) < 0)
+        break;
+      if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+        break;
+      if(procfs_buf_putu(buf, sizeof(buf), &len, free_blocks) < 0)
+        break;
+      if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+        break;
+      if(procfs_buf_putu(buf, sizeof(buf), &len, block_size) < 0)
+        break;
+      if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+        break;
+    }
     return procfs_copy_data(dst, off, n, buf, len);
   }
   if(ip->inum != PROCFS_UPTIME_INO)

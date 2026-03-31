@@ -38,15 +38,15 @@ build_ext2_image() {
 
   # Use fakeroot to build with root ownership
   if [ "$use_fakeroot" = true ]; then
-    fakeroot sh -c "chown -R 0:0 '$rootdir' && '$mke2fs_cmd' -q -t ext2 -d '$rootdir' -F '$image' 8192"
+    fakeroot sh -c "chown -R 0:0 '$rootdir' && '$mke2fs_cmd' -q -t ext2 -d '$rootdir' -F '$image' 32768"
   else
     # Try with sudo if not using fakeroot
-    if sudo -n "$mke2fs_cmd" -q -t ext2 -d "$rootdir" -F "$image" 8192 2>/dev/null; then
+    if sudo -n "$mke2fs_cmd" -q -t ext2 -d "$rootdir" -F "$image" 32768 2>/dev/null; then
       :
     else
       # Fall back to running as-is (files won't be owned by root)
       echo "warning: running mke2fs without elevated privileges; files will be owned by current user" >&2
-      "$mke2fs_cmd" -q -t ext2 -d "$rootdir" -F "$image" 8192
+      "$mke2fs_cmd" -q -t ext2 -d "$rootdir" -F "$image" 32768
     fi
   fi
 }

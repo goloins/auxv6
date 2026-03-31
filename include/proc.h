@@ -37,6 +37,18 @@ struct context {
 
 enum procstate { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, STOPPED, ZOMBIE };
 
+struct procinfo_k {
+  int pid;
+  int ppid;
+  int pgid;
+  int sid;
+  int uid;
+  int gid;
+  int state;
+  uint sz;
+  char name[16];
+};
+
 // Per-process state
 struct proc {
   uint sz;                     // Size of process memory (bytes)
