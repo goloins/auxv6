@@ -24,7 +24,11 @@ netdev_init(void)
 	arp_init();
 	loopback_attach();
 	virtio_net_init();
+	e1000_init();
+	pcnet_init();
 	rtl8111_init();
+	vmxnet3_init();
+	netvsc_init();
 }
 
 int

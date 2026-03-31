@@ -14,7 +14,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 
 ---
 
-## Recent Progress (2026-03-30 to 2026-03-31)
+## Recent Progress (2026-03-30 to 2026-04-01)
 
 - Signal delivery, `alarm()`, `SIGPIPE`, `lseek`, `dup2`, and baseline `fcntl()` support landed and are now integrated into the main syscall path.
 - PCI enumeration, IRQ registration, DMA allocation helpers, and `lspci` landed as the Tier 2 device foundation.
@@ -24,6 +24,12 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - TCP now exchanges real packets with a basic three-way handshake and ACKed payload delivery; `telnet` and `netcat` were added as rough but functional userland validation tools.
 - POSIX porting work expanded substantially: new `include/posix/*` headers, broader libc-style helpers in `user/ulib.c`, formatting/dirent wrappers in `user/posix.c`, `setjmp`, and enough compatibility to experiment with a `dash` port.
 - Userland bootstrap is now more Unix-like: `init` runs `dash /etc/rc.d/rc.S`, tracks runlevels, handles `telinit` requests via `SIGHUP`, and `exec` supports `#!` interpreter scripts.
+- **NVMe driver** now has I/O queue creation and synchronous READ/WRITE command support via PRP1 (single-page transfers).
+- **E1000 driver** (Intel Gigabit Ethernet) now has full ifnet integration with TX/RX descriptor rings, IRQ handling, and proper network interface registration.
+- **PCNET driver** (AMD PCNET-PCI II) now has full ifnet integration with TX/RX rings, initialization block, and IRQ handling.
+- **RTL8111 driver** (Realtek Gigabit Ethernet) promoted from probe stub to full implementation with descriptor-based TX/RX, IRQ handling, and ifnet integration.
+- **VMXnet3 driver** stub added for VMware paravirtualized NIC support (PCI detection, BAR mapping, MAC address reading).
+- **Hyper-V NetVSC driver** stub added for Microsoft Hyper-V synthetic network adapter (requires VMBus infrastructure for full implementation).
 
 ---
 
@@ -55,8 +61,8 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | PCI subsystem | 80% | Bus 0 enumeration, BAR decode/mapping, helper APIs, `lspci`; MSI/MSI-X still missing |
 | DMA support | 75% | Page-based DMA allocation with physical address tracking and alignment |
 | Virtio storage | 70% | Working virtio core + virtio-blk, but still single-queue/minimal-feature oriented |
-| Real NICs | 15% | `rtl8111` probe stub only; no fully working hardware NIC driver yet |
-| Modern storage | 10% | AHCI and NVMe remain stubs |
+| Real NICs | 60% | E1000, PCNET, RTL8111 have full ifnet integration; VMXnet3, Hyper-V netvsc are stubs |
+| Modern storage | 40% | AHCI has polling DMA read/write; NVMe has I/O queue and basic RW path |
 | Symlinks | None | VFS supports but not implemented |
 
 ---
@@ -244,16 +250,16 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 **Dependencies:** PCI, DMA  
 **Estimate:** 2-3 weeks
 
-### 3.3 NVMe Driver [MEDIUM]
-**Status:** Controller reset + admin queue + identify scaffolding exists; namespace-1 discovery/capacity parsing is now wired, but I/O queue + data path are still pending  
+### 3.3 NVMe Driver [PARTIAL]
+**Status:** Controller reset + admin queue + identify + I/O queue + basic RW path implemented  
 **Files:** `kernel/driver/nvme.c`, `include/pci.h`, `include/blockdev.h`  
 **Value:** Modern SSD support  
 
 **Basic implementation plan (minimum viable NVMe):**
 - [x] Finish namespace discovery (`IDENTIFY NS`) and choose active namespace policy (nsid 1 first)
-- [ ] Create one I/O queue pair and wire queue doorbells correctly for data commands
-- [ ] Implement synchronous `READ`/`WRITE` command path using PRP1 (single-page transfers)
-- [ ] Register namespace as block device and report capacity from namespace metadata
+- [x] Create one I/O queue pair and wire queue doorbells correctly for data commands
+- [x] Implement synchronous `READ`/`WRITE` command path using PRP1 (single-page transfers)
+- [x] Register namespace as block device and report capacity from namespace metadata
 - [ ] Add queue timeout/completion error handling and controller reset-on-fatal fallback
 
 **Follow-up hardening (after basic works):**
@@ -262,8 +268,8 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 - [ ] Interrupt-driven completions and MSI-X when available
 
 **Definition of done (basic):**
-- [ ] NVMe namespace appears in `lsblk` and can be mounted
-- [ ] Buffered block read/write path passes filesystem smoke tests
+- [x] NVMe namespace appears in `lsblk` and can be mounted
+- [x] Buffered block read/write path passes filesystem smoke tests
 - [ ] Controller recovers from command timeout without requiring full reboot
 
 **Dependencies:** PCI, DMA  
@@ -332,6 +338,59 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 - Good enough for DHCP, DNS, ping, and basic TCP userland testing in QEMU
 
 **Estimate:** 1 week
+
+### 4.3a Real Hardware NIC Drivers [PARTIAL]
+**Status:** E1000, PCNET, RTL8111 have full ifnet integration; VMXnet3 and netvsc are stubs  
+**Files:** `kernel/driver/e1000.c`, `kernel/driver/pcnet.c`, `kernel/driver/rtl8111.c`, `kernel/driver/vmxnet3.c`, `kernel/driver/netvsc.c`  
+**Value:** Support for real hardware and additional VM platforms  
+
+**E1000 (Intel Gigabit Ethernet) [IMPLEMENTED]:**
+- [x] PCI detection (vendor 0x8086, device 0x100E/0x153A)
+- [x] BAR0 MMIO mapping
+- [x] MAC address from EEPROM/RAL0
+- [x] TX/RX descriptor ring setup
+- [x] Full ifnet integration (if_output via descriptor ring)
+- [x] IRQ handler for TX/RX completion
+- [ ] Checksum offload (hardware capable, not wired)
+- [ ] Link status change handling
+
+**PCNET (AMD PCNET-PCI II) [IMPLEMENTED]:**
+- [x] PCI detection (vendor 0x1022, device 0x2000)
+- [x] I/O port-based register access
+- [x] 32-bit SWSTYLE mode
+- [x] TX/RX descriptor rings
+- [x] Initialization block setup
+- [x] Full ifnet integration
+- [x] IRQ handler for TX/RX completion
+
+**RTL8111 (Realtek Gigabit Ethernet) [IMPLEMENTED]:**
+- [x] PCI detection (vendor 0x10EC, device 0x8168/0x8169)
+- [x] BAR0 MMIO mapping
+- [x] MAC address from registers
+- [x] TX/RX descriptor rings (8169-style)
+- [x] Full ifnet integration
+- [x] IRQ handler for TX/RX completion
+- [ ] Jumbo frame support
+
+**VMXnet3 (VMware Paravirtualized) [STUB]:**
+- [x] PCI detection (vendor 0x15AD, device 0x07B0)
+- [x] BAR mapping (PT and VD registers)
+- [x] MAC address reading via command interface
+- [ ] TX/RX queue setup
+- [ ] Full ifnet integration
+
+**NetVSC (Hyper-V Synthetic NIC) [STUB]:**
+- [x] RNDIS protocol structures defined
+- [ ] VMBus infrastructure (blocking dependency)
+- [ ] Channel detection and negotiation
+- [ ] Full ifnet integration
+
+**Implementation notes:**
+- E1000: Most common emulated NIC, works in QEMU/VirtualBox/VMware
+- PCNET: Legacy QEMU default NIC, good fallback
+- RTL8111: Common on real hardware (laptops, desktops)
+- VMXnet3: High-performance VMware option (needs more work)
+- NetVSC: Requires VMBus transport layer not yet implemented
 
 ### 4.4 TCP Implementation [PARTIAL]
 **Current:** Actual packet exchange now works for basic client/server traffic  
@@ -458,11 +517,13 @@ Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
 | `kernel/driver/virtio.c` | Virtio framework core |
 | `kernel/driver/virtio_net.c` | Initial virtio network driver with RX/TX integration |
 | `kernel/driver/virtio_blk.c` | Initial virtio block driver with blockdev integration |
-| `kernel/driver/rtl8111.c` | Realtek probe stub |
-| `kernel/driver/e1000.c` | Intel E1000 scaffold |
-| `kernel/driver/pcnet.c` | AMD PCNET-PCI scaffold |
-| `kernel/driver/ahci.c` | AHCI/SATA scaffold |
-| `kernel/driver/nvme.c` | NVMe scaffold |
+| `kernel/driver/e1000.c` | Intel E1000 Gigabit Ethernet with full ifnet integration |
+| `kernel/driver/pcnet.c` | AMD PCNET-PCI II with full ifnet integration |
+| `kernel/driver/rtl8111.c` | Realtek RTL8111/8168 Gigabit Ethernet with full ifnet integration |
+| `kernel/driver/vmxnet3.c` | VMware VMXnet3 paravirtualized NIC stub |
+| `kernel/driver/netvsc.c` | Microsoft Hyper-V NetVSC paravirtualized NIC stub |
+| `kernel/driver/ahci.c` | AHCI/SATA driver with polling DMA read/write |
+| `kernel/driver/nvme.c` | NVMe driver with I/O queue and basic RW path |
 
 ### Headers
 | File | Description |

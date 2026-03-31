@@ -417,7 +417,11 @@ int             tcp_connect(struct ifnet*, struct socket*, struct sockaddr_in*);
 int             tcp_output(struct ifnet*, struct sockaddr_in*, struct sockaddr_in*, char*, uint);
 void            tcp_input(struct ifnet*, struct ip_hdr*, char*, uint);
 void            virtio_net_init(void);
+void            e1000_init(void);
+void            pcnet_init(void);
 void            rtl8111_init(void);
+void            vmxnet3_init(void);
+void            netvsc_init(void);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

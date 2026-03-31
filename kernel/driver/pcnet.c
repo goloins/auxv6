@@ -30,6 +30,7 @@
 #include "spinlock.h"
 #include "pci.h"
 #include "net.h"
+#include "memlayout.h"
 
 /* PCI Vendor/Device IDs */
 #define PCNET_VENDOR_ID    0x1022  /* AMD */
@@ -141,7 +142,7 @@ struct pcnet_tmd {
 struct pcnet_softc {
     struct pci_dev   *pci;
     struct spinlock   lock;
-    struct ifnet     *ifp;
+    struct ifnet      ifn;             /* ifnet structure */
     
     uint16_t iobase;      /* I/O port base */
     uint8_t  mac[6];
@@ -152,6 +153,7 @@ struct pcnet_softc {
     /* TX ring */
     struct pcnet_tmd *tx_ring;
     char *tx_bufs[PCNET_TX_RING_SIZE];
+    struct mbuf *tx_mbufs[PCNET_TX_RING_SIZE];
     int tx_head, tx_tail;
     
     /* RX ring */
@@ -160,10 +162,17 @@ struct pcnet_softc {
     int rx_head;
 };
 
+static int pcnet_output(struct ifnet *ifp, struct mbuf *m);
+
+static struct ifnet_ops pcnet_ifnet_ops = {
+    .if_output = pcnet_output,
+};
+
 /* Global array of PCNET devices */
 #define MAX_PCNET 4
 static struct pcnet_softc pcnet_devices[MAX_PCNET];
 static int pcnet_count = 0;
+extern int ncpu;
 
 /*
  * Read CSR register
@@ -188,7 +197,7 @@ pcnet_csr_write(struct pcnet_softc *sc, int reg, uint32_t val)
 /*
  * Read BCR register
  */
-static uint32_t
+static uint32_t __attribute__((unused))
 pcnet_bcr_read(struct pcnet_softc *sc, int reg)
 {
     outl(sc->iobase + PCNET_RAP, reg);
@@ -362,6 +371,9 @@ pcnet_output(struct ifnet *ifp, struct mbuf *m)
 {
     struct pcnet_softc *sc = (struct pcnet_softc *)ifp->if_softc;
     
+    if (!m || m->len == 0)
+        return -1;
+    
     acquire(&sc->lock);
     
     /* Check for space in TX ring */
@@ -377,6 +389,7 @@ pcnet_output(struct ifnet *ifp, struct mbuf *m)
     sc->tx_ring[sc->tx_tail].bcnt = -m->len;
     sc->tx_ring[sc->tx_tail].tmd2 = 0;
     sc->tx_ring[sc->tx_tail].tmd1 = TMD1_OWN | TMD1_STP | TMD1_ENP | TMD1_ADD_FCS;
+    sc->tx_mbufs[sc->tx_tail] = m;
     
     /* Advance tail */
     sc->tx_tail = (sc->tx_tail + 1) % PCNET_TX_RING_SIZE;
@@ -390,57 +403,94 @@ pcnet_output(struct ifnet *ifp, struct mbuf *m)
 }
 
 /*
- * Interrupt handler
+ * Process completed TX descriptors
  */
-void
-pcnet_intr(void)
+static void
+pcnet_tx_complete(struct pcnet_softc *sc)
 {
-    for (int i = 0; i < pcnet_count; i++) {
-        struct pcnet_softc *sc = &pcnet_devices[i];
-        
-        uint32_t csr0 = pcnet_csr_read(sc, CSR0);
-        if (!(csr0 & CSR0_INTR))
-            continue;
-        
-        /* Clear interrupt flags (write 1 to clear) */
-        pcnet_csr_write(sc, CSR0, csr0 & (CSR0_RINT | CSR0_TINT | CSR0_IDON |
-                                          CSR0_MERR | CSR0_MISS | CSR0_IENA));
-        
-        acquire(&sc->lock);
-        
-        /* TX interrupt */
-        if (csr0 & CSR0_TINT) {
-            while (sc->tx_head != sc->tx_tail &&
-                   !(sc->tx_ring[sc->tx_head].tmd1 & TMD1_OWN)) {
-                /* TX completed */
-                sc->tx_head = (sc->tx_head + 1) % PCNET_TX_RING_SIZE;
-            }
-        }
-        
-        /* RX interrupt */
-        if (csr0 & CSR0_RINT) {
-            while (!(sc->rx_ring[sc->rx_head].rmd1 & RMD1_OWN)) {
-                /* Received a packet */
-                uint16_t status = sc->rx_ring[sc->rx_head].rmd1;
-                uint32_t len = sc->rx_ring[sc->rx_head].mcnt & 0xFFF;
-                
-                if ((status & (RMD1_STP | RMD1_ENP)) == (RMD1_STP | RMD1_ENP) &&
-                    !(status & RMD1_ERR)) {
-                    /* Valid packet */
-                    cprintf("pcnet: rx %d bytes\n", len);
-                    /* TODO: Create mbuf and call if_input */
-                }
-                
-                /* Return descriptor to controller */
-                sc->rx_ring[sc->rx_head].rmd1 = RMD1_OWN;
-                sc->rx_ring[sc->rx_head].bcnt = -PCNET_RX_BUF_SIZE;
-                
-                sc->rx_head = (sc->rx_head + 1) % PCNET_RX_RING_SIZE;
-            }
-        }
-        
-        release(&sc->lock);
+    while (sc->tx_head != sc->tx_tail &&
+           !(sc->tx_ring[sc->tx_head].tmd1 & TMD1_OWN)) {
+        /* Free TX mbuf */
+        if (sc->tx_mbufs[sc->tx_head])
+            mbuf_free(sc->tx_mbufs[sc->tx_head]);
+        sc->tx_mbufs[sc->tx_head] = 0;
+        sc->tx_head = (sc->tx_head + 1) % PCNET_TX_RING_SIZE;
     }
+}
+
+/*
+ * Process received packets
+ */
+static void
+pcnet_rx_complete(struct pcnet_softc *sc)
+{
+    struct mbuf *m;
+    int processed = 0;
+    
+    while (processed < 32 && !(sc->rx_ring[sc->rx_head].rmd1 & RMD1_OWN)) {
+        /* Received a packet */
+        uint16_t status = sc->rx_ring[sc->rx_head].rmd1;
+        uint32_t len = sc->rx_ring[sc->rx_head].mcnt & 0xFFF;
+        
+        if ((status & (RMD1_STP | RMD1_ENP)) == (RMD1_STP | RMD1_ENP) &&
+            !(status & RMD1_ERR) && len > 0 && len <= PCNET_RX_BUF_SIZE) {
+            /* Valid complete packet */
+            m = mbuf_alloc();
+            if (m) {
+                memmove(m->data, sc->rx_bufs[sc->rx_head], len);
+                m->len = len;
+                m->rcvif = &sc->ifn;
+                
+                /* Hand off to network stack outside lock */
+                release(&sc->lock);
+                if_input(&sc->ifn, m);
+                acquire(&sc->lock);
+            }
+        }
+        
+        /* Return descriptor to controller */
+        sc->rx_ring[sc->rx_head].rmd1 = RMD1_OWN;
+        sc->rx_ring[sc->rx_head].bcnt = -PCNET_RX_BUF_SIZE;
+        
+        sc->rx_head = (sc->rx_head + 1) % PCNET_RX_RING_SIZE;
+        processed++;
+    }
+}
+
+/*
+ * IRQ handler for dynamic registration
+ */
+static void
+pcnet_irq_handler(int irq, void *arg)
+{
+    struct pcnet_softc *sc = (struct pcnet_softc *)arg;
+    uint32_t csr0;
+    
+    (void)irq;
+    if (!sc)
+        return;
+    
+    csr0 = pcnet_csr_read(sc, CSR0);
+    if (!(csr0 & CSR0_INTR))
+        return;
+    
+    /* Clear interrupt flags (write 1 to clear) */
+    pcnet_csr_write(sc, CSR0, csr0 & (CSR0_RINT | CSR0_TINT | CSR0_IDON |
+                                      CSR0_MERR | CSR0_MISS | CSR0_IENA));
+    
+    acquire(&sc->lock);
+    
+    /* TX interrupt */
+    if (csr0 & CSR0_TINT) {
+        pcnet_tx_complete(sc);
+    }
+    
+    /* RX interrupt */
+    if (csr0 & CSR0_RINT) {
+        pcnet_rx_complete(sc);
+    }
+    
+    release(&sc->lock);
 }
 
 /*
@@ -449,10 +499,12 @@ pcnet_intr(void)
 int
 pcnet_probe(struct pci_dev *pci)
 {
+    struct pcnet_softc *sc;
+    
     if (pcnet_count >= MAX_PCNET)
         return -1;
     
-    struct pcnet_softc *sc = &pcnet_devices[pcnet_count];
+    sc = &pcnet_devices[pcnet_count];
     memset(sc, 0, sizeof(*sc));
     initlock(&sc->lock, "pcnet");
     sc->pci = pci;
@@ -495,13 +547,35 @@ pcnet_probe(struct pci_dev *pci)
     if (pcnet_start(sc) < 0)
         return -1;
     
+    /* Register IRQ handler */
+    if (irq_register(pci->irq_line, pcnet_irq_handler, sc, "pcnet") < 0) {
+        cprintf("pcnet: failed to register IRQ %d\n", pci->irq_line);
+        return -1;
+    }
+    
     /* Enable interrupt */
     pci_enable_irq(pci, ncpu - 1);
     
+    /* Set up ifnet structure */
+    memset(&sc->ifn, 0, sizeof(sc->ifn));
+    safestrcpy(sc->ifn.if_xname, "pcn0", sizeof(sc->ifn.if_xname));
+    sc->ifn.if_xname[3] = '0' + pcnet_count;
+    sc->ifn.if_mtu = 1500;
+    sc->ifn.if_flags = IFF_UP | IFF_BROADCAST | IFF_RUNNING;
+    memmove(sc->ifn.if_hwaddr, sc->mac, sizeof(sc->ifn.if_hwaddr));
+    sc->ifn.if_softc = sc;
+    sc->ifn.if_input = ether_input;
+    sc->ifn.if_ops = &pcnet_ifnet_ops;
+    
     /* Register with network stack */
-    /* TODO: Create ifnet and register */
+    if (if_register(&sc->ifn) < 0) {
+        cprintf("pcnet: failed to register ifnet\n");
+        irq_unregister(pci->irq_line);
+        return -1;
+    }
     
     pcnet_count++;
+    cprintf("pcnet: attached %s irq=%d\n", sc->ifn.if_xname, pci->irq_line);
     
     return 0;
 }

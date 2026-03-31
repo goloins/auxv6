@@ -32,6 +32,7 @@
 #include "pci.h"
 #include "net.h"
 #include "stdint.h" 
+#include "memlayout.h"
 
 /* E1000 Register Offsets */
 #define E1000_CTRL      0x00000  /* Device Control */
@@ -151,7 +152,7 @@ struct e1000_rx_desc {
 struct e1000_softc {
     struct pci_dev    *pci;
     struct spinlock    lock;
-    struct ifnet      *ifp;
+    struct ifnet       ifn;             /* ifnet structure */
     
     /* Memory-mapped registers */
     volatile uint32_t *regs;
@@ -163,7 +164,7 @@ struct e1000_softc {
     struct e1000_tx_desc *tx_ring;
     uint16_t tx_head;
     uint16_t tx_tail;
-    void *tx_bufs[E1000_TX_RING_SIZE];
+    struct mbuf *tx_mbufs[E1000_TX_RING_SIZE];
     
     /* RX ring */
     struct e1000_rx_desc *rx_ring;
@@ -171,10 +172,17 @@ struct e1000_softc {
     char *rx_bufs[E1000_RX_RING_SIZE];
 };
 
+static int e1000_output(struct ifnet *ifp, struct mbuf *m);
+
+static struct ifnet_ops e1000_ifnet_ops = {
+    .if_output = e1000_output,
+};
+
 /* Global array of E1000 devices */
 #define MAX_E1000 4
 static struct e1000_softc e1000_devices[MAX_E1000];
 static int e1000_count = 0;
+extern int ncpu;
 
 /*
  * Read E1000 register
@@ -328,6 +336,9 @@ e1000_output(struct ifnet *ifp, struct mbuf *m)
 {
     struct e1000_softc *sc = (struct e1000_softc *)ifp->if_softc;
     
+    if (!m || m->len == 0)
+        return -1;
+    
     acquire(&sc->lock);
     
     /* Check for space in TX ring */
@@ -344,7 +355,7 @@ e1000_output(struct ifnet *ifp, struct mbuf *m)
     desc->cmd = E1000_TXD_CMD_EOP | E1000_TXD_CMD_IFCS | E1000_TXD_CMD_RS;
     desc->status = 0;
     
-    sc->tx_bufs[sc->tx_tail] = m;
+    sc->tx_mbufs[sc->tx_tail] = m;
     sc->tx_tail = next;
     
     /* Update tail register to start transmission */
@@ -356,44 +367,110 @@ e1000_output(struct ifnet *ifp, struct mbuf *m)
 }
 
 /*
- * Interrupt handler
+ * Process completed TX descriptors
  */
-void
-e1000_intr(void)
+static void
+e1000_tx_complete(struct e1000_softc *sc)
 {
-    for (int i = 0; i < e1000_count; i++) {
-        struct e1000_softc *sc = &e1000_devices[i];
+    while (sc->tx_head != sc->tx_tail &&
+           (sc->tx_ring[sc->tx_head].status & E1000_TXD_STAT_DD)) {
+        /* Free TX mbuf */
+        if (sc->tx_mbufs[sc->tx_head])
+            mbuf_free(sc->tx_mbufs[sc->tx_head]);
+        sc->tx_mbufs[sc->tx_head] = 0;
+        sc->tx_head = (sc->tx_head + 1) % E1000_TX_RING_SIZE;
+    }
+}
+
+/*
+ * Process received packets
+ */
+static void
+e1000_rx_complete(struct e1000_softc *sc)
+{
+    int i;
+    struct mbuf *m;
+    struct e1000_rx_desc *desc;
+    int processed = 0;
+    
+    for (i = 0; i < E1000_RX_RING_SIZE && processed < 32; i++) {
+        uint16_t idx = (sc->rx_tail + 1) % E1000_RX_RING_SIZE;
+        desc = &sc->rx_ring[idx];
         
-        uint32_t icr = e1000_read(sc, E1000_ICR);
-        if (icr == 0)
-            continue;
+        /* Check if descriptor is done */
+        if (!(desc->status & E1000_RXD_STAT_DD))
+            break;
         
-        acquire(&sc->lock);
-        
-        /* TX completion */
-        if (icr & E1000_ICR_TXDW) {
-            while (sc->tx_head != sc->tx_tail &&
-                   (sc->tx_ring[sc->tx_head].status & E1000_TXD_STAT_DD)) {
-                /* Free TX buffer */
-                /* TODO: mbuf_free(sc->tx_bufs[sc->tx_head]); */
-                sc->tx_bufs[sc->tx_head] = 0;
-                sc->tx_head = (sc->tx_head + 1) % E1000_TX_RING_SIZE;
+        if ((desc->status & E1000_RXD_STAT_EOP) && desc->errors == 0) {
+            /* Valid complete packet */
+            uint16_t len = desc->length;
+            
+            if (len > 0 && len <= E1000_RX_BUF_SIZE) {
+                m = mbuf_alloc();
+                if (m) {
+                    memmove(m->data, sc->rx_bufs[idx], len);
+                    m->len = len;
+                    m->rcvif = &sc->ifn;
+                    
+                    /* Hand off to network stack outside lock */
+                    release(&sc->lock);
+                    if_input(&sc->ifn, m);
+                    acquire(&sc->lock);
+                }
             }
         }
         
-        /* RX completion */
-        if (icr & E1000_ICR_RXT0) {
-            /* TODO: Process received packets */
-        }
+        /* Reset descriptor for reuse */
+        desc->status = 0;
+        desc->addr = V2P(sc->rx_bufs[idx]);
         
-        /* Link status change */
-        if (icr & E1000_ICR_LSC) {
-            uint32_t status = e1000_read(sc, E1000_STATUS);
-            cprintf("e1000: link %s\n", (status & E1000_STATUS_LU) ? "up" : "down");
-        }
-        
-        release(&sc->lock);
+        /* Update tail */
+        sc->rx_tail = idx;
+        e1000_write(sc, E1000_RDT, sc->rx_tail);
+        processed++;
     }
+}
+
+/*
+ * IRQ handler for dynamic registration
+ */
+static void
+e1000_irq_handler(int irq, void *arg)
+{
+    struct e1000_softc *sc = (struct e1000_softc *)arg;
+    uint32_t icr;
+    
+    (void)irq;
+    if (!sc)
+        return;
+    
+    icr = e1000_read(sc, E1000_ICR);
+    if (icr == 0)
+        return;
+    
+    acquire(&sc->lock);
+    
+    /* TX completion */
+    if (icr & E1000_ICR_TXDW) {
+        e1000_tx_complete(sc);
+    }
+    
+    /* RX completion */
+    if (icr & E1000_ICR_RXT0) {
+        e1000_rx_complete(sc);
+    }
+    
+    /* Link status change */
+    if (icr & E1000_ICR_LSC) {
+        uint32_t status = e1000_read(sc, E1000_STATUS);
+        if (status & E1000_STATUS_LU)
+            sc->ifn.if_flags |= IFF_RUNNING;
+        else
+            sc->ifn.if_flags &= ~IFF_RUNNING;
+        cprintf("e1000: link %s\n", (status & E1000_STATUS_LU) ? "up" : "down");
+    }
+    
+    release(&sc->lock);
 }
 
 /*
@@ -402,10 +479,13 @@ e1000_intr(void)
 int
 e1000_probe(struct pci_dev *pci)
 {
+    struct e1000_softc *sc;
+    uint32_t status;
+    
     if (e1000_count >= MAX_E1000)
         return -1;
     
-    struct e1000_softc *sc = &e1000_devices[e1000_count];
+    sc = &e1000_devices[e1000_count];
     memset(sc, 0, sizeof(*sc));
     initlock(&sc->lock, "e1000");
     sc->pci = pci;
@@ -440,6 +520,12 @@ e1000_probe(struct pci_dev *pci)
     e1000_write(sc, E1000_CTRL,
         e1000_read(sc, E1000_CTRL) | E1000_CTRL_SLU | E1000_CTRL_ASDE);
     
+    /* Register IRQ handler */
+    if (irq_register(pci->irq_line, e1000_irq_handler, sc, "e1000") < 0) {
+        cprintf("e1000: failed to register IRQ %d\n", pci->irq_line);
+        return -1;
+    }
+    
     /* Enable interrupts */
     e1000_write(sc, E1000_IMS,
         E1000_ICR_TXDW | E1000_ICR_RXT0 | E1000_ICR_LSC | E1000_ICR_RXO);
@@ -447,10 +533,32 @@ e1000_probe(struct pci_dev *pci)
     /* Enable PCI interrupt */
     pci_enable_irq(pci, ncpu - 1);
     
+    /* Set up ifnet structure */
+    memset(&sc->ifn, 0, sizeof(sc->ifn));
+    safestrcpy(sc->ifn.if_xname, "em0", sizeof(sc->ifn.if_xname));
+    sc->ifn.if_xname[2] = '0' + e1000_count;
+    sc->ifn.if_mtu = 1500;
+    sc->ifn.if_flags = IFF_UP | IFF_BROADCAST;
+    
+    /* Check link status */
+    status = e1000_read(sc, E1000_STATUS);
+    if (status & E1000_STATUS_LU)
+        sc->ifn.if_flags |= IFF_RUNNING;
+    
+    memmove(sc->ifn.if_hwaddr, sc->mac, sizeof(sc->ifn.if_hwaddr));
+    sc->ifn.if_softc = sc;
+    sc->ifn.if_input = ether_input;
+    sc->ifn.if_ops = &e1000_ifnet_ops;
+    
     /* Register with network stack */
-    /* TODO: Create ifnet and register */
+    if (if_register(&sc->ifn) < 0) {
+        cprintf("e1000: failed to register ifnet\n");
+        irq_unregister(pci->irq_line);
+        return -1;
+    }
     
     e1000_count++;
+    cprintf("e1000: attached %s irq=%d\n", sc->ifn.if_xname, pci->irq_line);
     
     return 0;
 }

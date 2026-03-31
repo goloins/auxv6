@@ -477,20 +477,149 @@ nvme_find_by_dev(uint dev)
     return 0;
 }
 
+/*
+ * Create an I/O queue pair
+ */
+static int
+nvme_create_io_queues(struct nvme_softc *sc)
+{
+    struct nvme_sqe cmd;
+    struct nvme_queue *ioq;
+    uint32_t dw10;
+    
+    /* Allocate I/O queue structure */
+    sc->io_queues = (struct nvme_queue *)kalloc();
+    if (!sc->io_queues)
+        return -1;
+    memset(sc->io_queues, 0, sizeof(struct nvme_queue));
+    
+    ioq = &sc->io_queues[0];
+    
+    /* Initialize the I/O queue */
+    if (nvme_queue_init(sc, ioq, 1, NVME_IO_QUEUE_SIZE) < 0)
+        return -1;
+    
+    /* Create I/O Completion Queue (IOCQ) */
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.opcode = NVME_ADMIN_CREATE_CQ;
+    cmd.cid = 2;
+    cmd.prp1 = V2P(ioq->cq);
+    dw10 = ((NVME_IO_QUEUE_SIZE - 1) << 16) | 1;  /* size | qid */
+    cmd.cdw10 = dw10;
+    cmd.cdw11 = 1;  /* Physically contiguous */
+    
+    nvme_submit_cmd(&sc->admin_q, &cmd);
+    if (nvme_poll_completion(&sc->admin_q, 2, 0) < 0) {
+        cprintf("nvme: create IO CQ failed\n");
+        return -1;
+    }
+    
+    /* Create I/O Submission Queue (IOSQ) */
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.opcode = NVME_ADMIN_CREATE_SQ;
+    cmd.cid = 3;
+    cmd.prp1 = V2P(ioq->sq);
+    dw10 = ((NVME_IO_QUEUE_SIZE - 1) << 16) | 1;  /* size | qid */
+    cmd.cdw10 = dw10;
+    cmd.cdw11 = (1 << 16) | 1;  /* CQID=1 | Physically contiguous */
+    
+    nvme_submit_cmd(&sc->admin_q, &cmd);
+    if (nvme_poll_completion(&sc->admin_q, 3, 0) < 0) {
+        cprintf("nvme: create IO SQ failed\n");
+        return -1;
+    }
+    
+    sc->num_io_queues = 1;
+    cprintf("nvme: created I/O queue pair\n");
+    
+    return 0;
+}
+
+/*
+ * Perform a READ or WRITE operation
+ */
+static int
+nvme_do_rw(struct nvme_softc *sc, uint64_t lba, void *data, int is_write)
+{
+    struct nvme_queue *ioq;
+    struct nvme_sqe cmd;
+    uint16_t cid;
+    uint32_t nlb;
+    
+    if (!sc || !sc->io_queues || sc->num_io_queues == 0)
+        return -1;
+    if (!data)
+        return -1;
+    
+    ioq = &sc->io_queues[0];
+    
+    /* Calculate number of LBAs based on BSIZE and device LBA size */
+    nlb = BSIZE / sc->lba_size;
+    if (nlb == 0)
+        nlb = 1;
+    
+    /* Prepare command */
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.opcode = is_write ? NVME_CMD_WRITE : NVME_CMD_READ;
+    cmd.nsid = sc->nsid;
+    cmd.prp1 = V2P(data);
+    cmd.prp2 = 0;  /* Single page transfer */
+    
+    /* CDW10-11: Starting LBA (64-bit) */
+    cmd.cdw10 = (uint32_t)(lba & 0xFFFFFFFF);
+    cmd.cdw11 = (uint32_t)(lba >> 32);
+    
+    /* CDW12: NLB (0-based count) */
+    cmd.cdw12 = nlb - 1;
+    
+    /* Command ID - use a simple counter */
+    cid = (uint16_t)((ioq->sq_tail + 100) & 0xFFFF);
+    cmd.cid = cid;
+    
+    acquiresleep(&ioq->lock);
+    
+    /* Copy command to submission queue */
+    memmove(&ioq->sq[ioq->sq_tail], &cmd, sizeof(cmd));
+    
+    /* Advance tail and ring doorbell */
+    ioq->sq_tail = (ioq->sq_tail + 1) % ioq->depth;
+    *ioq->sq_doorbell = ioq->sq_tail;
+    
+    releasesleep(&ioq->lock);
+    
+    /* Poll for completion */
+    if (nvme_poll_completion(ioq, cid, 0) < 0) {
+        cprintf("nvme: %s failed lba=%d\n", is_write ? "write" : "read", (uint32_t)lba);
+        return -1;
+    }
+    
+    return 0;
+}
+
 static int
 nvme_rw(struct buf *b)
 {
     struct nvme_softc *sc;
+    uint64_t lba;
+    int is_write;
 
     if (!b)
         return -1;
 
     sc = nvme_find_by_dev(b->dev);
-    if (!sc || sc->nsid == 0)
+    if (!sc || sc->nsid == 0 || sc->num_io_queues == 0)
         return -1;
 
-    /* Tier 3 next step: wire an I/O queue and READ/WRITE command path. */
-    return -1;
+    /* Convert block number to LBA */
+    lba = (uint64_t)b->blockno * (BSIZE / sc->lba_size);
+    is_write = (b->flags & B_DIRTY) != 0;
+
+    if (nvme_do_rw(sc, lba, b->data, is_write) < 0)
+        return -1;
+
+    b->flags |= B_VALID;
+    b->flags &= ~B_DIRTY;
+    return 0;
 }
 
 static uint
@@ -626,9 +755,15 @@ nvme_init_controller(struct nvme_softc *sc)
     memmove(mn, sc->id_ctrl->mn, 40); mn[40] = 0;
     cprintf("nvme: model=%s serial=%s\n", mn, sn);
 
-    /* Tier 3 step 1: choose namespace 1 first and extract capacity metadata. */
+    /* Choose namespace 1 first and extract capacity metadata. */
     if (nvme_identify_namespace(sc, 1) < 0)
         cprintf("nvme: no usable namespace discovered yet\n");
+    
+    /* Create I/O queues for data transfer */
+    if (sc->nsid != 0) {
+        if (nvme_create_io_queues(sc) < 0)
+            cprintf("nvme: failed to create I/O queues\n");
+    }
     
     return 0;
 }
@@ -673,7 +808,7 @@ nvme_probe(struct pci_dev *pci)
     nvme_write32(sc, NVME_REG_INTMC, 0xFFFFFFFF);
     pci_enable_irq(pci, ncpu - 1);
 
-    if (sc->nsid != 0 && nvme_count < ND_DISK_UNITS) {
+    if (sc->nsid != 0 && sc->num_io_queues > 0 && nvme_count < ND_DISK_UNITS) {
         uint dev_id = ND_DISK_DEV(nvme_count);
         if (bdev_register(dev_id, &nvme_bdevsw) == 0) {
             uint blocks = sc->nblocks_512 > 0xFFFFFFFFULL ?
