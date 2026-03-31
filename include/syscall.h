@@ -69,3 +69,4 @@
 #define SYS_fcntl 68
 #define SYS_netifsetaddr 69
 #define SYS_arpinfo 70
+#define SYS_routedel 71

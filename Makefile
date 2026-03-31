@@ -314,6 +314,9 @@ _rarp: user/rarp
 _ip: user/ip
 	cp user/ip _ip
 
+_v6dhcpd: user/v6dhcpd
+	cp user/v6dhcpd _v6dhcpd
+
 _passwd: user/passwd
 	cp user/passwd _passwd
 
@@ -393,6 +396,7 @@ UPROGS=\
 	_arp\
 	_rarp\
 	_ip\
+	_v6dhcpd\
 	_passwd\
 	_chmod\
 	_chown\
@@ -471,7 +475,9 @@ clean:
 	user/grep user/id user/init user/kill user/ln user/ls user/lsblk user/mkdir user/mv \
 	user/mount user/mounts user/mounttest user/umount \
 	user/uname \
+	_dhcp \
 	user/ifconfig user/netstat user/route user/arp user/rarp user/ip \
+	user/dhcp user/v6dhcpd \
 	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/lspci
 
 # make a printout

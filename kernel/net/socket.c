@@ -962,6 +962,24 @@ sys_routeadd(void)
 }
 
 int
+sys_routedel(void)
+{
+  int dst;
+  int mask;
+  int ifindex;
+  struct ifnet *ifp;
+
+  if(argint(0, &dst) < 0 || argint(1, &mask) < 0 || argint(2, &ifindex) < 0)
+    return -1;
+
+  ifp = if_byindex((uint)ifindex);
+  if(ifp == 0)
+    return -1;
+
+  return route_delete((uint)dst, (uint)mask, ifp);
+}
+
+int
 sys_netifsetaddr(void)
 {
   int ifindex;

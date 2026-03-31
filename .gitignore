@@ -54,6 +54,8 @@ user/route
 user/arp
 user/rarp
 user/ip
+user/dhcp
+user/v6dhcpd
 user/passwd
 user/chmod
 user/chown

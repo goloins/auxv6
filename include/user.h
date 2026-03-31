@@ -90,6 +90,7 @@ int netifinfo(struct netifinfo *out, int max);
 int routeinfo(struct routeinfo *out, int max);
 int arpinfo(struct arpinfo *out, int max);
 int routeadd(uint dst, uint mask, uint gateway, uint src, int ifindex);
+int routedel(uint dst, uint mask, int ifindex);
 int netifsetaddr(int ifindex, uint addr, uint mask);
 int mount(const char *path, const char *fstype, int flags);
 int umount(const char *path);

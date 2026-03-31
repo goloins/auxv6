@@ -17,6 +17,19 @@ static const uchar ether_bcast[ETH_ADDR_LEN] = {
 };
 
 static int
+ether_ipv4_broadcast(struct ifnet *ifp, uint ip)
+{
+	uint directed;
+
+	if(ip == 0xffffffffU)
+		return 1;
+	if(ifp == 0 || ifp->if_addr == 0 || ifp->if_netmask == 0)
+		return 0;
+	directed = (ifp->if_addr & ifp->if_netmask) | (~ifp->if_netmask);
+	return ip == directed;
+}
+
+static int
 ether_addr_equal(const uchar *a, const uchar *b)
 {
 	return memcmp(a, b, ETH_ADDR_LEN) == 0;
@@ -53,6 +66,9 @@ ether_output_ip(struct ifnet *ifp, struct mbuf *m, uint next_hop)
 {
 	uchar dst[ETH_ADDR_LEN];
 	int ret;
+
+	if(ether_ipv4_broadcast(ifp, next_hop))
+		return ether_output(ifp, m, ether_bcast, NET_PROTO_IP);
 
 	ret = arp_resolve(ifp, next_hop, dst, m);
 	if(ret < 0)

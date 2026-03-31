@@ -358,6 +358,7 @@ int             sys_netifinfo(void);
 int             sys_routeinfo(void);
 int             sys_arpinfo(void);
 int             sys_routeadd(void);
+int             sys_routedel(void);
 int             sys_netifsetaddr(void);
 int             socket_deliver(struct sockaddr_in*, struct sockaddr_in*, char*, uint);
 int             socket_deliver_raw(uchar, struct sockaddr_in*, struct sockaddr_in*, char*, uint);
