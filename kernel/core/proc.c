@@ -1522,8 +1522,16 @@ proc_kill_with_signal(int pid, int signo)
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
     if(p->state == UNUSED || p->pid == 0)
       continue;
-    if(p == initproc)
-      continue;
+    if(p == initproc){
+      int allow_init_hup;
+
+      // Keep init protected from arbitrary signals, but allow root to
+      // request a runlevel transition via SIGHUP to PID 1.
+      allow_init_hup = (pid > 0 && p->pid == pid && signo == SIGHUP &&
+                        curproc != 0 && (curproc == initproc || curproc->uid == 0));
+      if(!allow_init_hup)
+        continue;
+    }
 
     match = 0;
     if(pid > 0)
