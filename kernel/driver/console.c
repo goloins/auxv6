@@ -572,28 +572,27 @@ console_tty_index_from_inode(struct inode *ip)
  * -------------------------------------------------------------------------- */
 
 static void
-printint(int xx, int base, int sign)
+cprintint_w(uint x, int base, int neg, int width, int zero, int left)
 {
   static char digits[] = "0123456789abcdef";
   char buf[16];
   int i;
-  uint x;
-
-  if(sign && (sign = xx < 0))
-    x = -xx;
-  else
-    x = xx;
+  int pad;
 
   i = 0;
   do {
     buf[i++] = digits[x % base];
   } while((x /= base) != 0);
-
-  if(sign)
+  if(neg)
     buf[i++] = '-';
 
+  pad = width - i;
+  if(!left)
+    while(pad-- > 0) consputc(zero ? '0' : ' ');
   while(--i >= 0)
     consputc(buf[i]);
+  if(left)
+    while(pad-- > 0) consputc(' ');
 }
 
 void
@@ -602,6 +601,7 @@ cprintf(char *fmt, ...)
   int i, c, locking;
   uint *argp;
   char *s;
+  int width, prec, have_prec, left, zero;
 
   locking = cons.locking;
   if(locking)
@@ -613,18 +613,83 @@ cprintf(char *fmt, ...)
   argp = (uint*)(void*)(&fmt + 1);
   for(i = 0; (c = fmt[i] & 0xff) != 0; i++) {
     if(c != '%') { consputc(c); continue; }
-    c = fmt[++i] & 0xff;
+
+    /* Flags */
+    left = 0; zero = 0;
+    while(1) {
+      c = fmt[++i] & 0xff;
+      if(c == '-')      { left = 1; }
+      else if(c == '0') { zero = 1; }
+      else break;
+    }
+    if(left) zero = 0;
+
+    /* Width */
+    width = 0;
+    while(c >= '0' && c <= '9') {
+      width = width * 10 + (c - '0');
+      c = fmt[++i] & 0xff;
+    }
+
+    /* Precision */
+    have_prec = 0; prec = 0;
+    if(c == '.') {
+      have_prec = 1;
+      c = fmt[++i] & 0xff;
+      if(c == '*') {
+        prec = (int)*argp++;
+        c = fmt[++i] & 0xff;
+      } else {
+        while(c >= '0' && c <= '9') {
+          prec = prec * 10 + (c - '0');
+          c = fmt[++i] & 0xff;
+        }
+      }
+      zero = 0;
+    }
+
+    /* Length modifier (no-op on 32-bit) */
+    if(c == 'l')
+      c = fmt[++i] & 0xff;
+
     if(c == 0) break;
     switch(c) {
-    case 'd': printint(*argp++, 10, 1); break;
-    case 'u': printint(*argp++, 10, 0); break;
-    case 'x': case 'p': printint(*argp++, 16, 0); break;
-    case 's':
-      if((s = (char*)*argp++) == 0) s = "(null)";
-      for(; *s; s++) consputc(*s);
+    case 'd': case 'i': {
+      int v = (int)*argp++;
+      uint x = (v < 0) ? (uint)(-v) : (uint)v;
+      cprintint_w(x, 10, v < 0, width, zero, left);
       break;
+    }
+    case 'u':
+      cprintint_w(*argp++, 10, 0, width, zero, left);
+      break;
+    case 'x': case 'X': case 'p':
+      cprintint_w(*argp++, 16, 0, width, zero, left);
+      break;
+    case 'o':
+      cprintint_w(*argp++, 8, 0, width, zero, left);
+      break;
+    case 'c': {
+      char ch = (char)*argp++;
+      int pad = width - 1;
+      if(!left) while(pad-- > 0) consputc(' ');
+      consputc(ch);
+      if(left)  while(pad-- > 0) consputc(' ');
+      break;
+    }
+    case 's': {
+      int n, pad;
+      if((s = (char*)*argp++) == 0) s = "(null)";
+      n = 0;
+      while(s[n] && (!have_prec || n < prec)) n++;
+      pad = width - n;
+      if(!left) while(pad-- > 0) consputc(' ');
+      for(int j = 0; j < n; j++) consputc(s[j]);
+      if(left)  while(pad-- > 0) consputc(' ');
+      break;
+    }
     case '%': consputc('%'); break;
-    default: consputc('%'); consputc(c); break;
+    default:  consputc('%'); consputc(c); break;
     }
   }
 

@@ -768,7 +768,7 @@ isofs_mount_init(struct mount *m)
     initlock(&mp->lock, "isofs");
     mp->dev = m->dev;
     
-    cprintf("isofs: mount_init dev=%d\n", m->dev);
+    MOUNTDBG("isofs: mount_init dev=%d\n", m->dev);
     
     /* Search for primary volume descriptor */
     for(sector = ISO_VOL_DESC_START; sector < ISO_VOL_DESC_START + 16; sector++){
@@ -776,7 +776,7 @@ isofs_mount_init(struct mount *m)
         uint blk = sector * ISO_SECTORS_PER_BLOCK;
         int i;
         
-        cprintf("isofs: reading sector %d (blk %d)\n", sector, blk);
+        MOUNTDBG("isofs: reading sector %d (blk %d)\n", sector, blk);
         
         for(i = 0; i < ISO_SECTORS_PER_BLOCK; i++){
             struct buf *bp = bread(mp->dev, blk + i);
@@ -790,7 +790,7 @@ isofs_mount_init(struct mount *m)
             brelse(bp);
         }
         
-        cprintf("isofs: sector %d magic=%c%c%c%c%c type=%d\n", 
+        MOUNTDBG("isofs: sector %d magic=%c%c%c%c%c type=%d\n",
                 sector, buf[1], buf[2], buf[3], buf[4], buf[5], buf[0]);
         
         /* Check magic */
@@ -812,8 +812,8 @@ isofs_mount_init(struct mount *m)
             mp->root_extent = root_dr->extent_le;
             mp->root_size = root_dr->size_le;
             
-            cprintf("isofs: mounted volume '%.*s'\n", 32, pvd->volume_id);
-            cprintf("isofs: root extent=%d size=%d block_size=%d\n",
+            MOUNTDBG("isofs: mounted volume '%.*s'\n", 32, pvd->volume_id);
+            MOUNTDBG("isofs: root extent=%d size=%d block_size=%d\n",
                     mp->root_extent, mp->root_size, mp->block_size);
             
             m->fs_data = mp;

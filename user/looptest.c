@@ -7,7 +7,7 @@
 #define LOOP_DEV_BASE 40
 #define LOOP_DEV 1
 #define TEST_IMG "/tmp/looptest.img"
-#define TEST_ISO "/test.iso"
+#define TEST_ISO "/tmp/test.iso"
 #define MOUNT_POINT "/mnt/loopbusy"
 #define TEST_BLOCKS 4
 

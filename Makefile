@@ -573,6 +573,7 @@ clean:
 	.ext2root \
 	.ext2root-oldinit \
 	.fatroot \
+	targetfs/tmp/test.iso .isoroot \
 	kernel/**/*.o kernel/**/*.d kernel/**/*.asm \
 	user/*.o user/*.d user/*.asm user/cat user/echo \
 	user/fatregress \
@@ -622,7 +623,7 @@ TARGETFS_ETC ?= $(TARGETFS_DIR)/etc
 TARGETFS_SBIN ?= $(TARGETFS_DIR)/sbin
 TARGETFS_MAN_DIR ?= $(TARGETFS_DIR)/usr/share/man
 EXT2ROOT_FSTAB ?= $(TARGETFS_ETC)/fstab.ext2root
-ROOTFS_COMMON_FILES = README $(TARGETFS_ETC)/hosts $(EXT2ROOT_FSTAB) $(TARGETFS_ETC)/profile $(TARGETFS_ETC)/termcap $(TARGETFS_ETC)/passwd $(TARGETFS_ETC)/groups $(TARGETFS_ETC)/hostname $(TARGETFS_ETC)/motd $(TARGETFS_ETC)/resolv.conf $(TARGETFS_SBIN)/mount.ext2 $(TARGETFS_SBIN)/mount.msdosfs $(TARGETFS_SBIN)/mount.isofs $(TARGETFS_SBIN)/mount.xv6fs
+ROOTFS_COMMON_FILES = README $(TARGETFS_ETC)/hosts $(EXT2ROOT_FSTAB) $(TARGETFS_ETC)/profile $(TARGETFS_ETC)/termcap $(TARGETFS_ETC)/passwd $(TARGETFS_ETC)/groups $(TARGETFS_ETC)/hostname $(TARGETFS_ETC)/motd $(TARGETFS_ETC)/resolv.conf $(TARGETFS_SBIN)/mount.ext2 $(TARGETFS_SBIN)/mount.msdosfs $(TARGETFS_SBIN)/mount.isofs $(TARGETFS_SBIN)/mount.xv6fs $(TARGETFS_DIR)/tmp/test.iso
 ROOTFS_RC_FILES = $(TARGETFS_ETC)/rc.S $(TARGETFS_ETC)/rc.0 $(TARGETFS_ETC)/rc.1 $(TARGETFS_ETC)/rc.2 $(TARGETFS_ETC)/rc.3 $(TARGETFS_ETC)/rc.6
 ROOTFS_MAN_FILES = $(wildcard $(TARGETFS_MAN_DIR)/*.md)
 FATIMG ?= test_fat.img
@@ -633,6 +634,15 @@ FATQEMU = -drive file=$(FATIMG)$(comma)index=3$(comma)media=disk$(comma)format=r
 QEMUNETOPTS ?= -netdev user,id=auxnet0 -device virtio-net-pci,netdev=auxnet0,mac=52:54:00:12:34:56,disable-modern=on
 QEMUGFXOPTS ?= -device virtio-gpu-pci
 QEMUOPTS = -drive file=aux.bootkern,index=0,media=disk,format=raw $(EXT2QEMU) $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
+$(TARGETFS_DIR)/tmp/test.iso:
+	mkdir -p .isoroot $(TARGETFS_DIR)/tmp
+	printf 'auxv6 isofs test image\n' > .isoroot/README.TXT
+	printf 'hello from auxv6 loop test\n' > .isoroot/HELLO.TXT
+	printf '\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f' > .isoroot/DATA.BIN
+	genisoimage -quiet -rock -o $@ .isoroot 2>/dev/null || \
+	  xorriso -as mkisofs -quiet -rock -o $@ .isoroot 2>/dev/null
+	rm -rf .isoroot
 
 test_ext2.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) $(UPROGS)
 	sh tools/stage-ext2-root.sh .ext2root $(EXT2IMG) $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) $(UPROGS)
