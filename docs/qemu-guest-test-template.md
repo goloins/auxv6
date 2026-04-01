@@ -16,6 +16,7 @@ Use one harness for many subsystem smoke tests instead of writing one-off expect
 - `make qemu-guesttest-template AUXV6_QEMU_TARGET=<target> AUXV6_TEST_SCRIPT=<cmd-file>`
 - `make test-virtioblk-smoke`
 - `make test-virtioblk-negative`
+- `make test-virtioblk-retry-stress`
 
 ## Required Variables
 
@@ -57,6 +58,7 @@ cat /proc/vblk_flush
 EXPECT unsupp=
 EXPECT admin_last_op=1
 EXPECT admin_last_rc=-2
+EXPECT last_fail_class=3
 ```
 
 ## Extending To New Areas

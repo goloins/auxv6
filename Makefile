@@ -788,6 +788,11 @@ test-virtioblk-negative: aux.bootkern $(EXT2IMG) vblk0.img vblk1.img
 		AUXV6_QEMU_TARGET=qemu-nox-virtioblktest \
 		AUXV6_TEST_SCRIPT=tools/tests/virtioblk-negative.cmds
 
+test-virtioblk-retry-stress: aux.bootkern $(EXT2IMG) vblk0.img vblk1.img
+	@$(MAKE) qemu-guesttest-template \
+		AUXV6_QEMU_TARGET=qemu-nox-virtioblktest \
+		AUXV6_TEST_SCRIPT=tools/tests/virtioblk-retry-stress.cmds
+
 # CUT HERE
 # prepare dist for students
 # after running make dist, probably want to

@@ -1,0 +1,54 @@
+cat /proc/vblk_flush
+EXPECT retry_ioerr=0
+EXPECT retry_transport=0
+EXPECT retry_exhausted=0
+
+echo max_retries=2 > /proc/vblk_flush
+
+# UNSUPP should not be retried.
+echo test_fail_mode=unsupp > /proc/vblk_flush
+echo test_fail_count=3 > /proc/vblk_flush
+echo flush_first > /proc/vblk_flush
+cat /proc/vblk_flush
+EXPECT admin_last_op=3
+EXPECT admin_last_rc=-2
+EXPECT retries=0
+EXPECT retry_ioerr=0
+EXPECT retry_transport=0
+EXPECT last_attempts=1
+EXPECT last_fail_class=3
+
+# IOERR should consume retries and then succeed on final allowed attempt.
+echo test_fail_mode=ioerr > /proc/vblk_flush
+echo test_fail_count=2 > /proc/vblk_flush
+echo flush_first > /proc/vblk_flush
+cat /proc/vblk_flush
+EXPECT admin_last_op=3
+EXPECT admin_last_rc=0
+EXPECT retries=2
+EXPECT retry_ioerr=2
+EXPECT retry_transport=0
+EXPECT retry_exhausted=0
+EXPECT last_attempts=3
+EXPECT last_fail_class=1
+
+# TRANSPORT should consume retries and exhaust when failures exceed budget.
+echo test_fail_mode=transport > /proc/vblk_flush
+echo test_fail_count=3 > /proc/vblk_flush
+echo flush_first > /proc/vblk_flush
+cat /proc/vblk_flush
+EXPECT admin_last_op=3
+EXPECT admin_last_rc=-1
+EXPECT retries=4
+EXPECT retry_ioerr=2
+EXPECT retry_transport=2
+EXPECT retry_exhausted=1
+EXPECT last_attempts=3
+EXPECT last_fail_class=2
+
+# Return fault injector to neutral mode.
+echo test_fail_mode=none > /proc/vblk_flush
+echo test_fail_count=0 > /proc/vblk_flush
+cat /proc/vblk_flush
+EXPECT test_fail_mode=0
+EXPECT test_fail_remaining=0

@@ -43,6 +43,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - Virtio-blk regression coverage now includes a dedicated in-guest `vblktest` utility plus `qemu-virtioblktest` / `qemu-nox-virtioblktest` launch targets for multi-disk validation.
 - Virtio transitional PCI probe matching was corrected in virtio-blk/net/gpu init scans (`device_id - 0x0FFF`), preventing net/gpu misprobes from resetting other virtio functions during mixed-device boots.
 - Reusable QEMU guest automation template landed: `tools/qemu-guest-test.exp` runs command scripts (`tools/tests/*.cmds`) after login, with `make qemu-guesttest-template` plus `make test-virtioblk-smoke` and `make test-virtioblk-negative` coverage.
+- Retry-class validation coverage was added for virtio-blk via `make test-virtioblk-retry-stress`, using deterministic fault injection (`test_fail_mode` / `test_fail_count`) and assertion checks for bounded retry semantics, including per-device `last_fail_class` observability.
 - Guest automation now supports shell-independent `EXPECT` assertions inside command scripts, with optional rc checking (`AUXV6_CHECK_RC=1`) for richer shells and a basic-shell-safe default path.
 - Buffer-cache I/O error handling was hardened: `bread`/`bwrite` no longer panic immediately on transport failures, buffer error state is tracked (`B_ERROR`/`berror()`), and ext2/msdos/isofs/blockdev plus legacy xv6fs log/fs paths now explicitly gate on I/O error instead of silently consuming failed buffers.
 - The I/O-failure check path is now centralized below VFS via shared bio helpers (`bread_ok`/`bwrite_ok`), so active filesystems use one common block-level contract instead of duplicating `bread`/`berror`/`bwrite` checks per backend.
@@ -246,7 +247,7 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 - [x] Add explicit device capability tracking (`FLUSH`, `DISCARD`, `WRITE_ZEROES`) at probe time
 - [x] Implement `flush` request path and wire `fsync`-style call sites where available
 - [x] Implement discard/write-zeroes request helpers behind capability checks
-- [ ] Add error accounting and robust retry policy for transient I/O failures
+- [x] Add error accounting and robust retry policy for transient I/O failures
 - [x] Add runtime flush cadence tuning (`/proc/vblk_flush`) for write-heavy workloads
 - [ ] Add optional queue-depth tuning knobs (single queue retained as default)
 

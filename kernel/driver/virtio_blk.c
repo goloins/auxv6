@@ -106,6 +106,13 @@ struct virtio_blk_softc {
     uint32_t io_unsupp;
     uint32_t io_transport;
     uint32_t io_retry;
+    uint32_t io_retry_ioerr;
+    uint32_t io_retry_transport;
+    uint32_t io_retry_exhausted;
+    uint32_t io_last_type;
+    int      io_last_rc;
+    uint32_t io_last_attempts;
+    uint32_t io_last_fail_class;
     uint32_t flush_ok;
     uint32_t flush_fail;
     uint32_t discard_ok;
@@ -144,11 +151,23 @@ static int virtio_blk_flush_every_writes = 1;
 static int virtio_blk_max_retries = 2;
 static int virtio_blk_force_no_discard = 0;
 static int virtio_blk_force_no_write_zeroes = 0;
+static int virtio_blk_test_fail_mode = 0;
+static int virtio_blk_test_fail_remaining = 0;
+
+#define VIRTIO_BLK_TEST_FAIL_NONE       0
+#define VIRTIO_BLK_TEST_FAIL_IOERR      1
+#define VIRTIO_BLK_TEST_FAIL_TRANSPORT  2
+#define VIRTIO_BLK_TEST_FAIL_UNSUPP     3
 
 #define VIRTIO_BLK_REQ_OK       0
 #define VIRTIO_BLK_REQ_ERR      -1
 #define VIRTIO_BLK_REQ_UNSUPP   -2
 #define VIRTIO_BLK_REQ_IOERR    -3
+
+#define VIRTIO_BLK_FAILCLASS_NONE       0
+#define VIRTIO_BLK_FAILCLASS_IOERR      1
+#define VIRTIO_BLK_FAILCLASS_TRANSPORT  2
+#define VIRTIO_BLK_FAILCLASS_UNSUPP     3
 
 /* Forward declarations */
 static int virtio_blk_rw(struct buf *b);
@@ -181,6 +200,9 @@ static int virtio_blk_admin_write_zeroes_by_dev(uint dev, uint64_t sector,
 static int virtio_blk_admin_discard_all(uint64_t sector, uint32_t count);
 static int virtio_blk_admin_write_zeroes_all(uint64_t sector, uint32_t count,
                                              int unmap);
+static int virtio_blk_admin_flush_by_dev(uint dev);
+static int virtio_blk_admin_flush_all(void);
+static int virtio_blk_admin_flush_first(void);
 
 int
 virtio_blk_get_flush_every_writes(void)
@@ -226,6 +248,14 @@ virtio_blk_get_tune(char *buf, int max)
     pos = virtio_blk_append_uint(buf, max, pos, (uint)virtio_blk_force_no_write_zeroes);
     pos = virtio_blk_append_str(buf, max, pos, "\n");
 
+    pos = virtio_blk_append_str(buf, max, pos, "test_fail_mode=");
+    pos = virtio_blk_append_uint(buf, max, pos, (uint)virtio_blk_test_fail_mode);
+    pos = virtio_blk_append_str(buf, max, pos, "\n");
+
+    pos = virtio_blk_append_str(buf, max, pos, "test_fail_remaining=");
+    pos = virtio_blk_append_uint(buf, max, pos, (uint)virtio_blk_test_fail_remaining);
+    pos = virtio_blk_append_str(buf, max, pos, "\n");
+
     for (i = 0; i < virtio_blk_count; i++) {
         struct virtio_blk_softc *sc = &virtio_blk_devices[i];
 
@@ -241,6 +271,20 @@ virtio_blk_get_tune(char *buf, int max)
         pos = virtio_blk_append_uint(buf, max, pos, sc->io_transport);
         pos = virtio_blk_append_str(buf, max, pos, " retries=");
         pos = virtio_blk_append_uint(buf, max, pos, sc->io_retry);
+        pos = virtio_blk_append_str(buf, max, pos, " retry_ioerr=");
+        pos = virtio_blk_append_uint(buf, max, pos, sc->io_retry_ioerr);
+        pos = virtio_blk_append_str(buf, max, pos, " retry_transport=");
+        pos = virtio_blk_append_uint(buf, max, pos, sc->io_retry_transport);
+        pos = virtio_blk_append_str(buf, max, pos, " retry_exhausted=");
+        pos = virtio_blk_append_uint(buf, max, pos, sc->io_retry_exhausted);
+        pos = virtio_blk_append_str(buf, max, pos, " last_type=");
+        pos = virtio_blk_append_uint(buf, max, pos, sc->io_last_type);
+        pos = virtio_blk_append_str(buf, max, pos, " last_rc=");
+        pos = virtio_blk_append_sint(buf, max, pos, sc->io_last_rc);
+        pos = virtio_blk_append_str(buf, max, pos, " last_attempts=");
+        pos = virtio_blk_append_uint(buf, max, pos, sc->io_last_attempts);
+        pos = virtio_blk_append_str(buf, max, pos, " last_fail_class=");
+        pos = virtio_blk_append_uint(buf, max, pos, sc->io_last_fail_class);
         pos = virtio_blk_append_str(buf, max, pos, " flush_ok=");
         pos = virtio_blk_append_uint(buf, max, pos, sc->flush_ok);
         pos = virtio_blk_append_str(buf, max, pos, " flush_fail=");
@@ -339,6 +383,59 @@ virtio_blk_set_tune(const char *buf, int n)
         }
         return -1;
     }
+
+    if (n >= 15 && memcmp(buf, "test_fail_mode=", 15) == 0) {
+        const char *s = buf + 15;
+        int m = n - 15;
+
+        if (m == 4 && memcmp(s, "none", 4) == 0) {
+            virtio_blk_test_fail_mode = VIRTIO_BLK_TEST_FAIL_NONE;
+            return 0;
+        }
+        if (m == 5 && memcmp(s, "ioerr", 5) == 0) {
+            virtio_blk_test_fail_mode = VIRTIO_BLK_TEST_FAIL_IOERR;
+            return 0;
+        }
+        if (m == 9 && memcmp(s, "transport", 9) == 0) {
+            virtio_blk_test_fail_mode = VIRTIO_BLK_TEST_FAIL_TRANSPORT;
+            return 0;
+        }
+        if (m == 6 && memcmp(s, "unsupp", 6) == 0) {
+            virtio_blk_test_fail_mode = VIRTIO_BLK_TEST_FAIL_UNSUPP;
+            return 0;
+        }
+        return -1;
+    }
+
+    if (n >= 16 && memcmp(buf, "test_fail_count=", 16) == 0) {
+        v = 0;
+        for (i = 16; i < n; i++) {
+            if (buf[i] < '0' || buf[i] > '9')
+                return -1;
+            v = v * 10 + (uint)(buf[i] - '0');
+            if (v > 1000000)
+                return -1;
+        }
+        virtio_blk_test_fail_remaining = (int)v;
+        return 0;
+    }
+
+    /* Runtime admin operation: flush=DEV */
+    if (n >= 6 && memcmp(buf, "flush=", 6) == 0) {
+        if (virtio_blk_parse_u32(buf + 6, n - 6, &dev_u32, &consumed) < 0)
+            return -1;
+        if (6 + consumed != n)
+            return -1;
+        return virtio_blk_admin_flush_by_dev((uint)dev_u32);
+    }
+
+    /* Runtime admin operation: flush_all */
+    if (n == 9 && memcmp(buf, "flush_all", 9) == 0)
+        return virtio_blk_admin_flush_all();
+
+    /* Runtime admin operation: flush_first */
+    if (n == 11 && memcmp(buf, "flush_first", 11) == 0)
+        return virtio_blk_admin_flush_first();
 
     /* Runtime admin operation: discard=DEV:SECTOR:COUNT */
     if (n >= 8 && memcmp(buf, "discard=", 8) == 0) {
@@ -592,6 +689,16 @@ virtio_blk_submit_locked(struct virtio_blk_softc *sc, uint32_t type,
     if (!vq)
         return -1;
 
+    if (virtio_blk_test_fail_remaining > 0) {
+        virtio_blk_test_fail_remaining--;
+        if (virtio_blk_test_fail_mode == VIRTIO_BLK_TEST_FAIL_IOERR)
+            return VIRTIO_BLK_REQ_IOERR;
+        if (virtio_blk_test_fail_mode == VIRTIO_BLK_TEST_FAIL_TRANSPORT)
+            return VIRTIO_BLK_REQ_ERR;
+        if (virtio_blk_test_fail_mode == VIRTIO_BLK_TEST_FAIL_UNSUPP)
+            return VIRTIO_BLK_REQ_UNSUPP;
+    }
+
     sc->request.hdr.type = type;
     sc->request.hdr.reserved = 0;
     sc->request.hdr.sector = sector;
@@ -692,28 +799,48 @@ virtio_blk_submit_with_retry_locked(struct virtio_blk_softc *sc,
     if (attempts < 1)
         attempts = 1;
 
+    sc->io_last_type = type;
+    sc->io_last_attempts = 0;
+    sc->io_last_fail_class = VIRTIO_BLK_FAILCLASS_NONE;
+
     for (try = 0; try < attempts; try++) {
+        sc->io_last_attempts = (uint32_t)(try + 1);
         rc = virtio_blk_submit_locked(sc, type, sector, data, data_len, data_is_write);
-        if (rc == VIRTIO_BLK_REQ_OK)
+        if (rc == VIRTIO_BLK_REQ_OK) {
+            sc->io_last_rc = rc;
             return VIRTIO_BLK_REQ_OK;
+        }
 
         if (rc == VIRTIO_BLK_REQ_UNSUPP) {
             sc->io_unsupp++;
+            sc->io_last_rc = rc;
+            sc->io_last_fail_class = VIRTIO_BLK_FAILCLASS_UNSUPP;
             return rc;
         }
 
-        if (rc == VIRTIO_BLK_REQ_IOERR)
+        if (rc == VIRTIO_BLK_REQ_IOERR) {
             sc->io_ioerr++;
-        else
+            sc->io_last_fail_class = VIRTIO_BLK_FAILCLASS_IOERR;
+        } else {
             sc->io_transport++;
+            sc->io_last_fail_class = VIRTIO_BLK_FAILCLASS_TRANSPORT;
+        }
 
-        if (try + 1 >= attempts)
+        if (try + 1 >= attempts) {
+            sc->io_last_rc = rc;
+            sc->io_retry_exhausted++;
             return rc;
+        }
 
         sc->io_retry++;
+        if (rc == VIRTIO_BLK_REQ_IOERR)
+            sc->io_retry_ioerr++;
+        else
+            sc->io_retry_transport++;
         microdelay(50 * (try + 1));
     }
 
+    sc->io_last_rc = VIRTIO_BLK_REQ_ERR;
     return VIRTIO_BLK_REQ_ERR;
 }
 
@@ -967,6 +1094,55 @@ virtio_blk_admin_write_zeroes_all(uint64_t sector, uint32_t count, int unmap)
     }
 
     return found ? 0 : -1;
+}
+
+static int
+virtio_blk_admin_flush_by_dev(uint dev)
+{
+    struct virtio_blk_softc *sc;
+    int rc;
+
+    sc = virtio_blk_find_by_dev(dev);
+    if (!sc)
+        return -1;
+
+    acquiresleep(&sc->req_lock);
+    rc = virtio_blk_submit_with_retry_locked(sc, VIRTIO_BLK_T_FLUSH, 0, 0, 0, 0);
+    if (rc == VIRTIO_BLK_REQ_OK)
+        sc->flush_ok++;
+    else
+        sc->flush_fail++;
+    sc->admin_ops++;
+    sc->admin_last_op = 3;
+    sc->admin_last_rc = rc;
+    sc->admin_last_sector = 0;
+    sc->admin_last_count = 0;
+    releasesleep(&sc->req_lock);
+
+    return 0;
+}
+
+static int
+virtio_blk_admin_flush_all(void)
+{
+    int i;
+    int found;
+
+    found = 0;
+    for (i = 0; i < virtio_blk_count; i++) {
+        virtio_blk_admin_flush_by_dev(virtio_blk_devices[i].dev_id);
+        found = 1;
+    }
+
+    return found ? 0 : -1;
+}
+
+static int
+virtio_blk_admin_flush_first(void)
+{
+    if (virtio_blk_count < 1)
+        return -1;
+    return virtio_blk_admin_flush_by_dev(virtio_blk_devices[0].dev_id);
 }
 
 /*
