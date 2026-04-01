@@ -143,9 +143,6 @@ endif
 # Default: ext2 root filesystem for easier dynamic modifications
 ROOTFS_TYPE_VALUE ?= 2
 ROOTFS_DEV_VALUE ?= 2
-# Alternative: xv6 root filesystem (original default)
-XV6ROOT_TYPE_VALUE ?= 1
-XV6ROOT_DEV_VALUE ?= 1
 
 ROOTFS_CONFIG = include/rootfs_config.h
 
@@ -518,9 +515,8 @@ UPROGS=\
 # Old-init fallback set for machines without ports/dash.
 UPROGS_OLDINIT = $(filter-out _dash _init,$(UPROGS)) _v6init
 
-fs.img:
-	@echo "legacy mkfs flow is disabled; use EXT2-root targets (for example: make $(EXT2IMG) or make qemu)" >&2
-	@false
+fs.img: $(EXT2IMG)
+	cp -f $(EXT2IMG) fs.img
 
 # EXT2 root is now the default - these targets are included for clarity
 ext2root:
@@ -543,28 +539,6 @@ qemu-nox-gdb-ext2root: .gdbinit
 	$(MAKE) xv6.img $(EXT2IMG)
 	@echo "*** Now run 'gdb'." 1>&2
 	$(QEMU) -nographic -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
-
-# XV6 root filesystem variants (original default, kept for compatibility)
-xv6root:
-	$(MAKE) ROOTFS_TYPE_VALUE=$(XV6ROOT_TYPE_VALUE) ROOTFS_DEV_VALUE=$(XV6ROOT_DEV_VALUE) xv6.img fs.img
-
-qemu-xv6root:
-	$(MAKE) ROOTFS_TYPE_VALUE=$(XV6ROOT_TYPE_VALUE) ROOTFS_DEV_VALUE=$(XV6ROOT_DEV_VALUE) xv6.img fs.img
-	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=fs.img,index=1,media=disk,format=raw -smp $(CPUS) -m 512 $(QEMUEXTRA)
-
-qemu-nox-xv6root:
-	$(MAKE) ROOTFS_TYPE_VALUE=$(XV6ROOT_TYPE_VALUE) ROOTFS_DEV_VALUE=$(XV6ROOT_DEV_VALUE) xv6.img fs.img
-	$(QEMU) -nographic -drive file=xv6.img,index=0,media=disk,format=raw -drive file=fs.img,index=1,media=disk,format=raw -smp $(CPUS) -m 512 $(QEMUEXTRA)
-
-qemu-gdb-xv6root: .gdbinit
-	$(MAKE) ROOTFS_TYPE_VALUE=$(XV6ROOT_TYPE_VALUE) ROOTFS_DEV_VALUE=$(XV6ROOT_DEV_VALUE) xv6.img fs.img
-	@echo "*** Now run 'gdb'." 1>&2
-	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=fs.img,index=1,media=disk,format=raw -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
-
-qemu-nox-gdb-xv6root: .gdbinit
-	$(MAKE) ROOTFS_TYPE_VALUE=$(XV6ROOT_TYPE_VALUE) ROOTFS_DEV_VALUE=$(XV6ROOT_DEV_VALUE) xv6.img fs.img
-	@echo "*** Now run 'gdb'." 1>&2
-	$(QEMU) -nographic -drive file=xv6.img,index=0,media=disk,format=raw -drive file=fs.img,index=1,media=disk,format=raw -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
 
 -include kernel/**/*.d
 -include user/*.d
@@ -611,7 +585,7 @@ print: xv6.pdf
 
 # run in emulators
 
-bochs : fs.img xv6.img
+bochs : xv6.img $(EXT2IMG)
 	if [ ! -e .bochsrc ]; then ln -s config/dot-bochsrc .bochsrc; fi
 	bochs -q
 
@@ -630,7 +604,7 @@ TARGETFS_DIR ?= targetfs
 TARGETFS_ETC ?= $(TARGETFS_DIR)/etc
 TARGETFS_SBIN ?= $(TARGETFS_DIR)/sbin
 EXT2ROOT_FSTAB ?= $(TARGETFS_ETC)/fstab.ext2root
-ROOTFS_COMMON_FILES = README $(TARGETFS_ETC)/hosts $(EXT2ROOT_FSTAB) $(TARGETFS_ETC)/profile $(TARGETFS_ETC)/termcap $(TARGETFS_ETC)/passwd $(TARGETFS_ETC)/groups $(TARGETFS_ETC)/hostname $(TARGETFS_ETC)/motd $(TARGETFS_ETC)/resolv.conf
+ROOTFS_COMMON_FILES = README $(TARGETFS_ETC)/hosts $(EXT2ROOT_FSTAB) $(TARGETFS_ETC)/profile $(TARGETFS_ETC)/termcap $(TARGETFS_ETC)/passwd $(TARGETFS_ETC)/groups $(TARGETFS_ETC)/hostname $(TARGETFS_ETC)/motd $(TARGETFS_ETC)/resolv.conf $(TARGETFS_SBIN)/mount.ext2 $(TARGETFS_SBIN)/mount.msdosfs $(TARGETFS_SBIN)/mount.isofs $(TARGETFS_SBIN)/mount.xv6fs
 ROOTFS_RC_FILES = $(TARGETFS_ETC)/rc.S $(TARGETFS_ETC)/rc.0 $(TARGETFS_ETC)/rc.1 $(TARGETFS_ETC)/rc.2 $(TARGETFS_ETC)/rc.3 $(TARGETFS_ETC)/rc.6
 FATIMG ?= test_fat.img
 FATROOT_STAGE ?= .fatroot
@@ -639,7 +613,7 @@ EXT2QEMU = -drive file=$(EXT2IMG)$(comma)index=2$(comma)media=disk$(comma)format
 FATQEMU = -drive file=$(FATIMG)$(comma)index=3$(comma)media=disk$(comma)format=raw
 QEMUNETOPTS ?= -netdev user,id=auxnet0 -device virtio-net-pci,netdev=auxnet0,mac=52:54:00:12:34:56,disable-modern=on
 QEMUGFXOPTS ?= -device virtio-gpu-pci
-QEMUOPTS = -drive file=fs.img,index=1,media=disk,format=raw -drive file=xv6.img,index=0,media=disk,format=raw $(EXT2QEMU) $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+QEMUOPTS = -drive file=xv6.img,index=0,media=disk,format=raw $(EXT2QEMU) $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 test_ext2.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(UPROGS)
 	sh tools/stage-ext2-root.sh .ext2root $(EXT2IMG) $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(UPROGS)
@@ -731,4 +705,4 @@ tar:
 	cp dist/* config/.gdbinit.tmpl /tmp/xv6
 	(cd /tmp; tar cf - xv6) | gzip >xv6-rev10.tar.gz  # the next one will be 10 (9/17)
 
-.PHONY: dist-test dist ext2-reset fat-reset ext2root qemu-ext2root qemu-nox-ext2root qemu-gdb-ext2root qemu-nox-gdb-ext2root xv6root qemu-xv6root qemu-nox-xv6root qemu-gdb-xv6root qemu-nox-gdb-xv6root qemu-fat qemu-nox-fat qemu-oldinit
+.PHONY: dist-test dist ext2-reset fat-reset ext2root qemu-ext2root qemu-nox-ext2root qemu-gdb-ext2root qemu-nox-gdb-ext2root qemu-fat qemu-nox-fat qemu-oldinit
