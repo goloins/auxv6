@@ -43,6 +43,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - Virtio-blk regression coverage now includes a dedicated in-guest `vblktest` utility plus `qemu-virtioblktest` / `qemu-nox-virtioblktest` launch targets for multi-disk validation.
 - Virtio transitional PCI probe matching was corrected in virtio-blk/net/gpu init scans (`device_id - 0x0FFF`), preventing net/gpu misprobes from resetting other virtio functions during mixed-device boots.
 - Reusable QEMU guest automation template landed: `tools/qemu-guest-test.exp` runs command scripts (`tools/tests/*.cmds`) after login, with `make qemu-guesttest-template` plus initial `make test-virtioblk-smoke` coverage.
+- Buffer-cache I/O error handling was hardened: `bread`/`bwrite` no longer panic immediately on transport failures, buffer error state is tracked (`B_ERROR`/`berror()`), and ext2/msdos/isofs/blockdev plus legacy xv6fs log/fs paths now explicitly gate on I/O error instead of silently consuming failed buffers.
 - VFS backend lookups are now mount-aware for ext2/msdosfs/isofs instances, avoiding global active-device aliasing when resolving `/` inside non-root mounts.
 - Guest shutdown now has a first-class `halt` utility backed by a kernel poweroff syscall, so QEMU exit no longer depends on host-side `killall`.
 - **NVMe driver** now has I/O queue creation and synchronous READ/WRITE command support via PRP1 (single-page transfers).

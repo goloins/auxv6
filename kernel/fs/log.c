@@ -50,6 +50,31 @@ struct log log;
 
 static void recover_from_log(void);
 static void commit();
+static struct buf *log_bread_checked(uint dev, uint blockno);
+static void log_bwrite_checked(struct buf *b);
+
+static struct buf *
+log_bread_checked(uint dev, uint blockno)
+{
+  struct buf *b;
+
+  b = bread(dev, blockno);
+  if(b == 0)
+    panic("log: bread null");
+  if(berror(b)){
+    brelse(b);
+    panic("log: bread io error");
+  }
+  return b;
+}
+
+static void
+log_bwrite_checked(struct buf *b)
+{
+  bwrite(b);
+  if(berror(b))
+    panic("log: bwrite io error");
+}
 
 void
 initlog(int dev)
@@ -73,10 +98,10 @@ install_trans(void)
   int tail;
 
   for (tail = 0; tail < log.lh.n; tail++) {
-    struct buf *lbuf = bread(log.dev, log.start+tail+1); // read log block
-    struct buf *dbuf = bread(log.dev, log.lh.block[tail]); // read dst
+    struct buf *lbuf = log_bread_checked(log.dev, log.start+tail+1); // read log block
+    struct buf *dbuf = log_bread_checked(log.dev, log.lh.block[tail]); // read dst
     memmove(dbuf->data, lbuf->data, BSIZE);  // copy block to dst
-    bwrite(dbuf);  // write dst to disk
+    log_bwrite_checked(dbuf);  // write dst to disk
     brelse(lbuf);
     brelse(dbuf);
   }
@@ -86,7 +111,7 @@ install_trans(void)
 static void
 read_head(void)
 {
-  struct buf *buf = bread(log.dev, log.start);
+  struct buf *buf = log_bread_checked(log.dev, log.start);
   struct logheader *lh = (struct logheader *) (buf->data);
   int i;
   log.lh.n = lh->n;
@@ -102,14 +127,14 @@ read_head(void)
 static void
 write_head(void)
 {
-  struct buf *buf = bread(log.dev, log.start);
+  struct buf *buf = log_bread_checked(log.dev, log.start);
   struct logheader *hb = (struct logheader *) (buf->data);
   int i;
   hb->n = log.lh.n;
   for (i = 0; i < log.lh.n; i++) {
     hb->block[i] = log.lh.block[i];
   }
-  bwrite(buf);
+  log_bwrite_checked(buf);
   brelse(buf);
 }
 
@@ -188,10 +213,10 @@ write_log(void)
   int tail;
 
   for (tail = 0; tail < log.lh.n; tail++) {
-    struct buf *to = bread(log.dev, log.start+tail+1); // log block
-    struct buf *from = bread(log.dev, log.lh.block[tail]); // cache block
+    struct buf *to = log_bread_checked(log.dev, log.start+tail+1); // log block
+    struct buf *from = log_bread_checked(log.dev, log.lh.block[tail]); // cache block
     memmove(to->data, from->data, BSIZE);
-    bwrite(to);  // write the log
+    log_bwrite_checked(to);  // write the log
     brelse(from);
     brelse(to);
   }
