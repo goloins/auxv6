@@ -14,7 +14,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 
 ---
 
-## Recent Progress (2026-03-30 to 2026-03-31)
+## Recent Progress (2026-03-30 to 2026-04-01)
 
 - Signal delivery, `alarm()`, `SIGPIPE`, `lseek`, `dup2`, and baseline `fcntl()` support landed and are now integrated into the main syscall path.
 - PCI enumeration, IRQ registration, DMA allocation helpers, and `lspci` landed as the Tier 2 device foundation.
@@ -28,6 +28,10 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - ISO 9660 moved from a broken stub to a working read-only filesystem with real VFS integration, primary volume descriptor parsing, directory traversal, case-insensitive lookup, and file reads via loop-mounted images.
 - POSIX porting work expanded substantially: new `include/posix/*` headers, broader libc-style helpers in `user/ulib.c`, formatting/dirent wrappers in `user/posix.c`, `setjmp`, and enough compatibility to experiment with a `dash` port.
 - Userland bootstrap is now more Unix-like: `init` runs `dash /etc/rc.d/rc.S`, tracks runlevels, handles `telinit` requests via `SIGHUP`, and `exec` supports `#!` interpreter scripts.
+- Terminal compatibility moved forward: Linux-compatible tty ioctl numbers now include `TCGETS/TCSETS*`, `FIONREAD/TIOCINQ`, and `TIOCOUTQ`, with auxv6-specific `TIOCISATTY` moved to `0x54A3` to avoid Linux collision.
+- PTY support moved from placeholder to working baseline: kernel major 3 PTY backend now provides a static `/dev/ptmx` <-> `/dev/pts/0` pair with queueing, winsize/termios ioctls, and `SIGWINCH` signaling.
+- Init/userland terminal setup improved: `init` creates `/dev/ptmx` and `/dev/pts/0`, `openpty()` compatibility shim is available, and targetfs now ships `/etc/termcap` with `TERM=vt100` defaults.
+- Dash porting on Linux hosts became more robust: aux build rules now force-regenerate host tools and include `libgcc_compat.c` fallbacks for 64-bit division/mod helpers.
 - procfs gained more than basic process plumbing: `/proc/uptime`, `/proc/pci`, `/proc/vblk_flush`, and `/proc/ahci_tune` now exist for observability and runtime tuning.
 - **NVMe driver** now has I/O queue creation and synchronous READ/WRITE command support via PRP1 (single-page transfers).
 - **E1000 driver** (Intel Gigabit Ethernet) now has full ifnet integration with TX/RX descriptor rings, IRQ handling, and proper network interface registration.
@@ -43,37 +47,38 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 
 ## Current Subsystem Status
 
-### ✅ Mature Subsystems (70-90% complete)
+### ✅ Mature Subsystems (75-95% complete)
 | Subsystem | Status | Notes |
 |-----------|--------|-------|
 | VFS Layer | 90% | Multi-backend, mount table, longest-prefix matching |
 | ext2 filesystem | 85% | Read/write, directories, inode management, default rootfs build target |
 | FAT/msdosfs | 80% | ~1650 LOC, FAT12/16/32, short/long filenames |
+| TCP/IP stack | 80% | UDP works, DNS/resolver works, TCP handshake + data + retransmission + teardown work; flow control still basic |
 | Process model | 85% | fork/exec/wait, process groups, sessions |
 | Job control | 80% | setpgid, setsid, tcsetpgrp, terminal control |
 | Signal handling | 95% | Full userspace delivery, alarm(), SIGPIPE, hardware fault mapping |
 | Bootstrapping / init | 75% | VFS-launched init, rc scripts, runlevels, telinit, shebang exec |
 | Memory management | 80% | Virtual memory, page tables, kalloc/kfree |
-
-### ⚠️ Partially Implemented (30-60%)
-| Subsystem | Status | Notes |
-|-----------|--------|-------|
-| TCP/IP stack | 80% | UDP works, DNS/resolver works, TCP handshake + data + retransmission + teardown work; flow control still basic |
-| Networking interfaces | 60% | BSD ifnet abstraction, loopback, virtio-net, routing, DHCP tooling, outbound packet path |
-| POSIX compatibility layer | 60% | Broad header coverage, libc-style shims, dash port experiments, many APIs still stubbed or partial |
-| procfs | 70% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`; still sparse overall |
-
-### 🚧 Early Or Stubbed
-| Subsystem | Status | Notes |
-|-----------|--------|-------|
 | PCI subsystem | 80% | Bus 0 enumeration, BAR decode/mapping, helper APIs, `lspci`; MSI/MSI-X still missing |
 | DMA support | 75% | Page-based DMA allocation with physical address tracking and alignment |
+| Loop devices | 80% | 8 block devices backed by regular files, status/setup/teardown syscalls, `losetup` utility |
+| ISO 9660 | 85% | Working read-only implementation with VFS integration and loop-mount testing |
+
+### ⚠️ Partially Implemented (50-74%)
+| Subsystem | Status | Notes |
+|-----------|--------|-------|
+| Networking interfaces | 60% | BSD ifnet abstraction, loopback, virtio-net, routing, DHCP tooling, outbound packet path |
+| POSIX compatibility layer | 65% | Broader tty/ioctl compatibility, openpty shim, dash portability fixes; many APIs still stubbed or partial |
+| Terminal/PTY stack | 65% | Console + initial PTY backend (`/dev/ptmx`, `/dev/pts/0`), termios/winsize/ioctl routing; dynamic PTY allocation still pending |
+| procfs | 70% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`; still sparse overall |
 | Virtio storage | 70% | Working virtio core + virtio-blk, but still single-queue/minimal-feature oriented |
 | Real NICs | 60% | E1000, PCNET, RTL8111 have full ifnet integration; VMXnet3, Hyper-V netvsc, Intel I219-V, Intel I226-V, and ASIX AX88179 PCI are stubs |
-| Modern storage | 40% | AHCI has polling DMA read/write; NVMe has I/O queue and basic RW path |
-| Loop devices | 80% | 8 block devices backed by regular files, status/setup/teardown syscalls, `losetup` utility |
 | Symlinks | 65% | Syscalls, VFS hooks, and ext2 fast symlink support done; pathname following still pending |
-| ISO 9660 | 85% | Working read-only implementation with VFS integration and loop-mount testing |
+
+### 🚧 Early Or Stubbed (0-49%)
+| Subsystem | Status | Notes |
+|-----------|--------|-------|
+| Modern storage | 40% | AHCI has polling DMA read/write; NVMe has I/O queue and basic RW path |
 | Btrfs | None | Planned read-only support |
 | NFS | None | Planned; requires XDR/RPC infrastructure |
 | mdev | None | Planned userspace device node manager |
@@ -479,6 +484,7 @@ Phase 2 - ext2 Support (ext2 natively supports symlinks):
 - [x] Add `EXT2_S_IFLNK` and `EXT2_FT_SYMLINK` constants
 - [x] Implement `ext2_readlink()` - read target from fast symlink in i_block
 - [x] Implement `ext2_symlink()` - create fast symlink (<=60 bytes)
+- [ ] Support slow symlink creation (>60 bytes) in ext2
 - [x] Wire into ext2 vnode_ops
 - [x] Update `ext2_stat()` to properly set `M_IFLNK` mode bits
 - [x] Update `ext2_mode_to_type()` to return `T_SYMLINK`
@@ -723,7 +729,7 @@ Phase 6 - Write Support (Optional):
 | ~~fcntl~~ | ~~High~~ | ~~Medium~~ | ✅ Implemented 2026-03-30 |
 | select/poll | High | Medium | ✅ Baseline implementation landed 2026-03-31; event semantics and precision timeout behavior can be refined |
 | mmap | High | High | Memory mapping |
-| ioctl | High | Medium | Device control |
+| ioctl | Medium | Medium | ✅ TTY-focused ioctl syscall support landed 2026-04-01; broader non-tty device ioctl coverage still pending |
 | stat/lstat | Medium | Low | Complete stat info |
 | time/gettimeofday | Medium | Low | Time support |
 | getrlimit/setrlimit | Low | Medium | Resource limits |
@@ -759,7 +765,7 @@ Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
 - Additional portability wrappers for larger third-party ports
 
 ### 6.4 POSIX Porting And Init [ONGOING]
-**Status:** Significant userland progress landed 2026-03-31  
+**Status:** Significant userland progress landed through 2026-04-01  
 **Files:** `user/posix.c`, `user/ulib.c`, `user/setjmp.S`, `user/init.c`, `user/runlevel.c`, `user/telinit.c`, `kernel/core/exec.c`  
 
 **Delivered:**
@@ -767,6 +773,9 @@ Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
 - `exec()` shebang support for interpreter scripts
 - SysV-style init flow with `/etc/rc.d/rc.S`, runlevel transitions, and `telinit`/`runlevel` tooling
 - More POSIX-like `kill(pid, sig)` behavior wired into signal delivery
+- Linux-compatible terminal ioctl numbering for common termios and queue-state operations
+- Initial PTY integration with `openpty()` shim and static `/dev/ptmx` <-> `/dev/pts/0` path
+- Targetfs terminal defaults (`/etc/termcap`, `TERM=vt100`, `TERMCAP=/etc/termcap`) for better interactive app behavior
 
 ---
 
@@ -787,6 +796,7 @@ Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
 | `kernel/driver/rtl8111.c` | Realtek RTL8111/8168 Gigabit Ethernet with full ifnet integration |
 | `kernel/driver/vmxnet3.c` | VMware VMXnet3 paravirtualized NIC stub |
 | `kernel/driver/netvsc.c` | Microsoft Hyper-V NetVSC paravirtualized NIC stub |
+| `kernel/driver/pty.c` | Initial PTY driver backend with termios/winsize/ioctl support |
 | `kernel/driver/ahci.c` | AHCI/SATA driver with polling DMA read/write |
 | `kernel/driver/nvme.c` | NVMe driver with I/O queue and basic RW path |
 | `kernel/driver/loop.c` | Loop block device driver for mounting images through regular files |
@@ -821,6 +831,7 @@ Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
 | `user/losetup.c` | Loop device list/setup/detach utility |
 | `user/isotest.c` | ISO 9660 and loop-device smoke test utility |
 | `user/posix.c` | POSIX compatibility wrappers |
+| `user/termcheck.c` | Terminal/PTY/ioctl compatibility regression checks |
 | `user/runlevel.c` | Current/previous runlevel reporting |
 | `user/telinit.c` | Runlevel transition requests |
 
@@ -880,4 +891,5 @@ Several items have already landed out of order relative to this original plan, n
 5. **Then:** Begin XDR/RPC infrastructure as foundation for NFS client
 6. **In parallel:** Continue POSIX porting with `sendto`/`recvfrom`, `netinet/in.h`, and `arpa/inet.h` for NFS over UDP
 7. **Storage polish:** Finish virtio-blk discard/write-zeroes, address AHCI multi-device
-8. **Later:** Btrfs read-only stub, mdev utility for device node management
+8. **Terminal follow-up:** Expand PTY from static single pair to dynamic `/dev/pts/N` allocation and lifecycle
+9. **Later:** Btrfs read-only stub, mdev utility for device node management
