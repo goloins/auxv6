@@ -30,6 +30,8 @@ typedef struct {
 #define ARP_FLAG_PENDING  0x1
 #define ARP_FLAG_RESOLVED 0x2
 
+#define LOOP_STATUS_MOUNTED 0x1
+
 struct mountinfo {
   int dev;
   int flags;
@@ -110,7 +112,8 @@ int readlink(const char *path, char *buf, int bufsiz);
 int lstat(const char *path, struct stat *st);
 int loopsetup(int loopnum, const char *path, int offset, int nblocks);
 int loopteardown(int loopnum);
-int loopstatus(int loopnum, uint *backing_inum, uint *nblocks);
+int loopstatus(int loopnum, uint *backing_inum, uint *offset,
+               uint *nblocks, uint *flags);
 int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
 		   struct timeval *timeout);
 int poll(struct pollfd *fds, nfds_t nfds, int timeout);

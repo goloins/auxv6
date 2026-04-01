@@ -100,6 +100,7 @@ uint vfs_root_dev(void);
 int vfs_is_root_inode(struct inode *ip);
 int vfs_mount_count(void);
 int vfs_get_mounts(struct vfs_mount_info *out, int max);
+int vfs_dev_is_mounted(uint dev);
 int vfs_dev_has_cap(uint dev, uint cap);
 const struct vnode_ops* vfs_dev_vops(uint dev);
 int vfs_dev_is_xv6fs(uint dev);

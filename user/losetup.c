@@ -55,13 +55,13 @@ static void
 list_loops(void)
 {
   int i;
-  uint inum, nblocks;
+  uint inum, offset, nblocks, flags;
   int active_count = 0;
   
-  printf(1, "NAME       ACTIVE  BLOCKS  INODE\n");
+  printf(1, "NAME       ACTIVE  BLOCKS  OFFSET  MOUNTED  INODE\n");
   
   for(i = 0; i < NLOOP; i++){
-    int status = loopstatus(i, &inum, &nblocks);
+    int status = loopstatus(i, &inum, &offset, &nblocks, &flags);
     
     if(status < 0){
       printf(2, "/dev/loop%d: error getting status\n", i);
@@ -69,10 +69,13 @@ list_loops(void)
     }
     
     if(status > 0){
-      printf(1, "/dev/loop%d  yes     %d      %d\n", i, nblocks, inum);
+      printf(1, "/dev/loop%d  yes     %d      %d       %s      %d\n",
+             i, nblocks, offset,
+             (flags & LOOP_STATUS_MOUNTED) ? "yes" : "no",
+             inum);
       active_count++;
     } else {
-      printf(1, "/dev/loop%d  no      -       -\n", i);
+      printf(1, "/dev/loop%d  no      -       -       -        -\n", i);
     }
   }
   
@@ -162,9 +165,9 @@ main(int argc, char *argv[])
   
   if(argc == 3 && strcmp(argv[1], "-f") == 0){
     /* Find first free loop device */
-    uint inum, nblocks;
+    uint inum, offset, nblocks, flags;
     for(loopnum = 0; loopnum < NLOOP; loopnum++){
-      int status = loopstatus(loopnum, &inum, &nblocks);
+      int status = loopstatus(loopnum, &inum, &offset, &nblocks, &flags);
       if(status == 0)
         break;
     }

@@ -979,6 +979,26 @@ vfs_mount_count(void)
 }
 
 int
+vfs_dev_is_mounted(uint dev)
+{
+  int i;
+  int mounted;
+
+  mounted = 0;
+  acquire(&vfslock);
+  for(i = 0; i < VFS_MOUNTS_MAX; i++){
+    if(mounts[i].used == 0 || mounts[i].fs == 0)
+      continue;
+    if((uint)mounts[i].dev == dev){
+      mounted = 1;
+      break;
+    }
+  }
+  release(&vfslock);
+  return mounted;
+}
+
+int
 vfs_dev_has_cap(uint dev, uint cap)
 {
   struct mount *m;

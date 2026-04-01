@@ -160,6 +160,9 @@ int
 loop_setup(int loopnum, struct inode *ip, uint offset, uint nblocks)
 {
   struct loop_device *ld;
+  uint max_blocks;
+  uint req_end;
+  int valid_backing;
 
   if(!loop_inited)
     loop_init();
@@ -169,15 +172,39 @@ loop_setup(int loopnum, struct inode *ip, uint offset, uint nblocks)
   if(ip == 0)
     return -1;
 
+  // Loop offsets are byte offsets and must be block-aligned.
+  if((offset % BSIZE) != 0)
+    return -1;
+
+  // Backing must be a regular file or a block device node.
+  valid_backing = (ip->type == T_FILE) ||
+                  (ip->type == T_DEV && ip->major == BLOCKDEV);
+  if(!valid_backing)
+    return -1;
+
   // Get file size to determine nblocks if not specified
   ilock(ip);
+  if(offset >= ip->size){
+    iunlock(ip);
+    return -1;
+  }
+
+  max_blocks = (ip->size - offset) / BSIZE;
+  if(max_blocks == 0){
+    iunlock(ip);
+    return -1;
+  }
+
   if(nblocks == 0){
-    // Auto-detect size from inode
-    if(ip->size < BSIZE){
+    // Auto-detect size from inode from offset to end.
+    nblocks = max_blocks;
+  } else {
+    // Prevent overflow and out-of-range backing accesses.
+    req_end = offset + nblocks * BSIZE;
+    if(req_end < offset || nblocks > max_blocks){
       iunlock(ip);
       return -1;
     }
-    nblocks = (ip->size - offset) / BSIZE;
   }
   iunlock(ip);
 
@@ -216,8 +243,13 @@ loop_teardown(int loopnum)
 {
   struct loop_device *ld;
   struct inode *old_ip;
+  uint dev;
 
   if(loopnum < 0 || loopnum >= NLOOP)
+    return -1;
+
+  dev = LOOP_DEV_BASE + loopnum;
+  if(vfs_dev_is_mounted(dev))
     return -1;
 
   ld = &loops[loopnum];
@@ -249,10 +281,13 @@ loop_teardown(int loopnum)
  * Returns 1 if active, 0 if not, -1 on error.
  */
 int
-loop_status(int loopnum, uint *backing_inum, uint *nblocks)
+loop_status(int loopnum, uint *backing_inum, uint *offset,
+            uint *nblocks, uint *flags)
 {
   struct loop_device *ld;
   int active;
+  uint dev;
+  uint status_flags;
 
   if(loopnum < 0 || loopnum >= NLOOP)
     return -1;
@@ -263,10 +298,20 @@ loop_status(int loopnum, uint *backing_inum, uint *nblocks)
   if(active){
     if(backing_inum && ld->backing_ip)
       *backing_inum = ld->backing_ip->inum;
+    if(offset)
+      *offset = ld->offset;
     if(nblocks)
       *nblocks = ld->nblocks;
   }
   release(&ld->lock);
+
+  if(active && flags){
+    status_flags = 0;
+    dev = LOOP_DEV_BASE + loopnum;
+    if(vfs_dev_is_mounted(dev))
+      status_flags |= 0x1;
+    *flags = status_flags;
+  }
 
   return active;
 }

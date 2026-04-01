@@ -53,6 +53,7 @@ user/mounts
 user/mounttest
 user/losetup
 user/isotest
+user/looptest
 user/mv
 user/umount
 user/uname

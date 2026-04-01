@@ -172,6 +172,7 @@ int             vfs_is_root_inode(struct inode*);
 struct inode*   vfs_mount_crossover(struct inode*, char*);
 int             vfs_mount_count(void);
 int             vfs_get_mounts(struct vfs_mount_info*, int);
+int             vfs_dev_is_mounted(uint);
 int             vfs_dev_has_cap(uint, uint);
 const struct vnode_ops* vfs_dev_vops(uint);
 void*           vfs_dev_fs_data(uint);
@@ -228,7 +229,8 @@ void            dma_sync_for_cpu(void*, uint);
 void            loop_init(void);
 int             loop_setup(int loopnum, struct inode *ip, uint offset, uint nblocks);
 int             loop_teardown(int loopnum);
-int             loop_status(int loopnum, uint *backing_inum, uint *nblocks);
+int             loop_status(int loopnum, uint *backing_inum, uint *offset,
+							uint *nblocks, uint *flags);
 int             loop_devnum(int loopnum);
 int             loop_find_free(void);
 

@@ -93,10 +93,11 @@ test_loop_setup(void)
   }
   
   /* Check loop status */
-  uint inum, nblocks;
-  r = loopstatus(LOOP_DEV, &inum, &nblocks);
+  uint inum, offset, nblocks, flags;
+  r = loopstatus(LOOP_DEV, &inum, &offset, &nblocks, &flags);
   test_result("loopstatus()", r > 0);
-  printf(1, "  Loop device has %d blocks, backing inode %d\n", nblocks, inum);
+  printf(1, "  Loop device has %d blocks, offset %d, mounted=%s, backing inode %d\n",
+         nblocks, offset, (flags & LOOP_STATUS_MOUNTED) ? "yes" : "no", inum);
 }
 
 static void

@@ -32,6 +32,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - PTY support moved from baseline to dynamic behavior: kernel major 3 PTY backend now allocates multiple PTY pairs via `/dev/ptmx`, tracks per-file endpoint identity, exposes `TIOCGPTN`, and provides queueing plus winsize/termios ioctls and `SIGWINCH` signaling.
 - Init/userland terminal setup improved further: `init` now pre-creates `/dev/pts/0..15`, `openpty()`/`ptsname_r()` use dynamic `/dev/pts/N` resolution, and `termcheck` now includes multi-PTY isolation/lifecycle plus max create/terminate stress coverage.
 - Device-node lifecycle moved from static init hardcoding to a runlevel-integrated userspace manager: `devman -s` now runs in `rc.S`, scans kernel-visible devices, creates `/dev` nodes dynamically, and supports `debug=0/1` tuning via `/etc/devman.conf`.
+- Userland discoverability improved: `man` support and initial manpage coverage landed, with generation workflow documented in `docs/man-pages.md` and helper tooling in `tools/gen-man-pages.sh`.
 - Dash porting on Linux hosts became more robust: aux build rules now force-regenerate host tools and include `libgcc_compat.c` fallbacks for 64-bit division/mod helpers.
 - procfs gained more than basic process plumbing: `/proc/uptime`, `/proc/pci`, `/proc/vblk_flush`, and `/proc/ahci_tune` now exist for observability and runtime tuning.
 - **NVMe driver** now has I/O queue creation and synchronous READ/WRITE command support via PRP1 (single-page transfers).
@@ -72,6 +73,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 |-----------|--------|-------|
 | Networking interfaces | 60% | BSD ifnet abstraction, loopback, virtio-net, routing, DHCP tooling, outbound packet path |
 | POSIX compatibility layer | 70% | Broader tty/ioctl compatibility, dynamic `openpty`/`ptsname_r` path, dash portability fixes; many APIs still stubbed or partial |
+| Userland docs/manpages | 65% | `man` utility plus baseline pages are available; command coverage and completeness are still growing |
 | procfs | 70% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`; still sparse overall |
 | Virtio storage | 70% | Working virtio core + virtio-blk, but still single-queue/minimal-feature oriented |
 | Real NICs | 60% | E1000, PCNET, RTL8111 have full ifnet integration; VMXnet3, Hyper-V netvsc, Intel I219-V, Intel I226-V, and ASIX AX88179 PCI are stubs |
@@ -557,8 +559,9 @@ Phase 4 - Userspace:
 - [x] End-to-end ISO test utility (`isotest`)
 
 **Remaining Work:**
-- [ ] Busy-device safety policy for mounted loop devices
-- [ ] Richer status reporting (backing pathname, offset, flags)
+- [x] Busy-device safety policy for mounted loop devices (detach now rejects mounted loop devices)
+- [x] Richer status reporting (offset + mounted flag exposed through loopstatus/losetup)
+- [ ] Richer status reporting (backing pathname)
 - [ ] Partition-awareness helpers beyond manual offset/nblocks setup
 
 **Definition of done (current milestone):** ✅ Achieved
@@ -765,6 +768,7 @@ Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
 - Enough libc/POSIX scaffolding to experiment with ported software such as `dash`
 - `exec()` shebang support for interpreter scripts
 - SysV-style init flow with `/etc/rc.d/rc.S`, runlevel transitions, and `telinit`/`runlevel` tooling
+- `man` userspace utility and an initial manpage corpus, with generation/update workflow in `docs/man-pages.md`
 - More POSIX-like `kill(pid, sig)` behavior wired into signal delivery
 - Linux-compatible terminal ioctl numbering for common termios and queue-state operations
 - Dynamic PTY integration with `openpty()`/`ptsname_r()` and `/dev/ptmx` -> `/dev/pts/N` allocation
@@ -828,6 +832,8 @@ Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
 | `user/termcheck.c` | Terminal/PTY/ioctl compatibility regression checks, multi-PTY shell isolation/lifecycle, and PTY allocation stress tests |
 | `user/runlevel.c` | Current/previous runlevel reporting |
 | `user/telinit.c` | Runlevel transition requests |
+| `user/man.c` | `man` command for in-system manual page viewing |
+| `tools/gen-man-pages.sh` | Helper script for generating/updating manual pages |
 
 ### Filesystem
 | File | Description |
@@ -864,6 +870,7 @@ Several items have already landed out of order relative to this original plan, n
 3. **Back real getrlimit/setrlimit syscalls behind the existing header stubs** - 1 hour
 4. **Add `netinet/in.h` and `arpa/inet.h` compatibility headers, then flesh out userspace socket declarations** - 2-3 hours
 5. **Polish virtio-net link state / diagnostics** - 2 hours
+6. **Expand manpage coverage for key networking/storage/admin tools** - 2-4 hours
 
 ---
 
@@ -881,7 +888,7 @@ Several items have already landed out of order relative to this original plan, n
 1. ~~**Immediately:** Harden TCP with retransmission, teardown, and better receive/window handling~~ **DONE 2026-03-31**
 2. ~~**Now:** Finish symlink pathname resolution so `open()` follows symlinks and `lstat()` can explicitly avoid doing so~~ **DONE 2026-04-01**
 3. ~~**Next:** Finish ISO 9660 filesystem - rewrite stub to proper VFS API, enable ISO image mounting~~ **DONE 2026-03-31**
-4. **Next:** Harden the loop-device path with busy-device checks and better status/reporting
+4. **Next:** Harden the loop-device path with busy-device checks and better status/reporting (highest leverage stability item after recent userland/documentation wins)
 5. **Then:** Begin XDR/RPC infrastructure as foundation for NFS client
 6. **In parallel:** Continue POSIX porting with `sendto`/`recvfrom`, `netinet/in.h`, and `arpa/inet.h` for NFS over UDP
 7. **Storage polish:** Finish virtio-blk discard/write-zeroes, address AHCI multi-device

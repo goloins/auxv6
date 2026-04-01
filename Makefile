@@ -418,6 +418,9 @@ _losetup: user/losetup
 _isotest: user/isotest
 	cp user/isotest _isotest
 
+_looptest: user/looptest
+	cp user/looptest _looptest
+
 _termdemo: user/termdemo
 	cp user/termdemo _termdemo
 
@@ -515,6 +518,7 @@ UPROGS=\
 	_zombie\
 	_losetup\
 	_isotest\
+	_looptest\
 	_termdemo\
 	_termcheck\
 	_tail\
@@ -577,7 +581,7 @@ clean:
 	$(USER_STAGE_DIR) \
 	user/runlevel user/telinit \
 	user/mount user/mounts user/mounttest user/umount \
-	user/losetup user/isotest \
+	user/losetup user/isotest user/looptest \
 	user/man \
 	user/uname \
 	_dhcp \

@@ -1974,14 +1974,20 @@ sys_loopstatus(void)
 {
   int loopnum;
   uint *backing_inum;
+  uint *offset;
   uint *nblocks;
+  uint *flags;
 
   if(argint(0, &loopnum) < 0)
     return -1;
   if(argptr(1, (void*)&backing_inum, sizeof(*backing_inum)) < 0)
     return -1;
-  if(argptr(2, (void*)&nblocks, sizeof(*nblocks)) < 0)
+  if(argptr(2, (void*)&offset, sizeof(*offset)) < 0)
+    return -1;
+  if(argptr(3, (void*)&nblocks, sizeof(*nblocks)) < 0)
+    return -1;
+  if(argptr(4, (void*)&flags, sizeof(*flags)) < 0)
     return -1;
 
-  return loop_status(loopnum, backing_inum, nblocks);
+  return loop_status(loopnum, backing_inum, offset, nblocks, flags);
 }
