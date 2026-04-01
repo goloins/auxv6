@@ -284,38 +284,54 @@ check_pty_max_stress(void)
 {
   int mfds[PTY_STRESS_CAP];
   int sfds[PTY_STRESS_CAP];
-  int count;
-  int expected;
+  int count1;
+  int count2;
+  int best;
   int i;
   int extra;
 
-  expected = -1;
+  best = 0;
   for(i = 0; i < PTY_STRESS_CYCLES; i++) {
-    count = open_pty_batch(mfds, sfds, PTY_STRESS_CAP);
-    if(count <= 0) {
-      close_pty_batch(mfds, sfds, count);
+    count1 = open_pty_batch(mfds, sfds, PTY_STRESS_CAP);
+    if(count1 <= 0) {
+      close_pty_batch(mfds, sfds, count1);
       return -1;
     }
 
-    if(expected < 0)
-      expected = count;
-    if(count != expected) {
-      close_pty_batch(mfds, sfds, count);
+    if(count1 < best) {
+      printf(2, "termcheck: pty stress regression cycle %d count=%d best=%d\n", i + 1, count1, best);
+      close_pty_batch(mfds, sfds, count1);
       return -1;
     }
+    if(count1 > best)
+      best = count1;
 
     extra = open("/dev/ptmx", O_RDWR);
     if(extra >= 0) {
       close(extra);
-      close_pty_batch(mfds, sfds, count);
+      close_pty_batch(mfds, sfds, count1);
+      printf(2, "termcheck: pty stress expected ptmx allocation failure at count=%d\n", count1);
       return -1;
     }
 
-    close_pty_batch(mfds, sfds, count);
-    printf(1, "termcheck: pty stress cycle %d/%d max=%d\n", i + 1, PTY_STRESS_CYCLES, count);
+    close_pty_batch(mfds, sfds, count1);
+
+    /* Re-open immediately to detect teardown leaks in the same cycle. */
+    count2 = open_pty_batch(mfds, sfds, PTY_STRESS_CAP);
+    if(count2 < count1) {
+      printf(2, "termcheck: pty stress leak? cycle %d count1=%d count2=%d\n", i + 1, count1, count2);
+      close_pty_batch(mfds, sfds, count2);
+      return -1;
+    }
+    if(count2 > best)
+      best = count2;
+    close_pty_batch(mfds, sfds, count2);
+
+    printf(1, "termcheck: pty stress cycle %d/%d counts=%d,%d best=%d\n", i + 1, PTY_STRESS_CYCLES, count1, count2, best);
+    sleep(1);
   }
 
-  if(expected < PTY_SHELL_SESSIONS)
+  if(best < PTY_SHELL_SESSIONS)
     return -1;
   return 0;
 }
