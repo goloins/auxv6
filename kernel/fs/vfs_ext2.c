@@ -1517,10 +1517,11 @@ ext2_skipelem(char *path, char *name)
 }
 
 static struct inode*
-ext2_walk(char *path, int nameiparent, char *name)
+ext2_walk(struct vfs *fs, char *path, int nameiparent, char *name)
 {
   struct inode *ip;
   struct inode *next;
+  struct ext2_mount_data *md;
   char elem[EXT2_NAME_MAX + 1];
   char curpath[256];
   char newpath[256];
@@ -1539,13 +1540,23 @@ ext2_walk(char *path, int nameiparent, char *name)
   if(path == 0)
     return 0;
 
+  md = 0;
+  if(fs)
+    md = (struct ext2_mount_data*)fs->fs_data;
+  if(md == 0)
+    md = ext2_bootstrap_data;
+  if(md == 0)
+    md = ext2_data_for_dev(ext2_active_dev);
+  if(md == 0)
+    return 0;
+
   safestrcpy(curpath, path, sizeof(curpath));
   depth = 0;
 
 restart:
 
   if(curpath[0] == '/'){
-    ip = ext2_make_inode(ext2_active_dev, EXT2_ROOT_INO);
+    ip = ext2_make_inode(md->dev, EXT2_ROOT_INO);
     if(ip == 0)
       return 0;
   } else {
@@ -1555,7 +1566,7 @@ restart:
       // cwd is not on this ext2 mount, fall back to root
       if(ip)
         iput(ip);
-      ip = ext2_make_inode(ext2_active_dev, EXT2_ROOT_INO);
+      ip = ext2_make_inode(md->dev, EXT2_ROOT_INO);
       if(ip == 0)
         return 0;
     }
@@ -2571,21 +2582,33 @@ ext2_rename(struct inode *olddp, char *oldname, struct inode *newdp, char *newna
 }
 
 static struct inode*
-ext2_root_inode(void)
+ext2_root_inode(struct vfs *fs)
 {
-  return ext2_make_inode(ext2_active_dev, EXT2_ROOT_INO);
+  struct ext2_mount_data *md;
+
+  md = 0;
+  if(fs)
+    md = (struct ext2_mount_data*)fs->fs_data;
+  if(md == 0)
+    md = ext2_bootstrap_data;
+  if(md == 0)
+    md = ext2_data_for_dev(ext2_active_dev);
+  if(md == 0)
+    return 0;
+
+  return ext2_make_inode(md->dev, EXT2_ROOT_INO);
 }
 
 static struct inode*
-ext2_namei(char *path)
+ext2_namei(struct vfs *fs, char *path)
 {
-  return ext2_walk(path, 0, 0);
+  return ext2_walk(fs, path, 0, 0);
 }
 
 static struct inode*
-ext2_nameiparent(char *path, char *name)
+ext2_nameiparent(struct vfs *fs, char *path, char *name)
 {
-  return ext2_walk(path, 1, name);
+  return ext2_walk(fs, path, 1, name);
 }
 
 static void

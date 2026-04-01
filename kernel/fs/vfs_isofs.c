@@ -146,21 +146,21 @@ isofs_read_sectors(struct isofs_mount_data *mp, uint lba, void *buf, uint count)
 
     for(i = 0; i < count; i++){
         uint block;
-        int j;
-        
-        /* Each ISO sector spans 4 x 512-byte blocks */
-        block = (lba + i) * ISO_SECTORS_PER_BLOCK;
-        
-        for(j = 0; j < ISO_SECTORS_PER_BLOCK; j++){
-            struct buf *bp = bread(mp->dev, block + j);
-            if(bp == 0)
-                return -1;
-            memmove(dst + j * BSIZE, bp->data, BSIZE);
-            brelse(bp);
-        }
-        dst += ISO_SECTOR_SIZE;
+    int j;
+
+    /* Each ISO sector spans 4 x 512-byte blocks */
+    block = (lba + i) * ISO_SECTORS_PER_BLOCK;
+
+    for(j = 0; j < ISO_SECTORS_PER_BLOCK; j++){
+        struct buf *bp = bread(mp->dev, block + j);
+        if(bp == 0)
+        return -1;
+        memmove(dst + j * BSIZE, bp->data, BSIZE);
+        brelse(bp);
     }
-    
+    dst += ISO_SECTOR_SIZE;
+    }
+
     return 0;
 }
 
@@ -267,9 +267,11 @@ isofs_parse_dirent(struct isofs_mount_data *mp, struct iso_directory_record *dr,
  * VFS: Get the root inode.
  */
 static struct inode*
-isofs_root_inode(void)
+isofs_root_inode(struct vfs *fs)
 {
-    struct isofs_mount_data *mp = isofs_mount_data_ptr;
+    struct isofs_mount_data *mp = fs ? (struct isofs_mount_data*)fs->fs_data : 0;
+    if(mp == 0)
+        mp = isofs_mount_data_ptr;
     
     if(mp == 0)
         return 0;
@@ -641,25 +643,10 @@ isofs_skipelem(char *path, char *name)
 }
 
 /*
- * Get root inode for the isofs mount.
- */
-static struct inode*
-isofs_get_root(void)
-{
-    struct isofs_mount_data *mp = isofs_mount_data_ptr;
-    
-    if(mp == 0)
-        return 0;
-    
-    return isofs_make_inode(mp->dev, ROOTINO, mp->root_extent, mp->root_size,
-                            ISO_FLAG_DIRECTORY);
-}
-
-/*
  * Walk a path in the isofs filesystem.
  */
 static struct inode*
-isofs_walk(char *path, int nameiparent, char *name)
+isofs_walk(struct vfs *fs, char *path, int nameiparent, char *name)
 {
     struct inode *ip;
     struct inode *next;
@@ -671,12 +658,12 @@ isofs_walk(char *path, int nameiparent, char *name)
         return 0;
     
     if(path[0] == '/'){
-        ip = isofs_get_root();
+        ip = isofs_root_inode(fs);
         if(ip == 0)
             return 0;
     } else {
         /* Relative path - not supported for isofs, fall back to root */
-        ip = isofs_get_root();
+        ip = isofs_root_inode(fs);
         if(ip == 0)
             return 0;
     }
@@ -719,18 +706,18 @@ isofs_walk(char *path, int nameiparent, char *name)
  * VFS: Resolve path to inode.
  */
 static struct inode*
-isofs_namei(char *path)
+isofs_namei(struct vfs *fs, char *path)
 {
-    return isofs_walk(path, 0, 0);
+    return isofs_walk(fs, path, 0, 0);
 }
 
 /*
  * VFS: Resolve path to parent inode and get filename.
  */
 static struct inode*
-isofs_nameiparent(char *path, char *name)
+isofs_nameiparent(struct vfs *fs, char *path, char *name)
 {
-    return isofs_walk(path, 1, name);
+    return isofs_walk(fs, path, 1, name);
 }
 
 /*

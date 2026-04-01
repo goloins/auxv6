@@ -283,20 +283,23 @@ xv6fs_rename(struct inode *olddp, char *oldname, struct inode *newdp, char *newn
 }
 
 static struct inode*
-xv6fs_root_inode(void)
+xv6fs_root_inode(struct vfs *fs)
 {
+  (void)fs;
   return iget(ROOTFS_DEV, ROOTINO);
 }
 
 static struct inode*
-xv6fs_namei(char *path)
+xv6fs_namei(struct vfs *fs, char *path)
 {
+  (void)fs;
   return namei(path);
 }
 
 static struct inode*
-xv6fs_nameiparent(char *path, char *name)
+xv6fs_nameiparent(struct vfs *fs, char *path, char *name)
 {
+  (void)fs;
   return nameiparent(path, name);
 }
 

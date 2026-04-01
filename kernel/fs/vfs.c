@@ -306,15 +306,16 @@ vfs_mount_register_inode(struct vfs *fs, int dev, int flags, char *path, struct 
       return -1;
     }
     fs_data = mctx.fs_data;
+    fs->fs_data = fs_data;
   }
 
   {
     struct inode *rootip;
     rootip = 0;
     if(fs->ops.root_inode)
-      rootip = fs->ops.root_inode();
+      rootip = fs->ops.root_inode(fs);
     else if(fs->ops.namei)
-      rootip = fs->ops.namei("/");
+      rootip = fs->ops.namei(fs, "/");
     if(rootip){
       acquire(&vfslock);
       mounts[slot].root_inum = rootip->inum;
@@ -500,13 +501,14 @@ vfs_init(void)
     if(rootvfs.mount_init(&mctx) < 0)
       panic("vfs_init: root mount_init");
     root_fs_data = mctx.fs_data;
+    rootvfs.fs_data = root_fs_data;
   }
 
   // Hold a stable mountpoint reference for '/'.
   if(rootvfs.ops.root_inode)
-    rootip = rootvfs.ops.root_inode();
+    rootip = rootvfs.ops.root_inode(&rootvfs);
   else
-    rootip = rootvfs.ops.namei("/");
+    rootip = rootvfs.ops.namei(&rootvfs, "/");
   if(rootip == 0)
     panic("vfs_init: root mountpoint");
 
@@ -576,7 +578,7 @@ vfs_cross_into_mount(struct inode *ip)
       // Found it - get the mounted filesystem's root inode
       if(m->fs->ops.root_inode){
         release(&vfslock);
-        root = m->fs->ops.root_inode();
+        root = m->fs->ops.root_inode(m->fs);
         return root;
       }
       break;
@@ -663,7 +665,7 @@ vfs_lookup(char *path, struct vnode *vn)
 {
   struct inode *ip;
   struct inode *cwdip;
-  struct inode* (*lookup)(char *path);
+  struct inode* (*lookup)(struct vfs *fs, char *path);
   uint cwddev;
   struct mount *m;
   char *relpath;
@@ -743,7 +745,7 @@ vfs_lookup(char *path, struct vnode *vn)
   if(cwdip)
     iput(cwdip);
 
-  ip = lookup(relpath);
+  ip = lookup(m->fs, relpath);
   if(ip == 0){
     vn->mnt = 0;
     return -1;
@@ -856,7 +858,7 @@ vfs_lookup_parent(char *path, char *name, struct vnode *vn)
 {
   struct inode *ip;
   struct inode *cwdip;
-  struct inode* (*lookup_parent)(char *path, char *name);
+  struct inode* (*lookup_parent)(struct vfs *fs, char *path, char *name);
   uint cwddev;
   struct mount *m;
   char *relpath;
@@ -936,7 +938,7 @@ vfs_lookup_parent(char *path, char *name, struct vnode *vn)
   if(cwdip)
     iput(cwdip);
 
-  ip = lookup_parent(relpath, name);
+  ip = lookup_parent(m->fs, relpath, name);
   if(ip == 0){
     vn->mnt = 0;
     return -1;

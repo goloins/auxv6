@@ -228,8 +228,9 @@ procfs_make_inode(uint inum)
 }
 
 static struct inode*
-procfs_namei(char *path)
+procfs_namei(struct vfs *fs, char *path)
 {
+  (void)fs;
   char filename[64];
   char *start;
   int i;
@@ -285,8 +286,9 @@ procfs_namei(char *path)
 }
 
 static struct inode*
-procfs_nameiparent(char *path, char *name)
+procfs_nameiparent(struct vfs *fs, char *path, char *name)
 {
+  (void)fs;
   char parent[256];
   char *start;
   int pathlen;
@@ -324,7 +326,7 @@ procfs_nameiparent(char *path, char *name)
 
   safestrcpy(name, &start[i+1], 64);
 
-  return procfs_namei(parent);
+  return procfs_namei(fs, parent);
 }
 
 static void

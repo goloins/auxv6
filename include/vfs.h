@@ -47,9 +47,9 @@ struct vnode_ops {
 };
 
 struct vfs_ops {
-  struct inode* (*root_inode)(void);
-  struct inode* (*namei)(char *path);
-  struct inode* (*nameiparent)(char *path, char *name);
+  struct inode* (*root_inode)(struct vfs *fs);
+  struct inode* (*namei)(struct vfs *fs, char *path);
+  struct inode* (*nameiparent)(struct vfs *fs, char *path, char *name);
   void (*inode_put)(struct inode *ip);
 };
 

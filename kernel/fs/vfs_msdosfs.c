@@ -85,7 +85,7 @@ struct msdos_mount_data {
 static uint msdos_active_dev;
 static struct msdos_mount_data *msdos_bootstrap_data;
 
-static struct inode* msdos_root_inode(void);
+static struct inode* msdos_root_inode(struct vfs *fs);
 static struct inode* msdos_dirlookup(struct inode *dp, char *name, uint *poff);
 static struct msdos_mount_data* msdos_data_for_dev(uint dev);
 static uint msdos_cluster_first_sector(struct msdos_mount_data *md, uint cluster);
@@ -977,9 +977,10 @@ msdos_nth_visit(struct fat_dirent *de, uint inum, uint visidx, void *arg)
 }
 
 static struct inode*
-msdos_walk(char *path, int nameiparent, char *name)
+msdos_walk(struct vfs *fs, char *path, int nameiparent, char *name)
 {
   struct inode *ip;
+  struct msdos_mount_data *md;
   char elem[DIRSIZ + 1];
   int i;
   int e;
@@ -987,8 +988,18 @@ msdos_walk(char *path, int nameiparent, char *name)
   if(path == 0)
     return 0;
 
+  md = 0;
+  if(fs)
+    md = (struct msdos_mount_data*)fs->fs_data;
+  if(md == 0)
+    md = msdos_bootstrap_data;
+  if(md == 0)
+    md = msdos_data_for_dev(msdos_active_dev);
+  if(md == 0)
+    return 0;
+
   if(path[0] == '/'){
-    ip = msdos_root_inode();
+    ip = msdos_root_inode(fs);
     if(ip == 0)
       return 0;
   } else {
@@ -996,7 +1007,7 @@ msdos_walk(char *path, int nameiparent, char *name)
     if(ip == 0 || msdos_data_for_dev(ip->dev) == 0){
       if(ip)
         iput(ip);
-      ip = msdos_root_inode();
+      ip = msdos_root_inode(fs);
       if(ip == 0)
         return 0;
     }
@@ -1178,12 +1189,18 @@ msdos_mount_init(struct mount *m)
 }
 
 static struct inode*
-msdos_root_inode(void)
+msdos_root_inode(struct vfs *fs)
 {
   struct msdos_mount_data *md;
   struct fat_dirent rootde;
 
-  md = msdos_data_for_dev(msdos_active_dev);
+  md = 0;
+  if(fs)
+    md = (struct msdos_mount_data*)fs->fs_data;
+  if(md == 0)
+    md = msdos_bootstrap_data;
+  if(md == 0)
+    md = msdos_data_for_dev(msdos_active_dev);
   if(md == 0)
     return 0;
 
@@ -1192,22 +1209,22 @@ msdos_root_inode(void)
   if(md->fat_type == 32){
     rootde.clu_lo = (ushort)(md->root_cluster & 0xFFFF);
     rootde.clu_hi = (ushort)((md->root_cluster >> 16) & 0xFFFF);
-    return msdos_make_inode(msdos_active_dev, ROOTINO, &rootde, 0);
+    return msdos_make_inode(md->dev, ROOTINO, &rootde, 0);
   }
 
-  return msdos_make_inode(msdos_active_dev, ROOTINO, &rootde, 1);
+  return msdos_make_inode(md->dev, ROOTINO, &rootde, 1);
 }
 
 static struct inode*
-msdos_namei(char *path)
+msdos_namei(struct vfs *fs, char *path)
 {
-  return msdos_walk(path, 0, 0);
+  return msdos_walk(fs, path, 0, 0);
 }
 
 static struct inode*
-msdos_nameiparent(char *path, char *name)
+msdos_nameiparent(struct vfs *fs, char *path, char *name)
 {
-  return msdos_walk(path, 1, name);
+  return msdos_walk(fs, path, 1, name);
 }
 
 static void

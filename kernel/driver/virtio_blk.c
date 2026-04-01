@@ -151,16 +151,18 @@ static struct virtio_blk_softc *virtio_blk_find_by_dev(uint dev);
 static int virtio_blk_submit_locked(struct virtio_blk_softc *sc, uint32_t type,
                                     uint64_t sector, void *data, uint32_t data_len,
                                     int data_is_write);
+static int virtio_blk_wait_complete_locked(struct virtio_blk_softc *sc,
+                                           struct virtqueue *vq);
 static int virtio_blk_submit_with_retry_locked(struct virtio_blk_softc *sc,
                                                uint32_t type, uint64_t sector,
                                                void *data, uint32_t data_len,
                                                int data_is_write);
-static int virtio_blk_write_zeroes_locked(struct virtio_blk_softc *sc,
+static int __attribute__((unused)) virtio_blk_write_zeroes_locked(struct virtio_blk_softc *sc,
                                           uint64_t sector, uint32_t num_sectors,
                                           int unmap);
-static int virtio_blk_discard_locked(struct virtio_blk_softc *sc,
+static int __attribute__((unused)) virtio_blk_discard_locked(struct virtio_blk_softc *sc,
                                      uint64_t sector, uint32_t num_sectors);
-static int virtio_blk_buf_is_zero(char *data, int n);
+static int __attribute__((unused)) virtio_blk_buf_is_zero(char *data, int n);
 static int virtio_blk_append_str(char *buf, int max, int pos, const char *s);
 static int virtio_blk_append_uint(char *buf, int max, int pos, uint v);
 
@@ -455,8 +457,9 @@ virtio_blk_submit_locked(struct virtio_blk_softc *sc, uint32_t type,
     }
     virtq_kick(vq);
 
-    while (!sc->request.done) {
-        sleep(&sc->request, &sc->lock);
+    if (virtio_blk_wait_complete_locked(sc, vq) < 0) {
+        release(&sc->lock);
+        return -1;
     }
     release(&sc->lock);
 
@@ -468,6 +471,37 @@ virtio_blk_submit_locked(struct virtio_blk_softc *sc, uint32_t type,
         return VIRTIO_BLK_REQ_ERR;
 
     return VIRTIO_BLK_REQ_OK;
+}
+
+static int
+virtio_blk_wait_complete_locked(struct virtio_blk_softc *sc,
+                                struct virtqueue *vq)
+{
+    uint32_t len;
+    void *cookie;
+    int spins;
+
+    /*
+     * Transitional virtio devices in QEMU can share a legacy IRQ line.
+     * Poll the used ring with a bounded wait so a missed interrupt does not
+     * wedge synchronous filesystem I/O forever.
+     */
+    for (spins = 0; spins < 200000; spins++) {
+        if (sc->request.done)
+            return 0;
+
+        cookie = virtq_get_buf(vq, &len);
+        if (cookie != 0) {
+            sc->request.done = 1;
+            return 0;
+        }
+
+        release(&sc->lock);
+        microdelay(10);
+        acquire(&sc->lock);
+    }
+
+    return -1;
 }
 
 static int
