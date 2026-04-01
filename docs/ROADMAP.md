@@ -16,6 +16,9 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 
 ## Recent Progress (2026-03-30 to 2026-04-01)
 
+- **Loop device hardening tranche landed 2026-04-01:** `loop_setup()` now validates offset alignment, EOF bounds, nblocks range, and backing inode type. `loop_teardown()` is guarded by a new `vfs_dev_is_mounted()` helper that blocks detach while a filesystem is mounted on the device. `loopstatus()` API extended to return `offset` and a `flags` word with `LOOP_STATUS_MOUNTED`. `losetup` list output updated to show offset and mounted columns. Dedicated regression suite landed as `user/looptest.c` with three test groups: setup validation, status metadata, and busy-teardown guard. Test ISO image (`targetfs/tmp/test.iso`, containing README, HELLO, and DATA files) added to the rootfs staging path and used by the busy-teardown group. Rootfs image expanded to 256 MB for headroom.
+- **`cprintf` format support expanded 2026-04-01:** Kernel `cprintf` now supports field width, precision (both `%.N` and `%.*`), left-align (`-`), zero-pad (`0`) flags, `%c`, `%o`, `%i`, and length modifier (`l`). The old minimal dispatcher was replaced with a `cprintint_w`-based loop matching the capability of the userspace `printf`. This removes the need for workarounds when writing diagnostic code that uses standard printf format strings.
+- **isofs diagnostic prints gated 2026-04-01:** All mount-time diagnostic `cprintf` calls in `vfs_isofs.c` are now wrapped in `MOUNTDBG(...)`, silenced unless `DBG_MOUNT`/`AUXV6_DEBUG` is enabled. Only error paths remain unconditional. `docs/DEBUG-FLAGS.md` updated to note isofs under `DBG_MOUNT`.
 - Signal delivery, `alarm()`, `SIGPIPE`, `lseek`, `dup2`, and baseline `fcntl()` support landed and are now integrated into the main syscall path.
 - PCI enumeration, IRQ registration, DMA allocation helpers, and `lspci` landed as the Tier 2 device foundation.
 - ext2 is now the default root filesystem build target, staged images are created with correct `root:root` ownership, and init is executed from the mounted root filesystem after VFS initialization.
@@ -63,7 +66,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | Memory management | 80% | Virtual memory, page tables, kalloc/kfree |
 | PCI subsystem | 80% | Bus 0 enumeration, BAR decode/mapping, helper APIs, `lspci`; MSI/MSI-X still missing |
 | DMA support | 75% | Page-based DMA allocation with physical address tracking and alignment |
-| Loop devices | 80% | 8 block devices backed by regular files, status/setup/teardown syscalls, `losetup` utility |
+| Loop devices | 85% | 8 block devices; setup validation hardened, busy-teardown guard, extended status (offset + mounted flag), `looptest` regression suite, 256 MB rootfs |
 | ISO 9660 | 85% | Working read-only implementation with VFS integration and loop-mount testing |
 | Symlinks | 90% | `symlink/readlink/lstat` wired, VFS follow/no-follow behavior landed, ext2 path traversal follows intermediate links, loop-depth limits and regression tests added |
 | Terminal/PTY stack | 85% | Console + dynamic PTY allocation (`/dev/ptmx` -> `/dev/pts/N`), per-endpoint queue/termios/winsize/ioctl routing, stress-tested create/terminate lifecycle, and dynamic node creation via `devman` |
@@ -544,9 +547,9 @@ Phase 4 - Userspace:
 **Estimate:** 2-4 more days for follow-up compatibility work, not for basic support
 
 ### 5.3 Loop Devices [MEDIUM] - COMPLETE
-**Status:** Implemented 2026-03-31  
+**Status:** Implemented 2026-03-31; hardened 2026-04-01  
 **Value:** Mount ISO and disk images without dedicated hardware  
-**Files:** `kernel/driver/loop.c`, `kernel/core/sysfile.c`, `user/losetup.c`, `user/isotest.c`, `user/mount.c`  
+**Files:** `kernel/driver/loop.c`, `kernel/core/sysfile.c`, `user/losetup.c`, `user/isotest.c`, `user/looptest.c`, `user/mount.c`  
 
 **Completed:**
 - [x] `/dev/loop0` through `/dev/loop7` block devices
@@ -558,9 +561,15 @@ Phase 4 - Userspace:
 - [x] `mount` userspace support for `loopN` device names
 - [x] End-to-end ISO test utility (`isotest`)
 
+- [x] Busy-device safety policy — `loop_teardown()` rejects detach while a filesystem is mounted (`vfs_dev_is_mounted()` helper)
+- [x] `loop_setup()` input validation: offset alignment, offset < backing size, nblocks range, inode type check
+- [x] Extended `loopstatus()` API: returns `offset` and `flags` with `LOOP_STATUS_MOUNTED` bit
+- [x] `losetup` list output updated to show offset and mounted columns
+- [x] Dedicated regression suite `user/looptest.c`: setup validation, status metadata, and busy-teardown guard groups
+- [x] Test ISO (`targetfs/tmp/test.iso`) staged to `/tmp/test.iso` on rootfs for looptest busy-teardown group
+- [x] Rootfs image expanded to 256 MB
+
 **Remaining Work:**
-- [x] Busy-device safety policy for mounted loop devices (detach now rejects mounted loop devices)
-- [x] Richer status reporting (offset + mounted flag exposed through loopstatus/losetup)
 - [ ] Richer status reporting (backing pathname)
 - [ ] Partition-awareness helpers beyond manual offset/nblocks setup
 
@@ -797,7 +806,8 @@ Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
 | `kernel/driver/pty.c` | Dynamic PTY driver backend with multi-slot allocation, per-endpoint state, termios/winsize/ioctl support, and PTY poll/readiness semantics |
 | `kernel/driver/ahci.c` | AHCI/SATA driver with polling DMA read/write |
 | `kernel/driver/nvme.c` | NVMe driver with I/O queue and basic RW path |
-| `kernel/driver/loop.c` | Loop block device driver for mounting images through regular files |
+| `kernel/driver/loop.c` | Loop block device driver; setup validation, busy-teardown guard, extended status API |
+| `kernel/driver/console.c` | `cprintf` expanded: width, precision (`%.*s`/`%.N`), flags (`-`/`0`), `%c`, `%o`, `%i`, length modifier |
 
 ### Headers
 | File | Description |
@@ -826,8 +836,9 @@ Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
 | `user/v6dhcpd.c` | DHCP tooling |
 | `user/telnet.c` | Basic Telnet client |
 | `user/netcat.c` | Basic TCP/UDP client/server utility |
-| `user/losetup.c` | Loop device list/setup/detach utility |
+| `user/losetup.c` | Loop device list/setup/detach utility; offset and mounted-flag columns added |
 | `user/isotest.c` | ISO 9660 and loop-device smoke test utility |
+| `user/looptest.c` | Loop device regression suite: setup validation, status metadata, and busy-teardown guard |
 | `user/posix.c` | POSIX compatibility wrappers |
 | `user/termcheck.c` | Terminal/PTY/ioctl compatibility regression checks, multi-PTY shell isolation/lifecycle, and PTY allocation stress tests |
 | `user/runlevel.c` | Current/previous runlevel reporting |
@@ -888,7 +899,7 @@ Several items have already landed out of order relative to this original plan, n
 1. ~~**Immediately:** Harden TCP with retransmission, teardown, and better receive/window handling~~ **DONE 2026-03-31**
 2. ~~**Now:** Finish symlink pathname resolution so `open()` follows symlinks and `lstat()` can explicitly avoid doing so~~ **DONE 2026-04-01**
 3. ~~**Next:** Finish ISO 9660 filesystem - rewrite stub to proper VFS API, enable ISO image mounting~~ **DONE 2026-03-31**
-4. **Next:** Harden the loop-device path with busy-device checks and better status/reporting (highest leverage stability item after recent userland/documentation wins)
+4. ~~**Next:** Harden the loop-device path with busy-device checks and better status/reporting~~ **DONE 2026-04-01** (busy-teardown guard, extended loopstatus API, looptest suite, test ISO, 256 MB rootfs)
 5. **Then:** Begin XDR/RPC infrastructure as foundation for NFS client
 6. **In parallel:** Continue POSIX porting with `sendto`/`recvfrom`, `netinet/in.h`, and `arpa/inet.h` for NFS over UDP
 7. **Storage polish:** Finish virtio-blk discard/write-zeroes, address AHCI multi-device
