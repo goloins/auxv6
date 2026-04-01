@@ -31,8 +31,10 @@ struct vnode;
 void            binit(void);
 struct buf*     bread(uint, uint);
 int             berror(struct buf*);
+int             bread_ok(uint, uint, struct buf**);
 void            brelse(struct buf*);
 void            bwrite(struct buf*);
+int             bwrite_ok(struct buf*);
 
 // blockdev.c
 void            bdevinit(void);

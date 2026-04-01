@@ -121,6 +121,38 @@ berror(struct buf *b)
   return (b->flags & B_ERROR) != 0;
 }
 
+int
+bread_ok(uint dev, uint blockno, struct buf **out)
+{
+  struct buf *b;
+
+  if(out == 0)
+    return -1;
+  *out = 0;
+
+  b = bread(dev, blockno);
+  if(b == 0)
+    return -1;
+  if(berror(b)){
+    brelse(b);
+    return -1;
+  }
+
+  *out = b;
+  return 0;
+}
+
+int
+bwrite_ok(struct buf *b)
+{
+  if(b == 0)
+    return -1;
+  bwrite(b);
+  if(berror(b))
+    return -1;
+  return 0;
+}
+
 // Write b's contents to disk.  Must be locked.
 void
 bwrite(struct buf *b)

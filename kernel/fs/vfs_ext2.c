@@ -296,13 +296,8 @@ ext2_dev_read(uint dev, uint off, char *dst, uint n)
     boff = cur % BSIZE;
     take = ext2_min_u32(BSIZE - boff, n - done);
 
-    b = bread(dev, blockno);
-    if(b == 0)
+    if(bread_ok(dev, blockno, &b) < 0)
       return -1;
-    if(berror(b)){
-      brelse(b);
-      return -1;
-    }
     memmove(dst + done, (char*)b->data + boff, take);
     brelse(b);
 
@@ -330,16 +325,10 @@ ext2_dev_write(uint dev, uint off, char *src, uint n)
     boff = cur % BSIZE;
     take = ext2_min_u32(BSIZE - boff, n - done);
 
-    b = bread(dev, blockno);
-    if(b == 0)
+    if(bread_ok(dev, blockno, &b) < 0)
       return -1;
-    if(berror(b)){
-      brelse(b);
-      return -1;
-    }
     memmove((char*)b->data + boff, src + done, take);
-    bwrite(b);
-    if(berror(b)){
+    if(bwrite_ok(b) < 0){
       brelse(b);
       return -1;
     }

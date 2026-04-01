@@ -107,13 +107,8 @@ msdos_bread(struct msdos_mount_data *md, uint sec)
             md->dev, sec, nblocks);
     return 0;
   }
-  b = bread(md->dev, sec);
-  if(b == 0)
+  if(bread_ok(md->dev, sec, &b) < 0)
     return 0;
-  if(berror(b)){
-    brelse(b);
-    return 0;
-  }
   return b;
 }
 

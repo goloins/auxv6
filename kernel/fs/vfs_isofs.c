@@ -152,13 +152,9 @@ isofs_read_sectors(struct isofs_mount_data *mp, uint lba, void *buf, uint count)
     block = (lba + i) * ISO_SECTORS_PER_BLOCK;
 
     for(j = 0; j < ISO_SECTORS_PER_BLOCK; j++){
-        struct buf *bp = bread(mp->dev, block + j);
-        if(bp == 0)
-        return -1;
-        if(berror(bp)){
-        brelse(bp);
-        return -1;
-        }
+        struct buf *bp;
+        if(bread_ok(mp->dev, block + j, &bp) < 0)
+            return -1;
         memmove(dst + j * BSIZE, bp->data, BSIZE);
         brelse(bp);
     }
