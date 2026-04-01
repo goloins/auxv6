@@ -2,6 +2,8 @@ The directive: This should be used at every step of the way. Whenever you are im
 
 If its missing in kernel, implement it. If it's missing in the user library, implement it (ulib). If it's missing in the tools, implement it. If it's missing in the build system, implement it. If it's missing in the documentation, implement it. If it's missing in the tests, implement it. 
 
+NEVER USE THE xv6 MKFS. USE ONE OF THE HOST TOOLS. MK2FS WORKS GREAT AND IS FOR A FS WE ACTUALLY SUPPORT. 
+
 We should avoid adding anything that should be core c library function to posix.c unless absolutely necessary, and instead add it to ulib.
 
 Whenever a document in docs/ is relevant to a change, update it. If there isn't a relevant document, add one. If there is a relevant document but it doesn't cover the change, update it to cover the change.
