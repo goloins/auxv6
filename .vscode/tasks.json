@@ -27,6 +27,37 @@
 				"aux.kern"
 			],
 			"isBackground": false
+		},
+		{
+			"label": "build-new-utils",
+			"type": "shell",
+			"command": "make",
+			"args": [
+				"_lsof",
+				"_which",
+				"_file"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "build-new-utils",
+			"type": "shell",
+			"command": "make",
+			"args": [
+				"_lsof",
+				"_which",
+				"_file"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "build-file-only",
+			"type": "shell",
+			"command": "make",
+			"args": [
+				"_file"
+			],
+			"isBackground": false
 		}
 	]
 }

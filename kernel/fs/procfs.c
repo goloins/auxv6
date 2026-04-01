@@ -24,6 +24,7 @@
 #define PROCFS_MOUNTSTATS_INO 9
 #define PROCFS_LOGO_INO     10
 #define PROCFS_GFXSTATS_INO 11
+#define PROCFS_LSOF_INO     12
 #define PROCFS_VERSION_STR  "a/ux86 aux86 i686\n"
 
 struct procfs_inode {
@@ -43,6 +44,7 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_MOUNTSTATS_INO, "mountstats", 1024 },
   { PROCFS_LOGO_INO, "logo", 16 },
   { PROCFS_GFXSTATS_INO, "gfxstats", 256 },
+  { PROCFS_LSOF_INO, "lsof", 2048 },
   { 0, 0, 0 }
 };
 
@@ -52,7 +54,22 @@ static uint procfs_write_uint(char *buf, uint value);
 static uint
 procfs_root_dir_size(void)
 {
-  return 12 * sizeof(struct dirent);
+  return 13 * sizeof(struct dirent);
+}
+
+static const char*
+procfs_fd_type_name(int type)
+{
+  switch(type){
+  case FD_PIPE:
+    return "pipe";
+  case FD_INODE:
+    return "inode";
+  case FD_SOCKET:
+    return "socket";
+  default:
+    return "none";
+  }
 }
 
 static int
@@ -178,6 +195,10 @@ procfs_fill_inode(struct inode *ip, uint inum)
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
     ip->size = 256;
+  } else if(inum == PROCFS_LSOF_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
+    ip->size = 2048;
   } else {
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
@@ -355,7 +376,7 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     return -1;
   if(ip->inum == PROCFS_ROOT_INO){
     // Note: . and .. are synthesized by VFS for mount roots
-    struct dirent more_entries[10];
+    struct dirent more_entries[11];
     memset(more_entries, 0, sizeof(more_entries));
     more_entries[0].inum = PROCFS_UPTIME_INO;
     safestrcpy(more_entries[0].name, "uptime", DIRSIZ);
@@ -377,6 +398,8 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     safestrcpy(more_entries[8].name, "logo", DIRSIZ);
     more_entries[9].inum = PROCFS_GFXSTATS_INO;
     safestrcpy(more_entries[9].name, "gfxstats", DIRSIZ);
+    more_entries[10].inum = PROCFS_LSOF_INO;
+    safestrcpy(more_entries[10].name, "lsof", DIRSIZ);
     return procfs_copy_data(dst, off, n, (char*)more_entries, sizeof(more_entries));
   }
   if(ip->inum == PROCFS_VERSION_INO)
@@ -557,6 +580,68 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
         break;
       if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
         break;
+    }
+    return procfs_copy_data(dst, off, n, buf, len);
+  }
+  if(ip->inum == PROCFS_LSOF_INO){
+    struct procfdinfo_k finfo[16];
+    int fm;
+    int skip;
+
+    len = 0;
+    if(procfs_buf_puts(buf, sizeof(buf), &len,
+                       "PID FD TYPE RW DEV INO OFF NAME\n") < 0)
+      return -1;
+
+    skip = 0;
+    for(;;){
+      fm = proc_fd_snapshot(finfo, 16, skip);
+      if(fm <= 0)
+        break;
+
+      for(i = 0; i < fm; i++){
+        const char *t;
+
+        t = procfs_fd_type_name(finfo[i].type);
+        if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)finfo[i].pid) < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)finfo[i].fd) < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_puts(buf, sizeof(buf), &len, t) < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putc(buf, sizeof(buf), &len,
+                           finfo[i].readable ? 'r' : '-') < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putc(buf, sizeof(buf), &len,
+                           finfo[i].writable ? 'w' : '-') < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putu(buf, sizeof(buf), &len, finfo[i].dev) < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putu(buf, sizeof(buf), &len, finfo[i].inum) < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putu(buf, sizeof(buf), &len, finfo[i].off) < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_puts(buf, sizeof(buf), &len, finfo[i].name) < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+      }
+
+      skip += fm;
     }
     return procfs_copy_data(dst, off, n, buf, len);
   }

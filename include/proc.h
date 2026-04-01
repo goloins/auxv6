@@ -50,6 +50,18 @@ struct procinfo_k {
   char name[16];
 };
 
+struct procfdinfo_k {
+  int pid;
+  int fd;
+  int type;
+  int readable;
+  int writable;
+  uint off;
+  uint dev;
+  uint inum;
+  char name[16];
+};
+
 // Per-process state
 struct proc {
   uint sz;                     // Size of process memory (bytes)

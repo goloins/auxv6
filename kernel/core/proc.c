@@ -1656,6 +1656,55 @@ proc_snapshot(struct procinfo_k *out, int max)
   return n;
 }
 
+int
+proc_fd_snapshot(struct procfdinfo_k *out, int max, int skip)
+{
+  struct proc *p;
+  int n;
+  int fd;
+
+  if(out == 0 || max <= 0 || skip < 0)
+    return -1;
+
+  n = 0;
+  acquire(&ptable.lock);
+  for(p = ptable.proc; p < &ptable.proc[NPROC] && n < max; p++){
+    if(p->state == UNUSED || p->pid <= 0)
+      continue;
+
+    for(fd = 0; fd < NOFILE && n < max; fd++){
+      struct file *f;
+
+      f = p->ofile[fd];
+      if(f == 0)
+        continue;
+
+      if(skip > 0){
+        skip--;
+        continue;
+      }
+
+      out[n].pid = p->pid;
+      out[n].fd = fd;
+      out[n].type = f->type;
+      out[n].readable = f->readable;
+      out[n].writable = f->writable;
+      out[n].off = f->off;
+      out[n].dev = 0;
+      out[n].inum = 0;
+      if(f->type == FD_INODE && f->ip){
+        out[n].dev = f->ip->dev;
+        out[n].inum = f->ip->inum;
+      }
+      safestrcpy(out[n].name, p->name, sizeof(out[n].name));
+      n++;
+    }
+  }
+  release(&ptable.lock);
+
+  return n;
+}
+
 //PAGEBREAK: 36
 // Print a process listing to console.  For debugging.
 // Runs when user types ^P on console.

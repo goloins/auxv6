@@ -91,6 +91,9 @@ user/termdemo
 user/termcheck
 user/dmesg
 user/tail
+user/lsof
+user/which
+user/file
 user/date
 user/time
 include/rootfs_config.h
