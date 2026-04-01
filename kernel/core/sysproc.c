@@ -36,6 +36,19 @@ sys_exit(void)
 }
 
 int
+sys_halt(void)
+{
+  cprintf("halt: powering off\n");
+  outw(0x604, 0x2000);
+  outw(0xB004, 0x2000);
+  outw(0x4004, 0x3400);
+  cli();
+  for(;;)
+    asm volatile("hlt");
+  return 0;
+}
+
+int
 sys_wait(void)
 {
   return wait();

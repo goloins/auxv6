@@ -165,6 +165,7 @@ extern int sys_poll(void);
 extern int sys_ioctl(void);
 extern int sys_kmsgread(void);
 extern int sys_date(void);
+extern int sys_halt(void);
 
 static int (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -250,6 +251,7 @@ static int (*syscalls[])(void) = {
 [SYS_ioctl] sys_ioctl,
 [SYS_kmsgread] sys_kmsgread,
 [SYS_date] sys_date,
+[SYS_halt] sys_halt,
 };
 
 void

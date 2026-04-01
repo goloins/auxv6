@@ -40,6 +40,8 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - Userland discoverability improved: `man` support and initial manpage coverage landed, with generation workflow documented in `docs/man-pages.md` and helper tooling in `tools/gen-man-pages.sh`.
 - Dash porting on Linux hosts became more robust: aux build rules now force-regenerate host tools and include `libgcc_compat.c` fallbacks for 64-bit division/mod helpers.
 - procfs gained more than basic process plumbing: `/proc/uptime`, `/proc/pci`, `/proc/vblk_flush`, and `/proc/ahci_tune` now exist for observability and runtime tuning.
+- Virtio-blk regression coverage now includes a dedicated in-guest `vblktest` utility plus `qemu-virtioblktest` / `qemu-nox-virtioblktest` launch targets for multi-disk validation.
+- Guest shutdown now has a first-class `halt` utility backed by a kernel poweroff syscall, so QEMU exit no longer depends on host-side `killall`.
 - **NVMe driver** now has I/O queue creation and synchronous READ/WRITE command support via PRP1 (single-page transfers).
 - **E1000 driver** (Intel Gigabit Ethernet) now has full ifnet integration with TX/RX descriptor rings, IRQ handling, and proper network interface registration.
 - **PCNET driver** (AMD PCNET-PCI II) now has full ifnet integration with TX/RX rings, initialization block, and IRQ handling.
@@ -80,7 +82,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | POSIX compatibility layer | 70% | Broader tty/ioctl compatibility, dynamic `openpty`/`ptsname_r` path, dash portability fixes; many APIs still stubbed or partial |
 | Userland docs/manpages | 72% | `man` utility plus baseline pages are available, including new `which`/`lsof`/`file` coverage; command coverage and completeness are still growing |
 | procfs | 75% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`, `/proc/meminfo`, `/proc/ps`, `/proc/mountstats`, `/proc/gfxstats`, `/proc/lsof`; breadth improved but still sparse overall |
-| Virtio storage | 70% | Working virtio core + virtio-blk, but still single-queue/minimal-feature oriented |
+| Virtio storage | 75% | Working virtio core + virtio-blk, shared IRQ-safe under QEMU multi-device setups, with dedicated `vblktest` regression coverage |
 | Real NICs | 60% | E1000, PCNET, RTL8111 have full ifnet integration; VMXnet3, Hyper-V netvsc, Intel I219-V, Intel I226-V, and ASIX AX88179 PCI are stubs |
 | Device node management | 70% | `devman -s` creates `/dev` nodes at early runlevel from kernel-visible inventory; hotplug/event mode and richer policy rules still pending |
 
@@ -310,6 +312,7 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 
 ### 3.5 Storage Validation Matrix
 - [ ] Single-disk boot and root mount on each backend (virtio-blk, AHCI, NVMe)
+- [x] Multi-disk virtio-blk attach plus in-guest enumeration/mount/I/O regression path via `vblktest`
 - [ ] Multi-disk enumerate/mount behavior with mixed backends
 - [ ] Large sequential read/write soak (no panic, no leaked DMA buffers)
 - [ ] Power-cycle/reboot persistence check for written data

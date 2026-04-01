@@ -96,6 +96,7 @@ user/which
 user/file
 user/date
 user/time
+user/halt
 include/rootfs_config.h
 .ext2root/
 .fatroot/
@@ -105,4 +106,5 @@ ports/dash-0.5.12/src/mksignames
 ports/dash-0.5.12/src/mknodes
 ports/dash-0.5.12/src/mkinit
 .vscode/
+user/vblktest
 docs/Prompt-Directive.md

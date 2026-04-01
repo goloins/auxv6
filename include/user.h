@@ -120,6 +120,7 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout);
 int ioctl(int fd, int request, ...);
 int kmsgread(void *buf, int max);
 int date(struct rtcdate *r);
+int halt(void);
 int getpid(void);
 int getppid(void);
 int getpgrp(void);

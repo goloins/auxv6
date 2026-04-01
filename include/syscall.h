@@ -82,3 +82,4 @@
 #define SYS_ioctl 81
 #define SYS_kmsgread 82
 #define SYS_date 83
+#define SYS_halt 84

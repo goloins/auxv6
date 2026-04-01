@@ -262,6 +262,9 @@ _kill: user/kill
 _killall: user/killall
 	cp user/killall _killall
 
+_halt: user/halt
+	cp user/halt _halt
+
 _login: user/login
 	cp user/login _login
 
@@ -421,6 +424,9 @@ _isotest: user/isotest
 _looptest: user/looptest
 	cp user/looptest _looptest
 
+_vblktest: user/vblktest
+	cp user/vblktest _vblktest
+
 _termdemo: user/termdemo
 	cp user/termdemo _termdemo
 
@@ -476,6 +482,7 @@ UPROGS=\
 	_id\
 	_kill\
 	_killall\
+	_halt\
 	_login\
 	_getty\
 	_ln\
@@ -528,6 +535,7 @@ UPROGS=\
 	_losetup\
 	_isotest\
 	_looptest\
+	_vblktest\
 	_termdemo\
 	_termcheck\
 	_tail\
@@ -596,14 +604,14 @@ clean:
 	$(USER_STAGE_DIR) \
 	user/runlevel user/telinit \
 	user/mount user/mounts user/mounttest user/umount \
-	user/losetup user/isotest user/looptest \
+	user/losetup user/isotest user/looptest user/vblktest \
 	user/man \
 	user/uname \
 	_dhcp \
 	user/ifconfig user/netstat user/route user/arp user/rarp user/ip \
 	user/dhcp user/v6dhcpd user/nslookup \
 	user/lsof user/which user/file \
-	user/date user/time user/killall \
+	user/date user/time user/killall user/halt \
 	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/dmesg user/tail user/lspci user/v6init
 
 # make a printout
@@ -756,9 +764,9 @@ qemu-nox-virtioblktest: aux.bootkern $(EXT2IMG) vblk0.img vblk1.img
 
 EXTRA=\
 	tools/mkfs.c tools/stage-fat-root.sh user/ulib.c include/user.h user/cat.c user/echo.c user/fatregress.c user/grep.c user/kill.c\
-	user/date.c user/time.c user/killall.c\
+	user/date.c user/time.c user/killall.c user/halt.c\
 	user/lsof.c user/which.c user/file.c\
-	user/id.c user/login.c user/ln.c user/ls.c user/free.c user/df.c user/ps.c user/fsregress.c user/mkdir.c user/mount.c user/mounts.c user/mounttest.c user/umount.c user/passwd.c user/pwd.c user/chmod.c user/chown.c user/chgrp.c user/rm.c user/netinfo.c user/stressfs.c user/su.c user/usertests.c user/wc.c user/whoami.c user/zombie.c\
+	user/id.c user/login.c user/ln.c user/ls.c user/free.c user/df.c user/ps.c user/fsregress.c user/mkdir.c user/mount.c user/mounts.c user/mounttest.c user/umount.c user/passwd.c user/pwd.c user/chmod.c user/chown.c user/chgrp.c user/rm.c user/netinfo.c user/stressfs.c user/su.c user/usertests.c user/vblktest.c user/wc.c user/whoami.c user/zombie.c\
 	user/printf.c user/umalloc.c\
 	README targetfs/etc/hosts targetfs/etc/fstab targetfs/etc/profile targetfs/etc/termcap targetfs/etc/passwd targetfs/etc/hostname config/dot-bochsrc tools/*.pl tools/toc.* tools/runoff tools/runoff1 tools/runoff.list\
 	config/.gdbinit.tmpl gdbutil\

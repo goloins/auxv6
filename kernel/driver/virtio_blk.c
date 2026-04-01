@@ -363,17 +363,13 @@ virtio_blk_rw(struct buf *b)
     uint64_t sector = b->blockno * (BSIZE / 512);
     int rc;
 
-    if (is_write && virtio_blk_buf_is_zero((char *)b->data, BSIZE)) {
-        rc = virtio_blk_write_zeroes_locked(sc, sector, BSIZE / 512, 0);
-        if (rc == VIRTIO_BLK_REQ_UNSUPP && sc->has_discard)
-            rc = virtio_blk_discard_locked(sc, sector, BSIZE / 512);
-        if (rc == VIRTIO_BLK_REQ_UNSUPP)
-            rc = virtio_blk_submit_with_retry_locked(sc, req_type, sector,
-                                                     b->data, BSIZE, is_write);
-    } else {
-        rc = virtio_blk_submit_with_retry_locked(sc, req_type, sector,
-                                                 b->data, BSIZE, is_write);
-    }
+    /*
+     * Keep filesystem writes on the normal data path.
+     * Rewriting arbitrary zero-filled buffers into discard/write-zeroes is too
+     * aggressive for metadata traffic and newly allocated blocks.
+     */
+    rc = virtio_blk_submit_with_retry_locked(sc, req_type, sector,
+                                             b->data, BSIZE, is_write);
 
     if (rc < 0) {
         releasesleep(&sc->req_lock);
@@ -513,7 +509,7 @@ virtio_blk_submit_with_retry_locked(struct virtio_blk_softc *sc,
     return VIRTIO_BLK_REQ_ERR;
 }
 
-static int
+static int __attribute__((unused))
 virtio_blk_write_zeroes_locked(struct virtio_blk_softc *sc,
                                uint64_t sector, uint32_t num_sectors,
                                int unmap)
@@ -537,7 +533,7 @@ virtio_blk_write_zeroes_locked(struct virtio_blk_softc *sc,
     return rc;
 }
 
-static int
+static int __attribute__((unused))
 virtio_blk_discard_locked(struct virtio_blk_softc *sc,
                           uint64_t sector, uint32_t num_sectors)
 {
@@ -560,7 +556,7 @@ virtio_blk_discard_locked(struct virtio_blk_softc *sc,
     return rc;
 }
 
-static int
+static int __attribute__((unused))
 virtio_blk_buf_is_zero(char *data, int n)
 {
     int i;
