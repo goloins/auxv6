@@ -4,6 +4,7 @@
 #include "../include/user.h"
 #include "../include/x86.h"
 #include "../include/stddef.h"
+#include "../include/posix/sys/ioctl.h"
 
 char*
 strcpy(char *s, const char *t)
@@ -139,8 +140,10 @@ isatty(int fd)
 char*
 ttyname(int fd)
 {
-  static char name[16];
+  static char name[32];
   struct stat st;
+  int ptn;
+  int n;
 
   if(!isatty(fd))
     return 0;
@@ -158,11 +161,85 @@ ttyname(int fd)
     return name;
   }
 
-  if(st.st_major == 3 && st.st_minor == 1) {
-    memmove(name, "/dev/pts/0", 11);
+  if(st.st_major == 3 && st.st_minor >= 1) {
+    n = st.st_minor - 1;
+    if(n < 10) {
+      name[0] = '/'; name[1] = 'd'; name[2] = 'e'; name[3] = 'v';
+      name[4] = '/'; name[5] = 'p'; name[6] = 't'; name[7] = 's';
+      name[8] = '/'; name[9] = '0' + n; name[10] = 0;
+      return name;
+    }
+    if(n < 100) {
+      name[0] = '/'; name[1] = 'd'; name[2] = 'e'; name[3] = 'v';
+      name[4] = '/'; name[5] = 'p'; name[6] = 't'; name[7] = 's';
+      name[8] = '/'; name[9] = '0' + (n / 10); name[10] = '0' + (n % 10);
+      name[11] = 0;
+      return name;
+    }
+  }
+
+  if(st.st_major == 3 && ioctl(fd, TIOCGPTN, &ptn) == 0) {
+    if(ptn < 0 || ptn >= 100)
+      return 0;
+    if(ptn < 10) {
+      name[0] = '/'; name[1] = 'd'; name[2] = 'e'; name[3] = 'v';
+      name[4] = '/'; name[5] = 'p'; name[6] = 't'; name[7] = 's';
+      name[8] = '/'; name[9] = '0' + ptn; name[10] = 0;
+    } else {
+      name[0] = '/'; name[1] = 'd'; name[2] = 'e'; name[3] = 'v';
+      name[4] = '/'; name[5] = 'p'; name[6] = 't'; name[7] = 's';
+      name[8] = '/'; name[9] = '0' + (ptn / 10); name[10] = '0' + (ptn % 10);
+      name[11] = 0;
+    }
     return name;
   }
 
+  return 0;
+}
+
+char*
+ptsname(int fd)
+{
+  static char name[32];
+  int ptn;
+
+  if(ioctl(fd, TIOCGPTN, &ptn) < 0)
+    return 0;
+  if(ptn < 0 || ptn >= 100)
+    return 0;
+
+  if(ptn < 10) {
+    name[0] = '/'; name[1] = 'd'; name[2] = 'e'; name[3] = 'v';
+    name[4] = '/'; name[5] = 'p'; name[6] = 't'; name[7] = 's';
+    name[8] = '/'; name[9] = '0' + ptn; name[10] = 0;
+  } else {
+    name[0] = '/'; name[1] = 'd'; name[2] = 'e'; name[3] = 'v';
+    name[4] = '/'; name[5] = 'p'; name[6] = 't'; name[7] = 's';
+    name[8] = '/'; name[9] = '0' + (ptn / 10); name[10] = '0' + (ptn % 10);
+    name[11] = 0;
+  }
+
+  return name;
+}
+
+int
+ptsname_r(int fd, char *buf, size_t buflen)
+{
+  char *name;
+  uint need;
+
+  if(buf == 0)
+    return -1;
+
+  name = ptsname(fd);
+  if(name == 0)
+    return -1;
+
+  need = strlen(name) + 1;
+  if(buflen < need)
+    return -1;
+
+  memmove(buf, name, need);
   return 0;
 }
 

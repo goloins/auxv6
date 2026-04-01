@@ -318,6 +318,19 @@ fd_ready_events(struct file *f)
   events = 0;
   switch(f->type){
   case FD_INODE:
+    if(f->ip && f->ip->type == T_DEV && f->ip->major == PTYDEV){
+      rd = 0;
+      wr = 0;
+      err = 0;
+      pty_poll_events(f, &rd, &wr, &err);
+      if(f->readable && rd)
+        events |= POLLIN;
+      if(f->writable && wr)
+        events |= POLLOUT;
+      if(err)
+        events |= POLLERR | POLLHUP;
+      break;
+    }
     if(f->readable)
       events |= POLLIN;
     if(f->writable)
@@ -1038,6 +1051,16 @@ sys_open(void)
     iunlockput(ip);
     end_op();
     return -1;
+  }
+
+  if(ip->type == T_DEV && ip->major == PTYDEV){
+    if(pty_open(f, ip->minor) < 0){
+      myproc()->ofile[fd] = 0;
+      fileclose(f);
+      iunlockput(ip);
+      end_op();
+      return -1;
+    }
   }
 
   must_write = (omode & O_WRONLY) || ((omode & O_RDWR) == O_RDWR);

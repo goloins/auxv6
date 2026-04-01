@@ -199,6 +199,7 @@ make_tty_nodes(void)
 {
   int i;
   char path[] = "/dev/tty0";
+  char pty_path[] = "/dev/pts/00";
 
   for(i = 0; i < 4; i++) {
     path[8] = '0' + i;
@@ -207,7 +208,17 @@ make_tty_nodes(void)
 
   mkdir("/dev/pts");
   ensure_node("/dev/ptmx", M_IFCHR, 3, 0);
-  ensure_node("/dev/pts/0", M_IFCHR, 3, 1);
+  for(i = 0; i < 16; i++) {
+    if(i < 10) {
+      pty_path[9] = '0' + i;
+      pty_path[10] = 0;
+    } else {
+      pty_path[9] = '0' + (i / 10);
+      pty_path[10] = '0' + (i % 10);
+      pty_path[11] = 0;
+    }
+    ensure_node(pty_path, M_IFCHR, 3, i + 1);
+  }
 }
 
 int

@@ -1111,7 +1111,7 @@ proc_tcgetattr(int fd, uint termios_addr)
   }
 
   if(f->ip->major == PTYDEV)
-    return pty_get_termios(f->ip->minor, (struct termios*)termios_addr);
+    return pty_get_termios_file(f, (struct termios*)termios_addr);
 
   return -1;
 }
@@ -1139,7 +1139,7 @@ proc_tcsetattr(int fd, int optional_actions, uint termios_addr)
   }
 
   if(f->ip->major == PTYDEV)
-    return pty_set_termios(f->ip->minor, (const struct termios*)termios_addr, optional_actions);
+    return pty_set_termios_file(f, (const struct termios*)termios_addr, optional_actions);
 
   return -1;
 }

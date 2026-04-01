@@ -34,6 +34,8 @@ filealloc(void)
   for(f = ftable.file; f < ftable.file + NFILE; f++){
     if(f->ref == 0){
       f->ref = 1;
+      f->pty_side = PTY_SIDE_NONE;
+      f->pty_index = -1;
       release(&ftable.lock);
       return f;
     }
@@ -75,6 +77,8 @@ fileclose(struct file *f)
   if(ff.type == FD_PIPE)
     pipeclose(ff.pipe, ff.writable);
   else if(ff.type == FD_INODE){
+    if(ff.ip && ff.ip->type == T_DEV && ff.ip->major == PTYDEV)
+      pty_close(&ff);
     begin_op();
     iput(ff.ip);
     end_op();
@@ -99,6 +103,9 @@ filestat(struct file *f, struct stat *st)
       rc = 0;
       stati(f->ip, st);
     }
+    if(rc == 0 && f->ip->type == T_DEV && f->ip->major == PTYDEV &&
+       f->pty_side == PTY_SIDE_SLAVE && f->pty_index >= 0)
+      st->st_minor = PTY_MINOR_SLAVE_BASE + f->pty_index;
     iunlock(f->ip);
     return rc;
   }
@@ -119,6 +126,11 @@ fileread(struct file *f, char *addr, int n)
     return piperead(f->pipe, addr, n);
   if(f->type == FD_INODE){
     ilock(f->ip);
+
+    if(f->ip->type == T_DEV && f->ip->major == PTYDEV){
+      iunlock(f->ip);
+      return pty_fileread(f, addr, n);
+    }
 
     if(f->ip->type == T_DEV){
       r = readi(f->ip, addr, f->off, n);
@@ -212,6 +224,9 @@ filewrite(struct file *f, char *addr, int n)
   if(f->type == FD_PIPE)
     return pipewrite(f->pipe, addr, n);
   if(f->type == FD_INODE){
+    if(f->ip->type == T_DEV && f->ip->major == PTYDEV)
+      return pty_filewrite(f, addr, n);
+
     if(f->ip->type == T_DEV){
       ilock(f->ip);
       r = writei(f->ip, addr, f->off, n);

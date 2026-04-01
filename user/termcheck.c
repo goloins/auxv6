@@ -4,6 +4,8 @@
 #include "../include/termios.h"
 #include "../include/posix/sys/ioctl.h"
 
+int ptsname_r(int fd, char *buf, uint buflen);
+
 static int
 check_termios_roundtrip(int fd)
 {
@@ -182,11 +184,18 @@ check_pty_roundtrip(void)
   int mfd;
   int sfd;
   char ch;
+  char sname[32];
 
   mfd = open("/dev/ptmx", O_RDWR);
   if(mfd < 0)
     return -1;
-  sfd = open("/dev/pts/0", O_RDWR);
+
+  if(ptsname_r(mfd, sname, sizeof(sname)) < 0) {
+    close(mfd);
+    return -1;
+  }
+
+  sfd = open(sname, O_RDWR);
   if(sfd < 0) {
     close(mfd);
     return -1;
@@ -321,10 +330,10 @@ main(int argc, char **argv)
   }
 
   if(check_pty_roundtrip() < 0) {
-    printf(2, "FAIL: pty /dev/ptmx <-> /dev/pts/0 roundtrip\n");
+    printf(2, "FAIL: pty /dev/ptmx <-> /dev/pts/N roundtrip\n");
     fails++;
   } else {
-    printf(1, "PASS: pty /dev/ptmx <-> /dev/pts/0 roundtrip\n");
+    printf(1, "PASS: pty /dev/ptmx <-> /dev/pts/N roundtrip\n");
   }
 
   if(fails == 0)

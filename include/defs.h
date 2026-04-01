@@ -63,9 +63,14 @@ void            panic(char*) __attribute__((noreturn));
 
 // pty.c
 void            ptyinit(void);
-int             pty_ioctl(int fd, int request, uint arg);
-int             pty_get_termios(int minor, struct termios *tp);
-int             pty_set_termios(int minor, const struct termios *tp, int optional_actions);
+int             pty_open(struct file *f, int minor);
+void            pty_close(struct file *f);
+int             pty_ioctl_file(struct file *f, int request, uint arg);
+int             pty_get_termios_file(struct file *f, struct termios *tp);
+int             pty_set_termios_file(struct file *f, const struct termios *tp, int optional_actions);
+int             pty_fileread(struct file *f, char *dst, int n);
+int             pty_filewrite(struct file *f, char *src, int n);
+void            pty_poll_events(struct file *f, int *rd, int *wr, int *err);
 
 // Master debug flag - set to 1 to enable boot diagnostics and subsystem logging.
 // Controlled via -DAUXV6_DEBUG=1 or by editing here.

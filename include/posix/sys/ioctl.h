@@ -35,6 +35,7 @@
 
 /* auxv6-specific tty query (kept out of Linux-occupied request space) */
 #define TIOCISATTY  0x54A3  /* returns 1 if fd is a tty */
+#define TIOCGPTN    0x80045430 /* get PTY number from ptmx master -> int * */
 
 /* Flush/drain */
 #define TCFLSH      0x540B  /* flush pending input/output */

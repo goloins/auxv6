@@ -3,6 +3,8 @@ struct file {
   int ref; // reference count
   char readable;
   char writable;
+  char pty_side; /* 0=none, 1=master, 2=slave */
+  short pty_index;
   struct pipe *pipe;
   struct inode *ip;
   struct socket *socket;
@@ -41,6 +43,12 @@ extern struct devsw devsw[];
 #define CONSOLE 1
 #define BLOCKDEV 2
 #define PTYDEV 3
+#define PTY_MAX_UNITS 16
+#define PTY_MINOR_PTMX 0
+#define PTY_MINOR_SLAVE_BASE 1
+#define PTY_SIDE_NONE 0
+#define PTY_SIDE_MASTER 1
+#define PTY_SIDE_SLAVE 2
 #define DISK_MAX_UNITS 4
 #define DISK_PARTS_PER_DISK 4
 #define DISK_DEV(unit) (unit)

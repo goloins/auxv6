@@ -19,6 +19,8 @@
 #include "../include/posix/stdarg.h"
 #include "../include/posix/sys/ioctl.h"
 
+int ptsname_r(int fd, char *buf, uint buflen);
+
 #ifndef AT_FDCWD
 #define AT_FDCWD (-100)
 #endif
@@ -837,6 +839,7 @@ openpty(int *amaster, int *aslave, char *name,
 {
   int mfd;
   int sfd;
+  char slave_name[32];
 
   if(amaster == 0 || aslave == 0) {
     errno = EINVAL;
@@ -849,7 +852,13 @@ openpty(int *amaster, int *aslave, char *name,
     return -1;
   }
 
-  sfd = open("/dev/pts/0", O_RDWR);
+  if(ptsname_r(mfd, slave_name, sizeof(slave_name)) < 0) {
+    close(mfd);
+    errno = ENOENT;
+    return -1;
+  }
+
+  sfd = open(slave_name, O_RDWR);
   if(sfd < 0) {
     close(mfd);
     errno = ENOENT;
@@ -875,7 +884,7 @@ openpty(int *amaster, int *aslave, char *name,
   }
 
   if(name)
-    strcpy(name, "/dev/pts/0");
+    strcpy(name, slave_name);
 
   *amaster = mfd;
   *aslave = sfd;

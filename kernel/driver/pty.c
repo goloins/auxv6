@@ -12,10 +12,8 @@
 #include "termios.h"
 #include "signal.h"
 
-#define NPTY 1
+#define NPTY PTY_MAX_UNITS
 #define PTY_BUF 512
-#define PTY_MINOR_PTMX 0
-#define PTY_MINOR_SLAVE_BASE 1
 
 struct pty_chan {
   char buf[PTY_BUF];
@@ -24,6 +22,9 @@ struct pty_chan {
 };
 
 struct pty_pair {
+  int allocated;
+  int master_refs;
+  int slave_refs;
   struct termios termios;
   struct winsize winsize;
   int fg_pgid;
@@ -37,13 +38,51 @@ static struct {
 } ptys;
 
 static int
-pty_minor_to_index(int minor)
+pty_minor_to_slave_index(int minor)
 {
-  if(minor == PTY_MINOR_PTMX)
-    return 0;
   if(minor >= PTY_MINOR_SLAVE_BASE && minor < PTY_MINOR_SLAVE_BASE + NPTY)
     return minor - PTY_MINOR_SLAVE_BASE;
   return -1;
+}
+
+static void
+pty_pair_init_defaults(struct pty_pair *pty)
+{
+  memset(pty, 0, sizeof(*pty));
+  pty->allocated = 1;
+  pty->termios.c_iflag = ICRNL;
+  pty->termios.c_oflag = OPOST | ONLCR;
+  pty->termios.c_cflag = CS8 | CREAD | CLOCAL;
+  pty->termios.c_lflag = ECHO | ICANON | ISIG | ECHOE | IEXTEN;
+  pty->termios.c_cc[VINTR] = 3;
+  pty->termios.c_cc[VQUIT] = 28;
+  pty->termios.c_cc[VERASE] = 127;
+  pty->termios.c_cc[VKILL] = 21;
+  pty->termios.c_cc[VEOF] = 4;
+  pty->termios.c_cc[VTIME] = 0;
+  pty->termios.c_cc[VMIN] = 1;
+  pty->termios.c_cc[VSTART] = 17;
+  pty->termios.c_cc[VSTOP] = 19;
+  pty->termios.c_cc[VSUSP] = 26;
+  pty->winsize.ws_row = 24;
+  pty->winsize.ws_col = 80;
+  pty->fg_pgid = 1;
+}
+
+static int
+pty_lookup_file(struct file *f, struct pty_pair **out_pair)
+{
+  if(f == 0 || f->type != FD_INODE || f->ip == 0)
+    return -1;
+  if(f->ip->type != T_DEV || f->ip->major != PTYDEV)
+    return -1;
+  if(f->pty_side != PTY_SIDE_MASTER && f->pty_side != PTY_SIDE_SLAVE)
+    return -1;
+  if(f->pty_index < 0 || f->pty_index >= NPTY)
+    return -1;
+  if(out_pair)
+    *out_pair = &ptys.pair[f->pty_index];
+  return 0;
 }
 
 static int
@@ -89,26 +128,29 @@ pty_chan_write(struct pty_chan *ch, char *src, int n)
 }
 
 int
-pty_get_termios(int minor, struct termios *tp)
+pty_get_termios_file(struct file *f, struct termios *tp)
 {
-  int idx;
+  struct pty_pair *pty;
 
   if(tp == 0)
     return -1;
-  idx = pty_minor_to_index(minor);
-  if(idx < 0)
+  if(pty_lookup_file(f, &pty) < 0)
     return -1;
 
   acquire(&ptys.lock);
-  *tp = ptys.pair[idx].termios;
+  if(!pty->allocated){
+    release(&ptys.lock);
+    return -1;
+  }
+  *tp = pty->termios;
   release(&ptys.lock);
   return 0;
 }
 
 int
-pty_set_termios(int minor, const struct termios *tp, int optional_actions)
+pty_set_termios_file(struct file *f, const struct termios *tp, int optional_actions)
 {
-  int idx;
+  struct pty_pair *pty;
 
   if(tp == 0)
     return -1;
@@ -117,42 +159,31 @@ pty_set_termios(int minor, const struct termios *tp, int optional_actions)
      optional_actions != TCSAFLUSH)
     return -1;
 
-  idx = pty_minor_to_index(minor);
-  if(idx < 0)
+  if(pty_lookup_file(f, &pty) < 0)
     return -1;
 
   acquire(&ptys.lock);
-  ptys.pair[idx].termios = *tp;
+  if(!pty->allocated){
+    release(&ptys.lock);
+    return -1;
+  }
+  pty->termios = *tp;
   if(optional_actions == TCSAFLUSH)
-    ptys.pair[idx].to_slave.r = ptys.pair[idx].to_slave.w;
+    pty->to_slave.r = pty->to_slave.w;
   release(&ptys.lock);
   return 0;
 }
 
 int
-pty_ioctl(int fd, int request, uint arg)
+pty_ioctl_file(struct file *f, int request, uint arg)
 {
-  struct proc *p;
-  struct file *f;
-  struct inode *ip;
   struct pty_pair *pty;
+  int ptn;
   struct winsize *ws;
   int *intp;
-  int idx;
   int inq;
 
-  p = myproc();
-  if(p == 0 || fd < 0 || fd >= NOFILE)
-    return -1;
-  f = p->ofile[fd];
-  if(f == 0 || f->type != FD_INODE || f->ip == 0)
-    return -1;
-  ip = f->ip;
-  if(ip->type != T_DEV || ip->major != PTYDEV)
-    return -1;
-
-  idx = pty_minor_to_index(ip->minor);
-  if(idx < 0)
+  if(pty_lookup_file(f, &pty) < 0)
     return -1;
 
   switch(request) {
@@ -160,25 +191,33 @@ pty_ioctl(int fd, int request, uint arg)
     if(arg == 0)
       return -1;
     acquire(&ptys.lock);
-    *(struct termios*)arg = ptys.pair[idx].termios;
+    if(!pty->allocated){
+      release(&ptys.lock);
+      return -1;
+    }
+    *(struct termios*)arg = pty->termios;
     release(&ptys.lock);
     return 0;
 
   case 0x5402:  /* TCSETS */
-    return pty_set_termios(ip->minor, (const struct termios *)arg, TCSANOW);
+    return pty_set_termios_file(f, (const struct termios *)arg, TCSANOW);
 
   case 0x5403:  /* TCSETSW */
-    return pty_set_termios(ip->minor, (const struct termios *)arg, TCSADRAIN);
+    return pty_set_termios_file(f, (const struct termios *)arg, TCSADRAIN);
 
   case 0x5404:  /* TCSETSF */
-    return pty_set_termios(ip->minor, (const struct termios *)arg, TCSAFLUSH);
+    return pty_set_termios_file(f, (const struct termios *)arg, TCSAFLUSH);
 
   case 0x5413:  /* TIOCGWINSZ */
     if(arg == 0)
       return -1;
     ws = (struct winsize*)arg;
     acquire(&ptys.lock);
-    *ws = ptys.pair[idx].winsize;
+    if(!pty->allocated){
+      release(&ptys.lock);
+      return -1;
+    }
+    *ws = pty->winsize;
     release(&ptys.lock);
     return 0;
 
@@ -187,8 +226,12 @@ pty_ioctl(int fd, int request, uint arg)
       return -1;
     ws = (struct winsize*)arg;
     acquire(&ptys.lock);
-    ptys.pair[idx].winsize = *ws;
-    inq = ptys.pair[idx].fg_pgid;
+    if(!pty->allocated){
+      release(&ptys.lock);
+      return -1;
+    }
+    pty->winsize = *ws;
+    inq = pty->fg_pgid;
     release(&ptys.lock);
     proc_signal_pgid(inq, SIGWINCH);
     return 0;
@@ -198,7 +241,11 @@ pty_ioctl(int fd, int request, uint arg)
       return -1;
     intp = (int*)arg;
     acquire(&ptys.lock);
-    *intp = ptys.pair[idx].fg_pgid;
+    if(!pty->allocated){
+      release(&ptys.lock);
+      return -1;
+    }
+    *intp = pty->fg_pgid;
     release(&ptys.lock);
     return 0;
 
@@ -207,8 +254,22 @@ pty_ioctl(int fd, int request, uint arg)
       return -1;
     intp = (int*)arg;
     acquire(&ptys.lock);
-    ptys.pair[idx].fg_pgid = *intp;
+    if(!pty->allocated){
+      release(&ptys.lock);
+      return -1;
+    }
+    pty->fg_pgid = *intp;
     release(&ptys.lock);
+    return 0;
+
+  case 0x80045430:  /* TIOCGPTN */
+    if(arg == 0)
+      return -1;
+    if(f->pty_side != PTY_SIDE_MASTER)
+      return -1;
+    intp = (int*)arg;
+    ptn = f->pty_index;
+    *intp = ptn;
     return 0;
 
   case 0x541B:  /* FIONREAD / TIOCINQ */
@@ -216,8 +277,11 @@ pty_ioctl(int fd, int request, uint arg)
       return -1;
     intp = (int*)arg;
     acquire(&ptys.lock);
-    pty = &ptys.pair[idx];
-    if(ip->minor == PTY_MINOR_PTMX)
+    if(!pty->allocated){
+      release(&ptys.lock);
+      return -1;
+    }
+    if(f->pty_side == PTY_SIDE_MASTER)
       *intp = (int)(pty->to_master.w - pty->to_master.r);
     else
       *intp = (int)(pty->to_slave.w - pty->to_slave.r);
@@ -229,8 +293,11 @@ pty_ioctl(int fd, int request, uint arg)
       return -1;
     intp = (int*)arg;
     acquire(&ptys.lock);
-    pty = &ptys.pair[idx];
-    if(ip->minor == PTY_MINOR_PTMX)
+    if(!pty->allocated){
+      release(&ptys.lock);
+      return -1;
+    }
+    if(f->pty_side == PTY_SIDE_MASTER)
       *intp = (int)(pty->to_slave.w - pty->to_slave.r);
     else
       *intp = (int)(pty->to_master.w - pty->to_master.r);
@@ -241,9 +308,12 @@ pty_ioctl(int fd, int request, uint arg)
     if((int)arg != TCIFLUSH && (int)arg != TCOFLUSH && (int)arg != TCIOFLUSH)
       return -1;
     acquire(&ptys.lock);
-    pty = &ptys.pair[idx];
+    if(!pty->allocated){
+      release(&ptys.lock);
+      return -1;
+    }
     if((int)arg == TCIFLUSH || (int)arg == TCIOFLUSH) {
-      if(ip->minor == PTY_MINOR_PTMX)
+      if(f->pty_side == PTY_SIDE_MASTER)
         pty->to_master.r = pty->to_master.w;
       else
         pty->to_slave.r = pty->to_slave.w;
@@ -263,81 +333,224 @@ pty_ioctl(int fd, int request, uint arg)
 }
 
 int
-ptyread(struct inode *ip, char *dst, uint off, int n)
+pty_fileread(struct file *f, char *dst, int n)
 {
   struct pty_pair *pty;
   struct pty_chan *in;
-  int idx;
+  int peer_refs;
   int rc;
 
-  (void)off;
-
-  idx = pty_minor_to_index(ip->minor);
-  if(idx < 0)
+  if(pty_lookup_file(f, &pty) < 0)
     return -1;
 
-  iunlock(ip);
   acquire(&ptys.lock);
-  pty = &ptys.pair[idx];
-  in = (ip->minor == PTY_MINOR_PTMX) ? &pty->to_master : &pty->to_slave;
+  if(!pty->allocated){
+    release(&ptys.lock);
+    return -1;
+  }
+  if(f->pty_side == PTY_SIDE_MASTER) {
+    in = &pty->to_master;
+    peer_refs = pty->slave_refs;
+  } else {
+    in = &pty->to_slave;
+    peer_refs = pty->master_refs;
+  }
+
+  if(in->r == in->w && peer_refs == 0){
+    release(&ptys.lock);
+    return 0;
+  }
+
   rc = pty_chan_read(in, dst, n);
   release(&ptys.lock);
-  ilock(ip);
   return rc;
+}
+
+int
+pty_filewrite(struct file *f, char *src, int n)
+{
+  struct pty_pair *pty;
+  struct pty_chan *out;
+  int peer_refs;
+  int rc;
+
+  if(pty_lookup_file(f, &pty) < 0)
+    return -1;
+
+  acquire(&ptys.lock);
+  if(!pty->allocated){
+    release(&ptys.lock);
+    return -1;
+  }
+  if(f->pty_side == PTY_SIDE_MASTER) {
+    out = &pty->to_slave;
+    peer_refs = pty->slave_refs;
+  } else {
+    out = &pty->to_master;
+    peer_refs = pty->master_refs;
+  }
+  if(peer_refs == 0){
+    release(&ptys.lock);
+    return -1;
+  }
+
+  rc = pty_chan_write(out, src, n);
+  release(&ptys.lock);
+  return rc;
+}
+
+void
+pty_poll_events(struct file *f, int *rd, int *wr, int *err)
+{
+  struct pty_pair *pty;
+  struct pty_chan *in;
+  struct pty_chan *out;
+  int peer_refs;
+
+  if(rd)
+    *rd = 0;
+  if(wr)
+    *wr = 0;
+  if(err)
+    *err = 0;
+
+  if(pty_lookup_file(f, &pty) < 0)
+    return;
+
+  acquire(&ptys.lock);
+  if(!pty->allocated){
+    release(&ptys.lock);
+    if(err)
+      *err = 1;
+    return;
+  }
+
+  if(f->pty_side == PTY_SIDE_MASTER) {
+    in = &pty->to_master;
+    out = &pty->to_slave;
+    peer_refs = pty->slave_refs;
+  } else {
+    in = &pty->to_slave;
+    out = &pty->to_master;
+    peer_refs = pty->master_refs;
+  }
+
+  if(rd && (in->w != in->r || peer_refs == 0))
+    *rd = 1;
+  if(wr && out->w - out->r < PTY_BUF && peer_refs > 0)
+    *wr = 1;
+  if(err && peer_refs == 0)
+    *err = 1;
+
+  release(&ptys.lock);
+}
+
+int
+pty_open(struct file *f, int minor)
+{
+  int i;
+  struct pty_pair *pty;
+
+  if(f == 0)
+    return -1;
+
+  acquire(&ptys.lock);
+  if(minor == PTY_MINOR_PTMX){
+    for(i = 0; i < NPTY; i++){
+      pty = &ptys.pair[i];
+      if(pty->allocated)
+        continue;
+      pty_pair_init_defaults(pty);
+      pty->master_refs = 1;
+      f->pty_side = PTY_SIDE_MASTER;
+      f->pty_index = i;
+      release(&ptys.lock);
+      return 0;
+    }
+    release(&ptys.lock);
+    return -1;
+  }
+
+  i = pty_minor_to_slave_index(minor);
+  if(i < 0){
+    release(&ptys.lock);
+    return -1;
+  }
+
+  pty = &ptys.pair[i];
+  if(!pty->allocated || pty->master_refs <= 0){
+    release(&ptys.lock);
+    return -1;
+  }
+
+  pty->slave_refs++;
+  f->pty_side = PTY_SIDE_SLAVE;
+  f->pty_index = i;
+  release(&ptys.lock);
+  return 0;
+}
+
+void
+pty_close(struct file *f)
+{
+  struct pty_pair *pty;
+
+  if(pty_lookup_file(f, &pty) < 0)
+    return;
+
+  acquire(&ptys.lock);
+  if(!pty->allocated){
+    release(&ptys.lock);
+    return;
+  }
+
+  if(f->pty_side == PTY_SIDE_MASTER){
+    if(pty->master_refs > 0)
+      pty->master_refs--;
+  } else if(f->pty_side == PTY_SIDE_SLAVE){
+    if(pty->slave_refs > 0)
+      pty->slave_refs--;
+  }
+
+  wakeup(&pty->to_master.r);
+  wakeup(&pty->to_master.w);
+  wakeup(&pty->to_slave.r);
+  wakeup(&pty->to_slave.w);
+
+  if(pty->master_refs == 0 && pty->slave_refs == 0)
+    memset(pty, 0, sizeof(*pty));
+
+  release(&ptys.lock);
+
+  f->pty_side = PTY_SIDE_NONE;
+  f->pty_index = -1;
+}
+
+int
+ptyread(struct inode *ip, char *dst, uint off, int n)
+{
+  (void)ip;
+  (void)dst;
+  (void)off;
+  (void)n;
+  return -1;
 }
 
 int
 ptywrite(struct inode *ip, char *src, uint off, int n)
 {
-  struct pty_pair *pty;
-  struct pty_chan *out;
-  int idx;
-  int rc;
-
+  (void)ip;
+  (void)src;
   (void)off;
-
-  idx = pty_minor_to_index(ip->minor);
-  if(idx < 0)
-    return -1;
-
-  iunlock(ip);
-  acquire(&ptys.lock);
-  pty = &ptys.pair[idx];
-  out = (ip->minor == PTY_MINOR_PTMX) ? &pty->to_slave : &pty->to_master;
-  rc = pty_chan_write(out, src, n);
-  release(&ptys.lock);
-  ilock(ip);
-  return rc;
+  (void)n;
+  return -1;
 }
 
 void
 ptyinit(void)
 {
-  struct pty_pair *pty;
-
   initlock(&ptys.lock, "pty");
-  acquire(&ptys.lock);
-
-  pty = &ptys.pair[0];
-  pty->termios.c_iflag = ICRNL;
-  pty->termios.c_oflag = OPOST | ONLCR;
-  pty->termios.c_cflag = CS8 | CREAD | CLOCAL;
-  pty->termios.c_lflag = ECHO | ICANON | ISIG | ECHOE | IEXTEN;
-  pty->termios.c_cc[VINTR] = 3;
-  pty->termios.c_cc[VQUIT] = 28;
-  pty->termios.c_cc[VERASE] = 127;
-  pty->termios.c_cc[VKILL] = 21;
-  pty->termios.c_cc[VEOF] = 4;
-  pty->termios.c_cc[VTIME] = 0;
-  pty->termios.c_cc[VMIN] = 1;
-  pty->termios.c_cc[VSTART] = 17;
-  pty->termios.c_cc[VSTOP] = 19;
-  pty->termios.c_cc[VSUSP] = 26;
-  pty->winsize.ws_row = 24;
-  pty->winsize.ws_col = 80;
-  pty->fg_pgid = 1;
-
-  release(&ptys.lock);
+  memset(&ptys.pair, 0, sizeof(ptys.pair));
 
   devsw[PTYDEV].read = ptyread;
   devsw[PTYDEV].write = ptywrite;
