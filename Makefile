@@ -232,6 +232,9 @@ $(USER_STAGE_DIR)/%: user/%.o $(ULIB) | $(USER_STAGE_DIR)
 _cat: user/cat
 	cp user/cat _cat
 
+_devman: user/devman
+	cp user/devman _devman
+
 _echo: user/echo
 	cp user/echo _echo
 
@@ -448,6 +451,7 @@ mkfs: tools/mkfs.c include/fs.h
 
 UPROGS=\
 	_cat\
+	_devman\
 	_echo\
 	_fatregress\
 	_fsregress\

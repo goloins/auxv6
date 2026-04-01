@@ -116,109 +116,16 @@ maybe_process_runlevel_change(int *login_pid, char *cur_runlevel)
 }
 
 static void
-ensure_node(const char *path, int mode, short major, short minor)
-{
-  int fd;
-  struct stat st;
-
-  fd = open(path, O_RDONLY);
-  if(fd >= 0){
-    close(fd);
-    if(stat(path, &st) == 0 && st.st_type == T_DEV &&
-       st.st_major == major && st.st_minor == minor &&
-       (st.st_mode & M_IFMT) == (mode & M_IFMT))
-      return;
-    unlink(path);
-  }
-  mknod((char*)path, mode, major, minor);
-}
-
-static void
 make_disk_nodes(void)
 {
-  int unit;
-  int part;
-  int dev;
-  char path[16];
-
-  for(unit = 0; unit < HD_DISK_UNITS; unit++){
-    dev = HD_DISK_DEV(unit);
-    if(devblocks(dev) <= 0)
-      continue;
-
-    path[0] = '/'; path[1] = 'd'; path[2] = 'e'; path[3] = 'v'; path[4] = '/';
-    path[5] = 'h'; path[6] = 'd'; path[7] = 'a' + unit; path[8] = 0;
-    ensure_node(path, M_IFBLK, 2, dev);
-
-    for(part = 1; part <= HD_PARTS_PER_DISK; part++){
-      int pdev = HD_PART_DEV(unit, part);
-      if(devblocks(pdev) <= 0)
-        continue;
-      path[0] = '/'; path[1] = 'd'; path[2] = 'e'; path[3] = 'v'; path[4] = '/';
-      path[5] = 'h'; path[6] = 'd'; path[7] = 'a' + unit;
-      path[8] = '0' + part;
-      path[9] = 0;
-      ensure_node(path, M_IFBLK, 2, pdev);
-    }
-  }
-
-  for(unit = 0; unit < VD_DISK_UNITS; unit++){
-    dev = VD_DISK_DEV(unit);
-    if(devblocks(dev) <= 0)
-      continue;
-
-    path[0] = '/'; path[1] = 'd'; path[2] = 'e'; path[3] = 'v'; path[4] = '/';
-    path[5] = 'v'; path[6] = 'd'; path[7] = 'a' + unit; path[8] = 0;
-    ensure_node(path, M_IFBLK, 2, dev);
-
-    for(part = 1; part <= VD_PARTS_PER_DISK; part++){
-      int pdev = VD_PART_DEV(unit, part);
-      if(devblocks(pdev) <= 0)
-        continue;
-      path[0] = '/'; path[1] = 'd'; path[2] = 'e'; path[3] = 'v'; path[4] = '/';
-      path[5] = 'v'; path[6] = 'd'; path[7] = 'a' + unit;
-      path[8] = '0' + part;
-      path[9] = 0;
-      ensure_node(path, M_IFBLK, 2, pdev);
-    }
-  }
-
-  for(unit = 0; unit < ND_DISK_UNITS; unit++){
-    dev = ND_DISK_DEV(unit);
-    if(devblocks(dev) <= 0)
-      continue;
-
-    path[0] = '/'; path[1] = 'd'; path[2] = 'e'; path[3] = 'v'; path[4] = '/';
-    path[5] = 'n'; path[6] = 'd'; path[7] = 'a' + unit; path[8] = 0;
-    ensure_node(path, M_IFBLK, 2, dev);
-  }
+  /* Device nodes are now created by devman in rc.S */
 }
 
 static void
 make_tty_nodes(void)
 {
-  int i;
-  char path[] = "/dev/tty0";
-  char pty_path[] = "/dev/pts/00";
-
-  for(i = 0; i < 4; i++) {
-    path[8] = '0' + i;
-    ensure_node(path, M_IFCHR, 1, i + 1);
-  }
-
+  /* Device nodes are now created by devman in rc.S */
   mkdir("/dev/pts");
-  ensure_node("/dev/ptmx", M_IFCHR, 3, 0);
-  for(i = 0; i < 16; i++) {
-    if(i < 10) {
-      pty_path[9] = '0' + i;
-      pty_path[10] = 0;
-    } else {
-      pty_path[9] = '0' + (i / 10);
-      pty_path[10] = '0' + (i % 10);
-      pty_path[11] = 0;
-    }
-    ensure_node(pty_path, M_IFCHR, 3, i + 1);
-  }
 }
 
 int
@@ -246,9 +153,7 @@ main(void)
   printf(1, "init: creating /dev directory\n");
   mkdir("/dev");
   make_tty_nodes();
-  printf(1, "init: calling make_disk_nodes\n");
   make_disk_nodes();
-  printf(1, "init: make_disk_nodes done\n");
 
   printf(1, "init: duping stdin to stdout and stderr\n");
   dup(0);  // stdout

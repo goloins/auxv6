@@ -21,6 +21,7 @@ future_ideas.txt
 *.swp
 user/whoami
 user/cat
+user/devman
 user/echo
 user/forktest
 user/fatregress
