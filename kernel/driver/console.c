@@ -62,6 +62,10 @@ struct console_ansi_state {
 struct console_tty_state {
   int fg_pgid;
   struct termios termios;
+  struct termios pending_termios;
+  int pending_termios_valid;
+  int pending_termios_action;
+  int output_busy;
   struct winsize winsize;
   struct console_input_state input;
   struct console_ansi_state ansi;
@@ -810,6 +814,50 @@ consputc_ansi(struct console_tty_state *t, int c)
 #define KEY_F3    0xEC
 #define KEY_F4    0xED
 
+static int
+console_utf8_erase_len(struct console_tty_state *t)
+{
+  uint e;
+  int n;
+  uchar b;
+
+  if(t->input.e == t->input.w)
+    return 0;
+  if(!(t->termios.c_iflag & IUTF8))
+    return 1;
+
+  e = t->input.e;
+  n = 1;
+  while(n < 4 && e > t->input.w + (uint)n) {
+    b = (uchar)t->input.buf[(e - (uint)n) % INPUT_BUF];
+    if((b & 0xC0) != 0x80)
+      break;
+    n++;
+  }
+  return n;
+}
+
+static void
+console_echo_input_char(struct console_tty_state *t, int c, int canonical, uchar veof)
+{
+  if(!(t->termios.c_lflag & ECHO) &&
+     !((t->termios.c_lflag & ECHONL) && c == '\n'))
+    return;
+
+  if(canonical && veof && c == (int)veof)
+    return;
+
+  if((t->termios.c_lflag & ECHOCTL) &&
+     c != '\n' && c != '\r' && c != '\t' &&
+     ((c >= 0 && c < 0x20) || c == 0x7f)) {
+    consputc('^');
+    consputc(c == 0x7f ? '?' : (c + '@'));
+    return;
+  }
+
+  consputc(c);
+}
+
 /* --------------------------------------------------------------------------
  * Foreground pgrp / termios accessors
  * -------------------------------------------------------------------------- */
@@ -863,9 +911,21 @@ console_set_termios(int tty, const struct termios *tp, int optional_actions)
     return -1;
   acquire(&cons.lock);
   t = console_tty_by_index(tty);
-  t->termios = *tp;
-  if(optional_actions == TCSAFLUSH)
-    t->input.r = t->input.w = t->input.e;
+
+  if(optional_actions == TCSANOW) {
+    t->termios = *tp;
+  } else if(t->output_busy > 0) {
+    t->pending_termios = *tp;
+    t->pending_termios_valid = 1;
+    t->pending_termios_action = optional_actions;
+    release(&cons.lock);
+    return 0;
+  } else {
+    t->termios = *tp;
+    if(optional_actions == TCSAFLUSH)
+      t->input.r = t->input.w = t->input.e;
+  }
+
   release(&cons.lock);
   return 0;
 }
@@ -1031,6 +1091,14 @@ consoleintr(int (*getc)(void))
     /* Ctrl+P: process dump debug */
     if(c == C('P')) { doprocdump = 1; continue; }
 
+    /* ISTRIP: clear the 8th bit for regular byte input. */
+    if((t->termios.c_iflag & ISTRIP) && c >= 0 && c < 0x100 &&
+       c != KEY_HOME && c != KEY_END && c != KEY_UP && c != KEY_DN &&
+       c != KEY_LF && c != KEY_RT && c != KEY_PGUP && c != KEY_PGDN &&
+       c != KEY_INS && c != KEY_DEL && c != KEY_F1 && c != KEY_F2 &&
+       c != KEY_F3 && c != KEY_F4)
+      c &= 0x7f;
+
     /* ISIG: signal characters */
     if(isig) {
       if(vintr && c == (int)vintr) {
@@ -1089,18 +1157,28 @@ consoleintr(int (*getc)(void))
       if(vkill && c == (int)vkill) {
         while(t->input.e != t->input.w &&
               t->input.buf[(t->input.e-1) % INPUT_BUF] != '\n') {
-          t->input.e--;
+          int erase_n = console_utf8_erase_len(t);
+          int j;
+          if(erase_n <= 0)
+            break;
+          t->input.e -= erase_n;
           if(t->termios.c_lflag & (ECHOE|ECHOKE))
-            consputc(BACKSPACE);
+            for(j = 0; j < erase_n; j++)
+              consputc(BACKSPACE);
         }
         continue;
       }
       if((verase && c == (int)verase) || c == C('H') || c == '\x7f') {
         if(t->input.e != t->input.w &&
            t->input.buf[(t->input.e-1) % INPUT_BUF] != '\n') {
-          t->input.e--;
-          if(echo && (t->termios.c_lflag & ECHOE))
-            consputc(BACKSPACE);
+          int erase_n = console_utf8_erase_len(t);
+          int j;
+          if(erase_n > 0) {
+            t->input.e -= erase_n;
+            if(echo && (t->termios.c_lflag & ECHOE))
+              for(j = 0; j < erase_n; j++)
+                consputc(BACKSPACE);
+          }
         }
         continue;
       }
@@ -1129,8 +1207,7 @@ consoleintr(int (*getc)(void))
     /* Buffer the character */
     if(c != 0 && t->input.e - t->input.r < INPUT_BUF) {
       t->input.buf[t->input.e++ % INPUT_BUF] = c;
-      if(echo && (!canonical || c != (int)veof || !veof))
-        consputc(c);
+      console_echo_input_char(t, c, canonical, veof);
       if(!canonical                        ||
          c == '\n'                         ||
          (veol && c == (int)veol)          ||
@@ -1306,6 +1383,8 @@ consolewrite(struct inode *ip, char *buf, uint off, int n)
     return -1;
   }
 
+  t->output_busy++;
+
   for(i = 0; i < n; i++) {
     c = buf[i] & 0xff;
     emit = 1;
@@ -1329,6 +1408,19 @@ consolewrite(struct inode *ip, char *buf, uint off, int n)
     if(emit)
       consputc_ansi(t, c);
   }
+
+  t->output_busy--;
+  if(t->output_busy <= 0) {
+    t->output_busy = 0;
+    if(t->pending_termios_valid) {
+      t->termios = t->pending_termios;
+      if(t->pending_termios_action == TCSAFLUSH)
+        t->input.r = t->input.w = t->input.e;
+      t->pending_termios_valid = 0;
+      t->pending_termios_action = 0;
+    }
+  }
+
   release(&cons.lock);
   ilock(ip);
   return n;

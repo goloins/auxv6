@@ -409,6 +409,9 @@ _isotest: user/isotest
 _termdemo: user/termdemo
 	cp user/termdemo _termdemo
 
+_termcheck: user/termcheck
+	cp user/termcheck _termcheck
+
 _dash: ports/dash-0.5.12/Makefile.auxv6 user/ulib.o user/usys.o user/printf.o user/umalloc.o user/resolve.o user/posix.o user/setjmp.o
 	$(MAKE) -f ports/dash-0.5.12/Makefile.auxv6
 	cp ports/dash-0.5.12/_dash _dash
@@ -483,6 +486,7 @@ UPROGS=\
 	_losetup\
 	_isotest\
 	_termdemo\
+	_termcheck\
 	_dash\
 
 # Old-init fallback set for machines without ports/dash.
@@ -565,7 +569,7 @@ clean:
 	_dhcp \
 	user/ifconfig user/netstat user/route user/arp user/rarp user/ip \
 	user/dhcp user/v6dhcpd user/nslookup \
-	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/lspci user/v6init
+	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/lspci user/v6init
 
 # make a printout
 FILES = $(shell grep -v '^\#' tools/runoff.list)

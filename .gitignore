@@ -81,6 +81,7 @@ user/usertests
 user/wc
 user/zombie
 user/termdemo
+user/termcheck
 include/rootfs_config.h
 .ext2root/
 .fatroot/
