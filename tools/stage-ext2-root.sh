@@ -77,7 +77,12 @@ install -d -m 0700 "$rootdir/root"
 
 for src in "$@"; do
   base=${src##*/}
-  case "$base" in
+  rel=$base
+  if [ "${src#targetfs/}" != "$src" ]; then
+    rel=${src#targetfs/}
+  fi
+
+  case "$rel" in
     _init)
       install -m 0755 "$src" "$rootdir/init"
       install -m 0755 "$src" "$rootdir/bin/init"
@@ -109,53 +114,67 @@ for src in "$@"; do
     _*)
       install -m 0755 "$src" "$rootdir/bin/${base#_}"
       ;;
-    etc.hosts)
+    etc/hosts)
       install -m 0644 "$src" "$rootdir/etc/hosts"
       ;;
-    etc.fstab)
+    etc/fstab)
       install -m 0644 "$src" "$rootdir/etc/fstab"
       ;;
-    etc.fstab.ext2root)
+    etc/fstab.ext2root)
       install -m 0644 "$src" "$rootdir/etc/fstab"
       ;;
-    etc.profile)
+    etc/profile)
       install -m 0644 "$src" "$rootdir/etc/profile"
       ;;
-    etc.termcap)
+    etc/termcap)
       install -m 0644 "$src" "$rootdir/etc/termcap"
       ;;
-    etc.rc.S)
+    etc/rc.S)
       install -m 0755 "$src" "$rootdir/etc/rc.d/rc.S"
       ;;
-    etc.rc.0)
+    etc/rc.0)
       install -m 0755 "$src" "$rootdir/etc/rc.d/rc.0"
       ;;
-    etc.rc.1)
+    etc/rc.1)
       install -m 0755 "$src" "$rootdir/etc/rc.d/rc.1"
       ;;
-    etc.rc.2)
+    etc/rc.2)
       install -m 0755 "$src" "$rootdir/etc/rc.d/rc.2"
       ;;
-    etc.rc.3)
+    etc/rc.3)
       install -m 0755 "$src" "$rootdir/etc/rc.d/rc.3"
       ;;
-    etc.rc.6)
+    etc/rc.6)
       install -m 0755 "$src" "$rootdir/etc/rc.d/rc.6"
       ;;
-    etc.passwd)
+    etc/passwd)
       install -m 0644 "$src" "$rootdir/etc/passwd"
       ;;
-    etc.groups)
+    etc/groups)
       install -m 0644 "$src" "$rootdir/etc/groups"
       ;;
-    etc.hostname)
+    etc/hostname)
       install -m 0644 "$src" "$rootdir/etc/hostname"
       ;;
-    etc.motd)
+    etc/motd)
       install -m 0644 "$src" "$rootdir/etc/motd"
       ;;
-    etc.resolv.conf)
+    etc/resolv.conf)
       install -m 0644 "$src" "$rootdir/etc/resolv.conf"
+      ;;
+    sbin/mount.*)
+      install -m 0755 "$src" "$rootdir/sbin/${rel#sbin/}"
+      ;;
+    */*)
+      dest="$rootdir/$rel"
+      install -d -m 0755 "$(dirname "$dest")"
+      mode=0644
+      case "$rel" in
+        bin/*|sbin/*|etc/rc.*)
+          mode=0755
+          ;;
+      esac
+      install -m "$mode" "$src" "$dest"
       ;;
     *)
       install -m 0644 "$src" "$rootdir/$base"

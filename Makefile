@@ -518,8 +518,9 @@ UPROGS=\
 # Old-init fallback set for machines without ports/dash.
 UPROGS_OLDINIT = $(filter-out _dash _init,$(UPROGS)) _v6init
 
-fs.img: mkfs README etc.hosts etc.fstab etc.profile etc.termcap etc.passwd etc.groups etc.hostname $(UPROGS)
-	./mkfs fs.img README etc.hosts etc.fstab etc.profile etc.termcap etc.passwd etc.groups etc.hostname $(UPROGS)
+fs.img:
+	@echo "legacy mkfs flow is disabled; use EXT2-root targets (for example: make $(EXT2IMG) or make qemu)" >&2
+	@false
 
 # EXT2 root is now the default - these targets are included for clarity
 ext2root:
@@ -625,7 +626,12 @@ CPUS := 2
 endif
 comma := ,
 EXT2IMG ?= test_ext2.img
-EXT2ROOT_FSTAB ?= etc.fstab.ext2root
+TARGETFS_DIR ?= targetfs
+TARGETFS_ETC ?= $(TARGETFS_DIR)/etc
+TARGETFS_SBIN ?= $(TARGETFS_DIR)/sbin
+EXT2ROOT_FSTAB ?= $(TARGETFS_ETC)/fstab.ext2root
+ROOTFS_COMMON_FILES = README $(TARGETFS_ETC)/hosts $(EXT2ROOT_FSTAB) $(TARGETFS_ETC)/profile $(TARGETFS_ETC)/termcap $(TARGETFS_ETC)/passwd $(TARGETFS_ETC)/groups $(TARGETFS_ETC)/hostname $(TARGETFS_ETC)/motd $(TARGETFS_ETC)/resolv.conf
+ROOTFS_RC_FILES = $(TARGETFS_ETC)/rc.S $(TARGETFS_ETC)/rc.0 $(TARGETFS_ETC)/rc.1 $(TARGETFS_ETC)/rc.2 $(TARGETFS_ETC)/rc.3 $(TARGETFS_ETC)/rc.6
 FATIMG ?= test_fat.img
 FATROOT_STAGE ?= .fatroot
 # qemu* targets already depend on $(EXT2IMG), so always attach it as index=2.
@@ -635,11 +641,11 @@ QEMUNETOPTS ?= -netdev user,id=auxnet0 -device virtio-net-pci,netdev=auxnet0,mac
 QEMUGFXOPTS ?= -device virtio-gpu-pci
 QEMUOPTS = -drive file=fs.img,index=1,media=disk,format=raw -drive file=xv6.img,index=0,media=disk,format=raw $(EXT2QEMU) $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
-test_ext2.img: tools/stage-ext2-root.sh README etc.hosts $(EXT2ROOT_FSTAB) etc.profile etc.termcap etc.rc.S etc.rc.0 etc.rc.1 etc.rc.2 etc.rc.3 etc.rc.6 etc.passwd etc.groups etc.hostname etc.motd etc.resolv.conf $(UPROGS)
-	sh tools/stage-ext2-root.sh .ext2root $(EXT2IMG) README etc.hosts $(EXT2ROOT_FSTAB) etc.profile etc.termcap etc.rc.S etc.rc.0 etc.rc.1 etc.rc.2 etc.rc.3 etc.rc.6 etc.passwd etc.groups etc.hostname etc.motd etc.resolv.conf $(UPROGS)
+test_ext2.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(UPROGS)
+	sh tools/stage-ext2-root.sh .ext2root $(EXT2IMG) $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(UPROGS)
 
-test_ext2_oldinit.img: tools/stage-ext2-root.sh README etc.hosts $(EXT2ROOT_FSTAB) etc.profile etc.termcap etc.passwd etc.groups etc.hostname etc.motd etc.resolv.conf $(UPROGS_OLDINIT)
-	sh tools/stage-ext2-root.sh .ext2root-oldinit test_ext2_oldinit.img README etc.hosts $(EXT2ROOT_FSTAB) etc.profile etc.termcap etc.passwd etc.groups etc.hostname etc.motd etc.resolv.conf $(UPROGS_OLDINIT)
+test_ext2_oldinit.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(UPROGS_OLDINIT)
+	sh tools/stage-ext2-root.sh .ext2root-oldinit test_ext2_oldinit.img $(ROOTFS_COMMON_FILES) $(UPROGS_OLDINIT)
 
 test_fat.img: tools/stage-fat-root.sh
 	sh tools/stage-fat-root.sh $(FATROOT_STAGE) $(FATIMG)
@@ -693,7 +699,7 @@ EXTRA=\
 	user/date.c user/time.c user/killall.c\
 	user/id.c user/login.c user/ln.c user/ls.c user/free.c user/df.c user/ps.c user/fsregress.c user/mkdir.c user/mount.c user/mounts.c user/mounttest.c user/umount.c user/passwd.c user/pwd.c user/chmod.c user/chown.c user/chgrp.c user/rm.c user/netinfo.c user/stressfs.c user/su.c user/usertests.c user/wc.c user/whoami.c user/zombie.c\
 	user/printf.c user/umalloc.c\
-	README etc.hosts etc.fstab etc.profile etc.termcap etc.passwd etc.hostname config/dot-bochsrc tools/*.pl tools/toc.* tools/runoff tools/runoff1 tools/runoff.list\
+	README targetfs/etc/hosts targetfs/etc/fstab targetfs/etc/profile targetfs/etc/termcap targetfs/etc/passwd targetfs/etc/hostname config/dot-bochsrc tools/*.pl tools/toc.* tools/runoff tools/runoff1 tools/runoff.list\
 	config/.gdbinit.tmpl gdbutil\
 
 dist:
