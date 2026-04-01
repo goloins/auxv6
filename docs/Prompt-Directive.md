@@ -1,4 +1,4 @@
-The directive: This should be used at every step of the way. Whenever you are implementing a new feature, fixing a bug, adding a test, updating documentation, etc, you should consult this directive and make sure you are following it.
+The directive: This should be used at every step of the way. Whenever you are implementing a new feature, fixing a bug, adding a test, updating documentation, etc, you should consult this directive and make sure you are following it. Every detail is important.
 
 If its missing in kernel, implement it. If it's missing in the user library, implement it (ulib). If it's missing in the tools, implement it. If it's missing in the build system, implement it. If it's missing in the documentation, implement it. If it's missing in the tests, implement it. 
 
