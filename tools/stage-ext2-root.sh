@@ -103,6 +103,9 @@ for src in "$@"; do
     _dmesg)
       install -m 0755 "$src" "$rootdir/sbin/dmesg"
       ;;
+    _killall)
+      install -m 0755 "$src" "$rootdir/sbin/killall"
+      ;;
     _*)
       install -m 0755 "$src" "$rootdir/bin/${base#_}"
       ;;

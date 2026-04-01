@@ -93,6 +93,7 @@ DASH_SRCS := \
   input.c jobs.c mail.c memalloc.c miscbltin.c \
   mystring.c options.c output.c parser.c redir.c show.c trap.c \
   main.c var.c system.c \
+  libgcc_compat.c \
   bltin/printf.c bltin/test.c bltin/times.c \
   builtins.c init.c nodes.c syntax.c signames.c
 
@@ -172,9 +173,7 @@ $(SRCDIR)/syntax.h $(SRCDIR)/syntax.c: $(SRCDIR)/mksyntax $(SRCDIR)/token.h
 $(SRCDIR)/mksyntax: $(SRCDIR)/mksyntax.c $(SRCDIR)/token.h
 	cc -o $@ $<
 
-$(SRCDIR)/builtins.def: $(SRCDIR)/builtins.def.in
-  cc -E -x c -DBSD=1 -DSHELL -DJOBS=1 -DSMALL=1 -o $@.tmp $< && \
-	grep -v '^#' $@.tmp > $@ && rm $@.tmp
+$(SRCDIR)/builtins.def: $(SRCDIR)/builtins.def.in ; cc -E -x c -DBSD=1 -DSHELL -DJOBS=1 -DSMALL=1 -o $@.tmp $< && grep -v '^#' $@.tmp > $@ && rm $@.tmp
 
 $(SRCDIR)/builtins.h $(SRCDIR)/builtins.c: $(SRCDIR)/builtins.def $(SRCDIR)/mkbuiltins
 	cd $(SRCDIR) && sh mkbuiltins builtins.def

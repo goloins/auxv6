@@ -33,6 +33,7 @@ user/telinit
 user/.stage/
 user/id
 user/kill
+user/killall
 user/login
 user/getty
 user/chvt
@@ -84,7 +85,13 @@ user/termdemo
 user/termcheck
 user/dmesg
 user/tail
+user/date
+user/time
 include/rootfs_config.h
 .ext2root/
 .fatroot/
 virtio_boot.log
+ports/dash-0.5.12/src/mksyntax
+ports/dash-0.5.12/src/mksignames
+ports/dash-0.5.12/src/mknodes
+ports/dash-0.5.12/src/mkinit

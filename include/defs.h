@@ -373,6 +373,7 @@ int             sys_loopteardown(void);
 int             sys_loopstatus(void);
 int             sys_select(void);
 int             sys_poll(void);
+int             sys_date(void);
 
 // timer.c
 void            timerinit(void);

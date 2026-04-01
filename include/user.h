@@ -116,6 +116,7 @@ int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
 int poll(struct pollfd *fds, nfds_t nfds, int timeout);
 int ioctl(int fd, int request, ...);
 int kmsgread(void *buf, int max);
+int date(struct rtcdate *r);
 int getpid(void);
 int getppid(void);
 int getpgrp(void);

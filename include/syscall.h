@@ -81,3 +81,4 @@
 #define SYS_poll 80
 #define SYS_ioctl 81
 #define SYS_kmsgread 82
+#define SYS_date 83
