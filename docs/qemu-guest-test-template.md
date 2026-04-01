@@ -15,6 +15,7 @@ Use one harness for many subsystem smoke tests instead of writing one-off expect
 
 - `make qemu-guesttest-template AUXV6_QEMU_TARGET=<target> AUXV6_TEST_SCRIPT=<cmd-file>`
 - `make test-virtioblk-smoke`
+- `make test-virtioblk-negative`
 
 ## Required Variables
 

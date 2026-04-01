@@ -42,7 +42,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - procfs gained more than basic process plumbing: `/proc/uptime`, `/proc/pci`, `/proc/vblk_flush`, and `/proc/ahci_tune` now exist for observability and runtime tuning.
 - Virtio-blk regression coverage now includes a dedicated in-guest `vblktest` utility plus `qemu-virtioblktest` / `qemu-nox-virtioblktest` launch targets for multi-disk validation.
 - Virtio transitional PCI probe matching was corrected in virtio-blk/net/gpu init scans (`device_id - 0x0FFF`), preventing net/gpu misprobes from resetting other virtio functions during mixed-device boots.
-- Reusable QEMU guest automation template landed: `tools/qemu-guest-test.exp` runs command scripts (`tools/tests/*.cmds`) after login, with `make qemu-guesttest-template` plus initial `make test-virtioblk-smoke` coverage.
+- Reusable QEMU guest automation template landed: `tools/qemu-guest-test.exp` runs command scripts (`tools/tests/*.cmds`) after login, with `make qemu-guesttest-template` plus `make test-virtioblk-smoke` and `make test-virtioblk-negative` coverage.
 - Buffer-cache I/O error handling was hardened: `bread`/`bwrite` no longer panic immediately on transport failures, buffer error state is tracked (`B_ERROR`/`berror()`), and ext2/msdos/isofs/blockdev plus legacy xv6fs log/fs paths now explicitly gate on I/O error instead of silently consuming failed buffers.
 - The I/O-failure check path is now centralized below VFS via shared bio helpers (`bread_ok`/`bwrite_ok`), so active filesystems use one common block-level contract instead of duplicating `bread`/`berror`/`bwrite` checks per backend.
 - VFS backend lookups are now mount-aware for ext2/msdosfs/isofs instances, avoiding global active-device aliasing when resolving `/` inside non-root mounts.
@@ -244,7 +244,7 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 - [x] Replace global-device shortcuts with dev->softc lookup in `rw`/`nblocks` paths
 - [x] Add explicit device capability tracking (`FLUSH`, `DISCARD`, `WRITE_ZEROES`) at probe time
 - [x] Implement `flush` request path and wire `fsync`-style call sites where available
-- [ ] Implement discard/write-zeroes request helpers behind capability checks
+- [x] Implement discard/write-zeroes request helpers behind capability checks
 - [ ] Add error accounting and robust retry policy for transient I/O failures
 - [x] Add runtime flush cadence tuning (`/proc/vblk_flush`) for write-heavy workloads
 - [ ] Add optional queue-depth tuning knobs (single queue retained as default)
@@ -252,7 +252,7 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 **Definition of done:**
 - [x] Multiple virtio disks can be attached and independently read/written/mounted
 - [x] No hardcoded device-0 behavior remains in I/O and capacity paths
-- [ ] Flush/discard/write-zeroes are feature-gated and return deterministic errors when unsupported
+- [x] Flush/discard/write-zeroes are feature-gated and return deterministic errors when unsupported
 - [ ] Stress pass: repeated mount/fsck-like write cycles complete without data corruption
 
 **Dependencies:** PCI, Virtio core  
@@ -914,7 +914,7 @@ Several items have already landed out of order relative to this original plan, n
 Primary goal: convert recently landed features into a more reliable baseline while unblocking NFS and broader POSIX ports.
 
 ### Tranche A - Storage reliability hardening
-- Virtio-blk: implement discard/write-zeroes helpers behind capability checks and return deterministic unsupported errors.
+- Virtio-blk: discard/write-zeroes helpers now exposed via `/proc/vblk_flush` admin commands (`discard`, `discard_all`, `write_zeroes`, `write_zeroes_all`) and deterministic unsupported behavior can be forced with `force_no_discard` / `force_no_write_zeroes`.
 - Virtio-blk: add error accounting + bounded retry policy for transient I/O failures.
 - AHCI: complete mount/unmount endurance loop with timeout/recover telemetry and no controller lockups.
 - NVMe: add command timeout handling with controller reset-on-fatal fallback.

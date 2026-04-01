@@ -112,6 +112,11 @@ struct virtio_blk_softc {
     uint32_t discard_fail;
     uint32_t write_zeroes_ok;
     uint32_t write_zeroes_fail;
+    uint32_t admin_ops;
+    int      admin_last_op;
+    int      admin_last_rc;
+    uint64_t admin_last_sector;
+    uint32_t admin_last_count;
     
     /* Block device ID (for blockdev registration) */
     uint dev_id;
@@ -137,6 +142,8 @@ static int virtio_blk_next_unit = 0;  /* Track next unit to allocate */
  */
 static int virtio_blk_flush_every_writes = 1;
 static int virtio_blk_max_retries = 2;
+static int virtio_blk_force_no_discard = 0;
+static int virtio_blk_force_no_write_zeroes = 0;
 
 #define VIRTIO_BLK_REQ_OK       0
 #define VIRTIO_BLK_REQ_ERR      -1
@@ -165,6 +172,15 @@ static int __attribute__((unused)) virtio_blk_discard_locked(struct virtio_blk_s
 static int __attribute__((unused)) virtio_blk_buf_is_zero(char *data, int n);
 static int virtio_blk_append_str(char *buf, int max, int pos, const char *s);
 static int virtio_blk_append_uint(char *buf, int max, int pos, uint v);
+static int virtio_blk_append_sint(char *buf, int max, int pos, int v);
+static int virtio_blk_parse_u32(const char *s, int n, uint32_t *out, int *consumed);
+static int virtio_blk_parse_u64(const char *s, int n, uint64_t *out, int *consumed);
+static int virtio_blk_admin_discard_by_dev(uint dev, uint64_t sector, uint32_t count);
+static int virtio_blk_admin_write_zeroes_by_dev(uint dev, uint64_t sector,
+                                                uint32_t count, int unmap);
+static int virtio_blk_admin_discard_all(uint64_t sector, uint32_t count);
+static int virtio_blk_admin_write_zeroes_all(uint64_t sector, uint32_t count,
+                                             int unmap);
 
 int
 virtio_blk_get_flush_every_writes(void)
@@ -202,6 +218,14 @@ virtio_blk_get_tune(char *buf, int max)
     pos = virtio_blk_append_uint(buf, max, pos, (uint)virtio_blk_max_retries);
     pos = virtio_blk_append_str(buf, max, pos, "\n");
 
+    pos = virtio_blk_append_str(buf, max, pos, "force_no_discard=");
+    pos = virtio_blk_append_uint(buf, max, pos, (uint)virtio_blk_force_no_discard);
+    pos = virtio_blk_append_str(buf, max, pos, "\n");
+
+    pos = virtio_blk_append_str(buf, max, pos, "force_no_write_zeroes=");
+    pos = virtio_blk_append_uint(buf, max, pos, (uint)virtio_blk_force_no_write_zeroes);
+    pos = virtio_blk_append_str(buf, max, pos, "\n");
+
     for (i = 0; i < virtio_blk_count; i++) {
         struct virtio_blk_softc *sc = &virtio_blk_devices[i];
 
@@ -229,6 +253,18 @@ virtio_blk_get_tune(char *buf, int max)
         pos = virtio_blk_append_uint(buf, max, pos, sc->write_zeroes_ok);
         pos = virtio_blk_append_str(buf, max, pos, " wz_fail=");
         pos = virtio_blk_append_uint(buf, max, pos, sc->write_zeroes_fail);
+        pos = virtio_blk_append_str(buf, max, pos, " has_discard=");
+        pos = virtio_blk_append_uint(buf, max, pos, (uint)sc->has_discard);
+        pos = virtio_blk_append_str(buf, max, pos, " has_wz=");
+        pos = virtio_blk_append_uint(buf, max, pos, (uint)sc->has_write_zeroes);
+        pos = virtio_blk_append_str(buf, max, pos, " admin_ops=");
+        pos = virtio_blk_append_uint(buf, max, pos, sc->admin_ops);
+        pos = virtio_blk_append_str(buf, max, pos, " admin_last_op=");
+        pos = virtio_blk_append_uint(buf, max, pos, (uint)sc->admin_last_op);
+        pos = virtio_blk_append_str(buf, max, pos, " admin_last_rc=");
+        pos = virtio_blk_append_sint(buf, max, pos, sc->admin_last_rc);
+        pos = virtio_blk_append_str(buf, max, pos, " admin_last_count=");
+        pos = virtio_blk_append_uint(buf, max, pos, sc->admin_last_count);
         pos = virtio_blk_append_str(buf, max, pos, "\n");
 
         if (pos >= max - 1)
@@ -243,6 +279,11 @@ virtio_blk_set_tune(const char *buf, int n)
 {
     uint v;
     int i;
+    int consumed;
+    uint32_t dev_u32;
+    uint32_t count_u32;
+    uint32_t unmap_u32;
+    uint64_t sector_u64;
 
     if (!buf || n <= 0)
         return -1;
@@ -273,6 +314,136 @@ virtio_blk_set_tune(const char *buf, int n)
         }
         virtio_blk_max_retries = (int)v;
         return 0;
+    }
+
+    if (n >= 17 && memcmp(buf, "force_no_discard=", 17) == 0) {
+        if (n == 17 || (n == 18 && buf[17] == '0')) {
+            virtio_blk_force_no_discard = 0;
+            return 0;
+        }
+        if (n == 18 && buf[17] == '1') {
+            virtio_blk_force_no_discard = 1;
+            return 0;
+        }
+        return -1;
+    }
+
+    if (n >= 22 && memcmp(buf, "force_no_write_zeroes=", 22) == 0) {
+        if (n == 22 || (n == 23 && buf[22] == '0')) {
+            virtio_blk_force_no_write_zeroes = 0;
+            return 0;
+        }
+        if (n == 23 && buf[22] == '1') {
+            virtio_blk_force_no_write_zeroes = 1;
+            return 0;
+        }
+        return -1;
+    }
+
+    /* Runtime admin operation: discard=DEV:SECTOR:COUNT */
+    if (n >= 8 && memcmp(buf, "discard=", 8) == 0) {
+        {
+            int p = 8;
+            if (virtio_blk_parse_u32(buf + p, n - p, &dev_u32, &consumed) < 0)
+                return -1;
+            p += consumed;
+            if (p >= n || buf[p++] != ':')
+                return -1;
+            if (virtio_blk_parse_u64(buf + p, n - p, &sector_u64, &consumed) < 0)
+                return -1;
+            p += consumed;
+            if (p >= n || buf[p++] != ':')
+                return -1;
+            if (virtio_blk_parse_u32(buf + p, n - p, &count_u32, &consumed) < 0)
+                return -1;
+            p += consumed;
+            if (p != n)
+                return -1;
+        }
+
+        return virtio_blk_admin_discard_by_dev((uint)dev_u32, sector_u64, count_u32);
+    }
+
+    /* Runtime admin operation: discard_all=SECTOR:COUNT */
+    if (n >= 12 && memcmp(buf, "discard_all=", 12) == 0) {
+        int p = 12;
+
+        if (virtio_blk_parse_u64(buf + p, n - p, &sector_u64, &consumed) < 0)
+            return -1;
+        p += consumed;
+        if (p >= n || buf[p++] != ':')
+            return -1;
+        if (virtio_blk_parse_u32(buf + p, n - p, &count_u32, &consumed) < 0)
+            return -1;
+        p += consumed;
+        if (p != n)
+            return -1;
+
+        return virtio_blk_admin_discard_all(sector_u64, count_u32);
+    }
+
+    /* Runtime admin operation: write_zeroes=DEV:SECTOR:COUNT[:UNMAP] */
+    if (n >= 13 && memcmp(buf, "write_zeroes=", 13) == 0) {
+        int p = 13;
+        int unmap = 0;
+
+        if (virtio_blk_parse_u32(buf + p, n - p, &dev_u32, &consumed) < 0)
+            return -1;
+        p += consumed;
+        if (p >= n || buf[p++] != ':')
+            return -1;
+        if (virtio_blk_parse_u64(buf + p, n - p, &sector_u64, &consumed) < 0)
+            return -1;
+        p += consumed;
+        if (p >= n || buf[p++] != ':')
+            return -1;
+        if (virtio_blk_parse_u32(buf + p, n - p, &count_u32, &consumed) < 0)
+            return -1;
+        p += consumed;
+        if (p < n) {
+            if (buf[p++] != ':')
+                return -1;
+            if (virtio_blk_parse_u32(buf + p, n - p, &unmap_u32, &consumed) < 0)
+                return -1;
+            if (unmap_u32 > 1)
+                return -1;
+            unmap = (int)unmap_u32;
+            p += consumed;
+        }
+        if (p != n)
+            return -1;
+
+        return virtio_blk_admin_write_zeroes_by_dev((uint)dev_u32, sector_u64,
+                                                    count_u32, unmap);
+    }
+
+    /* Runtime admin operation: write_zeroes_all=SECTOR:COUNT[:UNMAP] */
+    if (n >= 17 && memcmp(buf, "write_zeroes_all=", 17) == 0) {
+        int p = 17;
+        int unmap = 0;
+
+        if (virtio_blk_parse_u64(buf + p, n - p, &sector_u64, &consumed) < 0)
+            return -1;
+        p += consumed;
+        if (p >= n || buf[p++] != ':')
+            return -1;
+        if (virtio_blk_parse_u32(buf + p, n - p, &count_u32, &consumed) < 0)
+            return -1;
+        p += consumed;
+        if (p < n) {
+            if (buf[p++] != ':')
+                return -1;
+            if (virtio_blk_parse_u32(buf + p, n - p, &unmap_u32, &consumed) < 0)
+                return -1;
+            if (unmap_u32 > 1)
+                return -1;
+            unmap = (int)unmap_u32;
+            p += consumed;
+        }
+        if (p != n)
+            return -1;
+
+        return virtio_blk_admin_write_zeroes_all(sector_u64, count_u32, unmap);
     }
 
     /* Backward-compatible mode: plain integer updates flush cadence. */
@@ -554,7 +725,7 @@ virtio_blk_write_zeroes_locked(struct virtio_blk_softc *sc,
     struct virtio_blk_discard_write_zeroes rz;
     int rc;
 
-    if (!sc->has_write_zeroes)
+    if (!sc->has_write_zeroes || virtio_blk_force_no_write_zeroes)
         return VIRTIO_BLK_REQ_UNSUPP;
 
     rz.sector = sector;
@@ -577,7 +748,7 @@ virtio_blk_discard_locked(struct virtio_blk_softc *sc,
     struct virtio_blk_discard_write_zeroes d;
     int rc;
 
-    if (!sc->has_discard)
+    if (!sc->has_discard || virtio_blk_force_no_discard)
         return VIRTIO_BLK_REQ_UNSUPP;
 
     d.sector = sector;
@@ -634,6 +805,168 @@ virtio_blk_append_uint(char *buf, int max, int pos, uint v)
     if (pos < max)
         buf[pos] = 0;
     return pos;
+}
+
+static int
+virtio_blk_append_sint(char *buf, int max, int pos, int v)
+{
+    uint mag;
+    long long sv;
+
+    if (v < 0) {
+        if (pos < max - 1)
+            buf[pos++] = '-';
+        sv = (long long)v;
+        mag = (uint)(-sv);
+    } else {
+        mag = (uint)v;
+    }
+
+    return virtio_blk_append_uint(buf, max, pos, mag);
+}
+
+static int
+virtio_blk_parse_u32(const char *s, int n, uint32_t *out, int *consumed)
+{
+    uint32_t v;
+    int i;
+
+    if (!s || n <= 0 || !out || !consumed)
+        return -1;
+    if (s[0] < '0' || s[0] > '9')
+        return -1;
+
+    v = 0;
+    i = 0;
+    while (i < n && s[i] >= '0' && s[i] <= '9') {
+        uint32_t d = (uint32_t)(s[i] - '0');
+        if (v > (0xFFFFFFFFU - d) / 10U)
+            return -1;
+        v = v * 10U + d;
+        i++;
+    }
+
+    *out = v;
+    *consumed = i;
+    return 0;
+}
+
+static int
+virtio_blk_parse_u64(const char *s, int n, uint64_t *out, int *consumed)
+{
+    uint64_t v;
+    int i;
+
+    if (!s || n <= 0 || !out || !consumed)
+        return -1;
+    if (s[0] < '0' || s[0] > '9')
+        return -1;
+
+    v = 0;
+    i = 0;
+    while (i < n && s[i] >= '0' && s[i] <= '9') {
+        uint64_t d = (uint64_t)(s[i] - '0');
+        if (v > (0xFFFFFFFFFFFFFFFFULL - d) / 10ULL)
+            return -1;
+        v = v * 10ULL + d;
+        i++;
+    }
+
+    *out = v;
+    *consumed = i;
+    return 0;
+}
+
+static int
+virtio_blk_admin_discard_by_dev(uint dev, uint64_t sector, uint32_t count)
+{
+    struct virtio_blk_softc *sc;
+    int rc;
+
+    if (count == 0)
+        return -1;
+
+    sc = virtio_blk_find_by_dev(dev);
+    if (!sc)
+        return -1;
+
+    acquiresleep(&sc->req_lock);
+    rc = virtio_blk_discard_locked(sc, sector, count);
+    if (rc == VIRTIO_BLK_REQ_UNSUPP)
+        sc->io_unsupp++;
+    sc->admin_ops++;
+    sc->admin_last_op = 1;
+    sc->admin_last_rc = rc;
+    sc->admin_last_sector = sector;
+    sc->admin_last_count = count;
+    releasesleep(&sc->req_lock);
+
+    return 0;
+}
+
+static int
+virtio_blk_admin_write_zeroes_by_dev(uint dev, uint64_t sector,
+                                     uint32_t count, int unmap)
+{
+    struct virtio_blk_softc *sc;
+    int rc;
+
+    if (count == 0)
+        return -1;
+
+    sc = virtio_blk_find_by_dev(dev);
+    if (!sc)
+        return -1;
+
+    acquiresleep(&sc->req_lock);
+    rc = virtio_blk_write_zeroes_locked(sc, sector, count, unmap);
+    if (rc == VIRTIO_BLK_REQ_UNSUPP)
+        sc->io_unsupp++;
+    sc->admin_ops++;
+    sc->admin_last_op = 2;
+    sc->admin_last_rc = rc;
+    sc->admin_last_sector = sector;
+    sc->admin_last_count = count;
+    releasesleep(&sc->req_lock);
+
+    return 0;
+}
+
+static int
+virtio_blk_admin_discard_all(uint64_t sector, uint32_t count)
+{
+    int i;
+    int found;
+
+    if (count == 0)
+        return -1;
+
+    found = 0;
+    for (i = 0; i < virtio_blk_count; i++) {
+        virtio_blk_admin_discard_by_dev(virtio_blk_devices[i].dev_id, sector, count);
+        found = 1;
+    }
+
+    return found ? 0 : -1;
+}
+
+static int
+virtio_blk_admin_write_zeroes_all(uint64_t sector, uint32_t count, int unmap)
+{
+    int i;
+    int found;
+
+    if (count == 0)
+        return -1;
+
+    found = 0;
+    for (i = 0; i < virtio_blk_count; i++) {
+        virtio_blk_admin_write_zeroes_by_dev(virtio_blk_devices[i].dev_id,
+                                             sector, count, unmap);
+        found = 1;
+    }
+
+    return found ? 0 : -1;
 }
 
 /*
