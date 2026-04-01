@@ -1,0 +1,11 @@
+# Minimal termcap entry for auxv6 console/pty compatibility
+# Exposes a conservative vt100-like profile for curses editors.
+vt100|auxv6-vt100|auxv6 console and pty:\
+	:am:bs:ms:pt:km:mi:\
+	:co#80:li#24:\
+	:cl=\E[H\E[2J:ce=\E[K:cd=\E[J:\
+	:cm=\E[%i%d;%dH:ho=\E[H:ll=\E[24;1H:\
+	:so=\E[7m:se=\E[27m:us=\E[4m:ue=\E[24m:\
+	:md=\E[1m:me=\E[0m:mr=\E[7m:\
+	:ku=\EOA:kd=\EOB:kr=\EOC:kl=\EOD:\
+	:kh=\E[H:@7=\E[F:kP=\E[5~:kN=\E[6~:kI=\E[2~:kD=\E[3~:

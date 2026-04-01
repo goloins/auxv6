@@ -103,6 +103,9 @@ struct console_ansi_state {
   int g0_charset;
   int g1_charset;
   int gl_charset;
+  int cursor_keys_app;
+  int origin_mode;
+  int cursor_visible;
   uint utf8_accum;
   int utf8_need;
   uint utf8_min;
@@ -161,6 +164,9 @@ static struct console_tty_state console_tty_default = {
     .g0_charset = 0,
     .g1_charset = 0,
     .gl_charset = 0,
+    .cursor_keys_app = 0,
+    .origin_mode = 0,
+    .cursor_visible = 1,
     .alt_saved_attr = 0x07,
   },
 };
@@ -960,6 +966,7 @@ static void
 cgaputc_ansi(struct console_tty_state *t, int c)
 {
   int pos, row, col, n, r2, c2, p1, p2;
+  int row_base, row_max;
   uchar a = t->ansi.attr;
 
   pos = cga_cursor;
@@ -1078,11 +1085,14 @@ cgaputc_ansi(struct console_tty_state *t, int c)
     case 'F': n=p1?p1:1; r2=row-n; if(r2<0)r2=0; cga_write_cursor(r2*80); break;
     case 'G': c2=p1?p1-1:0; if(c2<0)c2=0; if(c2>79)c2=79; cga_write_cursor(row*80+c2); break;
     case 'H': case 'f':
-      r2=p1?p1-1:0; c2=p2?p2-1:0;
-      if(r2 < 0)
-        r2 = 0;
-      if(r2 > 24)
-        r2 = 24;
+      row_base = t->ansi.origin_mode ? t->ansi.scroll_top : 0;
+      row_max = t->ansi.origin_mode ? t->ansi.scroll_bot : 24;
+      r2 = (p1 ? p1 - 1 : 0) + row_base;
+      c2 = p2 ? p2 - 1 : 0;
+      if(r2 < row_base)
+        r2 = row_base;
+      if(r2 > row_max)
+        r2 = row_max;
       if(c2 < 0)
         c2 = 0;
       if(c2 > 79)
@@ -1147,15 +1157,37 @@ cgaputc_ansi(struct console_tty_state *t, int c)
       ansi_restore_cursor(t);
       break;
     case 'h':
-      if(t->ansi.question && (p1 == 47 || p1 == 1047 || p1 == 1049)) {
-        ansi_save_cursor(t);
-        ansi_enter_alt_screen(t);
+      if(t->ansi.question) {
+        if(p1 == 1)
+          t->ansi.cursor_keys_app = 1;
+        else if(p1 == 6) {
+          t->ansi.origin_mode = 1;
+          cga_write_cursor(t->ansi.scroll_top * 80);
+        } else if(p1 == 25)
+          t->ansi.cursor_visible = 1;
+        else if(p1 == 1048)
+          ansi_save_cursor(t);
+        else if(p1 == 47 || p1 == 1047 || p1 == 1049) {
+          ansi_save_cursor(t);
+          ansi_enter_alt_screen(t);
+        }
       }
       break;
     case 'l':
-      if(t->ansi.question && (p1 == 47 || p1 == 1047 || p1 == 1049)) {
-        ansi_leave_alt_screen(t);
-        ansi_restore_cursor(t);
+      if(t->ansi.question) {
+        if(p1 == 1)
+          t->ansi.cursor_keys_app = 0;
+        else if(p1 == 6) {
+          t->ansi.origin_mode = 0;
+          cga_write_cursor(0);
+        } else if(p1 == 25)
+          t->ansi.cursor_visible = 0;
+        else if(p1 == 1048)
+          ansi_restore_cursor(t);
+        else if(p1 == 47 || p1 == 1047 || p1 == 1049) {
+          ansi_leave_alt_screen(t);
+          ansi_restore_cursor(t);
+        }
       }
       break;
     default: break;
@@ -1369,6 +1401,23 @@ console_ioctl(int fd, int request, uint arg)
   t = console_current_tty();
 
   switch(request) {
+  case 0x5401:  /* TCGETS */
+    if(arg == 0) return -1;
+    acquire(&cons.lock);
+    *(struct termios *)arg = t->termios;
+    release(&cons.lock);
+    return 0;
+
+  case 0x5402:  /* TCSETS */
+  case 0x5403:  /* TCSETSW */
+  case 0x5404:  /* TCSETSF */
+    if(arg == 0) return -1;
+    if(request == 0x5402)
+      return console_set_termios(console_current_tty_index(), (const struct termios *)arg, TCSANOW);
+    if(request == 0x5403)
+      return console_set_termios(console_current_tty_index(), (const struct termios *)arg, TCSADRAIN);
+    return console_set_termios(console_current_tty_index(), (const struct termios *)arg, TCSAFLUSH);
+
   case 0x5413:  /* TIOCGWINSZ */
     if(arg == 0) return -1;
     ws = (struct winsize *)arg;
@@ -1415,8 +1464,17 @@ console_ioctl(int fd, int request, uint arg)
     }
     return 0;
 
-  case 0x5411:  /* TIOCISATTY */
-    return 1;
+  case 0x5411:  /* TIOCOUTQ */
+    if(arg == 0) return -1;
+    *(int *)arg = 0;
+    return 0;
+
+  case 0x541B:  /* FIONREAD / TIOCINQ */
+    if(arg == 0) return -1;
+    acquire(&cons.lock);
+    *(int *)arg = (int)(t->input.w - t->input.r);
+    release(&cons.lock);
+    return 0;
 
   case 0x54A0:  /* TIOCGACTTTY */
     if(arg == 0) return -1;
@@ -1436,6 +1494,9 @@ console_ioctl(int fd, int request, uint arg)
     intp = (int *)arg;
     *intp = CONSOLE_NTTY;
     return 0;
+
+  case 0x54A3:  /* TIOCISATTY */
+    return 1;
 
   case 0x540B:  /* TCFLSH */
     if((int)arg != TCIFLUSH && (int)arg != TCOFLUSH && (int)arg != TCIOFLUSH)
@@ -1532,10 +1593,10 @@ consoleintr(int (*getc)(void))
     /* Special keyboard keys: inject ANSI escape sequences */
     esc_seq = 0;
     switch(c) {
-    case KEY_UP:   esc_seq = "\033[A";  break;
-    case KEY_DN:   esc_seq = "\033[B";  break;
-    case KEY_RT:   esc_seq = "\033[C";  break;
-    case KEY_LF:   esc_seq = "\033[D";  break;
+    case KEY_UP:   esc_seq = t->ansi.cursor_keys_app ? "\033OA" : "\033[A";  break;
+    case KEY_DN:   esc_seq = t->ansi.cursor_keys_app ? "\033OB" : "\033[B";  break;
+    case KEY_RT:   esc_seq = t->ansi.cursor_keys_app ? "\033OC" : "\033[C";  break;
+    case KEY_LF:   esc_seq = t->ansi.cursor_keys_app ? "\033OD" : "\033[D";  break;
     case KEY_HOME: esc_seq = "\033[H";  break;
     case KEY_END:  esc_seq = "\033[F";  break;
     case KEY_PGUP: esc_seq = "\033[5~"; break;

@@ -170,5 +170,8 @@ int ttyname_r(int fd, char *buf, size_t buflen);
 int resolve_ipv4(const char *name, uint *out);
 int dns_nameservers(uint *servers, int max);
 int dns_lookup_ipv4(const char *name, uint server, uint *out);
+int openpty(int *amaster, int *aslave, char *name,
+			const struct termios *termp,
+			const struct winsize *winp);
 
 #endif

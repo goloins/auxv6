@@ -17,6 +17,7 @@
 #include "../include/user.h"
 #include "../include/posix/dirent.h"
 #include "../include/posix/stdarg.h"
+#include "../include/posix/sys/ioctl.h"
 
 #ifndef AT_FDCWD
 #define AT_FDCWD (-100)
@@ -812,4 +813,56 @@ int
 open64(const char *path, int flags, ...)
 {
   return open((char*)path, flags);
+}
+
+int
+openpty(int *amaster, int *aslave, char *name,
+        const struct termios *termp,
+        const struct winsize *winp)
+{
+  int mfd;
+  int sfd;
+
+  if(amaster == 0 || aslave == 0) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  mfd = open("/dev/ptmx", O_RDWR);
+  if(mfd < 0) {
+    errno = ENOENT;
+    return -1;
+  }
+
+  sfd = open("/dev/pts/0", O_RDWR);
+  if(sfd < 0) {
+    close(mfd);
+    errno = ENOENT;
+    return -1;
+  }
+
+  if(termp) {
+    if(ioctl(sfd, TCSETS, (void*)termp) < 0) {
+      close(sfd);
+      close(mfd);
+      errno = EINVAL;
+      return -1;
+    }
+  }
+
+  if(winp) {
+    if(ioctl(sfd, TIOCSWINSZ, (void*)winp) < 0) {
+      close(sfd);
+      close(mfd);
+      errno = EINVAL;
+      return -1;
+    }
+  }
+
+  if(name)
+    strcpy(name, "/dev/pts/0");
+
+  *amaster = mfd;
+  *aslave = sfd;
+  return 0;
 }

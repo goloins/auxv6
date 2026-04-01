@@ -40,6 +40,7 @@ extern struct devsw devsw[];
 
 #define CONSOLE 1
 #define BLOCKDEV 2
+#define PTYDEV 3
 #define DISK_MAX_UNITS 4
 #define DISK_PARTS_PER_DISK 4
 #define DISK_DEV(unit) (unit)

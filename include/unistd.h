@@ -23,6 +23,7 @@
 #include "sys/select.h"
 #include "poll.h"
 #include "stddef.h"
+#include "termios.h"
 
 /* POSIX version identification */
 #define _POSIX_VERSION          200809L
@@ -182,6 +183,9 @@ void    sync(void);
 int     isatty(int fd);
 char   *ttyname(int fd);
 int     ttyname_r(int fd, char *buf, size_t buflen);
+int     openpty(int *amaster, int *aslave, char *name,
+                const struct termios *termp,
+                const struct winsize *winp);
 
 /* Memory */
 int     brk(void *addr);

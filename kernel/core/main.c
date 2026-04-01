@@ -28,6 +28,7 @@ main(void)
   pci_init();      // PCI bus enumeration
   virtio_gpu_init(); // virtio-gpu subsystem
   consoleinit();   // console hardware
+  ptyinit();       // pseudo-terminal endpoints
   uartinit();      // serial port
   pinit();         // process table
   tvinit();        // trap vectors

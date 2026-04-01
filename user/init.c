@@ -204,6 +204,10 @@ make_tty_nodes(void)
     path[8] = '0' + i;
     ensure_node(path, M_IFCHR, 1, i + 1);
   }
+
+  mkdir("/dev/pts");
+  ensure_node("/dev/ptmx", M_IFCHR, 3, 0);
+  ensure_node("/dev/pts/0", M_IFCHR, 3, 1);
 }
 
 int

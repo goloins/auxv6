@@ -1061,40 +1061,87 @@ proc_is_tty_fd(int fd)
     return 0;
   if(f->ip->type != T_DEV)
     return 0;
-  if(f->ip->major != CONSOLE)
+  if(f->ip->major != CONSOLE && f->ip->major != PTYDEV)
     return 0;
 
   return 1;
 }
 
 int
+proc_tty_major(int fd)
+{
+  struct proc *curproc;
+  struct file *f;
+
+  curproc = myproc();
+  if(curproc == 0)
+    return -1;
+  if(fd < 0 || fd >= NOFILE)
+    return -1;
+
+  f = curproc->ofile[fd];
+  if(f == 0 || f->type != FD_INODE || f->ip == 0)
+    return -1;
+  if(f->ip->type != T_DEV)
+    return -1;
+
+  return f->ip->major;
+}
+
+int
 proc_tcgetattr(int fd, uint termios_addr)
 {
   struct proc *curproc;
+  struct file *f;
 
   curproc = myproc();
   if(curproc == 0 || termios_addr == 0)
     return -1;
-  if(curproc->tty < 0)
-    return -1;
   if(!proc_is_tty_fd(fd))
     return -1;
-  return console_get_termios(curproc->tty, (struct termios*)termios_addr);
+
+  f = curproc->ofile[fd];
+  if(f == 0 || f->ip == 0)
+    return -1;
+
+  if(f->ip->major == CONSOLE) {
+    if(curproc->tty < 0)
+      return -1;
+    return console_get_termios(curproc->tty, (struct termios*)termios_addr);
+  }
+
+  if(f->ip->major == PTYDEV)
+    return pty_get_termios(f->ip->minor, (struct termios*)termios_addr);
+
+  return -1;
 }
 
 int
 proc_tcsetattr(int fd, int optional_actions, uint termios_addr)
 {
   struct proc *curproc;
+  struct file *f;
 
   curproc = myproc();
   if(curproc == 0 || termios_addr == 0)
     return -1;
-  if(curproc->tty < 0)
-    return -1;
   if(!proc_is_tty_fd(fd))
     return -1;
-  return console_set_termios(curproc->tty, (const struct termios*)termios_addr, optional_actions);
+
+  f = curproc->ofile[fd];
+  if(f == 0 || f->ip == 0)
+    return -1;
+
+  if(f->ip->major == CONSOLE) {
+    if(curproc->tty < 0)
+      return -1;
+    return console_set_termios(curproc->tty, (const struct termios*)termios_addr, optional_actions);
+  }
+
+  if(f->ip->major == PTYDEV)
+    return pty_set_termios(f->ip->minor, (const struct termios*)termios_addr, optional_actions);
+
+  return -1;
 }
 
 int

@@ -139,20 +139,44 @@ isatty(int fd)
 char*
 ttyname(int fd)
 {
-  static char name[] = "/dev/console";
+  static char name[16];
+  struct stat st;
 
   if(!isatty(fd))
     return 0;
-  return name;
+
+  if(fstat(fd, &st) < 0 || st.st_type != T_DEV)
+    return 0;
+
+  if(st.st_major == 1) {
+    memmove(name, "/dev/console", 13);
+    return name;
+  }
+
+  if(st.st_major == 3 && st.st_minor == 0) {
+    memmove(name, "/dev/ptmx", 10);
+    return name;
+  }
+
+  if(st.st_major == 3 && st.st_minor == 1) {
+    memmove(name, "/dev/pts/0", 11);
+    return name;
+  }
+
+  return 0;
 }
 
 int
 ttyname_r(int fd, char *buf, size_t buflen)
 {
-  static const char name[] = "/dev/console";
+  char *name;
   uint need;
 
-  if(!isatty(fd) || buf == 0)
+  if(buf == 0)
+    return -1;
+
+  name = ttyname(fd);
+  if(name == 0)
     return -1;
 
   need = strlen(name) + 1;

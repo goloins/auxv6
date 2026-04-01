@@ -61,6 +61,12 @@ int             console_ioctl(int fd, int request, uint arg);
 int             console_kmsg_read(char *dst, int max);
 void            panic(char*) __attribute__((noreturn));
 
+// pty.c
+void            ptyinit(void);
+int             pty_ioctl(int fd, int request, uint arg);
+int             pty_get_termios(int minor, struct termios *tp);
+int             pty_set_termios(int minor, const struct termios *tp, int optional_actions);
+
 // Master debug flag - set to 1 to enable boot diagnostics and subsystem logging.
 // Controlled via -DAUXV6_DEBUG=1 or by editing here.
 #ifndef AUXV6_DEBUG
@@ -280,6 +286,7 @@ int             proc_signal_pgid(int pgid, int signo);
 int             proc_tcsetpgrp(int pgid);
 int             proc_tcgetpgrp(void);
 int             proc_is_tty_fd(int fd);
+int             proc_tty_major(int fd);
 int             proc_tcgetattr(int fd, uint termios_addr);
 int             proc_tcsetattr(int fd, int optional_actions, uint termios_addr);
 void            proc_apply_pending_signals(struct proc *p);

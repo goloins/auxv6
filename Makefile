@@ -2,6 +2,7 @@ OBJS = \
 	kernel/core/blockdev.o\
 	kernel/fs/bio.o\
 	kernel/driver/console.o\
+	kernel/driver/pty.o\
 	kernel/core/exec.o\
 	kernel/fs/file.o\
 	kernel/fs/fs.o\
@@ -517,8 +518,8 @@ UPROGS=\
 # Old-init fallback set for machines without ports/dash.
 UPROGS_OLDINIT = $(filter-out _dash _init,$(UPROGS)) _v6init
 
-fs.img: mkfs README etc.hosts etc.fstab etc.profile etc.passwd etc.groups etc.hostname $(UPROGS)
-	./mkfs fs.img README etc.hosts etc.fstab etc.profile etc.passwd etc.groups etc.hostname $(UPROGS)
+fs.img: mkfs README etc.hosts etc.fstab etc.profile etc.termcap etc.passwd etc.groups etc.hostname $(UPROGS)
+	./mkfs fs.img README etc.hosts etc.fstab etc.profile etc.termcap etc.passwd etc.groups etc.hostname $(UPROGS)
 
 # EXT2 root is now the default - these targets are included for clarity
 ext2root:
@@ -634,11 +635,11 @@ QEMUNETOPTS ?= -netdev user,id=auxnet0 -device virtio-net-pci,netdev=auxnet0,mac
 QEMUGFXOPTS ?= -device virtio-gpu-pci
 QEMUOPTS = -drive file=fs.img,index=1,media=disk,format=raw -drive file=xv6.img,index=0,media=disk,format=raw $(EXT2QEMU) $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
-test_ext2.img: tools/stage-ext2-root.sh README etc.hosts $(EXT2ROOT_FSTAB) etc.profile etc.rc.S etc.rc.0 etc.rc.1 etc.rc.2 etc.rc.3 etc.rc.6 etc.passwd etc.groups etc.hostname etc.resolv.conf $(UPROGS)
-	sh tools/stage-ext2-root.sh .ext2root $(EXT2IMG) README etc.hosts $(EXT2ROOT_FSTAB) etc.profile etc.rc.S etc.rc.0 etc.rc.1 etc.rc.2 etc.rc.3 etc.rc.6 etc.passwd etc.groups etc.hostname etc.resolv.conf $(UPROGS)
+test_ext2.img: tools/stage-ext2-root.sh README etc.hosts $(EXT2ROOT_FSTAB) etc.profile etc.termcap etc.rc.S etc.rc.0 etc.rc.1 etc.rc.2 etc.rc.3 etc.rc.6 etc.passwd etc.groups etc.hostname etc.resolv.conf $(UPROGS)
+	sh tools/stage-ext2-root.sh .ext2root $(EXT2IMG) README etc.hosts $(EXT2ROOT_FSTAB) etc.profile etc.termcap etc.rc.S etc.rc.0 etc.rc.1 etc.rc.2 etc.rc.3 etc.rc.6 etc.passwd etc.groups etc.hostname etc.resolv.conf $(UPROGS)
 
-test_ext2_oldinit.img: tools/stage-ext2-root.sh README etc.hosts $(EXT2ROOT_FSTAB) etc.profile etc.passwd etc.groups etc.hostname etc.resolv.conf $(UPROGS_OLDINIT)
-	sh tools/stage-ext2-root.sh .ext2root-oldinit test_ext2_oldinit.img README etc.hosts $(EXT2ROOT_FSTAB) etc.profile etc.passwd etc.groups etc.hostname etc.resolv.conf $(UPROGS_OLDINIT)
+test_ext2_oldinit.img: tools/stage-ext2-root.sh README etc.hosts $(EXT2ROOT_FSTAB) etc.profile etc.termcap etc.passwd etc.groups etc.hostname etc.resolv.conf $(UPROGS_OLDINIT)
+	sh tools/stage-ext2-root.sh .ext2root-oldinit test_ext2_oldinit.img README etc.hosts $(EXT2ROOT_FSTAB) etc.profile etc.termcap etc.passwd etc.groups etc.hostname etc.resolv.conf $(UPROGS_OLDINIT)
 
 test_fat.img: tools/stage-fat-root.sh
 	sh tools/stage-fat-root.sh $(FATROOT_STAGE) $(FATIMG)
@@ -692,7 +693,7 @@ EXTRA=\
 	user/date.c user/time.c user/killall.c\
 	user/id.c user/login.c user/ln.c user/ls.c user/free.c user/df.c user/ps.c user/fsregress.c user/mkdir.c user/mount.c user/mounts.c user/mounttest.c user/umount.c user/passwd.c user/pwd.c user/chmod.c user/chown.c user/chgrp.c user/rm.c user/netinfo.c user/stressfs.c user/su.c user/usertests.c user/wc.c user/whoami.c user/zombie.c\
 	user/printf.c user/umalloc.c\
-	README etc.hosts etc.fstab etc.profile etc.passwd etc.hostname config/dot-bochsrc tools/*.pl tools/toc.* tools/runoff tools/runoff1 tools/runoff.list\
+	README etc.hosts etc.fstab etc.profile etc.termcap etc.passwd etc.hostname config/dot-bochsrc tools/*.pl tools/toc.* tools/runoff tools/runoff1 tools/runoff.list\
 	config/.gdbinit.tmpl gdbutil\
 
 dist:

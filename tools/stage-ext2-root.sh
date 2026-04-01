@@ -121,6 +121,9 @@ for src in "$@"; do
     etc.profile)
       install -m 0644 "$src" "$rootdir/etc/profile"
       ;;
+    etc.termcap)
+      install -m 0644 "$src" "$rootdir/etc/termcap"
+      ;;
     etc.rc.S)
       install -m 0755 "$src" "$rootdir/etc/rc.d/rc.S"
       ;;

@@ -13,17 +13,24 @@ This plan prioritizes POSIX/SUS-correct behavior in kernel and ulib over app-spe
 3. Make behavior measurable with repeatable tests at each phase.
 4. Preserve existing functionality (shell job control, select/poll, telnet raw mode) while expanding compatibility.
 
-## Current Gaps (High-Value)
+## Current Status Snapshot (2026-04-01)
 
-1. termios surface is minimal (mostly ECHO/ICANON only).
-2. ioctl for terminal control is stubbed and unimplemented.
-3. isatty/ttyname behavior is heuristic, not descriptor/tty-backed.
-4. Optional tcsetattr actions beyond immediate apply are missing.
-5. Background tty access semantics (SIGTTIN/SIGTTOU) are not enforced.
-6. Terminal size reporting and SIGWINCH flow are incomplete.
-7. Keyboard special-key translation for editor expectations is limited.
-8. Console output does not parse the ANSI/VT subset needed for full-screen redraw.
-9. TTY state is console-global; PTY/per-tty model is not implemented.
+Already landed:
+1. Non-canonical reads with `VMIN/VTIME` behavior.
+2. `tcsetattr()` optional actions (`TCSANOW`, `TCSADRAIN`, `TCSAFLUSH`).
+3. Background tty semantics (`SIGTTIN`/`SIGTTOU`) in read/write paths.
+4. `TIOCGWINSZ`/`TIOCSWINSZ` and `SIGWINCH` propagation.
+5. ANSI/CSI handling sufficient for many line-editor and shell redraw paths.
+6. Linux-compatible ioctl termios/queue compatibility (`TCGETS`, `TCSETS*`, `FIONREAD`/`TIOCINQ`, `TIOCOUTQ`).
+7. Minimal PTY pair support with `/dev/ptmx` and `/dev/pts/0` data-path + tty ioctls.
+8. Baseline `TERM=vt100` + `/etc/termcap` staging for capability discovery.
+
+Still missing or incomplete for nano/curses-class reliability:
+1. PTY implementation is currently single-pair and static (`/dev/ptmx` <-> `/dev/pts/0`), without dynamic `/dev/pts/N` allocation.
+2. Session/controlling-tty integration for PTYs is still partial; job control remains console-centric.
+3. Terminal capability stack is termcap-only baseline; full terminfo database/tooling is still absent.
+4. ANSI parser does not yet cover full DEC/private mode behavior expected by some curses implementations.
+5. No configurable locale/wide-char width model akin full `wcwidth`/grapheme correctness for advanced TUI glyph handling.
 
 ## Staged Roadmap (Week-by-Week)
 

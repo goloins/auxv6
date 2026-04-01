@@ -10,6 +10,13 @@
 #include "signal.h"
 #include "spinlock.h"
 
+#ifndef CONSOLE
+#define CONSOLE 1
+#endif
+#ifndef PTYDEV
+#define PTYDEV 3
+#endif
+
 extern struct {
   struct spinlock lock;
   struct proc proc[NPROC];
@@ -548,6 +555,7 @@ sys_uname(void)
     int request;
     char *arg_ptr;
     int arg_int;
+    int tty_major;
 
     if(argint(0, &fd) < 0 || argint(1, &request) < 0)
       return -1;
@@ -555,56 +563,123 @@ sys_uname(void)
     if(!proc_is_tty_fd(fd))
       return -1;
 
+    tty_major = proc_tty_major(fd);
+    if(tty_major < 0)
+      return -1;
+
     switch(request) {
+    case 0x5401:  /* TCGETS */
+    case 0x5402:  /* TCSETS */
+    case 0x5403:  /* TCSETSW */
+    case 0x5404:  /* TCSETSF */
+      if(argptr(2, &arg_ptr, sizeof(struct termios)) < 0)
+        return -1;
+      if(tty_major == CONSOLE)
+        return console_ioctl(fd, request, (uint)arg_ptr);
+      if(tty_major == PTYDEV)
+        return pty_ioctl(fd, request, (uint)arg_ptr);
+      return -1;
+
     case 0x5413:  /* TIOCGWINSZ */
       if(argptr(2, &arg_ptr, sizeof(struct winsize)) < 0)
         return -1;
-      return console_ioctl(fd, request, (uint)arg_ptr);
+      if(tty_major == CONSOLE)
+        return console_ioctl(fd, request, (uint)arg_ptr);
+      if(tty_major == PTYDEV)
+        return pty_ioctl(fd, request, (uint)arg_ptr);
+      return -1;
 
     case 0x5414:  /* TIOCSWINSZ */
       if(argptr(2, &arg_ptr, sizeof(struct winsize)) < 0)
         return -1;
-      return console_ioctl(fd, request, (uint)arg_ptr);
+      if(tty_major == CONSOLE)
+        return console_ioctl(fd, request, (uint)arg_ptr);
+      if(tty_major == PTYDEV)
+        return pty_ioctl(fd, request, (uint)arg_ptr);
+      return -1;
 
     case 0x540F:  /* TIOCGPGRP */
       if(argptr(2, &arg_ptr, sizeof(int)) < 0)
         return -1;
-      return console_ioctl(fd, request, (uint)arg_ptr);
+      if(tty_major == CONSOLE)
+        return console_ioctl(fd, request, (uint)arg_ptr);
+      if(tty_major == PTYDEV)
+        return pty_ioctl(fd, request, (uint)arg_ptr);
+      return -1;
 
     case 0x5410:  /* TIOCSPGRP */
       if(argptr(2, &arg_ptr, sizeof(int)) < 0)
         return -1;
-      return console_ioctl(fd, request, (uint)arg_ptr);
+      if(tty_major == CONSOLE)
+        return console_ioctl(fd, request, (uint)arg_ptr);
+      if(tty_major == PTYDEV)
+        return pty_ioctl(fd, request, (uint)arg_ptr);
+      return -1;
 
     case 0x540E:  /* TIOCSCTTY */
       if(argint(2, &arg_int) < 0)
         arg_int = 0;
-      return console_ioctl(fd, request, (uint)arg_int);
+      if(tty_major == CONSOLE)
+        return console_ioctl(fd, request, (uint)arg_int);
+      if(tty_major == PTYDEV)
+        return pty_ioctl(fd, request, (uint)arg_int);
+      return -1;
 
     case 0x540B:  /* TCFLSH */
       if(argint(2, &arg_int) < 0)
         return -1;
-      return console_ioctl(fd, request, (uint)arg_int);
+      if(tty_major == CONSOLE)
+        return console_ioctl(fd, request, (uint)arg_int);
+      if(tty_major == PTYDEV)
+        return pty_ioctl(fd, request, (uint)arg_int);
+      return -1;
 
-    case 0x5411:  /* TIOCISATTY */
-      return console_ioctl(fd, request, 0);
+    case 0x5411:  /* TIOCOUTQ */
+    case 0x541B:  /* FIONREAD / TIOCINQ */
+      if(argptr(2, &arg_ptr, sizeof(int)) < 0)
+        return -1;
+      if(tty_major == CONSOLE)
+        return console_ioctl(fd, request, (uint)arg_ptr);
+      if(tty_major == PTYDEV)
+        return pty_ioctl(fd, request, (uint)arg_ptr);
+      return -1;
+
+    case 0x54A3:  /* TIOCISATTY */
+      if(tty_major == CONSOLE)
+        return console_ioctl(fd, request, 0);
+      if(tty_major == PTYDEV)
+        return pty_ioctl(fd, request, 0);
+      return -1;
 
     case 0x54A0:  /* TIOCGACTTTY */
       if(argptr(2, &arg_ptr, sizeof(int)) < 0)
         return -1;
-      return console_ioctl(fd, request, (uint)arg_ptr);
+      if(tty_major == CONSOLE)
+        return console_ioctl(fd, request, (uint)arg_ptr);
+      if(tty_major == PTYDEV)
+        return pty_ioctl(fd, request, (uint)arg_ptr);
+      return -1;
 
     case 0x54A1:  /* TIOCSACTTTY */
       if(argint(2, &arg_int) < 0)
         return -1;
-      return console_ioctl(fd, request, (uint)arg_int);
+      if(tty_major == CONSOLE)
+        return console_ioctl(fd, request, (uint)arg_int);
+      if(tty_major == PTYDEV)
+        return pty_ioctl(fd, request, (uint)arg_int);
+      return -1;
 
     case 0x54A2:  /* TIOCGNTTY */
       if(argptr(2, &arg_ptr, sizeof(int)) < 0)
         return -1;
-      return console_ioctl(fd, request, (uint)arg_ptr);
+      if(tty_major == CONSOLE)
+        return console_ioctl(fd, request, (uint)arg_ptr);
+      if(tty_major == PTYDEV)
+        return pty_ioctl(fd, request, (uint)arg_ptr);
+      return -1;
 
     default:
       return -1;
     }
+
   }
