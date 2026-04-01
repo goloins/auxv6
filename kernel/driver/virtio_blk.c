@@ -463,6 +463,9 @@ virtio_blk_submit_locked(struct virtio_blk_softc *sc, uint32_t type,
     }
     release(&sc->lock);
 
+    /* Pair with virtq completion path so DMA-updated status is visible. */
+    __sync_synchronize();
+
     if (sc->request.status == VIRTIO_BLK_S_UNSUPP)
         return VIRTIO_BLK_REQ_UNSUPP;
     if (sc->request.status == VIRTIO_BLK_S_IOERR)
@@ -782,7 +785,7 @@ virtio_blk_init(void)
         if (dev->vendor_id == PCI_VENDOR_VIRTIO &&
             (dev->device_id == PCI_DEVICE_VIRTIO_BLK ||
              (dev->device_id >= 0x1000 && dev->device_id <= 0x103F &&
-              dev->device_id - 0x1000 == VIRTIO_DEV_BLK))) {
+              dev->device_id - 0x0FFF == VIRTIO_DEV_BLK))) {
             virtio_blk_probe(dev);
         }
     }

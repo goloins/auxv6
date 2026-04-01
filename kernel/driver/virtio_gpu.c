@@ -766,7 +766,7 @@ virtio_gpu_init(void)
         if (dev->vendor_id == PCI_VENDOR_VIRTIO &&
             (dev->device_id == 0x1050 ||
              (dev->device_id >= 0x1000 && dev->device_id <= 0x103F &&
-              dev->device_id - 0x1000 == VIRTIO_DEV_GPU))) {
+              dev->device_id - 0x0FFF == VIRTIO_DEV_GPU))) {
             found = 1;
             if (virtio_gpu_probe(dev) < 0) {
                 cprintf("virtio_gpu: probe failed at %d:%d.%d id=%x:%x\n",

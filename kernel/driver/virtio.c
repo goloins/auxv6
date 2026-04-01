@@ -478,6 +478,9 @@ virtq_get_buf(struct virtqueue *vq, uint32_t *len)
     vq->desc_state[head] = 0;
     
     vq->last_used_idx++;
+
+    /* Ensure device DMA writes are visible before driver consumes data. */
+    __sync_synchronize();
     
     return data;
 }
