@@ -151,6 +151,9 @@ for src in "$@"; do
     etc.hostname)
       install -m 0644 "$src" "$rootdir/etc/hostname"
       ;;
+    etc.motd)
+      install -m 0644 "$src" "$rootdir/etc/motd"
+      ;;
     etc.resolv.conf)
       install -m 0644 "$src" "$rootdir/etc/resolv.conf"
       ;;

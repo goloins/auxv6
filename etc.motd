@@ -1,0 +1,10 @@
+    ___       ____  ___  ___    _______
+   /   |    _/_/ / / / |/ / |  / / ___/
+  / /| |  _/_// / / /|   /| | / / __ \
+ / ___ |_/_/ / /_/ //   | | |/ / /_/ /
+/_/  |_/_/   \____//_/|_| |___/\____/
+
+  Host: @HOSTNAME@  |  Free mem: @FREE_MEM@  |  Free disk: @FREE_DISK@
+
+  Welcome to A/UXV6. The root filesystem is ext2.
+
