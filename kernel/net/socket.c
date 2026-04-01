@@ -583,7 +583,7 @@ sys_socket(void)
     return -1;
   }
   
-  cprintf("socket: created fd=%d family=%d type=%d\n", fd, family, type);
+  NETDBG("socket: created fd=%d family=%d type=%d\n", fd, family, type);
   
   return fd;
 }
@@ -619,7 +619,7 @@ sys_bind(void)
   s->state = SOCK_BOUND;
   release(&socket_lock);
   
-  cprintf("bind: fd=%d port=%d\n", sockfd, s->local_addr.sin_port);
+  NETDBG("bind: fd=%d port=%d\n", sockfd, s->local_addr.sin_port);
   
   return 0;
 }

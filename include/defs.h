@@ -109,6 +109,14 @@ int             pty_set_termios(int minor, const struct termios *tp, int optiona
 // Boot information macro - for verbose discovery and enumeration details
 #define BOOTDBG(...)  do { if(AUXV6_BOOTINFO) cprintf(__VA_ARGS__); } while(0)
 
+// Runtime network verbosity flag - gates socket operations, connection details, etc.
+#ifndef AUXV6_NET_DEBUG
+#define AUXV6_NET_DEBUG 0
+#endif
+
+// Network debug macro - for socket ops, bind, connect, packet flow, etc.
+#define NETDBG(...)   do { if(AUXV6_NET_DEBUG) cprintf(__VA_ARGS__); } while(0)
+
 // exec.c
 int             exec(char*, char**);
 
