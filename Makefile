@@ -256,6 +256,12 @@ _kill: user/kill
 _login: user/login
 	cp user/login _login
 
+_getty: user/getty
+	cp user/getty _getty
+
+_chvt: user/chvt
+	cp user/chvt _chvt
+
 _ln: user/ln
 	cp user/ln _ln
 
@@ -315,6 +321,12 @@ _pwd: user/pwd
 
 _rm: user/rm
 	cp user/rm _rm
+
+_reset: user/reset
+	cp user/reset _reset
+
+_clear: user/clear
+	cp user/clear _clear
 
 _sh: user/sh
 	cp user/sh _sh
@@ -394,6 +406,9 @@ _losetup: user/losetup
 _isotest: user/isotest
 	cp user/isotest _isotest
 
+_termdemo: user/termdemo
+	cp user/termdemo _termdemo
+
 _dash: ports/dash-0.5.12/Makefile.auxv6 user/ulib.o user/usys.o user/printf.o user/umalloc.o user/resolve.o user/posix.o user/setjmp.o
 	$(MAKE) -f ports/dash-0.5.12/Makefile.auxv6
 	cp ports/dash-0.5.12/_dash _dash
@@ -417,6 +432,7 @@ UPROGS=\
 	_id\
 	_kill\
 	_login\
+	_getty\
 	_ln\
 	_ls\
 	_lsblk\
@@ -433,6 +449,8 @@ UPROGS=\
 	_uname\
 	_pwd\
 	_rm\
+	_reset\
+	_clear\
 	_sh\
 	_sockettest\
 	_su\
@@ -456,6 +474,7 @@ UPROGS=\
 	_chmod\
 	_chown\
 	_chgrp\
+	_chvt\
 	_stressfs\
 	_sigtest\
 	_usertests\
@@ -463,6 +482,7 @@ UPROGS=\
 	_zombie\
 	_losetup\
 	_isotest\
+	_termdemo\
 	_dash\
 
 # Old-init fallback set for machines without ports/dash.
@@ -545,7 +565,7 @@ clean:
 	_dhcp \
 	user/ifconfig user/netstat user/route user/arp user/rarp user/ip \
 	user/dhcp user/v6dhcpd user/nslookup \
-	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/lspci user/v6init
+	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/lspci user/v6init
 
 # make a printout
 FILES = $(shell grep -v '^\#' tools/runoff.list)

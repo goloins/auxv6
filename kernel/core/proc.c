@@ -9,6 +9,7 @@
 #include "sleeplock.h"
 #include "wait.h"
 #include "termios.h"
+#include "stat.h"
 #include "fs.h"
 #include "file.h"
 #include "traps.h"
@@ -1026,7 +1027,7 @@ proc_tcsetpgrp(int pgid)
   if(!found)
     return -1;
 
-  console_set_foreground_pgid(pgid);
+  console_set_foreground_pgid(curproc->tty, pgid);
   return 0;
 }
 
@@ -1040,7 +1041,30 @@ proc_tcgetpgrp(void)
     return -1;
   if(curproc->tty < 0)
     return -1;
-  return console_get_foreground_pgid();
+  return console_get_foreground_pgid(curproc->tty);
+}
+
+int
+proc_is_tty_fd(int fd)
+{
+  struct proc *curproc;
+  struct file *f;
+
+  curproc = myproc();
+  if(curproc == 0)
+    return 0;
+  if(fd < 0 || fd >= NOFILE)
+    return 0;
+
+  f = curproc->ofile[fd];
+  if(f == 0 || f->type != FD_INODE || f->ip == 0)
+    return 0;
+  if(f->ip->type != T_DEV)
+    return 0;
+  if(f->ip->major != CONSOLE)
+    return 0;
+
+  return 1;
 }
 
 int
@@ -1053,9 +1077,9 @@ proc_tcgetattr(int fd, uint termios_addr)
     return -1;
   if(curproc->tty < 0)
     return -1;
-  if(fd < 0 || fd > 2)
+  if(!proc_is_tty_fd(fd))
     return -1;
-  return console_get_termios((struct termios*)termios_addr);
+  return console_get_termios(curproc->tty, (struct termios*)termios_addr);
 }
 
 int
@@ -1068,9 +1092,9 @@ proc_tcsetattr(int fd, int optional_actions, uint termios_addr)
     return -1;
   if(curproc->tty < 0)
     return -1;
-  if(fd < 0 || fd > 2)
+  if(!proc_is_tty_fd(fd))
     return -1;
-  return console_set_termios((const struct termios*)termios_addr, optional_actions);
+  return console_set_termios(curproc->tty, (const struct termios*)termios_addr, optional_actions);
 }
 
 int
@@ -1572,6 +1596,7 @@ proc_snapshot(struct procinfo_k *out, int max)
     out[n].ppid = p->ppid;
     out[n].pgid = p->pgid;
     out[n].sid = p->sid;
+    out[n].tty = p->tty;
     out[n].uid = p->uid;
     out[n].gid = p->gid;
     out[n].state = p->state;

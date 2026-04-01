@@ -492,3 +492,71 @@ sys_uname(void)
   safestrcpy(buf, "a/ux86 aux86 i686", size);
   return 0;
 }
+
+  int
+  sys_ioctl(void)
+  {
+    int fd;
+    int request;
+    char *arg_ptr;
+    int arg_int;
+
+    if(argint(0, &fd) < 0 || argint(1, &request) < 0)
+      return -1;
+
+    if(!proc_is_tty_fd(fd))
+      return -1;
+
+    switch(request) {
+    case 0x5413:  /* TIOCGWINSZ */
+      if(argptr(2, &arg_ptr, sizeof(struct winsize)) < 0)
+        return -1;
+      return console_ioctl(fd, request, (uint)arg_ptr);
+
+    case 0x5414:  /* TIOCSWINSZ */
+      if(argptr(2, &arg_ptr, sizeof(struct winsize)) < 0)
+        return -1;
+      return console_ioctl(fd, request, (uint)arg_ptr);
+
+    case 0x540F:  /* TIOCGPGRP */
+      if(argptr(2, &arg_ptr, sizeof(int)) < 0)
+        return -1;
+      return console_ioctl(fd, request, (uint)arg_ptr);
+
+    case 0x5410:  /* TIOCSPGRP */
+      if(argptr(2, &arg_ptr, sizeof(int)) < 0)
+        return -1;
+      return console_ioctl(fd, request, (uint)arg_ptr);
+
+    case 0x540E:  /* TIOCSCTTY */
+      if(argint(2, &arg_int) < 0)
+        arg_int = 0;
+      return console_ioctl(fd, request, (uint)arg_int);
+
+    case 0x540B:  /* TCFLSH */
+      if(argint(2, &arg_int) < 0)
+        return -1;
+      return console_ioctl(fd, request, (uint)arg_int);
+
+    case 0x5411:  /* TIOCISATTY */
+      return console_ioctl(fd, request, 0);
+
+    case 0x54A0:  /* TIOCGACTTTY */
+      if(argptr(2, &arg_ptr, sizeof(int)) < 0)
+        return -1;
+      return console_ioctl(fd, request, (uint)arg_ptr);
+
+    case 0x54A1:  /* TIOCSACTTTY */
+      if(argint(2, &arg_int) < 0)
+        return -1;
+      return console_ioctl(fd, request, (uint)arg_int);
+
+    case 0x54A2:  /* TIOCGNTTY */
+      if(argptr(2, &arg_ptr, sizeof(int)) < 0)
+        return -1;
+      return console_ioctl(fd, request, (uint)arg_ptr);
+
+    default:
+      return -1;
+    }
+  }

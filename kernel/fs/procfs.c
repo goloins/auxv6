@@ -410,7 +410,7 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
 
     len = 0;
     if(procfs_buf_puts(buf, sizeof(buf), &len,
-                       "PID PPID PGID SID UID GID STAT SZ NAME\n") < 0)
+                       "PID PPID PGID SID TTY UID GID STAT SZ NAME\n") < 0)
       return -1;
 
     for(i = 0; i < pm; i++){
@@ -427,6 +427,10 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
       if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
         break;
       if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)pinfo[i].sid) < 0)
+        break;
+      if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+        break;
+      if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)pinfo[i].tty) < 0)
         break;
       if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
         break;

@@ -162,6 +162,7 @@ extern int sys_loopteardown(void);
 extern int sys_loopstatus(void);
 extern int sys_select(void);
 extern int sys_poll(void);
+extern int sys_ioctl(void);
 
 static int (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -244,6 +245,7 @@ static int (*syscalls[])(void) = {
 [SYS_loopstatus] sys_loopstatus,
 [SYS_select] sys_select,
 [SYS_poll] sys_poll,
+[SYS_ioctl] sys_ioctl,
 };
 
 void

@@ -79,3 +79,4 @@
 #define SYS_loopstatus 78
 #define SYS_select 79
 #define SYS_poll 80
+#define SYS_ioctl 81

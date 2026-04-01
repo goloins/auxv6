@@ -34,6 +34,8 @@ user/.stage/
 user/id
 user/kill
 user/login
+user/getty
+user/chvt
 user/ln
 user/ls
 user/lsblk
@@ -52,6 +54,8 @@ user/umount
 user/uname
 user/pwd
 user/rm
+user/reset
+user/clear
 user/sh
 user/sockettest
 user/su
@@ -76,6 +80,7 @@ user/stressfs
 user/usertests
 user/wc
 user/zombie
+user/termdemo
 include/rootfs_config.h
 .ext2root/
 .fatroot/

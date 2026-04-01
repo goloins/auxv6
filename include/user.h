@@ -114,6 +114,7 @@ int loopstatus(int loopnum, uint *backing_inum, uint *nblocks);
 int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
 		   struct timeval *timeout);
 int poll(struct pollfd *fds, nfds_t nfds, int timeout);
+int ioctl(int fd, int request, ...);
 int getpid(void);
 int getppid(void);
 int getpgrp(void);

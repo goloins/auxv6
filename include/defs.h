@@ -44,10 +44,13 @@ uint            bdev_nblocks(uint dev);
 void            consoleinit(void);
 void            cprintf(char*, ...);
 void            consoleintr(int(*)(void));
-void            console_set_foreground_pgid(int);
-int             console_get_foreground_pgid(void);
-int             console_get_termios(struct termios *tp);
-int             console_set_termios(const struct termios *tp, int optional_actions);
+void            console_set_foreground_pgid(int tty, int pgid);
+int             console_get_foreground_pgid(int tty);
+int             console_get_termios(int tty, struct termios *tp);
+int             console_set_termios(int tty, const struct termios *tp, int optional_actions);
+void            console_set_active_tty(int tty);
+int             console_get_active_tty(void);
+int             console_ioctl(int fd, int request, uint arg);
 void            panic(char*) __attribute__((noreturn));
 
 // Master debug flag - set to 1 to enable boot diagnostics and subsystem logging.
@@ -262,6 +265,7 @@ int             proc_sigprocmask(int how, uint set_addr, uint oldset_addr);
 int             proc_signal_pgid(int pgid, int signo);
 int             proc_tcsetpgrp(int pgid);
 int             proc_tcgetpgrp(void);
+int             proc_is_tty_fd(int fd);
 int             proc_tcgetattr(int fd, uint termios_addr);
 int             proc_tcsetattr(int fd, int optional_actions, uint termios_addr);
 void            proc_apply_pending_signals(struct proc *p);

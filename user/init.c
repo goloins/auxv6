@@ -194,6 +194,18 @@ make_disk_nodes(void)
   }
 }
 
+static void
+make_tty_nodes(void)
+{
+  int i;
+  char path[] = "/dev/tty0";
+
+  for(i = 0; i < 4; i++) {
+    path[8] = '0' + i;
+    ensure_node(path, M_IFCHR, 1, i + 1);
+  }
+}
+
 int
 main(void)
 {
@@ -218,6 +230,7 @@ main(void)
 
   printf(1, "init: creating /dev directory\n");
   mkdir("/dev");
+  make_tty_nodes();
   printf(1, "init: calling make_disk_nodes\n");
   make_disk_nodes();
   printf(1, "init: make_disk_nodes done\n");

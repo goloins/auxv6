@@ -3,6 +3,7 @@
 #include "../include/fcntl.h"
 #include "../include/user.h"
 #include "../include/x86.h"
+#include "../include/stddef.h"
 
 char*
 strcpy(char *s, const char *t)
@@ -123,6 +124,43 @@ readpass(char *buf, int max)
   write(1, "\n", 1);
   tcsetattr(0, TCSANOW, &oldt);
   return buf;
+}
+
+int
+isatty(int fd)
+{
+  struct termios t;
+
+  if(fd < 0)
+    return 0;
+  return (tcgetattr(fd, &t) == 0) ? 1 : 0;
+}
+
+char*
+ttyname(int fd)
+{
+  static char name[] = "/dev/console";
+
+  if(!isatty(fd))
+    return 0;
+  return name;
+}
+
+int
+ttyname_r(int fd, char *buf, size_t buflen)
+{
+  static const char name[] = "/dev/console";
+  uint need;
+
+  if(!isatty(fd) || buf == 0)
+    return -1;
+
+  need = strlen(name) + 1;
+  if(buflen < need)
+    return -1;
+
+  memmove(buf, name, need);
+  return 0;
 }
 
 int

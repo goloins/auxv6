@@ -42,6 +42,7 @@ struct procinfo_k {
   int ppid;
   int pgid;
   int sid;
+  int tty;
   int uid;
   int gid;
   int state;

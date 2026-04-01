@@ -33,6 +33,10 @@ kbdgetc(void)
 
   shift |= shiftcode[data];
   shift ^= togglecode[data];
+
+  if((shift & ALT) && data >= 0x3B && data <= 0x3E)
+    return KEY_F1 + (data - 0x3B);
+
   c = charcode[shift & (CTL | SHIFT)][data];
   if(shift & CAPSLOCK){
     if('a' <= c && c <= 'z')

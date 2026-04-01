@@ -434,18 +434,6 @@ getgroups(int n, gid_t *groups)
 }
 
 /* -------------------------------------------------------------------------
- * isatty — terminal check
- *
- * auxv6 has no ioctl(TIOCISATTY).  Return 1 for fds 0/1/2 on the
- * assumption they are connected to a console; 0 for everything else.
- * ------------------------------------------------------------------------- */
-int
-isatty(int fd)
-{
-  return (fd >= 0 && fd <= 2) ? 1 : 0;
-}
-
-/* -------------------------------------------------------------------------
  * sysconf — system configuration constants
  * ------------------------------------------------------------------------- */
 long
