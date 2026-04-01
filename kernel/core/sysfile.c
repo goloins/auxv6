@@ -970,10 +970,16 @@ sys_open(void)
   begin_op();
 
   if(omode & O_CREATE){
-    ip = create(path, T_FILE, 0, 0, 0);
+    // O_CREATE should still open an existing vnode when present.
+    ip = vfs_resolve(path);
     if(ip == 0){
-      end_op();
-      return -1;
+      ip = create(path, T_FILE, 0, 0, 0);
+      if(ip == 0){
+        end_op();
+        return -1;
+      }
+    } else {
+      ilock(ip);
     }
     if((omode & O_RDWR) == O_RDWR) {
       if(iaccess(ip, IACC_READ | IACC_WRITE) < 0){

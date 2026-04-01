@@ -24,7 +24,9 @@ main(void)
   seginit();       // segment descriptors
   picinit();       // disable pic
   ioapicinit();    // another interrupt controller
+  display_init();  // display device registry
   pci_init();      // PCI bus enumeration
+  virtio_gpu_init(); // virtio-gpu subsystem
   consoleinit();   // console hardware
   uartinit();      // serial port
   pinit();         // process table

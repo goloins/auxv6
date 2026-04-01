@@ -296,6 +296,43 @@ sys_alarm(void)
 }
 
 int
+sys_kmsgread(void)
+{
+  int uaddr;
+  int max;
+  char *kbuf;
+  int n;
+  struct proc *p;
+
+  if(argint(0, &uaddr) < 0 || argint(1, &max) < 0)
+    return -1;
+  if(max <= 0)
+    return 0;
+
+  kbuf = kalloc();
+  if(kbuf == 0)
+    return -1;
+
+  if(max > PGSIZE)
+    max = PGSIZE;
+
+  n = console_kmsg_read(kbuf, max);
+  if(n < 0) {
+    kfree(kbuf);
+    return -1;
+  }
+
+  p = myproc();
+  if(copyout(p->pgdir, (uint)uaddr, kbuf, (uint)n) < 0) {
+    kfree(kbuf);
+    return -1;
+  }
+
+  kfree(kbuf);
+  return n;
+}
+
+int
 sys_getpid(void)
 {
   return myproc()->pid;

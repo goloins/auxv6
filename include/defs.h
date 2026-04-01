@@ -50,7 +50,10 @@ int             console_get_termios(int tty, struct termios *tp);
 int             console_set_termios(int tty, const struct termios *tp, int optional_actions);
 void            console_set_active_tty(int tty);
 int             console_get_active_tty(void);
+int             console_logo_get_enabled(void);
+int             console_logo_set_enabled(int enabled);
 int             console_ioctl(int fd, int request, uint arg);
+int             console_kmsg_read(char *dst, int max);
 void            panic(char*) __attribute__((noreturn));
 
 // Master debug flag - set to 1 to enable boot diagnostics and subsystem logging.
@@ -181,6 +184,12 @@ int             pci_format_devices(char*, int);
 void            virtio_blk_init(void);
 int             virtio_blk_get_flush_every_writes(void);
 int             virtio_blk_set_flush_every_writes(int value);
+
+// virtio_gpu.c
+void            virtio_gpu_init(void);
+
+// graphics/display.c
+void            display_init(void);
 
 // dma.c
 void            dma_init(void);

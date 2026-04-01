@@ -17,9 +17,10 @@ OBJS = \
 	kernel/driver/dma.o\
 	kernel/driver/virtio.o\
 	kernel/driver/virtio_blk.o\
+	kernel/driver/virtio_gpu.o\
+	kernel/driver/virtio_net.o\
 	kernel/driver/ahci.o\
 	kernel/driver/nvme.o\
-	kernel/driver/virtio_net.o\
 	kernel/driver/e1000.o\
 	kernel/driver/i219.o\
 	kernel/driver/i226.o\
@@ -50,6 +51,10 @@ OBJS = \
 	kernel/driver/uart.o\
 	kernel/core/vectors.o\
 	kernel/core/vm.o\
+	kernel/graphics/framebuffer.o\
+	kernel/graphics/display.o\
+	kernel/graphics/font.o\
+	kernel/graphics/render.o\
 	kernel/net/socket.o\
 	kernel/net/device.o\
 	kernel/net/route.o\
@@ -412,6 +417,9 @@ _termdemo: user/termdemo
 _termcheck: user/termcheck
 	cp user/termcheck _termcheck
 
+_dmesg: user/dmesg
+	cp user/dmesg _dmesg
+
 _dash: ports/dash-0.5.12/Makefile.auxv6 user/ulib.o user/usys.o user/printf.o user/umalloc.o user/resolve.o user/posix.o user/setjmp.o
 	$(MAKE) -f ports/dash-0.5.12/Makefile.auxv6
 	cp ports/dash-0.5.12/_dash _dash
@@ -487,6 +495,7 @@ UPROGS=\
 	_isotest\
 	_termdemo\
 	_termcheck\
+	_dmesg\
 	_dash\
 
 # Old-init fallback set for machines without ports/dash.
@@ -569,7 +578,7 @@ clean:
 	_dhcp \
 	user/ifconfig user/netstat user/route user/arp user/rarp user/ip \
 	user/dhcp user/v6dhcpd user/nslookup \
-	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/lspci user/v6init
+	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/dmesg user/lspci user/v6init
 
 # make a printout
 FILES = $(shell grep -v '^\#' tools/runoff.list)
@@ -605,6 +614,7 @@ FATROOT_STAGE ?= .fatroot
 EXT2QEMU = -drive file=$(EXT2IMG)$(comma)index=2$(comma)media=disk$(comma)format=raw
 FATQEMU = -drive file=$(FATIMG)$(comma)index=3$(comma)media=disk$(comma)format=raw
 QEMUNETOPTS ?= -netdev user,id=auxnet0 -device virtio-net-pci,netdev=auxnet0,mac=52:54:00:12:34:56,disable-modern=on
+QEMUGFXOPTS ?= -device virtio-gpu-pci
 QEMUOPTS = -drive file=fs.img,index=1,media=disk,format=raw -drive file=xv6.img,index=0,media=disk,format=raw $(EXT2QEMU) $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 test_ext2.img: tools/stage-ext2-root.sh README etc.hosts $(EXT2ROOT_FSTAB) etc.profile etc.rc.S etc.rc.0 etc.rc.1 etc.rc.2 etc.rc.3 etc.rc.6 etc.passwd etc.groups etc.hostname etc.resolv.conf $(UPROGS)
@@ -626,10 +636,10 @@ fat-reset:
 
 # Default: EXT2 root filesystem (easier to modify/mount from other systems)
 qemu: xv6.img $(EXT2IMG)
-	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 qemu-oldinit: xv6.img test_ext2_oldinit.img
-	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=test_ext2_oldinit.img,index=2,media=disk,format=raw $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=test_ext2_oldinit.img,index=2,media=disk,format=raw $(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 qemu-memfs: xv6memfs.img
 	$(QEMU) -drive file=xv6memfs.img,index=0,media=disk,format=raw $(QEMUNETOPTS) -smp $(CPUS) -m 256
@@ -638,7 +648,7 @@ qemu-nox: xv6.img $(EXT2IMG)
 	$(QEMU) -nographic -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 qemu-fat: xv6.img $(EXT2IMG) $(FATIMG)
-	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(FATQEMU) $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(FATQEMU) $(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 qemu-nox-fat: xv6.img $(EXT2IMG) $(FATIMG)
 	$(QEMU) -nographic -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(FATQEMU) $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
@@ -648,7 +658,7 @@ qemu-nox-fat: xv6.img $(EXT2IMG) $(FATIMG)
 
 qemu-gdb: xv6.img $(EXT2IMG) .gdbinit
 	@echo "*** Now run 'gdb'." 1>&2
-	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS) -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
+	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
 
 qemu-nox-gdb: xv6.img $(EXT2IMG) .gdbinit
 	@echo "*** Now run 'gdb'." 1>&2

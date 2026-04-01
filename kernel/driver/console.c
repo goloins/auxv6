@@ -16,18 +16,71 @@
 #include "termios.h"
 #include "signal.h"
 #include "x86.h"
+#include "graphics/display.h"
+#include "graphics/framebuffer.h"
+#include "graphics/font.h"
+#include "graphics/render.h"
 
 struct console_tty_state;
 
 static void consputc(int);
 static void consputc_ansi(struct console_tty_state *t, int c);
+static struct console_tty_state *console_tty_by_index(int tty);
 
 static int panicked = 0;
+
+#define KMSG_RING_SIZE 16384
+
+static char kmsg_ring[KMSG_RING_SIZE];
+static uint kmsg_head;
+static uint kmsg_size;
 
 static struct {
   struct spinlock lock;
   int locking;
 } cons;
+
+static void
+kmsg_append_char_locked(int c)
+{
+  char ch;
+
+  if(c == 0x100)
+    return;
+
+  ch = (char)(c & 0xff);
+  kmsg_ring[kmsg_head] = ch;
+  kmsg_head = (kmsg_head + 1) % KMSG_RING_SIZE;
+  if(kmsg_size < KMSG_RING_SIZE)
+    kmsg_size++;
+}
+
+int
+console_kmsg_read(char *dst, int max)
+{
+  uint start;
+  uint i;
+  int n;
+
+  if(dst == 0 || max <= 0)
+    return 0;
+
+  acquire(&cons.lock);
+  if(kmsg_size == 0) {
+    release(&cons.lock);
+    return 0;
+  }
+
+  n = (max < (int)kmsg_size) ? max : (int)kmsg_size;
+  start = (kmsg_head + KMSG_RING_SIZE - kmsg_size) % KMSG_RING_SIZE;
+  start = (start + (kmsg_size - n)) % KMSG_RING_SIZE;
+
+  for(i = 0; i < (uint)n; i++)
+    dst[i] = kmsg_ring[(start + i) % KMSG_RING_SIZE];
+
+  release(&cons.lock);
+  return n;
+}
 
 struct console_input_state {
   char buf[128];
@@ -118,6 +171,251 @@ static int console_active_tty = 0;
 static ushort *cga_hw = (ushort*)P2V(0xb8000);
 static ushort *crt = (ushort*)P2V(0xb8000);
 static int cga_render_offscreen = 0;
+
+static struct display_device *console_gfx_dev;
+static struct framebuffer *console_gfx_fb;
+static struct render_context *console_gfx_ctx;
+static struct vt_surface *console_gfx_vts;
+static int console_gfx_announced;
+static int console_gfx_warned;
+static int console_logo_enabled = 1;
+
+int
+console_logo_get_enabled(void)
+{
+  return console_logo_enabled ? 1 : 0;
+}
+
+int
+console_logo_set_enabled(int enabled)
+{
+  console_logo_enabled = enabled ? 1 : 0;
+  return 0;
+}
+
+static void
+console_stamp_logo_textmode_locked(struct console_tty_state *t)
+{
+  static const char text[] = "A/UXV6";
+  static const uchar attr[6] = {
+    0x0A, /* light green */
+    0x0E, /* yellow */
+    0x06, /* brown/orange-ish */
+    0x0C, /* light red */
+    0x0D, /* light magenta */
+    0x09, /* light blue */
+  };
+  int col0;
+  int i;
+
+  if(!t)
+    return;
+  if(!console_logo_enabled)
+    return;
+
+  col0 = 80 - 6;
+  for(i = 0; i < 6; i++)
+    t->screen[col0 + i] = (ushort)(text[i] | ((ushort)attr[i] << 8));
+
+  if(t == console_tty_by_index(console_active_tty)) {
+    for(i = 0; i < 6; i++)
+      cga_hw[col0 + i] = t->screen[col0 + i];
+  }
+}
+
+static void
+console_gfx_draw_logo_char(struct framebuffer *fb, int x, int y, int scale,
+                           uint color, char ch)
+{
+  int row;
+  int col;
+  uchar rows[7];
+
+  memset(rows, 0, sizeof(rows));
+  switch(ch) {
+  case 'A':
+    rows[0] = 0x0E; rows[1] = 0x11; rows[2] = 0x11; rows[3] = 0x1F;
+    rows[4] = 0x11; rows[5] = 0x11; rows[6] = 0x11;
+    break;
+  case '/':
+    rows[0] = 0x01; rows[1] = 0x02; rows[2] = 0x04; rows[3] = 0x08;
+    rows[4] = 0x10; rows[5] = 0x00; rows[6] = 0x00;
+    break;
+  case 'U':
+    rows[0] = 0x11; rows[1] = 0x11; rows[2] = 0x11; rows[3] = 0x11;
+    rows[4] = 0x11; rows[5] = 0x11; rows[6] = 0x0E;
+    break;
+  case 'X':
+    rows[0] = 0x11; rows[1] = 0x11; rows[2] = 0x0A; rows[3] = 0x04;
+    rows[4] = 0x0A; rows[5] = 0x11; rows[6] = 0x11;
+    break;
+  case 'V':
+    rows[0] = 0x11; rows[1] = 0x11; rows[2] = 0x11; rows[3] = 0x11;
+    rows[4] = 0x11; rows[5] = 0x0A; rows[6] = 0x04;
+    break;
+  case '6':
+    rows[0] = 0x0E; rows[1] = 0x10; rows[2] = 0x10; rows[3] = 0x1E;
+    rows[4] = 0x11; rows[5] = 0x11; rows[6] = 0x0E;
+    break;
+  default:
+    return;
+  }
+
+  for(row = 0; row < 7; row++) {
+    for(col = 0; col < 5; col++) {
+      if(rows[row] & (1 << (4 - col)))
+        fb_fill_rect(fb, x + col * scale, y + row * scale, scale, scale, color);
+    }
+  }
+}
+
+static void
+console_gfx_draw_logo_locked(void)
+{
+  static const char text[] = "A/UXV6";
+  static const uint rainbow[6] = {
+    0x002DBE60, /* green */
+    0x00F7D154, /* yellow */
+    0x00F29F3F, /* orange */
+    0x00E24A3B, /* red */
+    0x008E56D9, /* violet */
+    0x003B82F6, /* blue */
+  };
+  int i;
+  int scale;
+  int char_w;
+  int char_h;
+  int spacing;
+  int total_w;
+  int x;
+  int y;
+
+  if(!console_gfx_fb)
+    return;
+  if(!console_logo_enabled)
+    return;
+
+  scale = 2;
+  char_w = 5 * scale;
+  char_h = 7 * scale;
+  spacing = scale;
+  total_w = 6 * char_w + 5 * spacing;
+  x = (int)console_gfx_fb->width - total_w - 8;
+  y = 6;
+  if(x < 0)
+    x = 0;
+
+  fb_fill_rect(console_gfx_fb, x - 4, y - 3, total_w + 8, char_h + 6, 0x00000000);
+  for(i = 0; i < 6; i++)
+    console_gfx_draw_logo_char(console_gfx_fb,
+                               x + i * (char_w + spacing),
+                               y,
+                               scale,
+                               rainbow[i],
+                               text[i]);
+}
+
+static int
+console_gfx_ensure_locked(void)
+{
+  struct render_context tmp;
+  const char *msg;
+  const char *p;
+
+  if(console_gfx_vts)
+    return 1;
+
+  console_gfx_dev = display_get_primary();
+  if(!console_gfx_dev) {
+    if(!console_gfx_warned) {
+      msg = "console: gfx mirror unavailable (no display device)\n";
+      for(p = msg; *p; p++)
+        uartputc(*p);
+      console_gfx_warned = 1;
+    }
+    return 0;
+  }
+
+  if(!console_gfx_dev->ops) {
+    if(!console_gfx_warned) {
+      msg = "console: gfx mirror unavailable (display ops not implemented)\n";
+      for(p = msg; *p; p++)
+        uartputc(*p);
+      console_gfx_warned = 1;
+    }
+    return 0;
+  }
+
+  if(!console_gfx_fb) {
+    console_gfx_fb = display_create_framebuffer(console_gfx_dev, 640, 400, PIXFMT_XRGB8888);
+    if(!console_gfx_fb)
+      return 0;
+  }
+
+  if(console_gfx_dev->num_crtcs > 0)
+    display_set_scanout(console_gfx_dev, &console_gfx_dev->crtcs[0], console_gfx_fb);
+
+  if(!console_gfx_ctx)
+    console_gfx_ctx = render_context_create(console_gfx_fb, font_builtin_default());
+  if(!console_gfx_ctx)
+    return 0;
+
+  memset(&tmp, 0, sizeof(tmp));
+  tmp = *console_gfx_ctx;
+  console_gfx_vts = vt_surface_create(80, 25, &tmp);
+  if(!console_gfx_vts)
+    return 0;
+
+  console_gfx_vts->fb_x = 0;
+  console_gfx_vts->fb_y = 0;
+
+  if(!console_gfx_announced) {
+    const char *msg = "console: gfx mirror enabled\n";
+    const char *p;
+    for(p = msg; *p; p++)
+      uartputc(*p);
+    console_gfx_announced = 1;
+  }
+
+  return 1;
+}
+
+static void
+console_gfx_sync_from_tty_locked(struct console_tty_state *t)
+{
+  int i;
+
+  if(!t)
+    return;
+  if(!console_gfx_ensure_locked())
+    return;
+
+  acquire(&console_gfx_vts->lock);
+  if(!console_gfx_vts->cells) {
+    release(&console_gfx_vts->lock);
+    return;
+  }
+
+  for(i = 0; i < 25 * 80; i++) {
+    ushort s = t->screen[i];
+    struct text_cell tc;
+    tc.codepoint = (uint)(s & 0x00FF);
+    tc.attr = 0;
+    tc.fg_color = (uchar)((s >> 8) & 0x0F);
+    tc.bg_color = (uchar)(((s >> 12) & 0x0F));
+    tc.width = 1;
+    console_gfx_vts->cells[i] = tc;
+  }
+
+  console_gfx_vts->cursor_x = t->cursor % 80;
+  console_gfx_vts->cursor_y = t->cursor / 80;
+  release(&console_gfx_vts->lock);
+
+  vt_mark_all_dirty(console_gfx_vts);
+  vt_render_dirty(console_gfx_vts);
+  console_gfx_draw_logo_locked();
+  display_flush(console_gfx_dev, console_gfx_fb);
+}
 
 static int
 console_tty_index_clamp(int tty)
@@ -264,11 +562,13 @@ console_flush_tty_locked(struct console_tty_state *t)
 {
   if(t != console_tty_by_index(console_active_tty))
     return;
+  console_stamp_logo_textmode_locked(t);
   memmove(cga_hw, t->screen, sizeof(t->screen));
   cga_render_offscreen = 0;
   cga_cursor = t->cursor;
   outb(CRTPORT, 14); outb(CRTPORT+1, t->cursor >> 8);
   outb(CRTPORT, 15); outb(CRTPORT+1, t->cursor);
+  console_gfx_sync_from_tty_locked(t);
 }
 
 static void
@@ -362,6 +662,7 @@ consputc(int c)
     uartputc('\b'); uartputc(' '); uartputc('\b');
   } else
     uartputc(c);
+  kmsg_append_char_locked(c);
   cgaputc_kernel(c);
 
   // Kernel-path output writes directly to hardware; mirror it into the
@@ -369,7 +670,9 @@ consputc(int c)
   // rewind to stale cursor/screen state.
   t = console_tty_by_index(console_active_tty);
   memmove(t->screen, cga_hw, sizeof(t->screen));
+  console_stamp_logo_textmode_locked(t);
   t->cursor = cga_cursor;
+  console_gfx_sync_from_tty_locked(t);
 }
 
 /* --------------------------------------------------------------------------

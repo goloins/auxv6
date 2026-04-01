@@ -100,6 +100,9 @@ for src in "$@"; do
     _chgrp)
       install -m 0755 "$src" "$rootdir/sbin/chgrp"
       ;;
+    _dmesg)
+      install -m 0755 "$src" "$rootdir/sbin/dmesg"
+      ;;
     _*)
       install -m 0755 "$src" "$rootdir/bin/${base#_}"
       ;;

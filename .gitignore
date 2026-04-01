@@ -82,6 +82,7 @@ user/wc
 user/zombie
 user/termdemo
 user/termcheck
+user/dmesg
 include/rootfs_config.h
 .ext2root/
 .fatroot/

@@ -22,6 +22,7 @@
 #define PROCFS_MEMINFO_INO  7
 #define PROCFS_PS_INO       8
 #define PROCFS_MOUNTSTATS_INO 9
+#define PROCFS_LOGO_INO     10
 #define PROCFS_VERSION_STR  "a/ux86 aux86 i686\n"
 
 struct procfs_inode {
@@ -39,6 +40,7 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_MEMINFO_INO, "meminfo", 128 },
   { PROCFS_PS_INO, "ps", 2048 },
   { PROCFS_MOUNTSTATS_INO, "mountstats", 1024 },
+  { PROCFS_LOGO_INO, "logo", 16 },
   { 0, 0, 0 }
 };
 
@@ -48,7 +50,7 @@ static uint procfs_write_uint(char *buf, uint value);
 static uint
 procfs_root_dir_size(void)
 {
-  return 10 * sizeof(struct dirent);
+  return 11 * sizeof(struct dirent);
 }
 
 static int
@@ -166,6 +168,10 @@ procfs_fill_inode(struct inode *ip, uint inum)
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IWUSR | M_IRGRP | M_IROTH;
     ip->size = 2048;
+  } else if(inum == PROCFS_LOGO_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IWUSR | M_IRGRP | M_IROTH;
+    ip->size = 16;
   } else {
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
@@ -326,7 +332,6 @@ int
 procfs_readi(struct inode *ip, char *dst, uint off, uint n)
 {
   char buf[2048];
-  struct dirent entries[8];
   struct procinfo_k pinfo[NPROC];
   struct vfs_mount_info mins[VFS_MOUNTS_MAX];
   uint total_pages;
@@ -344,24 +349,27 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     return -1;
   if(ip->inum == PROCFS_ROOT_INO){
     // Note: . and .. are synthesized by VFS for mount roots
-    memset(entries, 0, sizeof(entries));
-    entries[0].inum = PROCFS_UPTIME_INO;
-    safestrcpy(entries[0].name, "uptime", DIRSIZ);
-    entries[1].inum = PROCFS_VERSION_INO;
-    safestrcpy(entries[1].name, "version", DIRSIZ);
-    entries[2].inum = PROCFS_PCI_INO;
-    safestrcpy(entries[2].name, "pci", DIRSIZ);
-    entries[3].inum = PROCFS_VBLK_FLUSH_INO;
-    safestrcpy(entries[3].name, "vblk_flush", DIRSIZ);
-    entries[4].inum = PROCFS_AHCI_TUNE_INO;
-    safestrcpy(entries[4].name, "ahci_tune", DIRSIZ);
-    entries[5].inum = PROCFS_MEMINFO_INO;
-    safestrcpy(entries[5].name, "meminfo", DIRSIZ);
-    entries[6].inum = PROCFS_PS_INO;
-    safestrcpy(entries[6].name, "ps", DIRSIZ);
-    entries[7].inum = PROCFS_MOUNTSTATS_INO;
-    safestrcpy(entries[7].name, "mountstats", DIRSIZ);
-    return procfs_copy_data(dst, off, n, (char*)entries, sizeof(entries));
+    struct dirent more_entries[9];
+    memset(more_entries, 0, sizeof(more_entries));
+    more_entries[0].inum = PROCFS_UPTIME_INO;
+    safestrcpy(more_entries[0].name, "uptime", DIRSIZ);
+    more_entries[1].inum = PROCFS_VERSION_INO;
+    safestrcpy(more_entries[1].name, "version", DIRSIZ);
+    more_entries[2].inum = PROCFS_PCI_INO;
+    safestrcpy(more_entries[2].name, "pci", DIRSIZ);
+    more_entries[3].inum = PROCFS_VBLK_FLUSH_INO;
+    safestrcpy(more_entries[3].name, "vblk_flush", DIRSIZ);
+    more_entries[4].inum = PROCFS_AHCI_TUNE_INO;
+    safestrcpy(more_entries[4].name, "ahci_tune", DIRSIZ);
+    more_entries[5].inum = PROCFS_MEMINFO_INO;
+    safestrcpy(more_entries[5].name, "meminfo", DIRSIZ);
+    more_entries[6].inum = PROCFS_PS_INO;
+    safestrcpy(more_entries[6].name, "ps", DIRSIZ);
+    more_entries[7].inum = PROCFS_MOUNTSTATS_INO;
+    safestrcpy(more_entries[7].name, "mountstats", DIRSIZ);
+    more_entries[8].inum = PROCFS_LOGO_INO;
+    safestrcpy(more_entries[8].name, "logo", DIRSIZ);
+    return procfs_copy_data(dst, off, n, (char*)more_entries, sizeof(more_entries));
   }
   if(ip->inum == PROCFS_VERSION_INO)
     return procfs_copy_data(dst, off, n, PROCFS_VERSION_STR,
@@ -373,6 +381,11 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
   if(ip->inum == PROCFS_VBLK_FLUSH_INO){
     int cadence = virtio_blk_get_flush_every_writes();
     len = procfs_write_uint(buf, cadence < 0 ? 0 : (uint)cadence);
+    buf[len++] = '\n';
+    return procfs_copy_data(dst, off, n, buf, len);
+  }
+  if(ip->inum == PROCFS_LOGO_INO){
+    len = procfs_write_uint(buf, (uint)console_logo_get_enabled());
     buf[len++] = '\n';
     return procfs_copy_data(dst, off, n, buf, len);
   }
@@ -521,7 +534,9 @@ procfs_writei(struct inode *ip, char *src, uint off, uint n)
 
   if(ip == 0 || src == 0)
     return -1;
-  if(ip->inum != PROCFS_VBLK_FLUSH_INO && ip->inum != PROCFS_AHCI_TUNE_INO)
+  if(ip->inum != PROCFS_VBLK_FLUSH_INO &&
+      ip->inum != PROCFS_AHCI_TUNE_INO &&
+      ip->inum != PROCFS_LOGO_INO)
     return -1;
   if(off != 0)
     return -1;
@@ -565,6 +580,14 @@ procfs_writei(struct inode *ip, char *src, uint off, uint n)
 
   if(ip->inum == PROCFS_VBLK_FLUSH_INO){
     if(virtio_blk_set_flush_every_writes((int)val) < 0)
+      return -1;
+    return n;
+  }
+
+  if(ip->inum == PROCFS_LOGO_INO){
+    if(val > 1)
+      return -1;
+    if(console_logo_set_enabled((int)val) < 0)
       return -1;
     return n;
   }
