@@ -8,7 +8,7 @@ We should avoid adding anything that should be core c library function to posix.
 
 Whenever a document in docs/ is relevant to a change, update it. If there isn't a relevant document, add one. If there is a relevant document but it doesn't cover the change, update it to cover the change.
 
-When creating userland tools, make sure there is an entry in .gitignore or the binary and that it will
+When creating userland tools, make sure there is an entry in .gitignore for the binary and that it will
 be cleaned up by make clean. Ensure you build a manpage for the tool and add it to the documentation. I don't want any binaries ending up in staged or in the repo or in the build output that aren't tracked by git or documented.
 
 When writing filesystem code, use the vfs layer, the filesystem driver shouldn't have to handle anything with the device directly. If this isn't possible because of holes in the VFS layer,
