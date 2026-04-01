@@ -159,10 +159,10 @@ $(OBJS) kernel/core/entry.o: $(ROOTFS_CONFIG)
 
 user/%.o: $(ROOTFS_CONFIG)
 
-xv6.img: bootblock aux.kern
-	dd if=/dev/zero of=xv6.img count=10000
-	dd if=bootblock of=xv6.img conv=notrunc
-	dd if=aux.kern of=xv6.img seek=1 conv=notrunc
+aux.bootkern: bootblock aux.kern
+	dd if=/dev/zero of=aux.bootkern count=10000
+	dd if=bootblock of=aux.bootkern conv=notrunc
+	dd if=aux.kern of=aux.bootkern seek=1 conv=notrunc
 
 xv6memfs.img: bootblock kernelmemfs
 	dd if=/dev/zero of=xv6memfs.img count=10000
@@ -434,6 +434,9 @@ _dash: ports/dash-0.5.12/Makefile.auxv6 user/ulib.o user/usys.o user/printf.o us
 	$(MAKE) -f ports/dash-0.5.12/Makefile.auxv6
 	cp ports/dash-0.5.12/_dash _dash
 
+_symlinktest: user/symlinktest
+	cp user/symlinktest _symlinktest
+
 mkfs: tools/mkfs.c include/fs.h
 	gcc -Werror -Wall -o mkfs tools/mkfs.c
 
@@ -511,6 +514,7 @@ UPROGS=\
 	_time\
 	_dmesg\
 	_dash\
+	_symlinktest\
 
 # Old-init fallback set for machines without ports/dash.
 UPROGS_OLDINIT = $(filter-out _dash _init,$(UPROGS)) _v6init
@@ -520,25 +524,25 @@ fs.img: $(EXT2IMG)
 
 # EXT2 root is now the default - these targets are included for clarity
 ext2root:
-	$(MAKE) xv6.img $(EXT2IMG)
+	$(MAKE) aux.bootkern $(EXT2IMG)
 
 qemu-ext2root:
-	$(MAKE) xv6.img $(EXT2IMG)
-	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw -smp $(CPUS) -m 512 $(QEMUEXTRA)
+	$(MAKE) aux.bootkern $(EXT2IMG)
+	$(QEMU) -serial mon:stdio -drive file=aux.bootkern,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 qemu-nox-ext2root:
-	$(MAKE) xv6.img $(EXT2IMG)
-	$(QEMU) -nographic -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw -smp $(CPUS) -m 512 $(QEMUEXTRA)
+	$(MAKE) aux.bootkern $(EXT2IMG)
+	$(QEMU) -nographic -drive file=aux.bootkern,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 qemu-gdb-ext2root: .gdbinit
-	$(MAKE) xv6.img $(EXT2IMG)
+	$(MAKE) aux.bootkern $(EXT2IMG)
 	@echo "*** Now run 'gdb'." 1>&2
-	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
+	$(QEMU) -serial mon:stdio -drive file=aux.bootkern,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
 
 qemu-nox-gdb-ext2root: .gdbinit
-	$(MAKE) xv6.img $(EXT2IMG)
+	$(MAKE) aux.bootkern $(EXT2IMG)
 	@echo "*** Now run 'gdb'." 1>&2
-	$(QEMU) -nographic -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
+	$(QEMU) -nographic -drive file=aux.bootkern,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
 
 -include kernel/**/*.d
 -include user/*.d
@@ -547,7 +551,7 @@ qemu-nox-gdb-ext2root: .gdbinit
 clean: 
 	rm -rf *.tex *.dvi *.idx *.aux *.log *.ind *.ilg \
 	*.o *.d *.asm *.sym kernel/core/vectors.S bootblock entryother \
-	aux.kern xv6.img fs.img kernelmemfs \
+	aux.kern aux.bootkern fs.img kernelmemfs \
 	xv6memfs.img mkfs .gdbinit $(ROOTFS_CONFIG) \
 	test_ext2.img \
 	test_ext2_oldinit.img \
@@ -585,7 +589,7 @@ print: xv6.pdf
 
 # run in emulators
 
-bochs : xv6.img $(EXT2IMG)
+bochs : aux.bootkern $(EXT2IMG)
 	if [ ! -e .bochsrc ]; then ln -s config/dot-bochsrc .bochsrc; fi
 	bochs -q
 
@@ -613,7 +617,7 @@ EXT2QEMU = -drive file=$(EXT2IMG)$(comma)index=2$(comma)media=disk$(comma)format
 FATQEMU = -drive file=$(FATIMG)$(comma)index=3$(comma)media=disk$(comma)format=raw
 QEMUNETOPTS ?= -netdev user,id=auxnet0 -device virtio-net-pci,netdev=auxnet0,mac=52:54:00:12:34:56,disable-modern=on
 QEMUGFXOPTS ?= -device virtio-gpu-pci
-QEMUOPTS = -drive file=xv6.img,index=0,media=disk,format=raw $(EXT2QEMU) $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+QEMUOPTS = -drive file=aux.bootkern,index=0,media=disk,format=raw $(EXT2QEMU) $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 test_ext2.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(UPROGS)
 	sh tools/stage-ext2-root.sh .ext2root $(EXT2IMG) $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(UPROGS)
@@ -633,34 +637,34 @@ fat-reset:
 	$(MAKE) $(FATIMG)
 
 # Default: EXT2 root filesystem (easier to modify/mount from other systems)
-qemu: xv6.img $(EXT2IMG)
-	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+qemu: aux.bootkern $(EXT2IMG)
+	$(QEMU) -serial mon:stdio -drive file=aux.bootkern,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
-qemu-oldinit: xv6.img test_ext2_oldinit.img
-	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=test_ext2_oldinit.img,index=2,media=disk,format=raw $(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+qemu-oldinit: aux.bootkern test_ext2_oldinit.img
+	$(QEMU) -serial mon:stdio -drive file=aux.bootkern,index=0,media=disk,format=raw -drive file=test_ext2_oldinit.img,index=2,media=disk,format=raw $(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 qemu-memfs: xv6memfs.img
 	$(QEMU) -drive file=xv6memfs.img,index=0,media=disk,format=raw $(QEMUNETOPTS) -smp $(CPUS) -m 256
 
-qemu-nox: xv6.img $(EXT2IMG)
-	$(QEMU) -nographic -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+qemu-nox: aux.bootkern $(EXT2IMG)
+	$(QEMU) -nographic -drive file=aux.bootkern,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
-qemu-fat: xv6.img $(EXT2IMG) $(FATIMG)
-	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(FATQEMU) $(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+qemu-fat: aux.bootkern $(EXT2IMG) $(FATIMG)
+	$(QEMU) -serial mon:stdio -drive file=aux.bootkern,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(FATQEMU) $(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
-qemu-nox-fat: xv6.img $(EXT2IMG) $(FATIMG)
-	$(QEMU) -nographic -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(FATQEMU) $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+qemu-nox-fat: aux.bootkern $(EXT2IMG) $(FATIMG)
+	$(QEMU) -nographic -drive file=aux.bootkern,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(FATQEMU) $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 .gdbinit: config/.gdbinit.tmpl
 	sed "s/localhost:1234/localhost:$(GDBPORT)/" < $^ > $@
 
-qemu-gdb: xv6.img $(EXT2IMG) .gdbinit
+qemu-gdb: aux.bootkern $(EXT2IMG) .gdbinit
 	@echo "*** Now run 'gdb'." 1>&2
-	$(QEMU) -serial mon:stdio -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
+	$(QEMU) -serial mon:stdio -drive file=aux.bootkern,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
 
-qemu-nox-gdb: xv6.img $(EXT2IMG) .gdbinit
+qemu-nox-gdb: aux.bootkern $(EXT2IMG) .gdbinit
 	@echo "*** Now run 'gdb'." 1>&2
-	$(QEMU) -nographic -drive file=xv6.img,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS) -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
+	$(QEMU) -nographic -drive file=aux.bootkern,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS) -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
 
 # CUT HERE
 # prepare dist for students

@@ -5,11 +5,37 @@
 int
 main(int argc, char *argv[])
 {
-  if(argc != 3){
-    printf(2, "Usage: ln old new\n");
+  int is_symlink = 0;
+  int i;
+  char *old;
+  char *new;
+
+  // Parse arguments
+  i = 1;
+  if(i < argc && argv[i][0] == '-'){
+    if(argv[i][1] == 's' && argv[i][2] == 0){
+      is_symlink = 1;
+      i++;
+    } else {
+      printf(2, "Usage: ln [-s] old new\n");
+      exit();
+    }
+  }
+
+  if(i + 2 != argc){
+    printf(2, "Usage: ln [-s] old new\n");
     exit();
   }
-  if(link(argv[1], argv[2]) < 0)
-    printf(2, "link %s %s: failed\n", argv[1], argv[2]);
+
+  old = argv[i];
+  new = argv[i + 1];
+
+  if(is_symlink){
+    if(symlink(old, new) < 0)
+      printf(2, "symlink %s %s: failed\n", old, new);
+  } else {
+    if(link(old, new) < 0)
+      printf(2, "link %s %s: failed\n", old, new);
+  }
   exit();
 }

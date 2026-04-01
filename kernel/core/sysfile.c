@@ -1880,9 +1880,8 @@ sys_lstat(void)
     return -1;
 
   begin_op();
-  // For lstat, we need to not follow symlinks
-  // For now, use regular resolve and accept that we get the target
-  // TODO: add vfs_resolve_nofollow for proper lstat
+  // For now, lstat just follows like stat
+  // TODO: when ext2_walk_nofollow_final is hooked up, use that instead
   if((ip = vfs_resolve(path)) == 0){
     end_op();
     return -1;
