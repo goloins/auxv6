@@ -6,6 +6,229 @@
 
 int ptsname_r(int fd, char *buf, uint buflen);
 
+#define PTY_SHELL_SESSIONS 3
+#define PTY_POLL_LOOPS 80
+
+struct pty_shell_session {
+  int mfd;
+  int pid;
+  int seen;
+  char marker[16];
+};
+
+static int
+contains_token(const char *buf, int n, const char *tok)
+{
+  int i;
+  int j;
+  int tlen;
+
+  tlen = strlen(tok);
+  if(tlen <= 0 || n < tlen)
+    return 0;
+
+  for(i = 0; i <= n - tlen; i++) {
+    for(j = 0; j < tlen; j++) {
+      if(buf[i + j] != tok[j])
+        break;
+    }
+    if(j == tlen)
+      return 1;
+  }
+  return 0;
+}
+
+static void
+build_marker(char *dst, int idx)
+{
+  dst[0] = 'T';
+  dst[1] = 'C';
+  dst[2] = 'P';
+  dst[3] = 'T';
+  dst[4] = 'Y';
+  dst[5] = '_';
+  dst[6] = '0' + idx;
+  dst[7] = 0;
+}
+
+static int
+spawn_shell_on_pty(struct pty_shell_session *sess, int idx)
+{
+  int pid;
+  int sfd;
+  char sname[32];
+  char *sh_argv[] = { "sh", 0 };
+  char *dash_argv[] = { "dash", 0 };
+
+  memset(sess, 0, sizeof(*sess));
+  sess->mfd = -1;
+  sess->pid = -1;
+  build_marker(sess->marker, idx);
+
+  sess->mfd = open("/dev/ptmx", O_RDWR);
+  if(sess->mfd < 0)
+    return -1;
+
+  if(ptsname_r(sess->mfd, sname, sizeof(sname)) < 0) {
+    close(sess->mfd);
+    sess->mfd = -1;
+    return -1;
+  }
+
+  pid = fork();
+  if(pid < 0) {
+    close(sess->mfd);
+    sess->mfd = -1;
+    return -1;
+  }
+
+  if(pid == 0) {
+    (void)setsid();
+    (void)setpgid(0, 0);
+
+    sfd = open(sname, O_RDWR);
+    if(sfd < 0)
+      exit();
+
+    (void)ioctl(sfd, TIOCSCTTY, 0);
+
+    close(0);
+    dup(sfd);
+    close(1);
+    dup(sfd);
+    close(2);
+    dup(sfd);
+    if(sfd > 2)
+      close(sfd);
+
+    exec("/bin/sh", sh_argv);
+    exec("/sh", sh_argv);
+    exec("/bin/dash", dash_argv);
+
+    for(;;)
+      sleep(1000);
+  }
+
+  sess->pid = pid;
+  return 0;
+}
+
+static void
+cleanup_shell_sessions(struct pty_shell_session *sess, int n)
+{
+  int i;
+  int st;
+
+  for(i = 0; i < n; i++) {
+    if(sess[i].pid > 0)
+      kill(sess[i].pid, SIGKILL);
+  }
+  for(i = 0; i < n; i++) {
+    if(sess[i].pid > 0)
+      waitpid(sess[i].pid, &st, 0);
+    if(sess[i].mfd >= 0)
+      close(sess[i].mfd);
+    sess[i].pid = -1;
+    sess[i].mfd = -1;
+  }
+}
+
+static int
+check_multi_pty_shells(void)
+{
+  struct pty_shell_session sess[PTY_SHELL_SESSIONS];
+  char cmd[32];
+  char out[128];
+  int i;
+  int j;
+  int inq;
+  int got;
+  int all_seen;
+  int loops;
+
+  for(i = 0; i < PTY_SHELL_SESSIONS; i++) {
+    if(spawn_shell_on_pty(&sess[i], i) < 0) {
+      cleanup_shell_sessions(sess, PTY_SHELL_SESSIONS);
+      return -1;
+    }
+    printf(1, "termcheck: spawned shell on PTY %d\n", i);
+  }
+
+  for(i = 0; i < PTY_SHELL_SESSIONS; i++) {
+    memset(cmd, 0, sizeof(cmd));
+    strcpy(cmd, "echo ");
+    strcpy(cmd + 5, sess[i].marker);
+    strcpy(cmd + 5 + strlen(sess[i].marker), "\n");
+    if(write(sess[i].mfd, cmd, strlen(cmd)) < 0) {
+      cleanup_shell_sessions(sess, PTY_SHELL_SESSIONS);
+      return -1;
+    }
+  }
+
+  for(loops = 0; loops < PTY_POLL_LOOPS; loops++) {
+    all_seen = 1;
+    for(i = 0; i < PTY_SHELL_SESSIONS; i++) {
+      if(!sess[i].seen)
+        all_seen = 0;
+
+      inq = 0;
+      if(ioctl(sess[i].mfd, FIONREAD, &inq) < 0)
+        continue;
+      if(inq <= 0)
+        continue;
+
+      if(inq > (int)sizeof(out) - 1)
+        inq = (int)sizeof(out) - 1;
+      got = read(sess[i].mfd, out, inq);
+      if(got <= 0)
+        continue;
+      out[got] = 0;
+
+      if(contains_token(out, got, sess[i].marker)) {
+        if(!sess[i].seen)
+          printf(1, "termcheck: shell PTY %d produced marker %s\n", i, sess[i].marker);
+        sess[i].seen = 1;
+      }
+
+      for(j = 0; j < PTY_SHELL_SESSIONS; j++) {
+        if(j == i)
+          continue;
+        if(contains_token(out, got, sess[j].marker)) {
+          cleanup_shell_sessions(sess, PTY_SHELL_SESSIONS);
+          return -1;
+        }
+      }
+    }
+
+    all_seen = 1;
+    for(i = 0; i < PTY_SHELL_SESSIONS; i++) {
+      if(!sess[i].seen) {
+        all_seen = 0;
+        break;
+      }
+    }
+    if(all_seen)
+      break;
+
+    sleep(2);
+  }
+
+  all_seen = 1;
+  for(i = 0; i < PTY_SHELL_SESSIONS; i++) {
+    if(!sess[i].seen) {
+      all_seen = 0;
+      break;
+    }
+  }
+
+  cleanup_shell_sessions(sess, PTY_SHELL_SESSIONS);
+  if(!all_seen)
+    return -1;
+
+  printf(1, "termcheck: all PTY shells terminated\n");
+  return 0;
+}
+
 static int
 check_termios_roundtrip(int fd)
 {
@@ -334,6 +557,13 @@ main(int argc, char **argv)
     fails++;
   } else {
     printf(1, "PASS: pty /dev/ptmx <-> /dev/pts/N roundtrip\n");
+  }
+
+  if(check_multi_pty_shells() < 0) {
+    printf(2, "FAIL: multi-pty shell isolation/lifecycle\n");
+    fails++;
+  } else {
+    printf(1, "PASS: multi-pty shell isolation/lifecycle\n");
   }
 
   if(fails == 0)
