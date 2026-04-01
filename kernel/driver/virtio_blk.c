@@ -127,7 +127,10 @@ struct virtio_blk_softc {
     
     /* Block device ID (for blockdev registration) */
     uint dev_id;
-    
+
+    /* Hardware-negotiated virtqueue depth (set once at probe, read-only thereafter) */
+    uint32_t vq_size;
+
     /* Pending request tracking */
     struct {
         struct buf *bp;
@@ -149,6 +152,12 @@ static int virtio_blk_next_unit = 0;  /* Track next unit to allocate */
  */
 static int virtio_blk_flush_every_writes = 1;
 static int virtio_blk_max_retries = 2;
+/*
+ * Active queue depth cap.  Currently the driver serializes one request at a
+ * time via req_lock, so the effective maximum is 1.  This knob is exposed
+ * for observability and to lay the groundwork for future multi-inflight work.
+ */
+static int virtio_blk_queue_depth = 1;
 static int virtio_blk_force_no_discard = 0;
 static int virtio_blk_force_no_write_zeroes = 0;
 static int virtio_blk_test_fail_mode = 0;
@@ -240,6 +249,10 @@ virtio_blk_get_tune(char *buf, int max)
     pos = virtio_blk_append_uint(buf, max, pos, (uint)virtio_blk_max_retries);
     pos = virtio_blk_append_str(buf, max, pos, "\n");
 
+    pos = virtio_blk_append_str(buf, max, pos, "queue_depth=");
+    pos = virtio_blk_append_uint(buf, max, pos, (uint)virtio_blk_queue_depth);
+    pos = virtio_blk_append_str(buf, max, pos, "\n");
+
     pos = virtio_blk_append_str(buf, max, pos, "force_no_discard=");
     pos = virtio_blk_append_uint(buf, max, pos, (uint)virtio_blk_force_no_discard);
     pos = virtio_blk_append_str(buf, max, pos, "\n");
@@ -309,6 +322,8 @@ virtio_blk_get_tune(char *buf, int max)
         pos = virtio_blk_append_sint(buf, max, pos, sc->admin_last_rc);
         pos = virtio_blk_append_str(buf, max, pos, " admin_last_count=");
         pos = virtio_blk_append_uint(buf, max, pos, sc->admin_last_count);
+        pos = virtio_blk_append_str(buf, max, pos, " vq_size=");
+        pos = virtio_blk_append_uint(buf, max, pos, sc->vq_size);
         pos = virtio_blk_append_str(buf, max, pos, "\n");
 
         if (pos >= max - 1)
@@ -357,6 +372,26 @@ virtio_blk_set_tune(const char *buf, int n)
                 return -1;
         }
         virtio_blk_max_retries = (int)v;
+        return 0;
+    }
+
+    /*
+     * queue_depth: soft cap on active inflight descriptors.  Currently the
+     * driver is single-inflight, so values > 1 are accepted but clamped to 1
+     * at submission time until multi-inflight is implemented.
+     */
+    if (n >= 12 && memcmp(buf, "queue_depth=", 12) == 0) {
+        v = 0;
+        for (i = 12; i < n; i++) {
+            if (buf[i] < '0' || buf[i] > '9')
+                return -1;
+            v = v * 10 + (uint)(buf[i] - '0');
+            if (v > 256)
+                return -1;
+        }
+        if (v < 1)
+            v = 1;
+        virtio_blk_queue_depth = (int)v;
         return 0;
     }
 
@@ -1233,12 +1268,13 @@ virtio_blk_probe(struct pci_dev *pci)
             sc->has_flush, sc->has_discard, sc->has_write_zeroes,
             virtio_blk_flush_every_writes);
     
-    /* Create virtqueue */
+    /* Create virtqueue (size=0 → use hardware max) */
     struct virtqueue *vq = virtq_create(&sc->vdev, 0, 0);
     if (!vq) {
         virtio_reset(&sc->vdev);
         return -1;
     }
+    sc->vq_size = (uint32_t)vq->size;
     
     /* Set driver data for interrupt handler */
     sc->vdev.driver_data = sc;

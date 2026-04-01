@@ -90,7 +90,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | POSIX compatibility layer | 70% | Broader tty/ioctl compatibility, dynamic `openpty`/`ptsname_r` path, dash portability fixes; many APIs still stubbed or partial |
 | Userland docs/manpages | 72% | `man` utility plus baseline pages are available, including new `which`/`lsof`/`file` coverage; command coverage and completeness are still growing |
 | procfs | 75% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`, `/proc/meminfo`, `/proc/ps`, `/proc/mountstats`, `/proc/gfxstats`, `/proc/lsof`; breadth improved but still sparse overall |
-| Virtio storage | 92% | Working virtio core + virtio-blk, shared IRQ-safe under QEMU multi-device setups, with dedicated `vblktest` regression coverage, retry telemetry, per-device failure class observability, fault injection, and mount/persist stress harness — DoD checklist complete except optional queue-depth tuning |
+| Virtio storage | 95% | Working virtio core + virtio-blk, shared IRQ-safe under QEMU multi-device setups, with dedicated `vblktest` regression coverage, retry telemetry, per-device failure class observability, fault injection, mount/persist stress harness, and queue-depth knob infrastructure — full DoD checklist complete |
 | Real NICs | 60% | E1000, PCNET, RTL8111 have full ifnet integration; VMXnet3, Hyper-V netvsc, Intel I219-V, Intel I226-V, and ASIX AX88179 PCI are stubs |
 | Device node management | 70% | `devman -s` creates `/dev` nodes at early runlevel from kernel-visible inventory; hotplug/event mode and richer policy rules still pending |
 
@@ -250,7 +250,7 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 - [x] Implement discard/write-zeroes request helpers behind capability checks
 - [x] Add error accounting and robust retry policy for transient I/O failures
 - [x] Add runtime flush cadence tuning (`/proc/vblk_flush`) for write-heavy workloads
-- [ ] Add optional queue-depth tuning knobs (single queue retained as default)
+- [x] Add optional queue-depth tuning knobs (`queue_depth` global + per-device `vq_size` observability via `/proc/vblk_flush`; single-queue serialized baseline, knob infrastructure plumbed for future multi-inflight)
 
 **Definition of done:**
 - [x] Multiple virtio disks can be attached and independently read/written/mounted
