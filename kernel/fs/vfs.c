@@ -1,6 +1,7 @@
 #include "types.h"
 #include "defs.h"
 #include "param.h"
+#include "stat.h"
 #include "fs.h"
 #include "spinlock.h"
 #include "sleeplock.h"
@@ -761,6 +762,93 @@ vfs_lookup(char *path, struct vnode *vn)
 
   vn->ip = ip;
   return 0;
+}
+
+// vfs_lookup_follow: like vfs_lookup, but follows symlinks at the VFS layer.
+// The filesystem vnode_ops.readlink op is used to read each symlink target;
+// the filesystem itself never needs to know about symlink following.
+// Returns -1 on ELOOP (> SYMLOOP_MAX redirections), broken link, or missing op.
+int
+vfs_lookup_follow(char *path, struct vnode *vn)
+{
+  char cur[256];
+  char linktgt[256];
+  struct inode *ip;
+  const struct vnode_ops *vops;
+  int depth;
+  int n;
+
+  if(path == 0 || vn == 0)
+    return -1;
+
+  safestrcpy(cur, path, sizeof(cur));
+
+  for(depth = 0; depth <= SYMLOOP_MAX; depth++){
+    if(vfs_lookup(cur, vn) < 0)
+      return -1;
+
+    ip = vn->ip;
+    if(ip->type != T_SYMLINK)
+      return 0;  // Resolved to a non-symlink inode; done.
+
+    if(depth == SYMLOOP_MAX){
+      // Too many levels of symbolic links.
+      iput(ip);
+      vn->ip = 0;
+      vn->mnt = 0;
+      return -1;
+    }
+
+    vops = vfs_dev_vops(ip->dev);
+    if(vops == 0 || vops->readlink == 0){
+      iput(ip);
+      vn->ip = 0;
+      vn->mnt = 0;
+      return -1;
+    }
+
+    ilock(ip);
+    n = vops->readlink(ip, linktgt, sizeof(linktgt) - 1);
+    iunlock(ip);
+    iput(ip);
+    vn->ip = 0;
+    vn->mnt = 0;
+
+    if(n <= 0)
+      return -1;
+    linktgt[n] = 0;
+
+    if(linktgt[0] == '/'){
+      // Absolute target: replace entire current path.
+      safestrcpy(cur, linktgt, sizeof(cur));
+    } else {
+      // Relative target: compose with the directory part of cur.
+      char base[256];
+      char *p;
+      char *slash;
+      int blen;
+      int llen;
+
+      safestrcpy(base, cur, sizeof(base));
+      slash = 0;
+      for(p = base; *p; p++)
+        if(*p == '/')
+          slash = p;
+      if(slash)
+        *(slash + 1) = 0;
+      else
+        base[0] = 0;
+
+      blen = strlen(base);
+      llen = strlen(linktgt);
+      if(blen + llen >= (int)sizeof(cur) - 1)
+        return -1;
+      memmove(cur, base, blen);
+      memmove(cur + blen, linktgt, llen + 1);
+    }
+  }
+
+  return -1;
 }
 
 int

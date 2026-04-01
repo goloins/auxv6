@@ -91,6 +91,7 @@ void vfs_init(void);
 struct inode* vfs_namei(char *path);
 struct inode* vfs_nameiparent(char *path, char *name);
 int vfs_lookup(char *path, struct vnode *vn);
+int vfs_lookup_follow(char *path, struct vnode *vn);
 int vfs_lookup_parent(char *path, char *name, struct vnode *vn);
 void vfs_vnode_drop(struct vnode *vn);
 int vfs_register_mount(struct vfs *fs, int dev, int flags, char *path);

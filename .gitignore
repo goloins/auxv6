@@ -14,6 +14,7 @@ kernelmemfs
 mkfs
 .gdbinit
 aux.kern
+aux.bootkern
 *.info.md
 .vscode/settings.json
 future_ideas.txt
@@ -81,6 +82,7 @@ user/stressfs
 user/usertests
 user/wc
 user/zombie
+user/symlinktest
 user/termdemo
 user/termcheck
 user/dmesg

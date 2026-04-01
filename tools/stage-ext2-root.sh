@@ -74,6 +74,7 @@ install -d -m 0755 "$rootdir/bin" "$rootdir/sbin" "$rootdir/etc" "$rootdir/dev"
 install -d -m 0755 "$rootdir/home" "$rootdir/home/aux" "$rootdir/proc" "$rootdir/mnt"
 install -d -m 0755 "$rootdir/etc/rc.d"
 install -d -m 0700 "$rootdir/root"
+install -d -m 1777 "$rootdir/tmp"
 
 for src in "$@"; do
   base=${src##*/}

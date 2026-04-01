@@ -549,10 +549,18 @@ posix_exec_access_mode(const struct stat *st, int mode)
 int
 __posix_stat(const char *path, struct stat *buf)
 {
+  struct stat lst;
+
   errno = 0;
   if(stat(path, buf) < 0){
-    if(errno == 0)
-      errno = ENOENT;
+    if(errno == 0){
+      // Best-effort mapping: if final component is a symlink and follow failed,
+      // report ELOOP (common Unix behavior for symlink loops).
+      if(lstat(path, &lst) == 0 && lst.st_type == T_SYMLINK)
+        errno = ELOOP;
+      else
+        errno = ENOENT;
+    }
     return -1;
   }
   posix_fixup_mode_from_type(buf);
@@ -575,7 +583,14 @@ __posix_fstat(int fd, struct stat *buf)
 int
 __posix_lstat(const char *path, struct stat *buf)
 {
-  return __posix_stat(path, buf);
+  errno = 0;
+  if(lstat(path, buf) < 0){
+    if(errno == 0)
+      errno = ENOENT;
+    return -1;
+  }
+  posix_fixup_mode_from_type(buf);
+  return 0;
 }
 
 static int

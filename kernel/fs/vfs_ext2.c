@@ -176,6 +176,7 @@ static int ext2_read_disk_inode(struct ext2_mount_data *data, uint inum,
 static int ext2_write_disk_inode(struct ext2_mount_data *data, uint inum,
                                  struct ext2_inode *in);
 static struct inode* ext2_make_inode(uint dev, uint inum);
+static int ext2_readlink(struct inode *ip, char *buf, uint size);
 static uint ext2_encode_dev(short major, short minor);
 static void ext2_decode_dev(uint raw, short *major, short *minor);
 
@@ -1521,13 +1522,29 @@ ext2_walk(char *path, int nameiparent, char *name)
   struct inode *ip;
   struct inode *next;
   char elem[EXT2_NAME_MAX + 1];
+  char curpath[256];
+  char newpath[256];
+  char linkbuf[256];
   char *p;
+  char *start;
+  int depth;
+  int n;
+  int prefix_len;
+  int link_len;
+  int rest_len;
+  int pos;
+  int need_slash;
   int i;
 
   if(path == 0)
     return 0;
 
-  if(path[0] == '/'){
+  safestrcpy(curpath, path, sizeof(curpath));
+  depth = 0;
+
+restart:
+
+  if(curpath[0] == '/'){
     ip = ext2_make_inode(ext2_active_dev, EXT2_ROOT_INO);
     if(ip == 0)
       return 0;
@@ -1544,8 +1561,13 @@ ext2_walk(char *path, int nameiparent, char *name)
     }
   }
 
-  p = path;
-  while((p = ext2_skipelem(p, elem)) != 0){
+  p = curpath;
+  while(1){
+    start = p;
+    p = ext2_skipelem(p, elem);
+    if(p == 0)
+      break;
+
     if(elem[0] == 0 || (elem[0] == '.' && elem[1] == 0))
       continue;
 
@@ -1563,6 +1585,79 @@ ext2_walk(char *path, int nameiparent, char *name)
       iput(ip);
       return 0;
     }
+
+    // Follow symlinks in non-final components (e.g. /a/linkdir/file).
+    // Final component symlink following is handled by vfs_lookup_follow().
+    if(next->type == T_SYMLINK && *p != 0){
+      if(depth >= SYMLOOP_MAX){
+        iput(next);
+        iput(ip);
+        return 0;
+      }
+
+      n = ext2_readlink(next, linkbuf, sizeof(linkbuf) - 1);
+      if(n <= 0){
+        iput(next);
+        iput(ip);
+        return 0;
+      }
+      linkbuf[n] = 0;
+
+      if(linkbuf[0] == '/'){
+        prefix_len = 0;
+      } else {
+        while(*start == '/')
+          start++;
+        prefix_len = start - curpath;
+      }
+
+      if(prefix_len < 0 || prefix_len >= (int)sizeof(newpath)){
+        iput(next);
+        iput(ip);
+        return 0;
+      }
+
+      memmove(newpath, curpath, prefix_len);
+      pos = prefix_len;
+
+      link_len = strlen(linkbuf);
+      if(pos + link_len >= (int)sizeof(newpath)){
+        iput(next);
+        iput(ip);
+        return 0;
+      }
+      memmove(newpath + pos, linkbuf, link_len);
+      pos += link_len;
+
+      rest_len = strlen(p);
+      if(rest_len > 0){
+        need_slash = (pos == 0 || newpath[pos - 1] != '/');
+        if(need_slash){
+          if(pos + 1 >= (int)sizeof(newpath)){
+            iput(next);
+            iput(ip);
+            return 0;
+          }
+          newpath[pos++] = '/';
+        }
+        if(pos + rest_len >= (int)sizeof(newpath)){
+          iput(next);
+          iput(ip);
+          return 0;
+        }
+        memmove(newpath + pos, p, rest_len);
+        pos += rest_len;
+      }
+      newpath[pos] = 0;
+
+      iput(next);
+      iput(ip);
+
+      safestrcpy(curpath, newpath, sizeof(curpath));
+      depth++;
+      goto restart;
+    }
+
     iput(ip);
     ip = next;
   }
@@ -1588,6 +1683,12 @@ ext2_read(struct inode *ip, char *dst, uint off, uint n)
   if(data == 0)
     return -1;
   if(ext2_read_disk_inode(data, ip->inum, &dip) < 0)
+    return -1;
+
+  if((dip.i_mode & EXT2_S_IFMT) == EXT2_S_IFLNK)
+    // Symlink data (fast: stored in i_block; slow: in data blocks) must never
+    // be read as file data.  Callers should follow the link via vfs_lookup_follow
+    // before opening; if we reach here the VFS wiring has a bug.
     return -1;
 
   if((dip.i_mode & EXT2_S_IFMT) == EXT2_S_IFDIR)
@@ -1883,6 +1984,9 @@ ext2_stat(struct inode *ip, struct stat *st)
     break;
   }
   st->st_size = dip.i_size;
+  st->st_atime = dip.i_atime;
+  st->st_mtime = dip.i_mtime;
+  st->st_ctime = dip.i_ctime;
   return 0;
 }
 

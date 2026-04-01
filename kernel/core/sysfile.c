@@ -253,7 +253,7 @@ vfs_resolve(char *path)
 {
   struct vnode vn;
 
-  if(vfs_lookup(path, &vn) < 0)
+  if(vfs_lookup_follow(path, &vn) < 0)
     return 0;
   return vn.ip;
 }
@@ -1836,15 +1836,15 @@ sys_readlink(void)
     return -1;
 
   begin_op();
-  // Use vfs_namei_nofollow if we add it, or resolve then check type
-  ip = vfs_resolve(path);
+  // vfs_namei does NOT follow symlinks — we need the link inode itself.
+  ip = vfs_namei(path);
   if(ip == 0){
     end_op();
     return -1;
   }
 
   ilock(ip);
-  
+
   // Verify it's a symlink
   if(ip->type != T_SYMLINK){
     iunlockput(ip);
@@ -1880,9 +1880,8 @@ sys_lstat(void)
     return -1;
 
   begin_op();
-  // For now, lstat just follows like stat
-  // TODO: when ext2_walk_nofollow_final is hooked up, use that instead
-  if((ip = vfs_resolve(path)) == 0){
+  // lstat must NOT follow symlinks — use the no-follow vfs_namei.
+  if((ip = vfs_namei(path)) == 0){
     end_op();
     return -1;
   }

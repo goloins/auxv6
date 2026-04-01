@@ -580,6 +580,9 @@ stati(struct inode *ip, struct stat *st)
   st->st_gid = ip->gid;
   st->st_mode = ip->mode;
   st->st_size = ip->size;
+  st->st_atime = 0;
+  st->st_mtime = 0;
+  st->st_ctime = 0;
 }
 
 //PAGEBREAK!
