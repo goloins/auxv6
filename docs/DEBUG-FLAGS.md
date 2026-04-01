@@ -6,6 +6,28 @@ This document describes all compile-time debug flags available in auxv6 to contr
 
 The kernel implements several hierarchical debug flags to control verbosity of logging at different stages and for different subsystems. All flags default to **disabled** (0) for clean terminal output during normal operation.
 
+In addition to compile-time kernel flags, auxv6 now has a userspace boot-time tuner for device-node manager verbosity in `/etc/devman.conf`.
+
+### `devman` Runtime Debug Tuner
+
+Controls `devman` verbosity during early runlevel `/dev` population.
+
+**Default:** `debug=0` (concise output)  
+**Type:** Runtime config (no rebuild required)  
+**Config file:** `/etc/devman.conf`
+
+**Accepted settings:**
+- `debug=0` or `debug 0` -> concise mode (single-line progress + errors)
+- `debug=1` or `debug 1` -> verbose mode (per-node creation diagnostics)
+
+**Example:**
+```conf
+# /etc/devman.conf
+debug=1
+```
+
+This is separate from `AUXV6_DEBUG`: kernel compile-time debug flags remain compile-time, while `devman` logging is tuned at runtime via config.
+
 ## Master Flags
 
 ### `AUXV6_DEBUG` - Global Debug Master Flag

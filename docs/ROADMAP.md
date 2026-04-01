@@ -31,6 +31,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - Terminal compatibility moved forward: Linux-compatible tty ioctl numbers now include `TCGETS/TCSETS*`, `FIONREAD/TIOCINQ`, and `TIOCOUTQ`, with auxv6-specific `TIOCISATTY` moved to `0x54A3` to avoid Linux collision.
 - PTY support moved from baseline to dynamic behavior: kernel major 3 PTY backend now allocates multiple PTY pairs via `/dev/ptmx`, tracks per-file endpoint identity, exposes `TIOCGPTN`, and provides queueing plus winsize/termios ioctls and `SIGWINCH` signaling.
 - Init/userland terminal setup improved further: `init` now pre-creates `/dev/pts/0..15`, `openpty()`/`ptsname_r()` use dynamic `/dev/pts/N` resolution, and `termcheck` now includes multi-PTY isolation/lifecycle plus max create/terminate stress coverage.
+- Device-node lifecycle moved from static init hardcoding to a runlevel-integrated userspace manager: `devman -s` now runs in `rc.S`, scans kernel-visible devices, creates `/dev` nodes dynamically, and supports `debug=0/1` tuning via `/etc/devman.conf`.
 - Dash porting on Linux hosts became more robust: aux build rules now force-regenerate host tools and include `libgcc_compat.c` fallbacks for 64-bit division/mod helpers.
 - procfs gained more than basic process plumbing: `/proc/uptime`, `/proc/pci`, `/proc/vblk_flush`, and `/proc/ahci_tune` now exist for observability and runtime tuning.
 - **NVMe driver** now has I/O queue creation and synchronous READ/WRITE command support via PRP1 (single-page transfers).
@@ -57,14 +58,14 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | Process model | 85% | fork/exec/wait, process groups, sessions |
 | Job control | 80% | setpgid, setsid, tcsetpgrp, terminal control |
 | Signal handling | 95% | Full userspace delivery, alarm(), SIGPIPE, hardware fault mapping |
-| Bootstrapping / init | 75% | VFS-launched init, rc scripts, runlevels, telinit, shebang exec |
+| Bootstrapping / init | 80% | VFS-launched init, rc scripts, runlevels, telinit, shebang exec, early-runlevel `devman` device-node bootstrap |
 | Memory management | 80% | Virtual memory, page tables, kalloc/kfree |
 | PCI subsystem | 80% | Bus 0 enumeration, BAR decode/mapping, helper APIs, `lspci`; MSI/MSI-X still missing |
 | DMA support | 75% | Page-based DMA allocation with physical address tracking and alignment |
 | Loop devices | 80% | 8 block devices backed by regular files, status/setup/teardown syscalls, `losetup` utility |
 | ISO 9660 | 85% | Working read-only implementation with VFS integration and loop-mount testing |
 | Symlinks | 90% | `symlink/readlink/lstat` wired, VFS follow/no-follow behavior landed, ext2 path traversal follows intermediate links, loop-depth limits and regression tests added |
-| Terminal/PTY stack | 80% | Console + dynamic PTY allocation (`/dev/ptmx` -> `/dev/pts/N`), per-endpoint queue/termios/winsize/ioctl routing, and stress-tested create/terminate lifecycle; dynamic node management daemon still pending |
+| Terminal/PTY stack | 85% | Console + dynamic PTY allocation (`/dev/ptmx` -> `/dev/pts/N`), per-endpoint queue/termios/winsize/ioctl routing, stress-tested create/terminate lifecycle, and dynamic node creation via `devman` |
 
 ### ⚠️ Partially Implemented (50-74%)
 | Subsystem | Status | Notes |
@@ -74,6 +75,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | procfs | 70% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`; still sparse overall |
 | Virtio storage | 70% | Working virtio core + virtio-blk, but still single-queue/minimal-feature oriented |
 | Real NICs | 60% | E1000, PCNET, RTL8111 have full ifnet integration; VMXnet3, Hyper-V netvsc, Intel I219-V, Intel I226-V, and ASIX AX88179 PCI are stubs |
+| Device node management | 70% | `devman -s` creates `/dev` nodes at early runlevel from kernel-visible inventory; hotplug/event mode and richer policy rules still pending |
 
 ### 🚧 Early Or Stubbed (0-49%)
 | Subsystem | Status | Notes |
@@ -81,7 +83,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | Modern storage | 40% | AHCI has polling DMA read/write; NVMe has I/O queue and basic RW path |
 | Btrfs | None | Planned read-only support |
 | NFS | None | Planned; requires XDR/RPC infrastructure |
-| mdev | None | Planned userspace device node manager |
+| Device hotplug/eventing | None | Planned kernel event path for live node add/remove beyond boot-time `devman -s` |
 
 ---
 
@@ -605,43 +607,35 @@ Phase 4 - Filesystem Operations:
 
 **Estimate:** 2-3 weeks
 
-### 5.5 mdev - Device Node Manager [LOW]
-**Status:** Not started  
-**Value:** Replaces manual device node creation, enables hotplug  
-**Files:** `user/mdev.c` (new)
+### 5.5 devman - Device Node Manager [MEDIUM]
+**Status:** Implemented baseline 2026-04-01  
+**Value:** Replaces manual device node creation during boot; establishes centralized `/dev` policy  
+**Files:** `user/devman.c`, `targetfs/etc/devman.conf`, `targetfs/etc/rc.S`, `user/init.c`
 
-**Concept:** Userspace utility (like BusyBox mdev) that creates device nodes based on kernel events or configuration. Runs at boot and optionally on hotplug.
+**Concept:** Userspace utility inspired by mdev/udev that runs in early runlevel (`rc.S`) and creates device nodes in `/dev` from kernel-visible inventory.
 
-**Implementation Plan:**
+**Implemented (current baseline):**
+- [x] `devman -s` static scan mode in userspace
+- [x] Early-runlevel integration (`rc.S`) replacing init hardcoded node loops
+- [x] Dynamic node creation for available block devices and tty/pty endpoints
+- [x] Safe idempotent behavior (skip if node already matches expected major/minor)
+- [x] Output verbosity tuner via `/etc/devman.conf` (`debug=0/1`)
 
-Phase 1 - Static Mode:
-- [ ] Create `user/mdev.c` utility
-- [ ] Parse `/etc/mdev.conf` for device rules
-- [ ] Scan procfs or blockdev list for devices
-- [ ] Create device nodes in `/dev` based on rules
+**Current behavior:**
+- On boot, `rc.S` runs `/bin/devman -s` before other setup work.
+- Device nodes are created only for detected/known paths in the current model.
+- Default output is concise; verbose per-node diagnostics are enabled with `debug=1`.
 
-Phase 2 - Integration:
-- [ ] Add `SYS_mknod_dev` or enhance existing mknod for block/char devices
-- [ ] Hook into init scripts to run mdev at boot
-- [ ] Document configuration file format
+**Remaining Work / Follow-ups:**
+- [ ] Parse richer rule syntax in `/etc/devman.conf` (pattern -> mode/owner/group/action)
+- [ ] Add hotplug/event-driven mode (beyond boot-time scan)
+- [ ] Add optional stale-node cleanup policy
+- [ ] Add kernel-exported inventory/event hooks for full mdev/devfs-style lifecycle
 
-**Configuration format (simple):**
-```
-# /etc/mdev.conf
-# device_pattern  uid:gid  mode  [command]
-sd[a-z]          0:0      660
-sd[a-z][0-9]     0:0      660
-vd[a-z]          0:0      660
-console          0:0      600
-null             0:0      666
-```
-
-**Definition of done:**
-- `mdev -s` scans system and creates all device nodes
-- `/dev/sda`, `/dev/vda`, etc. appear automatically at boot
-- Rules file controls ownership and permissions
-
-**Estimate:** 3-4 days
+**Definition of done (baseline):** ✅ Achieved
+- [x] Boot no longer depends on hardcoded `/dev` node loops in init
+- [x] `devman -s` creates required nodes at startup
+- [x] Debug verbosity can be tuned in config without rebuilding
 
 ### 5.6 NFS Client [MEDIUM-HIGH]
 **Status:** Not started - requires RPC/XDR infrastructure  
@@ -892,5 +886,5 @@ Several items have already landed out of order relative to this original plan, n
 6. **In parallel:** Continue POSIX porting with `sendto`/`recvfrom`, `netinet/in.h`, and `arpa/inet.h` for NFS over UDP
 7. **Storage polish:** Finish virtio-blk discard/write-zeroes, address AHCI multi-device
 8. ~~**Terminal follow-up:** Expand PTY from static single pair to dynamic `/dev/pts/N` allocation and lifecycle~~ **DONE 2026-04-01**
-9. **Terminal follow-up:** Replace static `/dev/pts` node bootstrap with mdev/devfs-style dynamic node lifecycle management
-10. **Later:** Btrfs read-only stub, mdev utility for device node management
+9. ~~**Terminal follow-up:** Replace static `/dev/pts` node bootstrap with mdev/devfs-style dynamic node lifecycle management~~ **DONE 2026-04-01** (baseline via `devman -s` in `rc.S`; hotplug/eventing still pending)
+10. **Later:** Btrfs read-only stub and devman hotplug/event lifecycle enhancements
