@@ -667,7 +667,7 @@ $(TARGETFS_DIR)/tmp/test.iso:
 	genisoimage -quiet -rock -o $@ .isoroot 2>/dev/null || \
 	  xorriso -as mkisofs -quiet -rock -o $@ .isoroot 2>/dev/null
 	rm -rf .isoroot
-
+#nice
 test_ext2.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) $(UPROGS)
 	sh tools/stage-ext2-root.sh .ext2root $(EXT2IMG) $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) $(UPROGS)
 
