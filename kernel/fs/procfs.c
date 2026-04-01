@@ -23,6 +23,7 @@
 #define PROCFS_PS_INO       8
 #define PROCFS_MOUNTSTATS_INO 9
 #define PROCFS_LOGO_INO     10
+#define PROCFS_GFXSTATS_INO 11
 #define PROCFS_VERSION_STR  "a/ux86 aux86 i686\n"
 
 struct procfs_inode {
@@ -41,6 +42,7 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_PS_INO, "ps", 2048 },
   { PROCFS_MOUNTSTATS_INO, "mountstats", 1024 },
   { PROCFS_LOGO_INO, "logo", 16 },
+  { PROCFS_GFXSTATS_INO, "gfxstats", 256 },
   { 0, 0, 0 }
 };
 
@@ -50,7 +52,7 @@ static uint procfs_write_uint(char *buf, uint value);
 static uint
 procfs_root_dir_size(void)
 {
-  return 11 * sizeof(struct dirent);
+  return 12 * sizeof(struct dirent);
 }
 
 static int
@@ -172,6 +174,10 @@ procfs_fill_inode(struct inode *ip, uint inum)
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IWUSR | M_IRGRP | M_IROTH;
     ip->size = 16;
+  } else if(inum == PROCFS_GFXSTATS_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
+    ip->size = 256;
   } else {
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
@@ -349,7 +355,7 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     return -1;
   if(ip->inum == PROCFS_ROOT_INO){
     // Note: . and .. are synthesized by VFS for mount roots
-    struct dirent more_entries[9];
+    struct dirent more_entries[10];
     memset(more_entries, 0, sizeof(more_entries));
     more_entries[0].inum = PROCFS_UPTIME_INO;
     safestrcpy(more_entries[0].name, "uptime", DIRSIZ);
@@ -369,6 +375,8 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     safestrcpy(more_entries[7].name, "mountstats", DIRSIZ);
     more_entries[8].inum = PROCFS_LOGO_INO;
     safestrcpy(more_entries[8].name, "logo", DIRSIZ);
+    more_entries[9].inum = PROCFS_GFXSTATS_INO;
+    safestrcpy(more_entries[9].name, "gfxstats", DIRSIZ);
     return procfs_copy_data(dst, off, n, (char*)more_entries, sizeof(more_entries));
   }
   if(ip->inum == PROCFS_VERSION_INO)
@@ -387,6 +395,45 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
   if(ip->inum == PROCFS_LOGO_INO){
     len = procfs_write_uint(buf, (uint)console_logo_get_enabled());
     buf[len++] = '\n';
+    return procfs_copy_data(dst, off, n, buf, len);
+  }
+  if(ip->inum == PROCFS_GFXSTATS_INO){
+    len = 0;
+    if(procfs_buf_puts(buf, sizeof(buf), &len, "sync_calls ") < 0)
+      return -1;
+    if(procfs_buf_putu(buf, sizeof(buf), &len, console_gfx_stats_sync_calls()) < 0)
+      return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+      return -1;
+
+    if(procfs_buf_puts(buf, sizeof(buf), &len, "cells_changed ") < 0)
+      return -1;
+    if(procfs_buf_putu(buf, sizeof(buf), &len, console_gfx_stats_cells_changed()) < 0)
+      return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+      return -1;
+
+    if(procfs_buf_puts(buf, sizeof(buf), &len, "cells_rendered ") < 0)
+      return -1;
+    if(procfs_buf_putu(buf, sizeof(buf), &len, console_gfx_stats_cells_rendered()) < 0)
+      return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+      return -1;
+
+    if(procfs_buf_puts(buf, sizeof(buf), &len, "flush_calls ") < 0)
+      return -1;
+    if(procfs_buf_putu(buf, sizeof(buf), &len, console_gfx_stats_flush_calls()) < 0)
+      return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+      return -1;
+
+    if(procfs_buf_puts(buf, sizeof(buf), &len, "flush_pixels ") < 0)
+      return -1;
+    if(procfs_buf_putu(buf, sizeof(buf), &len, console_gfx_stats_flush_pixels()) < 0)
+      return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+      return -1;
+
     return procfs_copy_data(dst, off, n, buf, len);
   }
   if(ip->inum == PROCFS_AHCI_TUNE_INO){

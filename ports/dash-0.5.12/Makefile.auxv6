@@ -1,0 +1,205 @@
+# Makefile — dash 0.5.12 for auxv6
+#
+# Run from the auxv6 root:   make -f ports/dash-0.5.12/Makefile
+# Or from this directory:    make (sets ROOT automatically via $PWD)
+#
+# Outputs:  ports/dash-0.5.12/_dash   (auxv6 ELF binary)
+# Install:  copy _dash to the auxv6 disk image as /bin/sh
+#
+# Prerequisites — run once to generate derived sources:
+#   make -f ports/dash-0.5.12/Makefile generated
+# This only needs a host cc (gcc/clang); it does NOT need the cross-compiler.
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+ROOT     ?= $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST))))../..)
+SRCDIR   := $(ROOT)/ports/dash-0.5.12/src
+INCDIR   := $(ROOT)/include
+POSIXDIR := $(ROOT)/include/posix
+UBLIBDIR := $(ROOT)/user
+OUT      := $(ROOT)/ports/dash-0.5.12/_dash
+
+# ---------------------------------------------------------------------------
+# Toolchain — mirrors the root Makefile
+# ---------------------------------------------------------------------------
+CROSS_ROOT   ?= /usr/local
+CROSS_BINDIR ?= $(CROSS_ROOT)/bin
+
+ifndef TOOLPREFIX
+TOOLPREFIX := $(shell \
+  if i386-jos-elf-objdump -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
+  then echo 'i386-jos-elf-'; \
+  elif test -x '$(CROSS_BINDIR)/i386-jos-elf-objdump' && \
+       '$(CROSS_BINDIR)/i386-jos-elf-objdump' -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
+  then echo '$(CROSS_BINDIR)/i386-jos-elf-'; \
+  elif test -x '$(CROSS_BINDIR)/i386-elf-objdump' && \
+       '$(CROSS_BINDIR)/i386-elf-objdump' -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
+  then echo '$(CROSS_BINDIR)/i386-elf-'; \
+  elif test -x '$(CROSS_BINDIR)/i686-elf-objdump' && \
+       '$(CROSS_BINDIR)/i686-elf-objdump' -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
+  then echo '$(CROSS_BINDIR)/i686-elf-'; \
+  elif objdump -i 2>&1 | grep 'elf32-i386' >/dev/null 2>&1; \
+  then echo ''; \
+  else echo "ERROR: no i386 cross-toolchain found" >&2; exit 1; fi)
+endif
+
+CC      := $(TOOLPREFIX)gcc
+LD      := $(TOOLPREFIX)ld
+OBJDUMP := $(TOOLPREFIX)objdump
+
+# GCC runtime helper library (provides __udivmoddi4 etc. for 64-bit ops on i386)
+LIBGCC  := $(shell $(CC) -m32 -print-libgcc-file-name 2>/dev/null)
+
+# ---------------------------------------------------------------------------
+# Compiler flags
+# ---------------------------------------------------------------------------
+CFLAGS  := -fno-pic -static -fno-builtin -fno-strict-aliasing \
+           -O2 -Wall -MD -ggdb -m32 -fno-omit-frame-pointer \
+           -fno-stack-protector \
+           -DBSD=1 -DSHELL -DSMALL=1 -DJOBS=1 -D_POSIX_COMPAT_TC \
+           -include $(ROOT)/ports/dash-0.5.12/config.h \
+           -I$(SRCDIR) \
+           -I$(POSIXDIR) \
+           -I$(POSIXDIR)/sys \
+           -I$(INCDIR) \
+           -Wno-error
+
+# Suppress warnings that flood from ported code
+CFLAGS  += -Wno-implicit-function-declaration \
+           -Wno-implicit-int \
+           -Wno-int-conversion \
+           -Wno-unused-variable \
+           -Wno-unused-function \
+           -Wno-unused-but-set-variable \
+           -Wno-sign-compare \
+           -Wno-parentheses \
+           -Wno-misleading-indentation
+
+# ---------------------------------------------------------------------------
+# Linker flags
+# ---------------------------------------------------------------------------
+LDFLAGS := -N -e main -Ttext 0 -m $(shell $(LD) -V 2>/dev/null | grep elf_i386 | head -1)
+
+# ---------------------------------------------------------------------------
+# Source files
+# ---------------------------------------------------------------------------
+
+# dash sources (in src/)
+# histedit.c is excluded: SMALL=1 means no line editing, and histedit.c
+# unconditionally includes <getopt.h> and <histedit.h> which we don't have.
+DASH_SRCS := \
+  alias.c arith_yacc.c arith_yylex.c cd.c error.c eval.c exec.c expand.c \
+  input.c jobs.c mail.c memalloc.c miscbltin.c \
+  mystring.c options.c output.c parser.c redir.c show.c trap.c \
+  main.c var.c system.c \
+  bltin/printf.c bltin/test.c bltin/times.c \
+  builtins.c init.c nodes.c syntax.c signames.c
+
+# auxv6 runtime (from user/)
+ULIB_OBJS := \
+  $(UBLIBDIR)/ulib.o \
+  $(UBLIBDIR)/usys.o \
+  $(UBLIBDIR)/printf.o \
+  $(UBLIBDIR)/umalloc.o \
+  $(UBLIBDIR)/resolve.o \
+  $(UBLIBDIR)/posix.o \
+  $(UBLIBDIR)/setjmp.o
+
+DASH_OBJS := $(patsubst %.c,$(ROOT)/ports/dash-0.5.12/obj/%.o,$(DASH_SRCS))
+
+# ---------------------------------------------------------------------------
+# Generated sources that must exist before compiling
+# ---------------------------------------------------------------------------
+GENERATED := \
+  $(SRCDIR)/token.h \
+  $(SRCDIR)/token_vars.h \
+  $(SRCDIR)/nodes.h \
+  $(SRCDIR)/nodes.c \
+  $(SRCDIR)/syntax.h \
+  $(SRCDIR)/syntax.c \
+  $(SRCDIR)/builtins.h \
+  $(SRCDIR)/builtins.c \
+  $(SRCDIR)/signames.c \
+  $(SRCDIR)/init.c
+
+# ---------------------------------------------------------------------------
+# Targets
+# ---------------------------------------------------------------------------
+.PHONY: all generated clean
+
+all: $(GENERATED) $(OUT)
+
+$(OUT): $(DASH_OBJS) $(ULIB_OBJS)
+	$(LD) $(LDFLAGS) -o $@ $^ $(LIBGCC)
+	$(OBJDUMP) -S $@ > $(ROOT)/ports/dash-0.5.12/dash.asm || true
+
+# Compile dash sources into obj/
+$(ROOT)/ports/dash-0.5.12/obj/%.o: $(SRCDIR)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+# Make sure bltin/ subdir objects are handled
+$(ROOT)/ports/dash-0.5.12/obj/bltin/%.o: $(SRCDIR)/bltin/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+# Build auxv6 ulib objects from C if they don't exist
+$(UBLIBDIR)/%.o: $(UBLIBDIR)/%.c
+	$(MAKE) -C $(ROOT) $@
+
+# Build auxv6 ulib objects from assembly (.S)
+$(UBLIBDIR)/setjmp.o: $(UBLIBDIR)/setjmp.S
+	$(CC) -m32 -c -o $@ $<
+
+# ---------------------------------------------------------------------------
+# Code generation (run on host with native cc, once)
+# ---------------------------------------------------------------------------
+generated: $(GENERATED)
+
+$(SRCDIR)/token.h $(SRCDIR)/token_vars.h: $(SRCDIR)/mktokens
+	cd $(SRCDIR) && sh mktokens
+
+$(SRCDIR)/nodes.h $(SRCDIR)/nodes.c: $(SRCDIR)/mknodes $(SRCDIR)/nodetypes $(SRCDIR)/nodes.c.pat
+	cd $(SRCDIR) && ./mknodes nodetypes nodes.c.pat
+
+$(SRCDIR)/mknodes: $(SRCDIR)/mknodes.c
+	cc -o $@ $<
+
+$(SRCDIR)/syntax.h $(SRCDIR)/syntax.c: $(SRCDIR)/mksyntax $(SRCDIR)/token.h
+	cd $(SRCDIR) && ./mksyntax
+
+$(SRCDIR)/mksyntax: $(SRCDIR)/mksyntax.c $(SRCDIR)/token.h
+	cc -o $@ $<
+
+$(SRCDIR)/builtins.def: $(SRCDIR)/builtins.def.in
+  cc -E -x c -DBSD=1 -DSHELL -DJOBS=1 -DSMALL=1 -o $@.tmp $< && \
+	grep -v '^#' $@.tmp > $@ && rm $@.tmp
+
+$(SRCDIR)/builtins.h $(SRCDIR)/builtins.c: $(SRCDIR)/builtins.def $(SRCDIR)/mkbuiltins
+	cd $(SRCDIR) && sh mkbuiltins builtins.def
+
+$(SRCDIR)/signames.c: $(SRCDIR)/mksignames
+	cd $(SRCDIR) && ./mksignames > signames.c
+
+$(SRCDIR)/mksignames: $(SRCDIR)/mksignames.c
+	cc -o $@ $< 2>/dev/null || cc -Wno-deprecated-non-prototype -o $@ $<
+
+$(SRCDIR)/init.c: $(SRCDIR)/mkinit
+	cd $(SRCDIR) && ./mkinit \
+	  alias.c arith_yacc.c arith_yylex.c cd.c error.c eval.c exec.c expand.c \
+	  histedit.c input.c jobs.c mail.c main.c memalloc.c miscbltin.c \
+	  mystring.c options.c output.c parser.c redir.c show.c trap.c var.c \
+	  bltin/printf.c system.c bltin/test.c bltin/times.c
+
+$(SRCDIR)/mkinit: $(SRCDIR)/mkinit.c
+	cc -o $@ $<
+
+# ---------------------------------------------------------------------------
+clean:
+	rm -f $(DASH_OBJS) $(OUT)
+
+distclean: clean
+	rm -f $(GENERATED) \
+	      $(SRCDIR)/mknodes $(SRCDIR)/mksyntax $(SRCDIR)/mkinit \
+	      $(SRCDIR)/mksignames $(SRCDIR)/builtins.def

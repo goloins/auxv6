@@ -83,8 +83,8 @@ user/zombie
 user/termdemo
 user/termcheck
 user/dmesg
+user/tail
 include/rootfs_config.h
 .ext2root/
 .fatroot/
 virtio_boot.log
-ports/

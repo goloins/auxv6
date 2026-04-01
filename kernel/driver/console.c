@@ -179,6 +179,11 @@ static struct vt_surface *console_gfx_vts;
 static int console_gfx_announced;
 static int console_gfx_warned;
 static int console_logo_enabled = 1;
+static uint console_gfx_stat_sync_calls;
+static uint console_gfx_stat_cells_changed;
+static uint console_gfx_stat_cells_rendered;
+static uint console_gfx_stat_flush_calls;
+static uint console_gfx_stat_flush_pixels;
 
 int
 console_logo_get_enabled(void)
@@ -191,6 +196,36 @@ console_logo_set_enabled(int enabled)
 {
   console_logo_enabled = enabled ? 1 : 0;
   return 0;
+}
+
+uint
+console_gfx_stats_sync_calls(void)
+{
+  return console_gfx_stat_sync_calls;
+}
+
+uint
+console_gfx_stats_cells_changed(void)
+{
+  return console_gfx_stat_cells_changed;
+}
+
+uint
+console_gfx_stats_cells_rendered(void)
+{
+  return console_gfx_stat_cells_rendered;
+}
+
+uint
+console_gfx_stats_flush_calls(void)
+{
+  return console_gfx_stat_flush_calls;
+}
+
+uint
+console_gfx_stats_flush_pixels(void)
+{
+  return console_gfx_stat_flush_pixels;
 }
 
 static void
@@ -384,11 +419,22 @@ static void
 console_gfx_sync_from_tty_locked(struct console_tty_state *t)
 {
   int i;
+  int changed;
+  int changed_cells;
+  int old_cursor_x;
+  int old_cursor_y;
+  int new_cursor_x;
+  int new_cursor_y;
+  int rendered;
+  struct dirty_rect rect;
+  uint area;
 
   if(!t)
     return;
   if(!console_gfx_ensure_locked())
     return;
+
+  console_gfx_stat_sync_calls++;
 
   acquire(&console_gfx_vts->lock);
   if(!console_gfx_vts->cells) {
@@ -396,25 +442,76 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
     return;
   }
 
+  changed = 0;
+  changed_cells = 0;
+  old_cursor_x = console_gfx_vts->cursor_x;
+  old_cursor_y = console_gfx_vts->cursor_y;
+
   for(i = 0; i < 25 * 80; i++) {
     ushort s = t->screen[i];
     struct text_cell tc;
+    struct text_cell *dst;
     tc.codepoint = (uint)(s & 0x00FF);
     tc.attr = 0;
     tc.fg_color = (uchar)((s >> 8) & 0x0F);
     tc.bg_color = (uchar)(((s >> 12) & 0x0F));
     tc.width = 1;
-    console_gfx_vts->cells[i] = tc;
+
+    dst = &console_gfx_vts->cells[i];
+    if(dst->codepoint != tc.codepoint ||
+       dst->attr != tc.attr ||
+       dst->fg_color != tc.fg_color ||
+       dst->bg_color != tc.bg_color ||
+       dst->width != tc.width) {
+      *dst = tc;
+      if(console_gfx_vts->dirty)
+        console_gfx_vts->dirty[i] = 1;
+      changed = 1;
+      changed_cells++;
+    }
   }
 
-  console_gfx_vts->cursor_x = t->cursor % 80;
-  console_gfx_vts->cursor_y = t->cursor / 80;
+  new_cursor_x = t->cursor % 80;
+  new_cursor_y = t->cursor / 80;
+  if(new_cursor_x != old_cursor_x || new_cursor_y != old_cursor_y) {
+    if(old_cursor_x >= 0 && old_cursor_x < (int)console_gfx_vts->width &&
+       old_cursor_y >= 0 && old_cursor_y < (int)console_gfx_vts->height &&
+       console_gfx_vts->dirty)
+      console_gfx_vts->dirty[old_cursor_y * (int)console_gfx_vts->width + old_cursor_x] = 1;
+    if(new_cursor_x >= 0 && new_cursor_x < (int)console_gfx_vts->width &&
+       new_cursor_y >= 0 && new_cursor_y < (int)console_gfx_vts->height &&
+       console_gfx_vts->dirty)
+      console_gfx_vts->dirty[new_cursor_y * (int)console_gfx_vts->width + new_cursor_x] = 1;
+    changed = 1;
+  }
+
+  console_gfx_vts->cursor_x = new_cursor_x;
+  console_gfx_vts->cursor_y = new_cursor_y;
+  if(changed)
+    console_gfx_vts->any_dirty = 1;
   release(&console_gfx_vts->lock);
 
-  vt_mark_all_dirty(console_gfx_vts);
-  vt_render_dirty(console_gfx_vts);
+  if(!changed)
+    return;
+
+  console_gfx_stat_cells_changed += (uint)changed_cells;
+
+  rendered = vt_render_dirty(console_gfx_vts);
+  if(rendered > 0)
+    console_gfx_stat_cells_rendered += (uint)rendered;
+  vt_render_cursor(console_gfx_vts);
   console_gfx_draw_logo_locked();
+
+  area = 0;
+  if(fb_is_dirty(console_gfx_fb)) {
+    fb_get_dirty_rect(console_gfx_fb, &rect);
+    if(rect.right >= rect.left && rect.bottom >= rect.top)
+      area = (uint)(rect.right - rect.left + 1) * (uint)(rect.bottom - rect.top + 1);
+  }
+
   display_flush(console_gfx_dev, console_gfx_fb);
+  console_gfx_stat_flush_calls++;
+  console_gfx_stat_flush_pixels += area;
 }
 
 static int

@@ -36,12 +36,18 @@ ansi_index_to_pixel(struct vt_surface *vts, int idx)
 }
 
 static void
-render_cell_blocky(struct vt_surface *vts, int x, int y, struct text_cell *tc)
+render_cell_glyph(struct vt_surface *vts, int x, int y, struct text_cell *tc)
 {
     int px;
     int py;
     uint bg;
     uint fg;
+    const struct glyph *g;
+    struct font *font;
+    int row;
+    int col;
+    int max_rows;
+    int max_cols;
 
     if(!vts || !vts->fb || !tc)
         return;
@@ -53,9 +59,30 @@ render_cell_blocky(struct vt_surface *vts, int x, int y, struct text_cell *tc)
 
     fb_fill_rect(vts->fb, px, py, 8, 16, bg);
 
-    if(tc->codepoint != ' ' && tc->codepoint != 0) {
-        fb_fill_rect(vts->fb, px + 2, py + 3, 4, 10, fg);
+    if(tc->codepoint == ' ' || tc->codepoint == 0)
+        return;
+
+    font = vts->font ? vts->font : font_builtin_default();
+    if(!font)
+        return;
+
+    g = font_get_glyph(font, tc->codepoint);
+    if(!g || !g->bitmap)
+        return;
+
+    max_rows = g->height < 16 ? g->height : 16;
+    max_cols = g->width < 8 ? g->width : 8;
+
+    for(row = 0; row < max_rows; row++) {
+        uchar bits = g->bitmap[row];
+        for(col = 0; col < max_cols; col++) {
+            if(bits & (1 << (7 - col)))
+                fb_set_pixel(vts->fb, px + col, py + row, fg);
+        }
     }
+
+    if(tc->attr & TEXT_ATTR_UNDERLINE)
+        fb_fill_rect(vts->fb, px, py + 15, 8, 1, fg);
 }
 
 static int
@@ -407,6 +434,7 @@ vt_render(struct vt_surface *vts)
     uint x;
     uint y;
     int idx;
+    int rendered;
 
     if(!vts)
         return 0;
@@ -414,20 +442,20 @@ vt_render(struct vt_surface *vts)
     if(!vts->fb || !vts->cells)
         return -1;
 
+    rendered = 0;
     acquire(&vts->lock);
     for(y = 0; y < vts->height; y++) {
         for(x = 0; x < vts->width; x++) {
             idx = (int)(y * vts->width + x);
-            render_cell_blocky(vts, (int)x, (int)y, &vts->cells[idx]);
+            render_cell_glyph(vts, (int)x, (int)y, &vts->cells[idx]);
+            rendered++;
             if(vts->dirty)
                 vts->dirty[idx] = 0;
         }
     }
     vts->any_dirty = 0;
     release(&vts->lock);
-
-    vt_clear_dirty(vts);
-    return 0;
+    return rendered;
 }
 
 int
@@ -436,12 +464,14 @@ vt_render_dirty(struct vt_surface *vts)
     uint x;
     uint y;
     int idx;
+    int rendered;
 
     if(!vts)
         return 0;
     if(!vts->fb || !vts->cells)
         return -1;
 
+    rendered = 0;
     acquire(&vts->lock);
     if(!vts->any_dirty) {
         release(&vts->lock);
@@ -453,7 +483,8 @@ vt_render_dirty(struct vt_surface *vts)
             idx = (int)(y * vts->width + x);
             if(vts->dirty && !vts->dirty[idx])
                 continue;
-            render_cell_blocky(vts, (int)x, (int)y, &vts->cells[idx]);
+            render_cell_glyph(vts, (int)x, (int)y, &vts->cells[idx]);
+            rendered++;
             if(vts->dirty)
                 vts->dirty[idx] = 0;
         }
@@ -461,13 +492,24 @@ vt_render_dirty(struct vt_surface *vts)
 
     vts->any_dirty = 0;
     release(&vts->lock);
-    return 0;
+    return rendered;
 }
 
 int
 vt_render_cursor(struct vt_surface *vts)
 {
-    (void)vts;
+    int x;
+    int y;
+
+    if(!vts || !vts->fb)
+        return -1;
+    if(!vts->cursor_visible)
+        return 0;
+
+    x = vts->fb_x + vts->cursor_x * 8;
+    y = vts->fb_y + vts->cursor_y * 16;
+    fb_fill_rect(vts->fb, x, y + 14, 8, 2,
+                 ansi_index_to_pixel(vts, vts->fg_color & 0x0F));
     return 0;
 }
 

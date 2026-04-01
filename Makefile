@@ -417,6 +417,9 @@ _termdemo: user/termdemo
 _termcheck: user/termcheck
 	cp user/termcheck _termcheck
 
+_tail: user/tail
+	cp user/tail _tail
+
 _dmesg: user/dmesg
 	cp user/dmesg _dmesg
 
@@ -495,6 +498,7 @@ UPROGS=\
 	_isotest\
 	_termdemo\
 	_termcheck\
+	_tail\
 	_dmesg\
 	_dash\
 
@@ -578,7 +582,7 @@ clean:
 	_dhcp \
 	user/ifconfig user/netstat user/route user/arp user/rarp user/ip \
 	user/dhcp user/v6dhcpd user/nslookup \
-	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/dmesg user/lspci user/v6init
+	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/dmesg user/tail user/lspci user/v6init
 
 # make a printout
 FILES = $(shell grep -v '^\#' tools/runoff.list)
