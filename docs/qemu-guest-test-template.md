@@ -26,9 +26,10 @@ Use one harness for many subsystem smoke tests instead of writing one-off expect
 - `AUXV6_QEMU_TARGET` (default: `qemu-nox`)
 - `AUXV6_EXPECT_TIMEOUT` (default: `240` seconds)
 - `AUXV6_HALT` (default: `1`, set `0` to skip `halt`)
+- `AUXV6_CHECK_RC` (default: `0`; set `1` only on shells that support `$?`)
 - `AUXV6_LOGIN_USER` (default: `root`)
 - `AUXV6_LOGIN_PASS` (default: `root`)
-- `AUXV6_PROMPT` (default: `# `)
+- `AUXV6_PROMPT` (default: `#`)
 
 ## Command Script Format
 
@@ -36,6 +37,15 @@ Use one harness for many subsystem smoke tests instead of writing one-off expect
 - Empty lines ignored.
 - Lines starting with `#` are comments.
 - Each command must return to the shell prompt.
+- Lines starting with `EXPECT ` are regex assertions checked against the
+  output of the most recent command.
+
+When `AUXV6_CHECK_RC=1`, non-zero command status fails the run.
+On the default/basic-shell path (`AUXV6_CHECK_RC=0`), use `EXPECT` lines for
+deterministic assertions without shell feature dependencies.
+
+For auxv6's basic shell path, prefer `EXPECT` assertions and keep
+`AUXV6_CHECK_RC=0` (default).
 
 Example:
 
@@ -44,6 +54,9 @@ Example:
 lsblk
 vblktest 2
 cat /proc/vblk_flush
+EXPECT unsupp=
+EXPECT admin_last_op=1
+EXPECT admin_last_rc=-2
 ```
 
 ## Extending To New Areas

@@ -6,9 +6,10 @@
 #   AUXV6_TEST_SCRIPT   command file to run inside guest shell (required)
 #   AUXV6_LOGIN_USER    login user (default: root)
 #   AUXV6_LOGIN_PASS    login password (default: root)
-#   AUXV6_PROMPT        shell prompt pattern (default: "# ")
+#   AUXV6_PROMPT        shell prompt pattern (default: "#")
 #   AUXV6_EXPECT_TIMEOUT timeout in seconds (default: 240)
 #   AUXV6_HALT          halt guest at end: 1=yes, 0=no (default: 1)
+#   AUXV6_CHECK_RC      check command rc via $? probe: 1=yes, 0=no (default: 0)
 
 proc getenv_or_default {name default} {
     if {[info exists ::env($name)] && $::env($name) ne ""} {
@@ -21,9 +22,12 @@ set target [getenv_or_default "AUXV6_QEMU_TARGET" "qemu-nox"]
 set script [getenv_or_default "AUXV6_TEST_SCRIPT" ""]
 set user [getenv_or_default "AUXV6_LOGIN_USER" "root"]
 set pass [getenv_or_default "AUXV6_LOGIN_PASS" "root"]
-set prompt [getenv_or_default "AUXV6_PROMPT" "# "]
+set prompt [getenv_or_default "AUXV6_PROMPT" "#"]
 set halt_guest [getenv_or_default "AUXV6_HALT" "1"]
+set check_rc [getenv_or_default "AUXV6_CHECK_RC" "0"]
 set timeout [expr {[getenv_or_default "AUXV6_EXPECT_TIMEOUT" "240"] + 0}]
+set rc_marker "__AUXV6_RC__"
+set last_output ""
 
 if {$script eq ""} {
     puts stderr "AUXV6_TEST_SCRIPT is required"
@@ -51,7 +55,52 @@ while {[gets $fh line] >= 0} {
     if {[string first "#" $line] == 0} {
         continue
     }
+
+    if {[string first "EXPECT " $line] == 0} {
+        set pat [string range $line 7 end]
+        if {$pat eq ""} {
+            puts stderr "FAIL: empty EXPECT pattern"
+            send "halt\r"
+            expect eof
+            exit 1
+        }
+        if {![regexp -- $pat $last_output]} {
+            puts stderr "FAIL: EXPECT pattern not found: $pat"
+            send "halt\r"
+            expect eof
+            exit 1
+        }
+        continue
+    }
+
+    puts "RUN: $line"
     send "$line\r"
+    expect $prompt
+    set last_output $expect_out(buffer)
+
+    if {$check_rc ne "1"} {
+        continue
+    }
+
+    send "echo $rc_marker:$?\r"
+    expect {
+        -re "$rc_marker:0" {
+            # command succeeded
+        }
+        -re [format {%s:([0-9]+)} $rc_marker] {
+            set rc $expect_out(1,string)
+            puts stderr "FAIL: command returned rc=$rc: $line"
+            send "halt\r"
+            expect eof
+            exit 1
+        }
+        timeout {
+            puts stderr "FAIL: timeout while checking rc for command: $line"
+            send "halt\r"
+            expect eof
+            exit 1
+        }
+    }
     expect $prompt
 }
 close $fh

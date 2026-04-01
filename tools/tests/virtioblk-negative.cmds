@@ -1,13 +1,21 @@
 cat /proc/vblk_flush
+EXPECT force_no_discard=0
+EXPECT force_no_write_zeroes=0
 
 echo force_no_discard=1 > /proc/vblk_flush
 echo discard_all=0:8 > /proc/vblk_flush
 cat /proc/vblk_flush
+EXPECT admin_last_op=1
+EXPECT admin_last_rc=-2
 
 echo force_no_write_zeroes=1 > /proc/vblk_flush
 echo write_zeroes_all=8:8:1 > /proc/vblk_flush
 cat /proc/vblk_flush
+EXPECT admin_last_op=2
+EXPECT admin_last_rc=-2
 
 echo force_no_discard=0 > /proc/vblk_flush
 echo force_no_write_zeroes=0 > /proc/vblk_flush
 cat /proc/vblk_flush
+EXPECT force_no_discard=0
+EXPECT force_no_write_zeroes=0
