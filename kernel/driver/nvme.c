@@ -243,6 +243,14 @@ struct nvme_softc {
     uint64_t nsze;          /* Namespace size in blocks */
     uint32_t lba_size;      /* Logical block size */
     uint64_t nblocks_512;   /* Capacity normalized to 512-byte blocks */
+
+    int offline;
+    uint32_t io_ok;
+    uint32_t io_err;
+    uint32_t io_timeout;
+    uint32_t io_retry;
+    uint32_t resets;
+    uint32_t recover_fail;
     
     /* Block device ID */
     uint dev_id;
@@ -253,16 +261,114 @@ struct nvme_softc {
 static struct nvme_softc nvme_devices[MAX_NVME];
 static int nvme_count = 0;
 
+static int nvme_cmd_timeout_us = 1000000;
+static int nvme_rw_retries = 1;
+
 static int nvme_rw(struct buf *b);
 static uint nvme_nblocks(uint dev);
 static struct nvme_softc *nvme_find_by_dev(uint dev);
 static int nvme_identify_namespace(struct nvme_softc *sc, uint32_t nsid);
+static int nvme_enable_controller(struct nvme_softc *sc);
+static int nvme_create_io_queues(struct nvme_softc *sc);
+static int nvme_recover_controller(struct nvme_softc *sc, const char *why);
+static int nvme_poll_completion(struct nvme_softc *sc, struct nvme_queue *q,
+                                uint16_t cid, uint32_t *result);
+static int nvme_append_str(char *buf, int max, int pos, const char *s);
+static int nvme_append_uint(char *buf, int max, int pos, uint v);
 
 static const struct bdevsw nvme_bdevsw = {
     .rw = nvme_rw,
     .nblocks = nvme_nblocks,
     .name = "nvme"
 };
+
+int
+nvme_get_tune(char *buf, int max)
+{
+    int pos;
+    int i;
+
+    if (!buf || max <= 0)
+        return -1;
+
+    pos = 0;
+    pos = nvme_append_str(buf, max, pos, "cmd_timeout_us=");
+    pos = nvme_append_uint(buf, max, pos, (uint)nvme_cmd_timeout_us);
+    pos = nvme_append_str(buf, max, pos, "\n");
+
+    pos = nvme_append_str(buf, max, pos, "rw_retries=");
+    pos = nvme_append_uint(buf, max, pos, (uint)nvme_rw_retries);
+    pos = nvme_append_str(buf, max, pos, "\n");
+
+    for (i = 0; i < nvme_count; i++) {
+        struct nvme_softc *sc = &nvme_devices[i];
+        pos = nvme_append_str(buf, max, pos, "dev=");
+        pos = nvme_append_uint(buf, max, pos, sc->dev_id == (uint)-1 ? 0xFFFFFFFFU : sc->dev_id);
+        pos = nvme_append_str(buf, max, pos, " nsid=");
+        pos = nvme_append_uint(buf, max, pos, sc->nsid);
+        pos = nvme_append_str(buf, max, pos, " offline=");
+        pos = nvme_append_uint(buf, max, pos, (uint)sc->offline);
+        pos = nvme_append_str(buf, max, pos, " ok=");
+        pos = nvme_append_uint(buf, max, pos, sc->io_ok);
+        pos = nvme_append_str(buf, max, pos, " err=");
+        pos = nvme_append_uint(buf, max, pos, sc->io_err);
+        pos = nvme_append_str(buf, max, pos, " timeout=");
+        pos = nvme_append_uint(buf, max, pos, sc->io_timeout);
+        pos = nvme_append_str(buf, max, pos, " retry=");
+        pos = nvme_append_uint(buf, max, pos, sc->io_retry);
+        pos = nvme_append_str(buf, max, pos, " resets=");
+        pos = nvme_append_uint(buf, max, pos, sc->resets);
+        pos = nvme_append_str(buf, max, pos, " recover_fail=");
+        pos = nvme_append_uint(buf, max, pos, sc->recover_fail);
+        pos = nvme_append_str(buf, max, pos, "\n");
+
+        if (pos >= max - 1)
+            return pos;
+    }
+
+    return pos;
+}
+
+int
+nvme_set_tune(const char *buf, int n)
+{
+    uint v;
+    int i;
+
+    if (!buf || n <= 0)
+        return -1;
+
+    if (n > 0 && buf[n - 1] == '\n')
+        n--;
+
+    if (n >= 15 && memcmp(buf, "cmd_timeout_us=", 15) == 0) {
+        v = 0;
+        for (i = 15; i < n; i++) {
+            if (buf[i] < '0' || buf[i] > '9')
+                return -1;
+            v = v * 10 + (uint)(buf[i] - '0');
+        }
+        if (v < 1000 || v > 30000000)
+            return -1;
+        nvme_cmd_timeout_us = (int)v;
+        return 0;
+    }
+
+    if (n >= 11 && memcmp(buf, "rw_retries=", 11) == 0) {
+        v = 0;
+        for (i = 11; i < n; i++) {
+            if (buf[i] < '0' || buf[i] > '9')
+                return -1;
+            v = v * 10 + (uint)(buf[i] - '0');
+        }
+        if (v > 8)
+            return -1;
+        nvme_rw_retries = (int)v;
+        return 0;
+    }
+
+    return -1;
+}
 
 /*
  * Read controller register (32-bit)
@@ -405,12 +511,27 @@ nvme_submit_cmd(struct nvme_queue *q, struct nvme_sqe *cmd)
  * Poll for completion
  */
 static int
-nvme_poll_completion(struct nvme_queue *q, uint16_t cid, uint32_t *result)
+nvme_poll_completion(struct nvme_softc *sc, struct nvme_queue *q,
+                     uint16_t cid, uint32_t *result)
 {
     struct nvme_cqe *cqe;
-    
+    int i;
+    int loops;
+
+    loops = nvme_cmd_timeout_us / 10;
+    if (loops < 1)
+        loops = 1;
+
     /* Poll for completion */
-    for (int i = 0; i < 100000; i++) {
+    for (i = 0; i < loops; i++) {
+        uint32_t csts;
+
+        csts = nvme_read32(sc, NVME_REG_CSTS);
+        if (csts & NVME_CSTS_CFS) {
+            cprintf("nvme: controller fatal status during poll\n");
+            return -3;
+        }
+
         cqe = &q->cq[q->cq_head];
         
         if (NVME_CQE_STATUS_PHASE(cqe->status) == q->cq_phase) {
@@ -445,7 +566,7 @@ nvme_poll_completion(struct nvme_queue *q, uint16_t cid, uint32_t *result)
     }
     
     cprintf("nvme: completion timeout\n");
-    return -1;
+    return -2;
 }
 
 /*
@@ -464,7 +585,7 @@ nvme_identify(struct nvme_softc *sc, uint32_t nsid, uint32_t cns, void *data)
     cmd.cid = 1;
     
     nvme_submit_cmd(&sc->admin_q, &cmd);
-    return nvme_poll_completion(&sc->admin_q, 1, 0);
+    return nvme_poll_completion(sc, &sc->admin_q, 1, 0);
 }
 
 static struct nvme_softc *
@@ -509,7 +630,7 @@ nvme_create_io_queues(struct nvme_softc *sc)
     cmd.cdw11 = 1;  /* Physically contiguous */
     
     nvme_submit_cmd(&sc->admin_q, &cmd);
-    if (nvme_poll_completion(&sc->admin_q, 2, 0) < 0) {
+    if (nvme_poll_completion(sc, &sc->admin_q, 2, 0) < 0) {
         cprintf("nvme: create IO CQ failed\n");
         return -1;
     }
@@ -524,7 +645,7 @@ nvme_create_io_queues(struct nvme_softc *sc)
     cmd.cdw11 = (1 << 16) | 1;  /* CQID=1 | Physically contiguous */
     
     nvme_submit_cmd(&sc->admin_q, &cmd);
-    if (nvme_poll_completion(&sc->admin_q, 3, 0) < 0) {
+    if (nvme_poll_completion(sc, &sc->admin_q, 3, 0) < 0) {
         cprintf("nvme: create IO SQ failed\n");
         return -1;
     }
@@ -545,6 +666,9 @@ nvme_do_rw(struct nvme_softc *sc, uint64_t lba, void *data, int is_write)
     struct nvme_sqe cmd;
     uint16_t cid;
     uint32_t nlb;
+    int max_attempts;
+    int attempt;
+    int rc;
     
     if (!sc || !sc->io_queues || sc->num_io_queues == 0)
         return -1;
@@ -576,24 +700,77 @@ nvme_do_rw(struct nvme_softc *sc, uint64_t lba, void *data, int is_write)
     cid = (uint16_t)((ioq->sq_tail + 100) & 0xFFFF);
     cmd.cid = cid;
     
-    acquiresleep(&ioq->lock);
-    
-    /* Copy command to submission queue */
-    memmove(&ioq->sq[ioq->sq_tail], &cmd, sizeof(cmd));
-    
-    /* Advance tail and ring doorbell */
-    ioq->sq_tail = (ioq->sq_tail + 1) % ioq->depth;
-    *ioq->sq_doorbell = ioq->sq_tail;
-    
-    releasesleep(&ioq->lock);
-    
-    /* Poll for completion */
-    if (nvme_poll_completion(ioq, cid, 0) < 0) {
-        cprintf("nvme: %s failed lba=%d\n", is_write ? "write" : "read", (uint32_t)lba);
-        return -1;
+    max_attempts = 1 + nvme_rw_retries;
+    if (max_attempts < 1)
+        max_attempts = 1;
+
+    for (attempt = 0; attempt < max_attempts; attempt++) {
+        acquiresleep(&ioq->lock);
+
+        /* Copy command to submission queue */
+        memmove(&ioq->sq[ioq->sq_tail], &cmd, sizeof(cmd));
+
+        /* Advance tail and ring doorbell */
+        ioq->sq_tail = (ioq->sq_tail + 1) % ioq->depth;
+        *ioq->sq_doorbell = ioq->sq_tail;
+
+        releasesleep(&ioq->lock);
+
+        /* Poll for completion */
+        rc = nvme_poll_completion(sc, ioq, cid, 0);
+        if (rc == 0)
+            return 0;
+
+        sc->io_err++;
+        if (rc == -2)
+            sc->io_timeout++;
+
+        if (attempt + 1 >= max_attempts)
+            break;
+
+        if (rc == -2 || rc == -3) {
+            if (nvme_recover_controller(sc, rc == -2 ? "io-timeout" : "fatal") < 0)
+                break;
+        }
+
+        sc->io_retry++;
+        microdelay(50 * (attempt + 1));
     }
+
+    cprintf("nvme: %s failed lba=%d\n", is_write ? "write" : "read", (uint32_t)lba);
+    return -1;
+
     
+}
+
+static int
+nvme_recover_controller(struct nvme_softc *sc, const char *why)
+{
+    if (!sc)
+        return -1;
+    if (sc->offline)
+        return -1;
+
+    cprintf("nvme: recovering controller (%s)\n", why ? why : "unknown");
+    sc->resets++;
+
+    if (nvme_reset(sc) < 0)
+        goto fail;
+    if (nvme_enable_controller(sc) < 0)
+        goto fail;
+    if (nvme_identify_namespace(sc, sc->nsid ? sc->nsid : 1) < 0)
+        goto fail;
+    if (nvme_create_io_queues(sc) < 0)
+        goto fail;
+
     return 0;
+
+fail:
+    sc->recover_fail++;
+    sc->offline = 1;
+    cprintf("nvme: controller marked offline after recovery failure\n");
+    
+    return -1;
 }
 
 static int
@@ -609,6 +786,8 @@ nvme_rw(struct buf *b)
     sc = nvme_find_by_dev(b->dev);
     if (!sc || sc->nsid == 0 || sc->num_io_queues == 0)
         return -1;
+    if (sc->offline)
+        return -1;
 
     /* Convert block number to LBA */
     lba = (uint64_t)b->blockno * (BSIZE / sc->lba_size);
@@ -616,6 +795,8 @@ nvme_rw(struct buf *b)
 
     if (nvme_do_rw(sc, lba, b->data, is_write) < 0)
         return -1;
+
+    sc->io_ok++;
 
     b->flags |= B_VALID;
     b->flags &= ~B_DIRTY;
@@ -652,24 +833,28 @@ nvme_identify_namespace(struct nvme_softc *sc, uint32_t nsid)
 
     if (nvme_identify(sc, nsid, 0, idns) < 0) {
         cprintf("nvme: identify namespace %d failed\n", nsid);
+        kfree((char *)idns);
         return -1;
     }
 
     lbaf_index = idns->flbas & 0x0F;
     if (lbaf_index > idns->nlbaf || lbaf_index >= 16) {
         cprintf("nvme: invalid lbaf index %d\n", lbaf_index);
+        kfree((char *)idns);
         return -1;
     }
 
     lbads = idns->lbaf[lbaf_index * 4 + 2];
     if (lbads < 9 || lbads > 31) {
         cprintf("nvme: unsupported lba size shift %d\n", lbads);
+        kfree((char *)idns);
         return -1;
     }
 
     lba_count = idns->ncap ? idns->ncap : idns->nsze;
     if (lba_count == 0) {
         cprintf("nvme: namespace %d reports zero capacity\n", nsid);
+        kfree((char *)idns);
         return -1;
     }
 
@@ -686,6 +871,38 @@ nvme_identify_namespace(struct nvme_softc *sc, uint32_t nsid)
 
     cprintf("nvme: nsid=%d lba=%d bytes blocks512=%d\n",
             sc->nsid, sc->lba_size, (uint32_t)sc->nblocks_512);
+
+    kfree((char *)idns);
+
+    return 0;
+}
+
+static int
+nvme_enable_controller(struct nvme_softc *sc)
+{
+    uint32_t cc;
+
+    if (!sc)
+        return -1;
+
+    nvme_write32(sc, NVME_REG_AQA,
+        ((NVME_ADMIN_QUEUE_SIZE - 1) << 16) |
+        (NVME_ADMIN_QUEUE_SIZE - 1));
+
+    nvme_write64(sc, NVME_REG_ASQ, V2P(sc->admin_q.sq));
+    nvme_write64(sc, NVME_REG_ACQ, V2P(sc->admin_q.cq));
+
+    cc = NVME_CC_EN |
+         NVME_CC_CSS_NVM |
+         NVME_CC_MPS(0) |
+         NVME_CC_AMS_RR |
+         NVME_CC_SHN_NONE |
+         NVME_CC_IOSQES(6) |
+         NVME_CC_IOCQES(4);
+
+    nvme_write32(sc, NVME_REG_CC, cc);
+    if (nvme_wait_ready(sc, NVME_CSTS_RDY) < 0)
+        return -1;
 
     return 0;
 }
@@ -712,28 +929,7 @@ nvme_init_controller(struct nvme_softc *sc)
     if (nvme_queue_init(sc, &sc->admin_q, 0, NVME_ADMIN_QUEUE_SIZE) < 0)
         return -1;
     
-    /* Set admin queue attributes */
-    nvme_write32(sc, NVME_REG_AQA,
-        ((NVME_ADMIN_QUEUE_SIZE - 1) << 16) |
-        (NVME_ADMIN_QUEUE_SIZE - 1));
-    
-    /* Set admin queue base addresses */
-    nvme_write64(sc, NVME_REG_ASQ, V2P(sc->admin_q.sq));
-    nvme_write64(sc, NVME_REG_ACQ, V2P(sc->admin_q.cq));
-    
-    /* Configure and enable controller */
-    uint32_t cc = NVME_CC_EN |
-                  NVME_CC_CSS_NVM |
-                  NVME_CC_MPS(0) |      /* 4KB page size */
-                  NVME_CC_AMS_RR |
-                  NVME_CC_SHN_NONE |
-                  NVME_CC_IOSQES(6) |   /* 64 bytes */
-                  NVME_CC_IOCQES(4);    /* 16 bytes */
-    
-    nvme_write32(sc, NVME_REG_CC, cc);
-    
-    /* Wait for ready */
-    if (nvme_wait_ready(sc, NVME_CSTS_RDY) < 0)
+    if (nvme_enable_controller(sc) < 0)
         return -1;
     
     cprintf("nvme: controller enabled\n");
@@ -766,6 +962,37 @@ nvme_init_controller(struct nvme_softc *sc)
     }
     
     return 0;
+}
+
+static int
+nvme_append_str(char *buf, int max, int pos, const char *s)
+{
+    while (s && *s && pos < max - 1)
+        buf[pos++] = *s++;
+    if (pos < max)
+        buf[pos] = 0;
+    return pos;
+}
+
+static int
+nvme_append_uint(char *buf, int max, int pos, uint v)
+{
+    char tmp[16];
+    int len;
+    int i;
+
+    len = 0;
+    do {
+        tmp[len++] = '0' + (v % 10);
+        v /= 10;
+    } while (v > 0 && len < (int)sizeof(tmp));
+
+    for (i = len - 1; i >= 0 && pos < max - 1; i--)
+        buf[pos++] = tmp[i];
+
+    if (pos < max)
+        buf[pos] = 0;
+    return pos;
 }
 
 /*

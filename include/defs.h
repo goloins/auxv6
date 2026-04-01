@@ -196,6 +196,8 @@ int             ahci_set_tune(const char *buf, int n);
 
 // nvme.c
 void            nvme_init(void);
+int             nvme_get_tune(char *buf, int max);
+int             nvme_set_tune(const char *buf, int n);
 
 // ioapic.c
 void            ioapicenable(int irq, int cpu);
@@ -210,6 +212,8 @@ int             pci_format_devices(char*, int);
 void            virtio_blk_init(void);
 int             virtio_blk_get_flush_every_writes(void);
 int             virtio_blk_set_flush_every_writes(int value);
+int             virtio_blk_get_tune(char *buf, int max);
+int             virtio_blk_set_tune(const char *buf, int n);
 
 // virtio_gpu.c
 void            virtio_gpu_init(void);
@@ -352,6 +356,7 @@ void*           memset(void*, int, uint);
 char*           safestrcpy(char*, const char*, int);
 int             strlen(const char*);
 int             strncmp(const char*, const char*, uint);
+int             strcmp(const char*, const char*);
 char*           strncpy(char*, const char*, int);
 
 // syscall.c
@@ -409,7 +414,7 @@ void            tvinit(void);
 extern struct spinlock tickslock;
 typedef void (*irq_handler_t)(int irq, void *arg);
 int             irq_register(int irq, irq_handler_t handler, void *arg, const char *name);
-void            irq_unregister(int irq);
+int             irq_unregister(int irq, const char *name);
 
 // uart.c
 void            uartinit(void);

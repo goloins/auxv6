@@ -105,3 +105,4 @@ ports/dash-0.5.12/src/mksignames
 ports/dash-0.5.12/src/mknodes
 ports/dash-0.5.12/src/mkinit
 .vscode/
+docs/Prompt-Directive.md

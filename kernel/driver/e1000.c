@@ -553,7 +553,7 @@ e1000_probe(struct pci_dev *pci)
     /* Register with network stack */
     if (if_register(&sc->ifn) < 0) {
         cprintf("e1000: failed to register ifnet\n");
-        irq_unregister(pci->irq_line);
+        irq_unregister(pci->irq_line, "e1000");
         return -1;
     }
     

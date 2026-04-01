@@ -570,7 +570,7 @@ pcnet_probe(struct pci_dev *pci)
     /* Register with network stack */
     if (if_register(&sc->ifn) < 0) {
         cprintf("pcnet: failed to register ifnet\n");
-        irq_unregister(pci->irq_line);
+        irq_unregister(pci->irq_line, "pcnet");
         return -1;
     }
     

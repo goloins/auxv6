@@ -25,6 +25,7 @@
 #define PROCFS_LOGO_INO     10
 #define PROCFS_GFXSTATS_INO 11
 #define PROCFS_LSOF_INO     12
+#define PROCFS_NVME_TUNE_INO 13
 #define PROCFS_VERSION_STR  "a/ux86 aux86 i686\n"
 
 struct procfs_inode {
@@ -45,6 +46,7 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_LOGO_INO, "logo", 16 },
   { PROCFS_GFXSTATS_INO, "gfxstats", 256 },
   { PROCFS_LSOF_INO, "lsof", 2048 },
+  { PROCFS_NVME_TUNE_INO, "nvme_tune", 2048 },
   { 0, 0, 0 }
 };
 
@@ -54,7 +56,7 @@ static uint procfs_write_uint(char *buf, uint value);
 static uint
 procfs_root_dir_size(void)
 {
-  return 13 * sizeof(struct dirent);
+  return 14 * sizeof(struct dirent);
 }
 
 static const char*
@@ -198,6 +200,10 @@ procfs_fill_inode(struct inode *ip, uint inum)
   } else if(inum == PROCFS_LSOF_INO){
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
+    ip->size = 2048;
+  } else if(inum == PROCFS_NVME_TUNE_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IWUSR | M_IRGRP | M_IROTH;
     ip->size = 2048;
   } else {
     ip->type = T_FILE;
@@ -376,7 +382,7 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     return -1;
   if(ip->inum == PROCFS_ROOT_INO){
     // Note: . and .. are synthesized by VFS for mount roots
-    struct dirent more_entries[11];
+    struct dirent more_entries[12];
     memset(more_entries, 0, sizeof(more_entries));
     more_entries[0].inum = PROCFS_UPTIME_INO;
     safestrcpy(more_entries[0].name, "uptime", DIRSIZ);
@@ -400,6 +406,8 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     safestrcpy(more_entries[9].name, "gfxstats", DIRSIZ);
     more_entries[10].inum = PROCFS_LSOF_INO;
     safestrcpy(more_entries[10].name, "lsof", DIRSIZ);
+    more_entries[11].inum = PROCFS_NVME_TUNE_INO;
+    safestrcpy(more_entries[11].name, "nvme_tune", DIRSIZ);
     return procfs_copy_data(dst, off, n, (char*)more_entries, sizeof(more_entries));
   }
   if(ip->inum == PROCFS_VERSION_INO)
@@ -410,9 +418,10 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     return procfs_copy_data(dst, off, n, buf, len);
   }
   if(ip->inum == PROCFS_VBLK_FLUSH_INO){
-    int cadence = virtio_blk_get_flush_every_writes();
-    len = procfs_write_uint(buf, cadence < 0 ? 0 : (uint)cadence);
-    buf[len++] = '\n';
+    int r = virtio_blk_get_tune(buf, sizeof(buf));
+    if(r < 0)
+      return -1;
+    len = (uint)r;
     return procfs_copy_data(dst, off, n, buf, len);
   }
   if(ip->inum == PROCFS_LOGO_INO){
@@ -461,6 +470,13 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
   }
   if(ip->inum == PROCFS_AHCI_TUNE_INO){
     int r = ahci_get_tune(buf, sizeof(buf));
+    if(r < 0)
+      return -1;
+    len = (uint)r;
+    return procfs_copy_data(dst, off, n, buf, len);
+  }
+  if(ip->inum == PROCFS_NVME_TUNE_INO){
+    int r = nvme_get_tune(buf, sizeof(buf));
     if(r < 0)
       return -1;
     len = (uint)r;
@@ -660,7 +676,7 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
 static int
 procfs_writei(struct inode *ip, char *src, uint off, uint n)
 {
-  char kbuf[32];
+  char kbuf[128];
   uint i;
   uint val;
 
@@ -668,6 +684,7 @@ procfs_writei(struct inode *ip, char *src, uint off, uint n)
     return -1;
   if(ip->inum != PROCFS_VBLK_FLUSH_INO &&
       ip->inum != PROCFS_AHCI_TUNE_INO &&
+      ip->inum != PROCFS_NVME_TUNE_INO &&
       ip->inum != PROCFS_LOGO_INO)
     return -1;
   if(off != 0)
@@ -680,8 +697,20 @@ procfs_writei(struct inode *ip, char *src, uint off, uint n)
   memmove(kbuf, src, n);
   kbuf[n] = 0;
 
+  if(ip->inum == PROCFS_VBLK_FLUSH_INO){
+    if(virtio_blk_set_tune(kbuf, n) < 0)
+      return -1;
+    return n;
+  }
+
   if(ip->inum == PROCFS_AHCI_TUNE_INO){
     if(ahci_set_tune(kbuf, n) < 0)
+      return -1;
+    return n;
+  }
+
+  if(ip->inum == PROCFS_NVME_TUNE_INO){
+    if(nvme_set_tune(kbuf, n) < 0)
       return -1;
     return n;
   }
@@ -708,12 +737,6 @@ procfs_writei(struct inode *ip, char *src, uint off, uint n)
       break;
 
     return -1;
-  }
-
-  if(ip->inum == PROCFS_VBLK_FLUSH_INO){
-    if(virtio_blk_set_flush_every_writes((int)val) < 0)
-      return -1;
-    return n;
   }
 
   if(ip->inum == PROCFS_LOGO_INO){

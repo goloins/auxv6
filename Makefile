@@ -580,6 +580,8 @@ clean:
 	test_ext2.img \
 	test_ext2_oldinit.img \
 	test_fat.img \
+	vblk0.img \
+	vblk1.img \
 	$(UPROGS) \
 	$(UPROGS_OLDINIT) \
 	.ext2root \
@@ -674,6 +676,31 @@ fat-reset:
 	rm -f $(FATIMG)
 	$(MAKE) $(FATIMG)
 
+# Virtio-blk test images (empty ext2 filesystems for testing virtio-blk operations)
+vblk0.img:
+	@if command -v mke2fs >/dev/null 2>&1; then \
+		mke2fs -q -t ext2 -F $@ 262144; \
+	elif [ -x /sbin/mke2fs ]; then \
+		/sbin/mke2fs -q -t ext2 -F $@ 262144; \
+	else \
+		echo "error: mke2fs not found; unable to create virtio-blk test image" >&2; \
+		exit 1; \
+	fi
+
+vblk1.img:
+	@if command -v mke2fs >/dev/null 2>&1; then \
+		mke2fs -q -t ext2 -F $@ 262144; \
+	elif [ -x /sbin/mke2fs ]; then \
+		/sbin/mke2fs -q -t ext2 -F $@ 262144; \
+	else \
+		echo "error: mke2fs not found; unable to create virtio-blk test image" >&2; \
+		exit 1; \
+	fi
+
+vblk-reset:
+	rm -f vblk0.img vblk1.img
+	$(MAKE) vblk0.img vblk1.img
+
 # Default: EXT2 root filesystem (easier to modify/mount from other systems)
 qemu: aux.bootkern $(EXT2IMG)
 	$(QEMU) -serial mon:stdio -drive file=aux.bootkern,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
@@ -703,6 +730,23 @@ qemu-gdb: aux.bootkern $(EXT2IMG) .gdbinit
 qemu-nox-gdb: aux.bootkern $(EXT2IMG) .gdbinit
 	@echo "*** Now run 'gdb'." 1>&2
 	$(QEMU) -nographic -drive file=aux.bootkern,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS) -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
+
+# Virtio-blk testing: attach extra volumes via virtio-blk interface for harness validation
+qemu-virtioblktest: aux.bootkern $(EXT2IMG) vblk0.img vblk1.img
+	$(QEMU) -serial mon:stdio \
+		-drive file=aux.bootkern,index=0,media=disk,format=raw \
+		-drive file=$(EXT2IMG),index=2,media=disk,format=raw \
+		-drive file=vblk0.img,if=virtio,format=raw \
+		-drive file=vblk1.img,if=virtio,format=raw \
+		$(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
+qemu-nox-virtioblktest: aux.bootkern $(EXT2IMG) vblk0.img vblk1.img
+	$(QEMU) -nographic \
+		-drive file=aux.bootkern,index=0,media=disk,format=raw \
+		-drive file=$(EXT2IMG),index=2,media=disk,format=raw \
+		-drive file=vblk0.img,if=virtio,format=raw \
+		-drive file=vblk1.img,if=virtio,format=raw \
+		$(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 # CUT HERE
 # prepare dist for students

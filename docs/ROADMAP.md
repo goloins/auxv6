@@ -16,6 +16,8 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 
 ## Recent Progress (2026-03-30 to 2026-04-01)
 
+- **Userland diagnostics tranche landed 2026-04-01:** new `which`, `lsof`, and baseline `file` utilities are now part of the system image, with manpages staged under `/usr/share/man` for all three commands.
+- **procfs gained open-file visibility for userspace tooling 2026-04-01:** `/proc/lsof` now exposes per-process open fd snapshots (pid, fd, type, rw, dev, ino, off, name), backed by a new kernel `proc_fd_snapshot()` path used by `lsof`.
 - **Loop device hardening tranche landed 2026-04-01:** `loop_setup()` now validates offset alignment, EOF bounds, nblocks range, and backing inode type. `loop_teardown()` is guarded by a new `vfs_dev_is_mounted()` helper that blocks detach while a filesystem is mounted on the device. `loopstatus()` API extended to return `offset` and a `flags` word with `LOOP_STATUS_MOUNTED`. `losetup` list output updated to show offset and mounted columns. Dedicated regression suite landed as `user/looptest.c` with three test groups: setup validation, status metadata, and busy-teardown guard. Test ISO image (`targetfs/tmp/test.iso`, containing README, HELLO, and DATA files) added to the rootfs staging path and used by the busy-teardown group. Rootfs image expanded to 256 MB for headroom.
 - **`cprintf` format support expanded 2026-04-01:** Kernel `cprintf` now supports field width, precision (both `%.N` and `%.*`), left-align (`-`), zero-pad (`0`) flags, `%c`, `%o`, `%i`, and length modifier (`l`). The old minimal dispatcher was replaced with a `cprintint_w`-based loop matching the capability of the userspace `printf`. This removes the need for workarounds when writing diagnostic code that uses standard printf format strings.
 - **isofs diagnostic prints gated 2026-04-01:** All mount-time diagnostic `cprintf` calls in `vfs_isofs.c` are now wrapped in `MOUNTDBG(...)`, silenced unless `DBG_MOUNT`/`AUXV6_DEBUG` is enabled. Only error paths remain unconditional. `docs/DEBUG-FLAGS.md` updated to note isofs under `DBG_MOUNT`.
@@ -76,8 +78,8 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 |-----------|--------|-------|
 | Networking interfaces | 60% | BSD ifnet abstraction, loopback, virtio-net, routing, DHCP tooling, outbound packet path |
 | POSIX compatibility layer | 70% | Broader tty/ioctl compatibility, dynamic `openpty`/`ptsname_r` path, dash portability fixes; many APIs still stubbed or partial |
-| Userland docs/manpages | 65% | `man` utility plus baseline pages are available; command coverage and completeness are still growing |
-| procfs | 70% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`; still sparse overall |
+| Userland docs/manpages | 72% | `man` utility plus baseline pages are available, including new `which`/`lsof`/`file` coverage; command coverage and completeness are still growing |
+| procfs | 75% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`, `/proc/meminfo`, `/proc/ps`, `/proc/mountstats`, `/proc/gfxstats`, `/proc/lsof`; breadth improved but still sparse overall |
 | Virtio storage | 70% | Working virtio core + virtio-blk, but still single-queue/minimal-feature oriented |
 | Real NICs | 60% | E1000, PCNET, RTL8111 have full ifnet integration; VMXnet3, Hyper-V netvsc, Intel I219-V, Intel I226-V, and ASIX AX88179 PCI are stubs |
 | Device node management | 70% | `devman -s` creates `/dev` nodes at early runlevel from kernel-visible inventory; hotplug/event mode and richer policy rules still pending |
@@ -192,7 +194,7 @@ These items are blocking everything else and must be done first.
 ```c
 typedef void (*irq_handler_t)(int irq, void *arg);
 int irq_register(int irq, irq_handler_t handler, void *arg, const char *name);
-void irq_unregister(int irq);
+int irq_unregister(int irq, const char *name);  // Supports shared interrupts; name identifies handler to remove
 ```
 - Dynamic IRQ table with up to 256 handlers
 - Automatic dispatch from trap() for IRQs 0-255
@@ -783,6 +785,8 @@ Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
 - Dynamic PTY integration with `openpty()`/`ptsname_r()` and `/dev/ptmx` -> `/dev/pts/N` allocation
 - `termcheck` coverage expanded to include concurrent multi-PTY shell isolation/lifecycle and max create/terminate stress behavior
 - Targetfs terminal defaults (`/etc/termcap`, `TERM=vt100`, `TERMCAP=/etc/termcap`) for better interactive app behavior
+- New core diagnostic utilities in base userland: `which`, `lsof` (via `/proc/lsof`), and baseline magic/signature-based `file`
+- Matching manpage additions for `which`, `lsof`, and `file`
 
 ---
 
@@ -839,6 +843,9 @@ Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
 | `user/losetup.c` | Loop device list/setup/detach utility; offset and mounted-flag columns added |
 | `user/isotest.c` | ISO 9660 and loop-device smoke test utility |
 | `user/looptest.c` | Loop device regression suite: setup validation, status metadata, and busy-teardown guard |
+| `user/which.c` | PATH-aware executable lookup utility |
+| `user/lsof.c` | Open-file inspection utility backed by `/proc/lsof` |
+| `user/file.c` | Baseline file-type detector using signatures + lightweight heuristics |
 | `user/posix.c` | POSIX compatibility wrappers |
 | `user/termcheck.c` | Terminal/PTY/ioctl compatibility regression checks, multi-PTY shell isolation/lifecycle, and PTY allocation stress tests |
 | `user/runlevel.c` | Current/previous runlevel reporting |
@@ -854,7 +861,7 @@ Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
 | `kernel/fs/vfs_nfs.c` | NFS v3 client (planned) |
 | `kernel/net/xdr.c` | XDR encoding/decoding for RPC (planned) |
 | `kernel/net/rpc.c` | ONC RPC client (planned) |
-| `user/mdev.c` | Device node manager utility (planned) |
+| `user/devman.c` | Device node manager utility with boot-time static scan mode (`devman -s`) |
 
 ---
 
@@ -894,15 +901,56 @@ Several items have already landed out of order relative to this original plan, n
 
 ---
 
+## Next Tranche Plan (2026-04-02 to 2026-04-16)
+
+Primary goal: convert recently landed features into a more reliable baseline while unblocking NFS and broader POSIX ports.
+
+### Tranche A - Storage reliability hardening
+- Virtio-blk: implement discard/write-zeroes helpers behind capability checks and return deterministic unsupported errors.
+- Virtio-blk: add error accounting + bounded retry policy for transient I/O failures.
+- AHCI: complete mount/unmount endurance loop with timeout/recover telemetry and no controller lockups.
+- NVMe: add command timeout handling with controller reset-on-fatal fallback.
+
+**Definition of done:**
+- `lsblk`/mount behavior remains stable across repeated attach/mount/unmount cycles on virtio-blk, AHCI, and NVMe.
+- Unsupported storage operations fail predictably (no silent success, no panic).
+- Timeout/error counters are visible through existing diagnostic paths.
+
+### Tranche B - NFS prerequisite syscall and headers
+- Implement `sendto()` and `recvfrom()` syscall paths for UDP workflows.
+- Add `netinet/in.h` and `arpa/inet.h` compatibility headers.
+- Expand user-visible socket declarations to cover common datagram usage patterns.
+
+**Definition of done:**
+- UDP echo-style userspace tests pass using `sendto`/`recvfrom`.
+- A minimal RPC-like datagram exchange can be expressed in userspace without ad-hoc prototypes.
+
+### Tranche C - devman phase-2 policy improvements
+- Add richer `/etc/devman.conf` rule parsing (path pattern -> mode/owner/group/action).
+- Add optional stale-node cleanup mode for boot-time reconciliation.
+- Keep hotplug/event mode out-of-scope for this tranche, but define kernel/userspace interface requirements.
+
+**Definition of done:**
+- Policy-driven node mode/ownership works in boot scan mode.
+- Cleanup mode is opt-in and safe against active device nodes.
+- Hotplug interface proposal is documented with concrete data structures and event semantics.
+
+### Tranche D - observability and userland ergonomics
+- Expand procfs coverage where low-risk and high-value (`/proc/lsof` formatting polish, optional per-process filtering strategy notes).
+- Continue manpage expansion for recently landed storage/network/admin commands.
+- Add scripted smoke checks for `which`, `lsof`, and `file` in the userland regression flow.
+
+**Definition of done:**
+- New utilities are covered by scripted smoke tests in QEMU boot runs.
+- Manpages exist for each tool promoted to default userland in this tranche.
+
+---
+
 ## Next Steps (Recommended Order)
 
-1. ~~**Immediately:** Harden TCP with retransmission, teardown, and better receive/window handling~~ **DONE 2026-03-31**
-2. ~~**Now:** Finish symlink pathname resolution so `open()` follows symlinks and `lstat()` can explicitly avoid doing so~~ **DONE 2026-04-01**
-3. ~~**Next:** Finish ISO 9660 filesystem - rewrite stub to proper VFS API, enable ISO image mounting~~ **DONE 2026-03-31**
-4. ~~**Next:** Harden the loop-device path with busy-device checks and better status/reporting~~ **DONE 2026-04-01** (busy-teardown guard, extended loopstatus API, looptest suite, test ISO, 256 MB rootfs)
-5. **Then:** Begin XDR/RPC infrastructure as foundation for NFS client
-6. **In parallel:** Continue POSIX porting with `sendto`/`recvfrom`, `netinet/in.h`, and `arpa/inet.h` for NFS over UDP
-7. **Storage polish:** Finish virtio-blk discard/write-zeroes, address AHCI multi-device
-8. ~~**Terminal follow-up:** Expand PTY from static single pair to dynamic `/dev/pts/N` allocation and lifecycle~~ **DONE 2026-04-01**
-9. ~~**Terminal follow-up:** Replace static `/dev/pts` node bootstrap with mdev/devfs-style dynamic node lifecycle management~~ **DONE 2026-04-01** (baseline via `devman -s` in `rc.S`; hotplug/eventing still pending)
-10. **Later:** Btrfs read-only stub and devman hotplug/event lifecycle enhancements
+1. **Execute Tranche A (storage reliability hardening)** to reduce corruption/lockup risk before larger feature work.
+2. **Execute Tranche B (sendto/recvfrom + networking headers)** to unblock NFS/RPC bring-up.
+3. **Execute Tranche C (devman policy parsing + optional cleanup)** to strengthen `/dev` lifecycle safety.
+4. **Execute Tranche D (observability + manpages + utility smoke tests)** to lock in operational confidence.
+5. **Then begin XDR/RPC implementation** (`xdr.c`, `rpc.c`) followed by NFS read-only mount path.
+6. **After NFS foundation:** return to Btrfs read-only and devman hotplug/event lifecycle enhancements.

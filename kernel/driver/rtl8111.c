@@ -525,7 +525,7 @@ rtl8111_probe(struct pci_dev *dev)
     /* Register with network stack */
     if (if_register(&sc->ifn) < 0) {
         cprintf("rtl8111: failed to register ifnet\n");
-        irq_unregister(dev->irq_line);
+        irq_unregister(dev->irq_line, "rtl8111");
         return -1;
     }
     

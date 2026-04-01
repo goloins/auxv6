@@ -424,7 +424,7 @@ virtio_net_probe(struct pci_dev *pci)
     sc->ifp.if_ops = &virtio_net_ops;
 
     if (if_register(&sc->ifp) < 0) {
-        irq_unregister(sc->vdev.irq);
+        irq_unregister(sc->vdev.irq, "virtio_net");
         virtq_destroy(rxq);
         virtq_destroy(txq);
         virtio_reset(&sc->vdev);

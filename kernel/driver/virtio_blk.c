@@ -67,6 +67,12 @@ struct virtio_blk_req {
     uint64_t sector;
 } __attribute__((packed));
 
+struct virtio_blk_discard_write_zeroes {
+    uint64_t sector;
+    uint32_t num_sectors;
+    uint32_t flags;
+} __attribute__((packed));
+
 /* Config structure */
 struct virtio_blk_config {
     uint64_t capacity;      /* Capacity in 512-byte sectors */
@@ -94,6 +100,18 @@ struct virtio_blk_softc {
     int      has_discard;
     int      has_write_zeroes;
     uint32_t writes_since_flush;
+
+    uint32_t io_ok;
+    uint32_t io_ioerr;
+    uint32_t io_unsupp;
+    uint32_t io_transport;
+    uint32_t io_retry;
+    uint32_t flush_ok;
+    uint32_t flush_fail;
+    uint32_t discard_ok;
+    uint32_t discard_fail;
+    uint32_t write_zeroes_ok;
+    uint32_t write_zeroes_fail;
     
     /* Block device ID (for blockdev registration) */
     uint dev_id;
@@ -111,12 +129,19 @@ struct virtio_blk_softc {
 #define MAX_VIRTIO_BLK 4
 static struct virtio_blk_softc virtio_blk_devices[MAX_VIRTIO_BLK];
 static int virtio_blk_count = 0;
+static int virtio_blk_next_unit = 0;  /* Track next unit to allocate */
 
 /*
  * Tunable flush cadence for dirty writes.
  * 1 = flush every write, N = flush every N writes, 0 = disable explicit flush.
  */
 static int virtio_blk_flush_every_writes = 1;
+static int virtio_blk_max_retries = 2;
+
+#define VIRTIO_BLK_REQ_OK       0
+#define VIRTIO_BLK_REQ_ERR      -1
+#define VIRTIO_BLK_REQ_UNSUPP   -2
+#define VIRTIO_BLK_REQ_IOERR    -3
 
 /* Forward declarations */
 static int virtio_blk_rw(struct buf *b);
@@ -126,6 +151,18 @@ static struct virtio_blk_softc *virtio_blk_find_by_dev(uint dev);
 static int virtio_blk_submit_locked(struct virtio_blk_softc *sc, uint32_t type,
                                     uint64_t sector, void *data, uint32_t data_len,
                                     int data_is_write);
+static int virtio_blk_submit_with_retry_locked(struct virtio_blk_softc *sc,
+                                               uint32_t type, uint64_t sector,
+                                               void *data, uint32_t data_len,
+                                               int data_is_write);
+static int virtio_blk_write_zeroes_locked(struct virtio_blk_softc *sc,
+                                          uint64_t sector, uint32_t num_sectors,
+                                          int unmap);
+static int virtio_blk_discard_locked(struct virtio_blk_softc *sc,
+                                     uint64_t sector, uint32_t num_sectors);
+static int virtio_blk_buf_is_zero(char *data, int n);
+static int virtio_blk_append_str(char *buf, int max, int pos, const char *s);
+static int virtio_blk_append_uint(char *buf, int max, int pos, uint v);
 
 int
 virtio_blk_get_flush_every_writes(void)
@@ -143,6 +180,109 @@ virtio_blk_set_flush_every_writes(int value)
 
     virtio_blk_flush_every_writes = value;
     return 0;
+}
+
+int
+virtio_blk_get_tune(char *buf, int max)
+{
+    int pos;
+    int i;
+
+    if (!buf || max <= 0)
+        return -1;
+
+    pos = 0;
+    pos = virtio_blk_append_str(buf, max, pos, "flush_every_writes=");
+    pos = virtio_blk_append_uint(buf, max, pos, (uint)virtio_blk_flush_every_writes);
+    pos = virtio_blk_append_str(buf, max, pos, "\n");
+
+    pos = virtio_blk_append_str(buf, max, pos, "max_retries=");
+    pos = virtio_blk_append_uint(buf, max, pos, (uint)virtio_blk_max_retries);
+    pos = virtio_blk_append_str(buf, max, pos, "\n");
+
+    for (i = 0; i < virtio_blk_count; i++) {
+        struct virtio_blk_softc *sc = &virtio_blk_devices[i];
+
+        pos = virtio_blk_append_str(buf, max, pos, "dev=");
+        pos = virtio_blk_append_uint(buf, max, pos, sc->dev_id);
+        pos = virtio_blk_append_str(buf, max, pos, " ok=");
+        pos = virtio_blk_append_uint(buf, max, pos, sc->io_ok);
+        pos = virtio_blk_append_str(buf, max, pos, " ioerr=");
+        pos = virtio_blk_append_uint(buf, max, pos, sc->io_ioerr);
+        pos = virtio_blk_append_str(buf, max, pos, " unsupp=");
+        pos = virtio_blk_append_uint(buf, max, pos, sc->io_unsupp);
+        pos = virtio_blk_append_str(buf, max, pos, " transport=");
+        pos = virtio_blk_append_uint(buf, max, pos, sc->io_transport);
+        pos = virtio_blk_append_str(buf, max, pos, " retries=");
+        pos = virtio_blk_append_uint(buf, max, pos, sc->io_retry);
+        pos = virtio_blk_append_str(buf, max, pos, " flush_ok=");
+        pos = virtio_blk_append_uint(buf, max, pos, sc->flush_ok);
+        pos = virtio_blk_append_str(buf, max, pos, " flush_fail=");
+        pos = virtio_blk_append_uint(buf, max, pos, sc->flush_fail);
+        pos = virtio_blk_append_str(buf, max, pos, " discard_ok=");
+        pos = virtio_blk_append_uint(buf, max, pos, sc->discard_ok);
+        pos = virtio_blk_append_str(buf, max, pos, " discard_fail=");
+        pos = virtio_blk_append_uint(buf, max, pos, sc->discard_fail);
+        pos = virtio_blk_append_str(buf, max, pos, " wz_ok=");
+        pos = virtio_blk_append_uint(buf, max, pos, sc->write_zeroes_ok);
+        pos = virtio_blk_append_str(buf, max, pos, " wz_fail=");
+        pos = virtio_blk_append_uint(buf, max, pos, sc->write_zeroes_fail);
+        pos = virtio_blk_append_str(buf, max, pos, "\n");
+
+        if (pos >= max - 1)
+            return pos;
+    }
+
+    return pos;
+}
+
+int
+virtio_blk_set_tune(const char *buf, int n)
+{
+    uint v;
+    int i;
+
+    if (!buf || n <= 0)
+        return -1;
+
+    if (n > 0 && buf[n - 1] == '\n')
+        n--;
+
+    if (n >= 18 && memcmp(buf, "flush_every_writes=", 18) == 0) {
+        v = 0;
+        for (i = 18; i < n; i++) {
+            if (buf[i] < '0' || buf[i] > '9')
+                return -1;
+            v = v * 10 + (uint)(buf[i] - '0');
+            if (v > 1000000)
+                return -1;
+        }
+        return virtio_blk_set_flush_every_writes((int)v);
+    }
+
+    if (n >= 12 && memcmp(buf, "max_retries=", 12) == 0) {
+        v = 0;
+        for (i = 12; i < n; i++) {
+            if (buf[i] < '0' || buf[i] > '9')
+                return -1;
+            v = v * 10 + (uint)(buf[i] - '0');
+            if (v > 16)
+                return -1;
+        }
+        virtio_blk_max_retries = (int)v;
+        return 0;
+    }
+
+    /* Backward-compatible mode: plain integer updates flush cadence. */
+    v = 0;
+    for (i = 0; i < n; i++) {
+        if (buf[i] < '0' || buf[i] > '9')
+            return -1;
+        v = v * 10 + (uint)(buf[i] - '0');
+        if (v > 1000000)
+            return -1;
+    }
+    return virtio_blk_set_flush_every_writes((int)v);
 }
 
 /* Block device switch entry */
@@ -221,10 +361,24 @@ virtio_blk_rw(struct buf *b)
     int is_write = (b->flags & B_DIRTY) != 0;
     uint32_t req_type = is_write ? VIRTIO_BLK_T_OUT : VIRTIO_BLK_T_IN;
     uint64_t sector = b->blockno * (BSIZE / 512);
+    int rc;
 
-    if (virtio_blk_submit_locked(sc, req_type, sector, b->data, BSIZE, is_write) < 0) {
+    if (is_write && virtio_blk_buf_is_zero((char *)b->data, BSIZE)) {
+        rc = virtio_blk_write_zeroes_locked(sc, sector, BSIZE / 512, 0);
+        if (rc == VIRTIO_BLK_REQ_UNSUPP && sc->has_discard)
+            rc = virtio_blk_discard_locked(sc, sector, BSIZE / 512);
+        if (rc == VIRTIO_BLK_REQ_UNSUPP)
+            rc = virtio_blk_submit_with_retry_locked(sc, req_type, sector,
+                                                     b->data, BSIZE, is_write);
+    } else {
+        rc = virtio_blk_submit_with_retry_locked(sc, req_type, sector,
+                                                 b->data, BSIZE, is_write);
+    }
+
+    if (rc < 0) {
         releasesleep(&sc->req_lock);
-        cprintf("virtio_blk: data request failed dev=%d block=%d\n", b->dev, b->blockno);
+        cprintf("virtio_blk: data request failed dev=%d block=%d rc=%d\n",
+                b->dev, b->blockno, rc);
         return -1;
     }
 
@@ -233,14 +387,18 @@ virtio_blk_rw(struct buf *b)
 
     if (is_write && sc->has_flush && virtio_blk_flush_every_writes > 0 &&
         sc->writes_since_flush >= (uint32_t)virtio_blk_flush_every_writes) {
-        if (virtio_blk_submit_locked(sc, VIRTIO_BLK_T_FLUSH, 0, 0, 0, 0) < 0) {
+        if (virtio_blk_submit_with_retry_locked(sc, VIRTIO_BLK_T_FLUSH, 0, 0, 0, 0) < 0) {
+            sc->flush_fail++;
             releasesleep(&sc->req_lock);
             cprintf("virtio_blk: flush request failed dev=%d cadence=%d\n",
                     b->dev, virtio_blk_flush_every_writes);
             return -1;
         }
+        sc->flush_ok++;
         sc->writes_since_flush = 0;
     }
+
+    sc->io_ok++;
 
     releasesleep(&sc->req_lock);
     
@@ -306,10 +464,143 @@ virtio_blk_submit_locked(struct virtio_blk_softc *sc, uint32_t type,
     }
     release(&sc->lock);
 
+    if (sc->request.status == VIRTIO_BLK_S_UNSUPP)
+        return VIRTIO_BLK_REQ_UNSUPP;
+    if (sc->request.status == VIRTIO_BLK_S_IOERR)
+        return VIRTIO_BLK_REQ_IOERR;
     if (sc->request.status != VIRTIO_BLK_S_OK)
-        return -1;
+        return VIRTIO_BLK_REQ_ERR;
 
-    return 0;
+    return VIRTIO_BLK_REQ_OK;
+}
+
+static int
+virtio_blk_submit_with_retry_locked(struct virtio_blk_softc *sc,
+                                    uint32_t type, uint64_t sector,
+                                    void *data, uint32_t data_len,
+                                    int data_is_write)
+{
+    int attempts;
+    int try;
+    int rc;
+
+    attempts = 1 + virtio_blk_max_retries;
+    if (attempts < 1)
+        attempts = 1;
+
+    for (try = 0; try < attempts; try++) {
+        rc = virtio_blk_submit_locked(sc, type, sector, data, data_len, data_is_write);
+        if (rc == VIRTIO_BLK_REQ_OK)
+            return VIRTIO_BLK_REQ_OK;
+
+        if (rc == VIRTIO_BLK_REQ_UNSUPP) {
+            sc->io_unsupp++;
+            return rc;
+        }
+
+        if (rc == VIRTIO_BLK_REQ_IOERR)
+            sc->io_ioerr++;
+        else
+            sc->io_transport++;
+
+        if (try + 1 >= attempts)
+            return rc;
+
+        sc->io_retry++;
+        microdelay(50 * (try + 1));
+    }
+
+    return VIRTIO_BLK_REQ_ERR;
+}
+
+static int
+virtio_blk_write_zeroes_locked(struct virtio_blk_softc *sc,
+                               uint64_t sector, uint32_t num_sectors,
+                               int unmap)
+{
+    struct virtio_blk_discard_write_zeroes rz;
+    int rc;
+
+    if (!sc->has_write_zeroes)
+        return VIRTIO_BLK_REQ_UNSUPP;
+
+    rz.sector = sector;
+    rz.num_sectors = num_sectors;
+    rz.flags = unmap ? 1 : 0;
+
+    rc = virtio_blk_submit_with_retry_locked(sc, VIRTIO_BLK_T_WRITE_ZEROES,
+                                             0, &rz, sizeof(rz), 1);
+    if (rc == VIRTIO_BLK_REQ_OK)
+        sc->write_zeroes_ok++;
+    else
+        sc->write_zeroes_fail++;
+    return rc;
+}
+
+static int
+virtio_blk_discard_locked(struct virtio_blk_softc *sc,
+                          uint64_t sector, uint32_t num_sectors)
+{
+    struct virtio_blk_discard_write_zeroes d;
+    int rc;
+
+    if (!sc->has_discard)
+        return VIRTIO_BLK_REQ_UNSUPP;
+
+    d.sector = sector;
+    d.num_sectors = num_sectors;
+    d.flags = 0;
+
+    rc = virtio_blk_submit_with_retry_locked(sc, VIRTIO_BLK_T_DISCARD,
+                                             0, &d, sizeof(d), 1);
+    if (rc == VIRTIO_BLK_REQ_OK)
+        sc->discard_ok++;
+    else
+        sc->discard_fail++;
+    return rc;
+}
+
+static int
+virtio_blk_buf_is_zero(char *data, int n)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        if (data[i] != 0)
+            return 0;
+    }
+    return 1;
+}
+
+static int
+virtio_blk_append_str(char *buf, int max, int pos, const char *s)
+{
+    while (s && *s && pos < max - 1)
+        buf[pos++] = *s++;
+    if (pos < max)
+        buf[pos] = 0;
+    return pos;
+}
+
+static int
+virtio_blk_append_uint(char *buf, int max, int pos, uint v)
+{
+    char tmp[16];
+    int len;
+    int i;
+
+    len = 0;
+    do {
+        tmp[len++] = '0' + (v % 10);
+        v /= 10;
+    } while (v > 0 && len < (int)sizeof(tmp));
+
+    for (i = len - 1; i >= 0 && pos < max - 1; i--)
+        buf[pos++] = tmp[i];
+
+    if (pos < max)
+        buf[pos] = 0;
+    return pos;
 }
 
 /*
@@ -330,10 +621,13 @@ virtio_blk_alloc_devid(void)
 {
     int unit;
 
-    for (unit = 0; unit < VD_DISK_UNITS; unit++) {
+    /* Find the next unallocated unit using static counter */
+    for (unit = virtio_blk_next_unit; unit < VD_DISK_UNITS; unit++) {
         int dev = VD_DISK_DEV(unit);
-        if (bdev_register(dev, &virtio_blk_bdevsw) == 0)
+        if (bdev_register(dev, &virtio_blk_bdevsw) == 0) {
+            virtio_blk_next_unit = unit + 1;  /* Update for next allocation */
             return dev;
+        }
     }
 
     return -1;
@@ -425,7 +719,7 @@ virtio_blk_probe(struct pci_dev *pci)
     /* Register with block device layer using the first free vd* slot. */
     int dev_id = virtio_blk_alloc_devid();
     if (dev_id < 0) {
-        irq_unregister(sc->vdev.irq);
+        irq_unregister(sc->vdev.irq, "virtio_blk");
         virtq_destroy(vq);
         virtio_reset(&sc->vdev);
         cprintf("virtio_blk: no free block device slots\n");

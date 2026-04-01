@@ -278,6 +278,8 @@ struct ahci_port {
     uint32_t io_err;
     uint32_t io_timeout;
     uint32_t io_tfes;
+    uint32_t io_retry;
+    uint32_t recover_fail;
     uint32_t resets;
     uint32_t identify_fail;
     
@@ -310,6 +312,7 @@ static int ahci_count = 0;
 
 static int ahci_cmd_timeout_us = AHCI_TIMEOUT_CMD_US;
 static int ahci_idle_timeout_us = AHCI_TIMEOUT_PORT_IDLE_US;
+static int ahci_rw_retries = 1;
 
 static uint32_t ahci_port_read(struct ahci_softc *sc, int port, int reg);
 static void ahci_port_write(struct ahci_softc *sc, int port, int reg, uint32_t val);
@@ -348,6 +351,10 @@ ahci_get_tune(char *buf, int max)
     pos = ahci_append_uint(buf, max, pos, (uint)ahci_idle_timeout_us);
     pos = ahci_append_str(buf, max, pos, "\n");
 
+    pos = ahci_append_str(buf, max, pos, "rw_retries=");
+    pos = ahci_append_uint(buf, max, pos, (uint)ahci_rw_retries);
+    pos = ahci_append_str(buf, max, pos, "\n");
+
     pos = ahci_append_str(buf, max, pos, "dbg_build=");
     pos = ahci_append_uint(buf, max, pos, (uint)DBG_AHCI);
     pos = ahci_append_str(buf, max, pos, "\n");
@@ -372,6 +379,10 @@ ahci_get_tune(char *buf, int max)
             pos = ahci_append_uint(buf, max, pos, p->io_timeout);
             pos = ahci_append_str(buf, max, pos, " tfes=");
             pos = ahci_append_uint(buf, max, pos, p->io_tfes);
+            pos = ahci_append_str(buf, max, pos, " retry=");
+            pos = ahci_append_uint(buf, max, pos, p->io_retry);
+            pos = ahci_append_str(buf, max, pos, " recover_fail=");
+            pos = ahci_append_uint(buf, max, pos, p->recover_fail);
             pos = ahci_append_str(buf, max, pos, " resets=");
             pos = ahci_append_uint(buf, max, pos, p->resets);
             pos = ahci_append_str(buf, max, pos, " identify_fail=");
@@ -421,6 +432,19 @@ ahci_set_tune(const char *buf, int n)
         if (v < 1000 || v > 30000000)
             return -1;
         ahci_idle_timeout_us = (int)v;
+        return 0;
+    }
+
+    if (n >= 11 && memcmp(buf, "rw_retries=", 11) == 0) {
+        v = 0;
+        for (i = 11; i < n; i++) {
+            if (buf[i] < '0' || buf[i] > '9')
+                break;
+            v = v * 10 + (uint)(buf[i] - '0');
+        }
+        if (v > 8)
+            return -1;
+        ahci_rw_retries = (int)v;
         return 0;
     }
 
@@ -656,6 +680,8 @@ ahci_reset_all_stats(void)
             p->io_err = 0;
             p->io_timeout = 0;
             p->io_tfes = 0;
+            p->io_retry = 0;
+            p->recover_fail = 0;
             p->resets = 0;
             p->identify_fail = 0;
         }
@@ -783,6 +809,8 @@ ahci_submit_rw(struct ahci_port *p, uint64_t lba, void *data,
     int timed_out;
     uint16_t nsectors;
     uint32_t is;
+    int attempt;
+    int max_attempts;
 
     if (!p || !p->sc || !p->cmd_list || !p->cmd_tbl[0] || !data)
         return -1;
@@ -794,66 +822,84 @@ ahci_submit_rw(struct ahci_port *p, uint64_t lba, void *data,
     sc = p->sc;
     nsectors = (uint16_t)(data_len / 512);
 
-    if (ahci_wait_port_idle(sc, p->port_num, ahci_idle_timeout_us) < 0)
-        return -1;
+    max_attempts = 1 + ahci_rw_retries;
+    if (max_attempts < 1)
+        max_attempts = 1;
 
-    AHCIDBG("ahci: cmd port=%d dev=%d lba=%d sectors=%d write=%d\n",
-            p->port_num, p->dev_id, (uint32_t)lba, (int)nsectors, is_write);
+    for (attempt = 0; attempt < max_attempts; attempt++) {
+        if (ahci_wait_port_idle(sc, p->port_num, ahci_idle_timeout_us) < 0)
+            return -1;
 
-    memset(&p->cmd_list[0], 0, sizeof(p->cmd_list[0]));
-    memset(p->cmd_tbl[0], 0, sizeof(*p->cmd_tbl[0]));
+        AHCIDBG("ahci: cmd port=%d dev=%d lba=%d sectors=%d write=%d attempt=%d\n",
+                p->port_num, p->dev_id, (uint32_t)lba, (int)nsectors,
+                is_write, attempt + 1);
 
-    p->cmd_list[0].flags = AHCI_CMD_FIS_LEN(sizeof(struct fis_reg_h2d) / 4);
-    if (is_write)
-        p->cmd_list[0].flags |= AHCI_CMD_WRITE;
-    p->cmd_list[0].prdtl = 1;
-    p->cmd_list[0].ctba = V2P(p->cmd_tbl[0]);
-    p->cmd_list[0].ctbau = 0;
+        memset(&p->cmd_list[0], 0, sizeof(p->cmd_list[0]));
+        memset(p->cmd_tbl[0], 0, sizeof(*p->cmd_tbl[0]));
 
-    p->cmd_tbl[0]->prdt[0].dba = V2P(data);
-    p->cmd_tbl[0]->prdt[0].dbau = 0;
-    p->cmd_tbl[0]->prdt[0].dbc = (data_len - 1) | AHCI_PRDT_IOC;
+        p->cmd_list[0].flags = AHCI_CMD_FIS_LEN(sizeof(struct fis_reg_h2d) / 4);
+        if (is_write)
+            p->cmd_list[0].flags |= AHCI_CMD_WRITE;
+        p->cmd_list[0].prdtl = 1;
+        p->cmd_list[0].ctba = V2P(p->cmd_tbl[0]);
+        p->cmd_list[0].ctbau = 0;
 
-    fis = (struct fis_reg_h2d *)p->cmd_tbl[0]->cfis;
-    memset(fis, 0, sizeof(*fis));
-    fis->type = FIS_TYPE_REG_H2D;
-    fis->flags = 1 << 7;  /* Command */
-    fis->command = is_write ? ATA_CMD_WRITE_DMA_EX : ATA_CMD_READ_DMA_EX;
-    fis->device = 1 << 6;  /* LBA mode */
-    fis->lba0 = (uint8_t)(lba & 0xFF);
-    fis->lba1 = (uint8_t)((lba >> 8) & 0xFF);
-    fis->lba2 = (uint8_t)((lba >> 16) & 0xFF);
-    fis->lba3 = (uint8_t)((lba >> 24) & 0xFF);
-    fis->lba4 = (uint8_t)((lba >> 32) & 0xFF);
-    fis->lba5 = (uint8_t)((lba >> 40) & 0xFF);
-    fis->countl = (uint8_t)(nsectors & 0xFF);
-    fis->counth = (uint8_t)((nsectors >> 8) & 0xFF);
+        p->cmd_tbl[0]->prdt[0].dba = V2P(data);
+        p->cmd_tbl[0]->prdt[0].dbau = 0;
+        p->cmd_tbl[0]->prdt[0].dbc = (data_len - 1) | AHCI_PRDT_IOC;
 
-    ahci_port_write(sc, p->port_num, AHCI_PxIS, 0xFFFFFFFF);
-    ahci_port_write(sc, p->port_num, AHCI_PxSERR, 0xFFFFFFFF);
+        fis = (struct fis_reg_h2d *)p->cmd_tbl[0]->cfis;
+        memset(fis, 0, sizeof(*fis));
+        fis->type = FIS_TYPE_REG_H2D;
+        fis->flags = 1 << 7;  /* Command */
+        fis->command = is_write ? ATA_CMD_WRITE_DMA_EX : ATA_CMD_READ_DMA_EX;
+        fis->device = 1 << 6;  /* LBA mode */
+        fis->lba0 = (uint8_t)(lba & 0xFF);
+        fis->lba1 = (uint8_t)((lba >> 8) & 0xFF);
+        fis->lba2 = (uint8_t)((lba >> 16) & 0xFF);
+        fis->lba3 = (uint8_t)((lba >> 24) & 0xFF);
+        fis->lba4 = (uint8_t)((lba >> 32) & 0xFF);
+        fis->lba5 = (uint8_t)((lba >> 40) & 0xFF);
+        fis->countl = (uint8_t)(nsectors & 0xFF);
+        fis->counth = (uint8_t)((nsectors >> 8) & 0xFF);
 
-    ci = ahci_port_read(sc, p->port_num, AHCI_PxCI);
-    ahci_port_write(sc, p->port_num, AHCI_PxCI, ci | 1);
+        ahci_port_write(sc, p->port_num, AHCI_PxIS, 0xFFFFFFFF);
+        ahci_port_write(sc, p->port_num, AHCI_PxSERR, 0xFFFFFFFF);
 
-    if (ahci_wait_cmd_done(sc, p->port_num, 1, ahci_cmd_timeout_us,
-                           &timed_out, &is) == 0)
-        return 0;
+        ci = ahci_port_read(sc, p->port_num, AHCI_PxCI);
+        ahci_port_write(sc, p->port_num, AHCI_PxCI, ci | 1);
 
-    p->io_err++;
-    if (timed_out) {
-        p->io_timeout++;
-        cprintf("ahci: port %d command timeout write=%d lba=%d\n",
-                p->port_num, is_write, (uint32_t)lba);
-        ahci_diag_port(sc, p->port_num, "cmd-timeout");
-        ahci_port_recover(p, "cmd-timeout");
-        return -1;
+        if (ahci_wait_cmd_done(sc, p->port_num, 1, ahci_cmd_timeout_us,
+                               &timed_out, &is) == 0)
+            return 0;
+
+        p->io_err++;
+        if (timed_out) {
+            p->io_timeout++;
+            cprintf("ahci: port %d command timeout write=%d lba=%d\n",
+                    p->port_num, is_write, (uint32_t)lba);
+            ahci_diag_port(sc, p->port_num, "cmd-timeout");
+            if (ahci_port_recover(p, "cmd-timeout") < 0) {
+                p->recover_fail++;
+                return -1;
+            }
+        } else {
+            p->io_tfes++;
+            cprintf("ahci: port %d taskfile error is=0x%x write=%d lba=%d\n",
+                    p->port_num, is, is_write, (uint32_t)lba);
+            ahci_diag_port(sc, p->port_num, "cmd-tfes");
+            if (ahci_port_recover(p, "cmd-tfes") < 0) {
+                p->recover_fail++;
+                return -1;
+            }
+        }
+
+        if (attempt + 1 < max_attempts) {
+            p->io_retry++;
+            microdelay(50 * (attempt + 1));
+        }
     }
 
-    p->io_tfes++;
-    cprintf("ahci: port %d taskfile error is=0x%x write=%d lba=%d\n",
-            p->port_num, is, is_write, (uint32_t)lba);
-    ahci_diag_port(sc, p->port_num, "cmd-tfes");
-    ahci_port_recover(p, "cmd-tfes");
     return -1;
 }
 
@@ -959,6 +1005,8 @@ ahci_port_init(struct ahci_softc *sc, int port)
     p->io_err = 0;
     p->io_timeout = 0;
     p->io_tfes = 0;
+    p->io_retry = 0;
+    p->recover_fail = 0;
     p->resets = 0;
     p->identify_fail = 0;
     initsleeplock(&p->lock, "ahci_port");
