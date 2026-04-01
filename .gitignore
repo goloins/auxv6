@@ -41,6 +41,7 @@ user/getty
 user/chvt
 user/ln
 user/ls
+user/man
 user/lsblk
 user/free
 user/df
