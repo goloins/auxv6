@@ -1,0 +1,45 @@
+# Virtio-blk mount stress: repeated mount/write/umount/remount cycles on vda.
+# The vblk-stress.img is pre-formatted as ext2 on the host side (mke2fs in the
+# Makefile) so no in-guest filesystem creation is needed.
+#
+# Each cycle verifies that data written in the previous cycle survives unmount
+# and remount -- confirming ext2 write-back flushing and block layer coherence.
+
+mkdir /mnt/vblktest
+
+# --- Cycle 1: mount, write, verify in-session ---
+mount /dev/vda ext2 /mnt/vblktest
+echo stressdata1 > /mnt/vblktest/f1
+cat /mnt/vblktest/f1
+EXPECT stressdata1
+umount /mnt/vblktest
+
+# --- Cycle 2: remount, verify persistence, write second file ---
+mount /dev/vda ext2 /mnt/vblktest
+cat /mnt/vblktest/f1
+EXPECT stressdata1
+echo stressdata2 > /mnt/vblktest/f2
+cat /mnt/vblktest/f2
+EXPECT stressdata2
+umount /mnt/vblktest
+
+# --- Cycle 3: remount, verify both files, write third file ---
+mount /dev/vda ext2 /mnt/vblktest
+cat /mnt/vblktest/f1
+EXPECT stressdata1
+cat /mnt/vblktest/f2
+EXPECT stressdata2
+echo stressdata3 > /mnt/vblktest/f3
+cat /mnt/vblktest/f3
+EXPECT stressdata3
+umount /mnt/vblktest
+
+# --- Cycle 4: final remount, verify all three files persist ---
+mount /dev/vda ext2 /mnt/vblktest
+cat /mnt/vblktest/f1
+EXPECT stressdata1
+cat /mnt/vblktest/f2
+EXPECT stressdata2
+cat /mnt/vblktest/f3
+EXPECT stressdata3
+umount /mnt/vblktest

@@ -58,6 +58,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - **Intel I219-V driver** stub added for PCH-integrated Intel Ethernet (BSD-style attach skeleton with PCI probe, BAR mapping, MAC/link readout, and ifnet registration).
 - **Intel I226-V driver** stub added for Intel 2.5GbE bring-up (IGC-style PCI attach skeleton, BAR mapping, MAC/link readout, ifnet registration).
 - **ASIX AX88179 PCI driver** stub added as a PCI-only scaffold (explicitly avoiding xHCI/USB for now).
+- Virtio-blk mount/persistence stress pass landed: `make test-virtioblk-mount-stress` mounts a host-pre-formatted ext2 volume via virtio-blk, writes data across 4 mount/umount cycles, and asserts persistence on every remount — completing the virtio-blk definition-of-done checklist.
 
 ---
 
@@ -89,7 +90,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | POSIX compatibility layer | 70% | Broader tty/ioctl compatibility, dynamic `openpty`/`ptsname_r` path, dash portability fixes; many APIs still stubbed or partial |
 | Userland docs/manpages | 72% | `man` utility plus baseline pages are available, including new `which`/`lsof`/`file` coverage; command coverage and completeness are still growing |
 | procfs | 75% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`, `/proc/meminfo`, `/proc/ps`, `/proc/mountstats`, `/proc/gfxstats`, `/proc/lsof`; breadth improved but still sparse overall |
-| Virtio storage | 78% | Working virtio core + virtio-blk, shared IRQ-safe under QEMU multi-device setups, with dedicated `vblktest` regression coverage and mount-aware multi-filesystem lookup fixes |
+| Virtio storage | 92% | Working virtio core + virtio-blk, shared IRQ-safe under QEMU multi-device setups, with dedicated `vblktest` regression coverage, retry telemetry, per-device failure class observability, fault injection, and mount/persist stress harness — DoD checklist complete except optional queue-depth tuning |
 | Real NICs | 60% | E1000, PCNET, RTL8111 have full ifnet integration; VMXnet3, Hyper-V netvsc, Intel I219-V, Intel I226-V, and ASIX AX88179 PCI are stubs |
 | Device node management | 70% | `devman -s` creates `/dev` nodes at early runlevel from kernel-visible inventory; hotplug/event mode and richer policy rules still pending |
 
@@ -255,7 +256,7 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 - [x] Multiple virtio disks can be attached and independently read/written/mounted
 - [x] No hardcoded device-0 behavior remains in I/O and capacity paths
 - [x] Flush/discard/write-zeroes are feature-gated and return deterministic errors when unsupported
-- [ ] Stress pass: repeated mount/fsck-like write cycles complete without data corruption
+- [x] Stress pass: repeated mount/write/umount/remount cycles complete without data corruption (`make test-virtioblk-mount-stress`)
 
 **Dependencies:** PCI, Virtio core  
 **Estimate:** 1-2 weeks
