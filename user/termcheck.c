@@ -8,6 +8,8 @@ int ptsname_r(int fd, char *buf, uint buflen);
 
 #define PTY_SHELL_SESSIONS 3
 #define PTY_POLL_LOOPS 80
+#define PTY_STRESS_CAP 64
+#define PTY_STRESS_CYCLES 8
 
 struct pty_shell_session {
   int mfd;
@@ -226,6 +228,95 @@ check_multi_pty_shells(void)
     return -1;
 
   printf(1, "termcheck: all PTY shells terminated\n");
+  return 0;
+}
+
+static int
+open_pty_batch(int *mfds, int *sfds, int cap)
+{
+  int i;
+  int mfd;
+  int sfd;
+  char sname[32];
+
+  for(i = 0; i < cap; i++) {
+    mfds[i] = -1;
+    sfds[i] = -1;
+  }
+
+  for(i = 0; i < cap; i++) {
+    mfd = open("/dev/ptmx", O_RDWR);
+    if(mfd < 0)
+      break;
+    if(ptsname_r(mfd, sname, sizeof(sname)) < 0) {
+      close(mfd);
+      break;
+    }
+    sfd = open(sname, O_RDWR);
+    if(sfd < 0) {
+      close(mfd);
+      break;
+    }
+    mfds[i] = mfd;
+    sfds[i] = sfd;
+  }
+
+  return i;
+}
+
+static void
+close_pty_batch(int *mfds, int *sfds, int n)
+{
+  int i;
+
+  for(i = 0; i < n; i++) {
+    if(sfds[i] >= 0)
+      close(sfds[i]);
+    if(mfds[i] >= 0)
+      close(mfds[i]);
+    sfds[i] = -1;
+    mfds[i] = -1;
+  }
+}
+
+static int
+check_pty_max_stress(void)
+{
+  int mfds[PTY_STRESS_CAP];
+  int sfds[PTY_STRESS_CAP];
+  int count;
+  int expected;
+  int i;
+  int extra;
+
+  expected = -1;
+  for(i = 0; i < PTY_STRESS_CYCLES; i++) {
+    count = open_pty_batch(mfds, sfds, PTY_STRESS_CAP);
+    if(count <= 0) {
+      close_pty_batch(mfds, sfds, count);
+      return -1;
+    }
+
+    if(expected < 0)
+      expected = count;
+    if(count != expected) {
+      close_pty_batch(mfds, sfds, count);
+      return -1;
+    }
+
+    extra = open("/dev/ptmx", O_RDWR);
+    if(extra >= 0) {
+      close(extra);
+      close_pty_batch(mfds, sfds, count);
+      return -1;
+    }
+
+    close_pty_batch(mfds, sfds, count);
+    printf(1, "termcheck: pty stress cycle %d/%d max=%d\n", i + 1, PTY_STRESS_CYCLES, count);
+  }
+
+  if(expected < PTY_SHELL_SESSIONS)
+    return -1;
   return 0;
 }
 
@@ -564,6 +655,13 @@ main(int argc, char **argv)
     fails++;
   } else {
     printf(1, "PASS: multi-pty shell isolation/lifecycle\n");
+  }
+
+  if(check_pty_max_stress() < 0) {
+    printf(2, "FAIL: pty max create/terminate stress\n");
+    fails++;
+  } else {
+    printf(1, "PASS: pty max create/terminate stress\n");
   }
 
   if(fails == 0)
