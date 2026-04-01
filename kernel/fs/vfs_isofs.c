@@ -155,6 +155,10 @@ isofs_read_sectors(struct isofs_mount_data *mp, uint lba, void *buf, uint count)
         struct buf *bp = bread(mp->dev, block + j);
         if(bp == 0)
         return -1;
+        if(berror(bp)){
+        brelse(bp);
+        return -1;
+        }
         memmove(dst + j * BSIZE, bp->data, BSIZE);
         brelse(bp);
     }

@@ -756,6 +756,33 @@ qemu-nox-virtioblktest: aux.bootkern $(EXT2IMG) vblk0.img vblk1.img
 		-drive file=vblk1.img,if=virtio,format=raw \
 		$(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
+# Generic automated guest test template (extend by changing target + command file).
+AUXV6_QEMU_TARGET ?= qemu-nox
+AUXV6_TEST_SCRIPT ?=
+AUXV6_EXPECT_TIMEOUT ?= 240
+AUXV6_HALT ?= 1
+
+qemu-guesttest-template:
+	@if ! command -v expect >/dev/null 2>&1; then \
+		echo "error: expect not found; install expect to run guest automation" >&2; \
+		exit 1; \
+	fi
+	@if [ -z "$(AUXV6_TEST_SCRIPT)" ]; then \
+		echo "error: AUXV6_TEST_SCRIPT is required" >&2; \
+		echo "example: make qemu-guesttest-template AUXV6_QEMU_TARGET=qemu-nox-virtioblktest AUXV6_TEST_SCRIPT=tools/tests/virtioblk-smoke.cmds" >&2; \
+		exit 1; \
+	fi
+	@AUXV6_QEMU_TARGET="$(AUXV6_QEMU_TARGET)" \
+	 AUXV6_TEST_SCRIPT="$(AUXV6_TEST_SCRIPT)" \
+	 AUXV6_EXPECT_TIMEOUT="$(AUXV6_EXPECT_TIMEOUT)" \
+	 AUXV6_HALT="$(AUXV6_HALT)" \
+	 expect tools/qemu-guest-test.exp
+
+test-virtioblk-smoke: aux.bootkern $(EXT2IMG) vblk0.img vblk1.img
+	@$(MAKE) qemu-guesttest-template \
+		AUXV6_QEMU_TARGET=qemu-nox-virtioblktest \
+		AUXV6_TEST_SCRIPT=tools/tests/virtioblk-smoke.cmds
+
 # CUT HERE
 # prepare dist for students
 # after running make dist, probably want to

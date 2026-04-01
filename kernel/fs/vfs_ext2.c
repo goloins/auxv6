@@ -299,6 +299,10 @@ ext2_dev_read(uint dev, uint off, char *dst, uint n)
     b = bread(dev, blockno);
     if(b == 0)
       return -1;
+    if(berror(b)){
+      brelse(b);
+      return -1;
+    }
     memmove(dst + done, (char*)b->data + boff, take);
     brelse(b);
 
@@ -329,8 +333,16 @@ ext2_dev_write(uint dev, uint off, char *src, uint n)
     b = bread(dev, blockno);
     if(b == 0)
       return -1;
+    if(berror(b)){
+      brelse(b);
+      return -1;
+    }
     memmove((char*)b->data + boff, src + done, take);
     bwrite(b);
+    if(berror(b)){
+      brelse(b);
+      return -1;
+    }
     brelse(b);
 
     done += take;

@@ -1,0 +1,64 @@
+#!/usr/bin/expect -f
+
+# Generic auxv6 guest test harness.
+# Environment variables:
+#   AUXV6_QEMU_TARGET   make target to spawn (default: qemu-nox)
+#   AUXV6_TEST_SCRIPT   command file to run inside guest shell (required)
+#   AUXV6_LOGIN_USER    login user (default: root)
+#   AUXV6_LOGIN_PASS    login password (default: root)
+#   AUXV6_PROMPT        shell prompt pattern (default: "# ")
+#   AUXV6_EXPECT_TIMEOUT timeout in seconds (default: 240)
+#   AUXV6_HALT          halt guest at end: 1=yes, 0=no (default: 1)
+
+proc getenv_or_default {name default} {
+    if {[info exists ::env($name)] && $::env($name) ne ""} {
+        return $::env($name)
+    }
+    return $default
+}
+
+set target [getenv_or_default "AUXV6_QEMU_TARGET" "qemu-nox"]
+set script [getenv_or_default "AUXV6_TEST_SCRIPT" ""]
+set user [getenv_or_default "AUXV6_LOGIN_USER" "root"]
+set pass [getenv_or_default "AUXV6_LOGIN_PASS" "root"]
+set prompt [getenv_or_default "AUXV6_PROMPT" "# "]
+set halt_guest [getenv_or_default "AUXV6_HALT" "1"]
+set timeout [expr {[getenv_or_default "AUXV6_EXPECT_TIMEOUT" "240"] + 0}]
+
+if {$script eq ""} {
+    puts stderr "AUXV6_TEST_SCRIPT is required"
+    exit 2
+}
+
+if {![file exists $script]} {
+    puts stderr "test script not found: $script"
+    exit 2
+}
+
+spawn make $target
+expect "login:"
+send "$user\r"
+expect "password:"
+send "$pass\r"
+expect $prompt
+
+set fh [open $script r]
+while {[gets $fh line] >= 0} {
+    set line [string trim $line]
+    if {$line eq ""} {
+        continue
+    }
+    if {[string first "#" $line] == 0} {
+        continue
+    }
+    send "$line\r"
+    expect $prompt
+}
+close $fh
+
+if {$halt_guest eq "0"} {
+    send "exit\r"
+} else {
+    send "halt\r"
+}
+expect eof

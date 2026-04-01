@@ -42,6 +42,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - procfs gained more than basic process plumbing: `/proc/uptime`, `/proc/pci`, `/proc/vblk_flush`, and `/proc/ahci_tune` now exist for observability and runtime tuning.
 - Virtio-blk regression coverage now includes a dedicated in-guest `vblktest` utility plus `qemu-virtioblktest` / `qemu-nox-virtioblktest` launch targets for multi-disk validation.
 - Virtio transitional PCI probe matching was corrected in virtio-blk/net/gpu init scans (`device_id - 0x0FFF`), preventing net/gpu misprobes from resetting other virtio functions during mixed-device boots.
+- Reusable QEMU guest automation template landed: `tools/qemu-guest-test.exp` runs command scripts (`tools/tests/*.cmds`) after login, with `make qemu-guesttest-template` plus initial `make test-virtioblk-smoke` coverage.
 - VFS backend lookups are now mount-aware for ext2/msdosfs/isofs instances, avoiding global active-device aliasing when resolving `/` inside non-root mounts.
 - Guest shutdown now has a first-class `halt` utility backed by a kernel poweroff syscall, so QEMU exit no longer depends on host-side `killall`.
 - **NVMe driver** now has I/O queue creation and synchronous READ/WRITE command support via PRP1 (single-page transfers).

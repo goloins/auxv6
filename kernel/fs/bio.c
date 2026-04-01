@@ -104,11 +104,23 @@ bread(uint dev, uint blockno)
   if((b->flags & B_VALID) == 0) {
     if(bdevrw(b) < 0){
       cprintf("bread: failed dev=%d blockno=%d\n", dev, blockno);
-      panic("bread: no block device");
+      b->flags |= (B_ERROR | B_VALID);
+      memset(b->data, 0, BSIZE);
+      return b;
     }
+    b->flags &= ~B_ERROR;
   }
   return b;
 }
+
+int
+berror(struct buf *b)
+{
+  if(b == 0)
+    return 1;
+  return (b->flags & B_ERROR) != 0;
+}
+
 // Write b's contents to disk.  Must be locked.
 void
 bwrite(struct buf *b)
@@ -116,8 +128,12 @@ bwrite(struct buf *b)
   if(!holdingsleep(&b->lock))
     panic("bwrite");
   b->flags |= B_DIRTY;
-  if(bdevrw(b) < 0)
-    panic("bwrite: no block device");
+  if(bdevrw(b) < 0){
+    b->flags |= B_ERROR;
+    cprintf("bwrite: failed dev=%d blockno=%d\n", b->dev, b->blockno);
+    return;
+  }
+  b->flags &= ~B_ERROR;
 }
 
 // Release a locked buffer.

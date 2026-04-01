@@ -30,6 +30,7 @@ struct vnode;
 // bio.c
 void            binit(void);
 struct buf*     bread(uint, uint);
+int             berror(struct buf*);
 void            brelse(struct buf*);
 void            bwrite(struct buf*);
 

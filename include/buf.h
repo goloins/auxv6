@@ -11,4 +11,5 @@ struct buf {
 };
 #define B_VALID 0x2  // buffer has been read from disk
 #define B_DIRTY 0x4  // buffer needs to be written to disk
+#define B_ERROR 0x8  // last I/O on this buffer failed
 

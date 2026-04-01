@@ -1,0 +1,4 @@
+# Basic virtio-blk smoke commands in guest
+lsblk
+vblktest 2
+cat /proc/vblk_flush

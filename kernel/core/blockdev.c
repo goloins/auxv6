@@ -70,6 +70,12 @@ blockdev_read(struct inode *ip, char *dst, uint off, int n)
       chunk = (uint)n - total;
 
     bp = bread(ip->minor, blockno);
+    if(bp == 0)
+      return -1;
+    if(berror(bp)){
+      brelse(bp);
+      return -1;
+    }
     memmove(dst + total, bp->data + blockoff, chunk);
     brelse(bp);
 
@@ -108,8 +114,18 @@ blockdev_write(struct inode *ip, char *src, uint off, int n)
       chunk = (uint)n - total;
 
     bp = bread(ip->minor, blockno);
+    if(bp == 0)
+      return -1;
+    if(berror(bp)){
+      brelse(bp);
+      return -1;
+    }
     memmove(bp->data + blockoff, src + total, chunk);
     bwrite(bp);
+    if(berror(bp)){
+      brelse(bp);
+      return -1;
+    }
     brelse(bp);
 
     total += chunk;

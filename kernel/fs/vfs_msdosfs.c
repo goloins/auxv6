@@ -97,6 +97,7 @@ static struct buf*
 msdos_bread(struct msdos_mount_data *md, uint sec)
 {
   uint nblocks;
+  struct buf *b;
 
   if(md == 0)
     return 0;
@@ -106,7 +107,14 @@ msdos_bread(struct msdos_mount_data *md, uint sec)
             md->dev, sec, nblocks);
     return 0;
   }
-  return bread(md->dev, sec);
+  b = bread(md->dev, sec);
+  if(b == 0)
+    return 0;
+  if(berror(b)){
+    brelse(b);
+    return 0;
+  }
+  return b;
 }
 
 static int
