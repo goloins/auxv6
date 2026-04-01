@@ -22,7 +22,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - Virtio infrastructure moved from scaffolding to working code: `virtio-blk` now probes, negotiates features, performs block I/O, registers with the block layer, and shows up through `lsblk` and `/dev/vd*` nodes.
 - The network stack moved beyond loopback-only behavior: Ethernet framing, ARP cache/request/reply, routing controls, virtio-net RX/TX, DHCP tooling, resolver/`nslookup`, and outbound internet ping all landed.
 - TCP now exchanges real packets with a basic three-way handshake and ACKed payload delivery; `telnet` and `netcat` were added as rough but functional userland validation tools.
-- Symbolic link kernel plumbing landed: `symlink()`, `readlink()`, and `lstat()` syscalls are wired up, VFS gained symlink capabilities, and ext2 now supports fast symlink creation and target reads.
+- Symbolic link support moved from plumbing to working behavior: VFS-level symlink follow/no-follow resolution is in place, ext2 supports fast symlink create/read, loop-depth limits are enforced, and symlink regression tests now cover basic, chained, intermediate-path, loop, and relative-target cases.
 - Loop devices landed as a new storage/mounting bridge: 8 loop block devices can now be backed by regular files through new `loopsetup`, `loopteardown`, and `loopstatus` syscalls, with `losetup` userspace support.
 - Baseline I/O multiplexing landed with `select()` and `poll()` syscalls, including fd readiness across inode files, pipes, and sockets plus timeout handling.
 - ISO 9660 moved from a broken stub to a working read-only filesystem with real VFS integration, primary volume descriptor parsing, directory traversal, case-insensitive lookup, and file reads via loop-mounted images.
@@ -63,6 +63,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | DMA support | 75% | Page-based DMA allocation with physical address tracking and alignment |
 | Loop devices | 80% | 8 block devices backed by regular files, status/setup/teardown syscalls, `losetup` utility |
 | ISO 9660 | 85% | Working read-only implementation with VFS integration and loop-mount testing |
+| Symlinks | 90% | `symlink/readlink/lstat` wired, VFS follow/no-follow behavior landed, ext2 path traversal follows intermediate links, loop-depth limits and regression tests added |
 
 ### ⚠️ Partially Implemented (50-74%)
 | Subsystem | Status | Notes |
@@ -73,7 +74,6 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | procfs | 70% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`; still sparse overall |
 | Virtio storage | 70% | Working virtio core + virtio-blk, but still single-queue/minimal-feature oriented |
 | Real NICs | 60% | E1000, PCNET, RTL8111 have full ifnet integration; VMXnet3, Hyper-V netvsc, Intel I219-V, Intel I226-V, and ASIX AX88179 PCI are stubs |
-| Symlinks | 65% | Syscalls, VFS hooks, and ext2 fast symlink support done; pathname following still pending |
 
 ### 🚧 Early Or Stubbed (0-49%)
 | Subsystem | Status | Notes |
@@ -466,8 +466,8 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 
 ## Priority Tier 5: Filesystem Enhancements (Weeks 19-24)
 
-### 5.1 Symbolic Links [HIGH] - IN PROGRESS
-**Current:** Basic syscalls landed, ext2 support implemented, path resolution still needed  
+### 5.1 Symbolic Links [HIGH] - CORE COMPLETE
+**Current:** End-to-end symlink behavior is working for ext2-backed paths, including follow/no-follow semantics and loop-depth enforcement. Slow symlink (>60B) create and `ls -l` display polish remain follow-ups.  
 **Files:** `include/stat.h`, `include/vfs.h`, `kernel/fs/vfs.c`, `kernel/core/sysfile.c`, `kernel/fs/vfs_ext2.c`  
 
 **Implementation Plan:**
@@ -490,25 +490,24 @@ Phase 2 - ext2 Support (ext2 natively supports symlinks):
 - [x] Update `ext2_mode_to_type()` to return `T_SYMLINK`
 
 Phase 3 - Path Resolution:
-- [ ] Modify `ext2_walk()` to detect and follow symlinks during traversal
-- [ ] Add symlink resolution with configurable follow mode (NOFOLLOW for lstat)
-- [ ] Add symlink loop detection (max 8 levels, return ELOOP)
-- [ ] Add `vfs_resolve_nofollow()` for proper `lstat()` behavior
+- [x] Modify `ext2_walk()` to detect and follow symlinks during traversal (including intermediate path components)
+- [x] Add symlink resolution with configurable follow mode (`vfs_lookup_follow` for follow paths, `vfs_namei` for no-follow syscalls)
+- [x] Add symlink loop detection (max 8 levels)
+- [x] Keep `lstat()`/`readlink()` on no-follow inode lookup path
 
 Phase 4 - Userspace:
 - [x] Add `symlink()`, `readlink()`, `lstat()` wrappers in `user/usys.S`
 - [x] Add declarations in `user.h`
-- [ ] Add `ln -s` support to ln utility (or create new utility)
+- [x] Add `ln -s` support to ln utility
 - [ ] Add `ls -l` symlink display support
+- [x] Add dedicated symlink regression coverage (`user/symlinktest.c`) including loop and relative-target edge cases
 
 **Definition of done:**
 - `symlink("/tmp/target", "/tmp/link")` creates a valid symlink ✅
 - `readlink("/tmp/link", buf, size)` returns the target path ✅
-- `open("/tmp/link")` follows the symlink to the target (needs path resolution)
-- Symlink chains up to 8 levels work; deeper chains return -1 (ELOOP)
-- `lstat()` returns symlink metadata without following (needs nofollow resolution)
-
-**Estimate:** 2-3 more days for path resolution
+- `open("/tmp/link")` follows the symlink to the target ✅
+- Symlink chains up to 8 levels work; deeper chains fail at the loop-depth limit ✅
+- `lstat()` returns symlink metadata without following ✅
 
 ### 5.2 ISO 9660 (CD-ROM) [MEDIUM] - MOSTLY COMPLETE
 **Status:** Working read-only implementation landed 2026-03-31  
@@ -885,7 +884,7 @@ Several items have already landed out of order relative to this original plan, n
 ## Next Steps (Recommended Order)
 
 1. ~~**Immediately:** Harden TCP with retransmission, teardown, and better receive/window handling~~ **DONE 2026-03-31**
-2. **Now:** Finish symlink pathname resolution so `open()` follows symlinks and `lstat()` can explicitly avoid doing so
+2. ~~**Now:** Finish symlink pathname resolution so `open()` follows symlinks and `lstat()` can explicitly avoid doing so~~ **DONE 2026-04-01**
 3. ~~**Next:** Finish ISO 9660 filesystem - rewrite stub to proper VFS API, enable ISO image mounting~~ **DONE 2026-03-31**
 4. **Next:** Harden the loop-device path with busy-device checks and better status/reporting
 5. **Then:** Begin XDR/RPC infrastructure as foundation for NFS client
