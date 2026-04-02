@@ -1385,6 +1385,20 @@ check_terminal_parser_sequences(int fd)
     return -1;
   }
 
+  n = collect_query_reply(fd, "\033]0;auxv6\a\033[7;10H\033[6n", buf, sizeof(buf));
+  if(n < 0 || parse_cpr_reply(buf, n, 0, &row, &col) < 0 || row != 7 || col != 10) {
+    tc_debug_query_fail("OSC BEL terminator", "\\033]0;auxv6\\a", "CPR after OSC", buf, n);
+    tcsetattr(fd, TCSANOW, &oldt);
+    return -1;
+  }
+
+  n = collect_query_reply(fd, "\033]0;auxv6\033\\\033[8;10H\033[6n", buf, sizeof(buf));
+  if(n < 0 || parse_cpr_reply(buf, n, 0, &row, &col) < 0 || row != 8 || col != 10) {
+    tc_debug_query_fail("OSC ST terminator", "\\033]0;auxv6\\033\\\\", "CPR after OSC", buf, n);
+    tcsetattr(fd, TCSANOW, &oldt);
+    return -1;
+  }
+
   drain_tty_input_nonblock(fd);
   (void)ioctl(fd, TCFLSH, TCIFLUSH);
   (void)write(fd, "\033[?7h\033[4l", 8);
@@ -1459,6 +1473,8 @@ check_terminal_mode_query_replies(int fd)
      expect_token_reply(fd, "DECRQM ?9 reset", "\033[?9l\033[?9$p", "\033[?9;2$y", buf, sizeof(buf)) < 0 ||
      expect_token_reply(fd, "DECRQM ?67 set", "\033[?67h\033[?67$p", "\033[?67;1$y", buf, sizeof(buf)) < 0 ||
      expect_token_reply(fd, "DECRQM ?67 reset", "\033[?67l\033[?67$p", "\033[?67;2$y", buf, sizeof(buf)) < 0 ||
+    expect_token_reply(fd, "DECRQM ?66 set", "\033=\033[?66$p", "\033[?66;1$y", buf, sizeof(buf)) < 0 ||
+    expect_token_reply(fd, "DECRQM ?66 reset", "\033>\033[?66$p", "\033[?66;2$y", buf, sizeof(buf)) < 0 ||
      expect_token_reply(fd, "DECRQM ?69 set", "\033[?69h\033[?69$p", "\033[?69;1$y", buf, sizeof(buf)) < 0 ||
      expect_token_reply(fd, "DECRQM ?69 reset", "\033[?69l\033[?69$p", "\033[?69;2$y", buf, sizeof(buf)) < 0 ||
      expect_token_reply(fd, "DECRQM ?95 set", "\033[?95h\033[?95$p", "\033[?95;1$y", buf, sizeof(buf)) < 0 ||

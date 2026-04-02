@@ -908,6 +908,7 @@ consputc(int c)
 #define ANSI_OSC     3
 #define ANSI_ESC_G0  4
 #define ANSI_ESC_G1  5
+#define ANSI_OSC_ESC 6
 
 #define ANSI_CS_ASCII 0
 #define ANSI_CS_DEC   1
@@ -1016,6 +1017,9 @@ ansi_apply_private_mode(struct console_tty_state *t, int mode, int set)
   } else if(mode == 67) {
     /* backspace key mode */
     t->ansi.backarrow_key = set ? 1 : 0;
+  } else if(mode == 66) {
+    /* application keypad mode */
+    t->ansi.keypad_app = set ? 1 : 0;
   } else if(mode == 69) {
     /* alt keypad */
     t->ansi.alt_keypad = set ? 1 : 0;
@@ -1106,6 +1110,8 @@ ansi_private_mode_state(struct console_tty_state *t, int mode)
     return t->ansi.mouse_x10 ? 1 : 2;
   if(mode == 67)
     return t->ansi.backarrow_key ? 1 : 2;
+  if(mode == 66)
+    return t->ansi.keypad_app ? 1 : 2;
   if(mode == 1048)
     return t->ansi.cursor_save_mode ? 1 : 2;
   if(mode == 69)
@@ -1528,6 +1534,8 @@ cgaputc_ansi(struct console_tty_state *t, int c)
     if(c == ']') { t->ansi.state=ANSI_OSC; return; }
     if(c == '(') { t->ansi.state=ANSI_ESC_G0; return; }
     if(c == ')') { t->ansi.state=ANSI_ESC_G1; return; }
+    if(c == '=') { t->ansi.keypad_app = 1; t->ansi.state = ANSI_NORMAL; return; }
+    if(c == '>') { t->ansi.keypad_app = 0; t->ansi.state = ANSI_NORMAL; return; }
     if(c == '7') { ansi_save_cursor(t); t->ansi.state = ANSI_NORMAL; return; }
     if(c == '8') { ansi_restore_cursor(t); t->ansi.state = ANSI_NORMAL; return; }
     if(c == 'c') {
@@ -1546,7 +1554,21 @@ cgaputc_ansi(struct console_tty_state *t, int c)
     return;
 
   case ANSI_OSC:
-    if(c == '\a' || c == 0x9C) t->ansi.state = ANSI_NORMAL;
+    if(c == '\a' || c == 0x9C) {
+      t->ansi.state = ANSI_NORMAL;
+      return;
+    }
+    if(c == 0x1B) {
+      t->ansi.state = ANSI_OSC_ESC;
+      return;
+    }
+    return;
+
+  case ANSI_OSC_ESC:
+    if(c == '\\' || c == '\a' || c == 0x9C)
+      t->ansi.state = ANSI_NORMAL;
+    else
+      t->ansi.state = ANSI_OSC;
     return;
 
   case ANSI_ESC_G0:
