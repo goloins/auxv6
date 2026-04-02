@@ -865,7 +865,72 @@ ext2_inode_truncate_blocks(struct ext2_mount_data *data, struct ext2_inode *dip)
     dip->i_block[12] = 0;
   }
 
-  dip->i_block[13] = 0;
+  if(dip->i_block[13]){
+    uint dind_block;
+    uint *lvl1;
+    uint *lvl2;
+    uint ptrs;
+
+    dind_block = dip->i_block[13];
+    if(data->block_size > PGSIZE)
+      return -1;
+    lvl1 = (uint*)kalloc();
+    if(lvl1 == 0)
+      return -1;
+    lvl2 = (uint*)kalloc();
+    if(lvl2 == 0){
+      kfree((char*)lvl1);
+      return -1;
+    }
+
+    if(ext2_dev_read(data->dev, dind_block * data->block_size,
+                     (char*)lvl1, data->block_size) < 0){
+      kfree((char*)lvl2);
+      kfree((char*)lvl1);
+      return -1;
+    }
+
+    ptrs = data->block_size / sizeof(uint);
+    for(i = 0; i < ptrs; i++){
+      uint j;
+      uint lvl2_block;
+
+      lvl2_block = lvl1[i];
+      if(lvl2_block == 0)
+        continue;
+
+      if(ext2_dev_read(data->dev, lvl2_block * data->block_size,
+                       (char*)lvl2, data->block_size) < 0){
+        kfree((char*)lvl2);
+        kfree((char*)lvl1);
+        return -1;
+      }
+
+      for(j = 0; j < ptrs; j++){
+        if(lvl2[j] == 0)
+          continue;
+        if(ext2_free_block(data, lvl2[j]) < 0){
+          kfree((char*)lvl2);
+          kfree((char*)lvl1);
+          return -1;
+        }
+      }
+
+      if(ext2_free_block(data, lvl2_block) < 0){
+        kfree((char*)lvl2);
+        kfree((char*)lvl1);
+        return -1;
+      }
+    }
+
+    kfree((char*)lvl2);
+    kfree((char*)lvl1);
+
+    if(ext2_free_block(data, dind_block) < 0)
+      return -1;
+    dip->i_block[13] = 0;
+  }
+
   dip->i_block[14] = 0;
   dip->i_size = 0;
   dip->i_blocks = 0;
@@ -1268,8 +1333,11 @@ static int
 ext2_inode_blockno(struct ext2_mount_data *data, struct ext2_inode *dip, uint lbn, uint *out)
 {
   uint ptrs;
-  uint ind_index;
+  uint idx1;
+  uint idx2;
   uint ind_block;
+  uint dind_block;
+  uint lvl2_block;
   uint off;
 
   if(data == 0 || dip == 0 || out == 0)
@@ -1281,17 +1349,42 @@ ext2_inode_blockno(struct ext2_mount_data *data, struct ext2_inode *dip, uint lb
   }
 
   ptrs = data->block_size / sizeof(uint);
-  ind_index = lbn - 12;
-  if(ind_index >= ptrs)
+  lbn -= 12;
+  if(lbn < ptrs){
+    ind_block = dip->i_block[12];
+    if(ind_block == 0){
+      *out = 0;
+      return 0;
+    }
+
+    off = ind_block * data->block_size + lbn * sizeof(uint);
+    if(ext2_dev_read(data->dev, off, (char*)out, sizeof(uint)) < 0)
+      return -1;
+    return 0;
+  }
+
+  lbn -= ptrs;
+  if(lbn >= ptrs * ptrs)
     return -1;
 
-  ind_block = dip->i_block[12];
-  if(ind_block == 0){
+  dind_block = dip->i_block[13];
+  if(dind_block == 0){
     *out = 0;
     return 0;
   }
 
-  off = ind_block * data->block_size + ind_index * sizeof(uint);
+  idx1 = lbn / ptrs;
+  idx2 = lbn % ptrs;
+
+  off = dind_block * data->block_size + idx1 * sizeof(uint);
+  if(ext2_dev_read(data->dev, off, (char*)&lvl2_block, sizeof(uint)) < 0)
+    return -1;
+  if(lvl2_block == 0){
+    *out = 0;
+    return 0;
+  }
+
+  off = lvl2_block * data->block_size + idx2 * sizeof(uint);
   if(ext2_dev_read(data->dev, off, (char*)out, sizeof(uint)) < 0)
     return -1;
   return 0;
@@ -1726,12 +1819,26 @@ ext2_write(struct inode *ip, char *src, uint off, uint n)
   struct ext2_inode dip;
   uint done;
   uint *ind_tbl;
+  uint *dind_tbl;
   uint *alloc_list;
   char *zbuf;
   int ind_loaded;
   int ind_dirty;
   int ind_flushed;
   int new_ind_block;
+  int dind_loaded;
+  int dind_dirty;
+  int dind_flushed;
+  int new_dind_block;
+  struct {
+    int used;
+    uint idx;
+    uint block;
+    uint *tbl;
+    int dirty;
+    int flushed;
+    int new_block;
+  } dleaf[2];
   uint alloc_n;
   uint ptrs;
   uint blocks_per_sec;
@@ -1762,12 +1869,26 @@ ext2_write(struct inode *ip, char *src, uint off, uint n)
     return -1;
 
   ind_tbl = 0;
+  dind_tbl = 0;
   alloc_list = 0;
   zbuf = 0;
   ind_loaded = 0;
   ind_dirty = 0;
   ind_flushed = 0;
   new_ind_block = 0;
+  dind_loaded = 0;
+  dind_dirty = 0;
+  dind_flushed = 0;
+  new_dind_block = 0;
+  for(i = 0; i < 2; i++){
+    dleaf[i].used = 0;
+    dleaf[i].idx = 0;
+    dleaf[i].block = 0;
+    dleaf[i].tbl = 0;
+    dleaf[i].dirty = 0;
+    dleaf[i].flushed = 0;
+    dleaf[i].new_block = 0;
+  }
   alloc_n = 0;
   ptrs = data->block_size / sizeof(uint);
 
@@ -1781,7 +1902,7 @@ ext2_write(struct inode *ip, char *src, uint off, uint n)
     goto fail;
   memset(zbuf, 0, PGSIZE);
 
-  // Ensure all touched logical blocks are mapped; allocate direct/single-indirect blocks as needed.
+  // Ensure touched logical blocks are mapped and write data in one pass.
   done = 0;
   while(done < n){
     uint pos;
@@ -1789,6 +1910,7 @@ ext2_write(struct inode *ip, char *src, uint off, uint n)
     uint boff;
     uint chunk;
     uint blockno;
+    uint byte_off;
 
     pos = off + done;
     lbn = pos / data->block_size;
@@ -1809,13 +1931,10 @@ ext2_write(struct inode *ip, char *src, uint off, uint n)
           goto fail;
         alloc_list[alloc_n++] = new_block;
         dip.i_block[lbn] = new_block;
-      } else {
+      } else if(lbn < 12 + ptrs) {
         uint ind_index;
 
         ind_index = lbn - 12;
-        if(ind_index >= ptrs)
-          goto fail;
-
         if(!ind_loaded){
           ind_tbl = (uint*)kalloc();
           if(ind_tbl == 0)
@@ -1852,34 +1971,114 @@ ext2_write(struct inode *ip, char *src, uint off, uint n)
           ind_tbl[ind_index] = new_block;
           ind_dirty = 1;
         }
+
+        blockno = ind_tbl[ind_index];
+      } else {
+        uint rel;
+        uint dind_index;
+        uint leaf_index;
+        int slot;
+
+        rel = lbn - 12 - ptrs;
+        if(rel >= ptrs * ptrs)
+          goto fail;
+
+        dind_index = rel / ptrs;
+        leaf_index = rel % ptrs;
+
+        if(!dind_loaded){
+          dind_tbl = (uint*)kalloc();
+          if(dind_tbl == 0)
+            goto fail;
+          memset((char*)dind_tbl, 0, PGSIZE);
+
+          if(dip.i_block[13] == 0){
+            if(ext2_alloc_block(data, &dip.i_block[13]) < 0)
+              goto fail;
+            if(alloc_n >= PGSIZE / sizeof(uint))
+              goto fail;
+            alloc_list[alloc_n++] = dip.i_block[13];
+            if(ext2_dev_write(data->dev, dip.i_block[13] * data->block_size,
+                              zbuf, data->block_size) < 0)
+              goto fail;
+            new_dind_block = 1;
+            dind_dirty = 1;
+          } else {
+            if(ext2_dev_read(data->dev, dip.i_block[13] * data->block_size,
+                             (char*)dind_tbl, data->block_size) < 0)
+              goto fail;
+          }
+          dind_loaded = 1;
+        }
+
+        slot = -1;
+        for(i = 0; i < 2; i++){
+          if(dleaf[i].used && dleaf[i].idx == dind_index){
+            slot = i;
+            break;
+          }
+        }
+        if(slot < 0){
+          for(i = 0; i < 2; i++){
+            if(!dleaf[i].used){
+              slot = i;
+              break;
+            }
+          }
+        }
+        if(slot < 0)
+          goto fail;
+
+        if(!dleaf[slot].used){
+          uint leaf_block;
+
+          dleaf[slot].tbl = (uint*)kalloc();
+          if(dleaf[slot].tbl == 0)
+            goto fail;
+          memset((char*)dleaf[slot].tbl, 0, PGSIZE);
+
+          dleaf[slot].used = 1;
+          dleaf[slot].idx = dind_index;
+          dleaf[slot].dirty = 0;
+          dleaf[slot].flushed = 0;
+          dleaf[slot].new_block = 0;
+
+          leaf_block = dind_tbl[dind_index];
+          if(leaf_block == 0){
+            if(ext2_alloc_block(data, &leaf_block) < 0)
+              goto fail;
+            if(alloc_n >= PGSIZE / sizeof(uint))
+              goto fail;
+            alloc_list[alloc_n++] = leaf_block;
+            if(ext2_dev_write(data->dev, leaf_block * data->block_size,
+                              zbuf, data->block_size) < 0)
+              goto fail;
+            dind_tbl[dind_index] = leaf_block;
+            dind_dirty = 1;
+            dleaf[slot].new_block = 1;
+          } else {
+            if(ext2_dev_read(data->dev, leaf_block * data->block_size,
+                             (char*)dleaf[slot].tbl, data->block_size) < 0)
+              goto fail;
+          }
+          dleaf[slot].block = leaf_block;
+        }
+
+        if(dleaf[slot].tbl[leaf_index] == 0){
+          if(ext2_alloc_block(data, &new_block) < 0)
+            goto fail;
+          if(alloc_n >= PGSIZE / sizeof(uint))
+            goto fail;
+          if(ext2_dev_write(data->dev, new_block * data->block_size,
+                            zbuf, data->block_size) < 0)
+            goto fail;
+          alloc_list[alloc_n++] = new_block;
+          dleaf[slot].tbl[leaf_index] = new_block;
+          dleaf[slot].dirty = 1;
+        }
+
+        blockno = dleaf[slot].tbl[leaf_index];
       }
-    }
-    done += chunk;
-  }
-
-  done = 0;
-  while(done < n){
-    uint pos;
-    uint lbn;
-    uint boff;
-    uint chunk;
-    uint blockno;
-    uint byte_off;
-
-    pos = off + done;
-    lbn = pos / data->block_size;
-    boff = pos % data->block_size;
-    chunk = ext2_min_u32(data->block_size - boff, n - done);
-
-    if(lbn < 12){
-      blockno = dip.i_block[lbn];
-    } else {
-      uint ind_index;
-
-      ind_index = lbn - 12;
-      if(ind_tbl == 0 || ind_index >= ptrs)
-        goto fail;
-      blockno = ind_tbl[ind_index];
     }
     if(blockno == 0)
       goto fail;
@@ -1888,6 +2087,23 @@ ext2_write(struct inode *ip, char *src, uint off, uint n)
     if(ext2_dev_write(data->dev, byte_off, src + done, chunk) < 0)
       goto fail;
     done += chunk;
+  }
+
+  for(i = 0; i < 2; i++){
+    if(dleaf[i].used && dleaf[i].dirty){
+      if(ext2_dev_write(data->dev, dleaf[i].block * data->block_size,
+                        (char*)dleaf[i].tbl, data->block_size) < 0)
+        goto fail;
+      dleaf[i].dirty = 0;
+      dleaf[i].flushed = 1;
+    }
+  }
+
+  if(dind_dirty){
+    if(ext2_dev_write(data->dev, dip.i_block[13] * data->block_size,
+                      (char*)dind_tbl, data->block_size) < 0)
+      goto fail;
+    dind_flushed = 1;
   }
 
   if(ind_dirty){
@@ -1918,16 +2134,23 @@ ext2_write(struct inode *ip, char *src, uint off, uint n)
     kfree(zbuf);
   if(ind_tbl)
     kfree((char*)ind_tbl);
+  if(dind_tbl)
+    kfree((char*)dind_tbl);
+  for(i = 0; i < 2; i++){
+    if(dleaf[i].tbl)
+      kfree((char*)dleaf[i].tbl);
+  }
 
   EXT2DBG("ext2: write ino=%d rc=%d size=%d\n", ip->inum, (int)n, (int)dip.i_size);
   return n;
 
 fail:
+  for(i = 0; i < 12; i++){
+    if(ext2_block_in_list(alloc_list, alloc_n, dip.i_block[i]))
+      dip.i_block[i] = 0;
+  }
+
   if(ind_tbl){
-    for(i = 0; i < 12; i++){
-      if(ext2_block_in_list(alloc_list, alloc_n, dip.i_block[i]))
-        dip.i_block[i] = 0;
-    }
     for(i = 0; i < ptrs; i++){
       if(ext2_block_in_list(alloc_list, alloc_n, ind_tbl[i]))
         ind_tbl[i] = 0;
@@ -1936,10 +2159,36 @@ fail:
       dip.i_block[12] = 0;
   }
 
+  if(dind_tbl){
+    for(i = 0; i < 2; i++){
+      if(dleaf[i].used && dleaf[i].tbl){
+        uint j;
+        for(j = 0; j < ptrs; j++){
+          if(ext2_block_in_list(alloc_list, alloc_n, dleaf[i].tbl[j]))
+            dleaf[i].tbl[j] = 0;
+        }
+        if(dleaf[i].new_block)
+          dind_tbl[dleaf[i].idx] = 0;
+      }
+    }
+    if(new_dind_block)
+      dip.i_block[13] = 0;
+  }
+
   for(i = 0; i < alloc_n; i++){
     if(alloc_list[i])
       ext2_free_block(data, alloc_list[i]);
   }
+
+  for(i = 0; i < 2; i++){
+    if(dleaf[i].used && dleaf[i].tbl && dleaf[i].flushed && !dleaf[i].new_block && dleaf[i].block)
+      ext2_dev_write(data->dev, dleaf[i].block * data->block_size,
+                     (char*)dleaf[i].tbl, data->block_size);
+  }
+
+  if(dind_tbl && dind_flushed && !new_dind_block && dip.i_block[13])
+    ext2_dev_write(data->dev, dip.i_block[13] * data->block_size,
+                   (char*)dind_tbl, data->block_size);
 
   if(ind_tbl && ind_flushed && !new_ind_block && dip.i_block[12])
     ext2_dev_write(data->dev, dip.i_block[12] * data->block_size,
@@ -1951,6 +2200,12 @@ fail:
     kfree(zbuf);
   if(ind_tbl)
     kfree((char*)ind_tbl);
+  if(dind_tbl)
+    kfree((char*)dind_tbl);
+  for(i = 0; i < 2; i++){
+    if(dleaf[i].tbl)
+      kfree((char*)dleaf[i].tbl);
+  }
   EXT2DBG("ext2: write ino=%d rc=%d\n", ip->inum, -1);
   return -1;
 }
