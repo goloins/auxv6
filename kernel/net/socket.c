@@ -821,6 +821,107 @@ sys_send(void)
   return len;
 }
 
+// sendto(sockfd, buf, len, flags, dst, dstlen) syscall
+// Sends a datagram to dst.  If dst is NULL falls back to connected remote_addr.
+// flags must be 0; SOCK_STREAM is not supported.
+// An unbound SOCK_DGRAM socket is auto-assigned an ephemeral source port.
+int
+sys_sendto(void)
+{
+  int sockfd, len, flags, dstlen, dst_raw;
+  char *buf;
+  struct socket *s;
+  struct sockaddr_in *dst;
+  struct sockaddr_in src, rdst;
+  int type;
+  uint proto;
+  struct ifnet *ifp;
+  uint route_src;
+
+  if(argint(0, &sockfd) < 0 || argint(2, &len) < 0)
+    return -1;
+  if(argint(3, &flags) < 0 || flags != 0)
+    return -1;
+  if(len < 0 || (uint)len > MBUF_SIZE - sizeof(struct udp_hdr))
+    return -1;
+  if(argptr(1, &buf, len) < 0)
+    return -1;
+
+  // arg4 is the destination pointer – may be 0 (NULL)
+  if(argint(4, &dst_raw) < 0)
+    return -1;
+  dst = 0;
+  if(dst_raw != 0) {
+    if(argint(5, &dstlen) < 0 || dstlen < (int)sizeof(struct sockaddr_in))
+      return -1;
+    if(argptr(4, (char**)&dst, sizeof(struct sockaddr_in)) < 0)
+      return -1;
+    if(dst->sin_family != AF_INET)
+      return -1;
+  }
+
+  s = getfd_socket(sockfd);
+  if(!s)
+    return -1;
+
+  acquire(&socket_lock);
+  type = s->type;
+  proto = s->protocol;
+  memmove(&src, &s->local_addr, sizeof(src));
+  if(dst)
+    memmove(&rdst, dst, sizeof(rdst));
+  else
+    memmove(&rdst, &s->remote_addr, sizeof(rdst));
+  release(&socket_lock);
+
+  // Unsupported on SOCK_STREAM – use send()
+  if(type != SOCK_DGRAM && type != SOCK_RAW)
+    return -1;
+
+  if(rdst.sin_addr == 0)
+    return -1;
+
+  route_src = 0;
+  ifp = route_lookup(rdst.sin_addr, &route_src, 0);
+  if(!ifp)
+    return -1;
+  if(src.sin_addr == 0)
+    src.sin_addr = route_src;
+
+  // Auto-bind an ephemeral source port when the socket has not been bound yet
+  if(type == SOCK_DGRAM && src.sin_port == 0) {
+    acquire(&socket_lock);
+    if(s->local_addr.sin_port == 0) {
+      ushort p = alloc_ephemeral_port_locked();
+      if(p == 0) {
+        release(&socket_lock);
+        return -1;
+      }
+      s->local_addr.sin_family = AF_INET;
+      s->local_addr.sin_port = p;
+      s->local_addr.sin_addr = src.sin_addr;
+      if(s->state == SOCK_CLOSED)
+        s->state = SOCK_BOUND;
+    }
+    src.sin_port = s->local_addr.sin_port;
+    release(&socket_lock);
+  }
+
+  if(type == SOCK_DGRAM) {
+    if(rdst.sin_port == 0)
+      return -1;
+    if(udp_output(ifp, &src, &rdst, buf, (uint)len) < 0)
+      return -1;
+  } else {
+    // SOCK_RAW
+    if(ip_output(ifp, (uchar)proto, src.sin_addr, rdst.sin_addr, buf, (uint)len) < 0)
+      return -1;
+  }
+
+  NETDBG("sendto: fd=%d len=%d dport=%d\n", sockfd, len, rdst.sin_port);
+  return len;
+}
+
 // recv(sockfd, buf, len) syscall
 int
 sys_recv(void)
@@ -854,6 +955,73 @@ sys_recv(void)
   s->recv_len -= (uint)n;
 
   release(&socket_lock);
+  return n;
+}
+
+// recvfrom(sockfd, buf, len, flags, src, srclen) syscall
+// Receives data and optionally fills src with the sender's address.
+// src and srclen may be NULL.  flags must be 0.
+int
+sys_recvfrom(void)
+{
+  int sockfd, len, flags, src_raw;
+  char *buf;
+  int n;
+  struct socket *s;
+  struct sockaddr_in *src_out;
+  int *srclen_ptr;
+  struct sockaddr_in peer;
+
+  if(argint(0, &sockfd) < 0 || argint(2, &len) < 0)
+    return -1;
+  if(argint(3, &flags) < 0 || flags != 0)
+    return -1;
+  if(len < 0 || argptr(1, &buf, len) < 0)
+    return -1;
+
+  // arg4 is the source address pointer – may be 0 (NULL)
+  if(argint(4, &src_raw) < 0)
+    return -1;
+  src_out = 0;
+  srclen_ptr = 0;
+  if(src_raw != 0) {
+    if(argptr(4, (char**)&src_out, sizeof(struct sockaddr_in)) < 0)
+      return -1;
+    // arg5 is the addrlen pointer – may also be NULL
+    {
+      int slen_raw;
+      if(argint(5, &slen_raw) >= 0 && slen_raw != 0)
+        argptr(5, (char**)&srclen_ptr, sizeof(int));
+    }
+  }
+
+  s = getfd_socket(sockfd);
+  if(!s)
+    return -1;
+
+  acquire(&socket_lock);
+  while(s->recv_len == 0)
+    sleep(s, &socket_lock);
+
+  n = len;
+  if((uint)n > s->recv_len)
+    n = s->recv_len;
+  if(n > 0)
+    memmove(buf, s->recv_buf, (uint)n);
+  if((uint)n < s->recv_len)
+    memmove(s->recv_buf, s->recv_buf + n, s->recv_len - (uint)n);
+  s->recv_len -= (uint)n;
+
+  // Snapshot sender address before release; socket_deliver already wrote it
+  memmove(&peer, &s->remote_addr, sizeof(peer));
+  release(&socket_lock);
+
+  if(src_out)
+    memmove(src_out, &peer, sizeof(peer));
+  if(srclen_ptr)
+    *srclen_ptr = (int)sizeof(struct sockaddr_in);
+
+  NETDBG("recvfrom: fd=%d n=%d sport=%d\n", sockfd, n, peer.sin_port);
   return n;
 }
 

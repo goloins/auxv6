@@ -83,3 +83,5 @@
 #define SYS_kmsgread 82
 #define SYS_date 83
 #define SYS_halt 84
+#define SYS_sendto 85
+#define SYS_recvfrom 86

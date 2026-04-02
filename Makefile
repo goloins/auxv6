@@ -358,6 +358,9 @@ _whoami: user/whoami
 _tcptest: user/tcptest
 	cp user/tcptest _tcptest
 
+_udptest: user/udptest
+	cp user/udptest _udptest
+
 _ping: user/ping
 	cp user/ping _ping
 
@@ -508,6 +511,7 @@ UPROGS=\
 	_su\
 	_whoami\
 	_tcptest\
+	_udptest\
 	_ping\
 	_nslookup\
 	_netinfo\

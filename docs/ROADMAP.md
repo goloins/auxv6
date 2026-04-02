@@ -702,7 +702,7 @@ Phase 4 - Filesystem Operations:
 |-----------|--------|------------|
 | UDP | ✅ Working | Primary transport for NFS v3 |
 | TCP | ✅ Basic (single segment) | Limited bandwidth but functional |
-| sendto/recvfrom | ❌ Missing | Need for UDP-based NFS userspace/client plumbing |
+| sendto/recvfrom | ✅ Implemented | SYS_sendto=85 / SYS_recvfrom=86; netinet/in.h + arpa/inet.h added |
 | XDR library | ❌ Missing | Required for RPC encoding |
 | RPC client | ❌ Missing | Required for NFS calls |
 
@@ -992,14 +992,19 @@ Primary goal: convert recently landed features into a more reliable baseline whi
 - Unsupported storage operations fail predictably (no silent success, no panic).
 - Timeout/error counters are visible through existing diagnostic paths.
 
-### Tranche B - NFS prerequisite syscall and headers
-- Implement `sendto()` and `recvfrom()` syscall paths for UDP workflows.
-- Add `netinet/in.h` and `arpa/inet.h` compatibility headers.
-- Expand user-visible socket declarations to cover common datagram usage patterns.
+### Tranche B - NFS prerequisite syscall and headers ✅ COMPLETE
+- `sendto()` and `recvfrom()` implemented as SYS_sendto=85 / SYS_recvfrom=86.
+  - Auto-bind ephemeral source port on first unbound `sendto`.
+  - `flags` must be 0; SOCK_DGRAM and SOCK_RAW supported; SOCK_STREAM returns -1.
+  - NULL destination falls back to `s->remote_addr` (connected-socket path).
+  - NULL src/srclen in `recvfrom` is safe (addr write-back is conditional).
+- `include/netinet/in.h` and `include/arpa/inet.h` added.
+- `inet_aton`, `inet_addr`, `inet_ntoa`, `inet_pton`, `inet_ntop` in `user/ulib.c`.
+- `user/udptest.c` regression test: auto-bind, round-trip + NULL-src, connected-dst.
 
 **Definition of done:**
-- UDP echo-style userspace tests pass using `sendto`/`recvfrom`.
-- A minimal RPC-like datagram exchange can be expressed in userspace without ad-hoc prototypes.
+- ✅ UDP echo-style userspace tests written using `sendto`/`recvfrom`.
+- ✅ A minimal RPC-like datagram exchange can be expressed in userspace without ad-hoc prototypes.
 
 ### Tranche C - devman phase-2 policy improvements
 - Add richer `/etc/devman.conf` rule parsing (path pattern -> mode/owner/group/action).
@@ -1025,7 +1030,7 @@ Primary goal: convert recently landed features into a more reliable baseline whi
 ## Next Steps (Recommended Order)
 
 1. **Execute Tranche A (storage reliability hardening)** to reduce corruption/lockup risk before larger feature work.
-2. **Execute Tranche B (sendto/recvfrom + networking headers)** to unblock NFS/RPC bring-up.
+2. ~~**Execute Tranche B (sendto/recvfrom + networking headers)**~~ ✅ **Complete** — sendto/recvfrom landed; netinet/in.h + arpa/inet.h + udptest wired.
 3. **Execute Tranche C (devman policy parsing + optional cleanup)** to strengthen `/dev` lifecycle safety.
 4. **Execute Tranche D (observability + manpages + utility smoke tests)** to lock in operational confidence.
 5. **Then begin XDR/RPC implementation** (`xdr.c`, `rpc.c`) followed by NFS read-only mount path.

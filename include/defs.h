@@ -454,6 +454,8 @@ int             sys_connect(void);
 int             sys_send(void);
 int             sys_recv(void);
 int             sys_recvtimeout(void);
+int             sys_sendto(void);
+int             sys_recvfrom(void);
 int             sys_listen(void);
 int             sys_accept(void);
 int             sys_netifinfo(void);

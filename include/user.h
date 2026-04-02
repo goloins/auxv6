@@ -150,6 +150,10 @@ int connect(int sockfd, struct sockaddr_in *addr, int addrlen);
 int send(int sockfd, const void *buf, int len);
 int recv(int sockfd, void *buf, int len);
 int recvtimeout(int sockfd, void *buf, int len, int timeout_ticks);
+int sendto(int sockfd, const void *buf, int len, int flags,
+           struct sockaddr_in *dst, int dstlen);
+int recvfrom(int sockfd, void *buf, int len, int flags,
+             struct sockaddr_in *src, int *srclen);
 int listen(int sockfd, int backlog);
 int accept(int sockfd);
 

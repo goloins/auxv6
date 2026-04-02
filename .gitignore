@@ -66,6 +66,7 @@ user/sh
 user/sockettest
 user/su
 user/tcptest
+user/udptest
 user/ping
 user/nslookup
 user/netinfo

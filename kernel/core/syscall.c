@@ -166,6 +166,8 @@ extern int sys_ioctl(void);
 extern int sys_kmsgread(void);
 extern int sys_date(void);
 extern int sys_halt(void);
+extern int sys_sendto(void);
+extern int sys_recvfrom(void);
 
 static int (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -252,6 +254,8 @@ static int (*syscalls[])(void) = {
 [SYS_kmsgread] sys_kmsgread,
 [SYS_date] sys_date,
 [SYS_halt] sys_halt,
+[SYS_sendto]   sys_sendto,
+[SYS_recvfrom] sys_recvfrom,
 };
 
 void

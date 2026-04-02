@@ -1056,5 +1056,122 @@ clearenv(void)
   return 0;
 }
 
+/* ------------------------------------------------------------------ *
+ * inet address conversion helpers                                      *
+ * Only AF_INET (IPv4) is handled.                                      *
+ * ------------------------------------------------------------------ */
+#include "../include/arpa/inet.h"
+
+/* Parse up to 3-digit decimal octet, advance *sp past consumed chars.
+   Returns -1 if the field is invalid or out of range 0-255. */
+static int
+parse_octet(const char **sp)
+{
+  const char *s = *sp;
+  int v = 0, nd = 0;
+  while(*s >= '0' && *s <= '9') {
+    v = v * 10 + (*s - '0');
+    if(v > 255)
+      return -1;
+    s++;
+    nd++;
+  }
+  if(nd == 0)
+    return -1;
+  *sp = s;
+  return v;
+}
+
+int
+inet_aton(const char *cp, struct in_addr *ap)
+{
+  const char *s = cp;
+  int a, b, c, d;
+
+  if((a = parse_octet(&s)) < 0 || *s++ != '.') return 0;
+  if((b = parse_octet(&s)) < 0 || *s++ != '.') return 0;
+  if((c = parse_octet(&s)) < 0 || *s++ != '.') return 0;
+  if((d = parse_octet(&s)) < 0 || *s != '\0')  return 0;
+
+  if(ap)
+    ap->s_addr = ((uint)a << 24) | ((uint)b << 16) | ((uint)c << 8) | (uint)d;
+  return 1;
+}
+
+uint
+inet_addr(const char *cp)
+{
+  struct in_addr a;
+  if(!inet_aton(cp, &a))
+    return INADDR_NONE;
+  return a.s_addr;
+}
+
+/* Scratch buffer for inet_ntoa — not re-entrant, matches POSIX semantics. */
+static char _inet_ntoa_buf[16];
+
+static void
+u32_to_decstr(char *out, uint v)
+{
+  /* v is 0-255; write decimal digits then NUL. */
+  int i = 0;
+  char tmp[4];
+  if(v == 0) { out[0] = '0'; out[1] = '\0'; return; }
+  while(v) { tmp[i++] = '0' + (v % 10); v /= 10; }
+  int j = 0;
+  while(i-- > 0) out[j++] = tmp[i];
+  out[j] = '\0';
+}
+
+char *
+inet_ntoa(struct in_addr in)
+{
+  uint v = in.s_addr;
+  char fld[4][4];
+  u32_to_decstr(fld[0], (v >> 24) & 0xff);
+  u32_to_decstr(fld[1], (v >> 16) & 0xff);
+  u32_to_decstr(fld[2], (v >>  8) & 0xff);
+  u32_to_decstr(fld[3],  v        & 0xff);
+  /* hand-assemble dotted quad into static buffer */
+  char *p = _inet_ntoa_buf;
+  for(int f = 0; f < 4; f++) {
+    for(char *c = fld[f]; *c; c++) *p++ = *c;
+    *p++ = (f < 3) ? '.' : '\0';
+  }
+  return _inet_ntoa_buf;
+}
+
+int
+inet_pton(int af, const char *src, void *dst)
+{
+  if(af != AF_INET)
+    return -1;
+  struct in_addr a;
+  if(!inet_aton(src, &a))
+    return 0;
+  memmove(dst, &a.s_addr, 4);
+  return 1;
+}
+
+const char *
+inet_ntop(int af, const void *src, char *dst, uint size)
+{
+  if(af != AF_INET)
+    return 0;
+  uint v;
+  memmove(&v, src, 4);
+  struct in_addr a;
+  a.s_addr = v;
+  char *tmp = inet_ntoa(a);
+  /* count length */
+  uint len = 0;
+  while(tmp[len]) len++;
+  if(size < len + 1)
+    return 0;
+  memmove(dst, tmp, len + 1);
+  return dst;
+}
+
 /* end of ulib.c */
+
 
