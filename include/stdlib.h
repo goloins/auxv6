@@ -85,6 +85,9 @@ void       *reallocarray(void *ptr, size_t nmemb, size_t size);
  * Program termination
  */
 void        abort(void) __attribute__((noreturn));
+#ifdef exit
+#undef exit
+#endif
 void        exit(int status) __attribute__((noreturn));
 void        _Exit(int status) __attribute__((noreturn));
 int         atexit(void (*func)(void));

@@ -207,7 +207,7 @@ kernel/core/vectors.S: tools/vectors.pl
 	./tools/vectors.pl > kernel/core/vectors.S
 
 LIBC_OBJS = user/ulib.o user/string.o user/errstr.o user/umalloc.o user/tty.o user/inet.o user/fmt.o user/dirent.o user/env.o user/stdlib.o user/posix_fs.o user/posix.o user/stdio.o user/regex.o user/calloc.o
-LIBAUXV6_OBJS = user/usys.o user/printf.o user/resolve.o
+LIBAUXV6_OBJS = user/crt0.o user/usys.o user/printf.o user/resolve.o
 ULIB = $(LIBC_OBJS) $(LIBAUXV6_OBJS)
 
 USER_STAGE_DIR = user/.stage
@@ -221,7 +221,7 @@ user/usertests.o: user/usertests.c
 	$(CC) $(CFLAGS) -Os -c -o $@ $<
 
 user/%: user/%.o $(ULIB)
-	$(LD) $(LDFLAGS) -N -e main -Ttext 0 -o $@ $^ $(LIBGCC)
+	$(LD) $(LDFLAGS) -N -e _start -Ttext 0 -o $@ $^ $(LIBGCC)
 	$(OBJDUMP) -S $@ > $(basename $@).asm
 	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(basename $@).sym
 
@@ -229,7 +229,7 @@ $(USER_STAGE_DIR):
 	mkdir -p $(USER_STAGE_DIR)
 
 $(USER_STAGE_DIR)/%: user/%.o $(ULIB) | $(USER_STAGE_DIR)
-	$(LD) $(LDFLAGS) -N -e main -Ttext 0 -o $@ $^ $(LIBGCC)
+	$(LD) $(LDFLAGS) -N -e _start -Ttext 0 -o $@ $^ $(LIBGCC)
 
 _cat: user/cat
 	cp user/cat _cat
@@ -670,8 +670,16 @@ $(TARGETFS_DIR)/tmp/test.iso:
 	printf 'auxv6 isofs test image\n' > .isoroot/README.TXT
 	printf 'hello from auxv6 loop test\n' > .isoroot/HELLO.TXT
 	printf '\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f' > .isoroot/DATA.BIN
-	genisoimage -quiet -rock -o $@ .isoroot 2>/dev/null || \
-	  xorriso -as mkisofs -quiet -rock -o $@ .isoroot 2>/dev/null
+	@if command -v mkisofs >/dev/null 2>&1; then \
+		mkisofs -quiet -rock -o $@ .isoroot; \
+	elif command -v genisoimage >/dev/null 2>&1; then \
+		genisoimage -quiet -rock -o $@ .isoroot; \
+	elif command -v xorriso >/dev/null 2>&1; then \
+		xorriso -as mkisofs -quiet -rock -o $@ .isoroot; \
+	else \
+		echo "error: need mkisofs, genisoimage, or xorriso to build $@" >&2; \
+		exit 1; \
+	fi
 	rm -rf .isoroot
 #nice
 test_ext2.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) $(UPROGS)

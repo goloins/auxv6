@@ -118,33 +118,33 @@ report_path(const char *path)
   uchar iso[5];
 
   if(lstat(path, &st) < 0){
-    printf(2, "file: cannot stat %s\n", path);
+    dprintf(2, "file: cannot stat %s\n", path);
     return;
   }
 
   if(st.st_type == T_DIR){
-    printf(1, "%s: directory\n", path);
+    dprintf(1, "%s: directory\n", path);
     return;
   }
   if(st.st_type == T_DEV){
-    printf(1, "%s: device\n", path);
+    dprintf(1, "%s: device\n", path);
     return;
   }
   if(st.st_type == T_SYMLINK){
-    printf(1, "%s: symbolic link\n", path);
+    dprintf(1, "%s: symbolic link\n", path);
     return;
   }
 
   fd = open(path, O_RDONLY);
   if(fd < 0){
-    printf(2, "file: cannot open %s\n", path);
+    dprintf(2, "file: cannot open %s\n", path);
     return;
   }
 
   n = read(fd, buf, sizeof(buf));
   if(n < 0){
     close(fd);
-    printf(2, "file: cannot read %s\n", path);
+    dprintf(2, "file: cannot read %s\n", path);
     return;
   }
 
@@ -156,7 +156,7 @@ report_path(const char *path)
     }
   }
   close(fd);
-  printf(1, "%s: %s\n", path, kind);
+  dprintf(1, "%s: %s\n", path, kind);
 }
 
 int
@@ -165,12 +165,12 @@ main(int argc, char *argv[])
   int i;
 
   if(argc < 2){
-    printf(2, "usage: file path...\n");
-    exit();
+    dprintf(2, "usage: file path...\n");
+    exit(0);
   }
 
   for(i = 1; i < argc; i++)
     report_path(argv[i]);
 
-  exit();
+  exit(0);
 }

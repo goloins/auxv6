@@ -12,6 +12,7 @@
 
 #include "types.h"
 #include "stddef.h"
+#include "sys/types.h"
 #include "signal.h"
 #include "wait.h"
 #include "termios.h"
@@ -78,17 +79,25 @@ struct arpinfo {
 	uint if_index;
 };
 
-int fork(void);
-int exit(void) __attribute__((noreturn));
-int wait(void);
-int waitpid(int pid, int *status, int options);
-int wait4(int pid, int *status, int options, void *rusage);
-int waitid(int idtype, int id, siginfo_t *info, int options);
+pid_t fork(void);
+void __auxv6_sys_exit(int status) __attribute__((noreturn));
+void __auxv6_libc_exit(int status) __asm__("exit") __attribute__((noreturn));
+#ifndef _STDLIB_H
+#define __AUXV6_EXIT_CHOOSE(_0, _1, NAME, ...) NAME
+#define __AUXV6_EXIT0() __auxv6_libc_exit(0)
+#define __AUXV6_EXIT1(status) __auxv6_libc_exit(status)
+#define exit(...) \
+	__AUXV6_EXIT_CHOOSE(_, ##__VA_ARGS__, __AUXV6_EXIT1, __AUXV6_EXIT0)(__VA_ARGS__)
+#endif
+pid_t wait(void);
+pid_t waitpid(pid_t pid, int *status, int options);
+pid_t wait4(pid_t pid, int *status, int options, void *rusage);
+int waitid(id_t idtype, id_t id, siginfo_t *info, int options);
 int pipe(int*);
-int write(int, const void*, int);
-int read(int, void*, int);
+ssize_t write(int, const void*, size_t);
+ssize_t read(int, void*, size_t);
 int close(int);
-int kill(int pid, int sig);
+int kill(pid_t pid, int sig);
 int exec(char*, char**);
 int open(const char*, int);
 int mknod(const char*, int, short, short);
@@ -99,8 +108,8 @@ int rename(const char*, const char*);
 int ext2fail(int, int);
 int fsfault(int, int, int);
 int mkdir(const char*);
-int chmod(const char*, int);
-int chown(const char*, int, int);
+int chmod(const char*, mode_t);
+int chown(const char*, uid_t, gid_t);
 int mountinfo(struct mountinfo *out, int max);
 int netifinfo(struct netifinfo *out, int max);
 int routeinfo(struct routeinfo *out, int max);
@@ -112,14 +121,14 @@ int mount(const char *path, const char *fstype, int flags);
 int umount(const char *path);
 int devblocks(int dev);
 int getdents(int fd, struct dirent *ents, int max);
-int uname(char *buf, int size);
+int uname(char *buf, size_t size);
 int chdir(const char*);
 int dup(int);
 int dup2(int oldfd, int newfd);
-int lseek(int fd, int offset, int whence);
+off_t lseek(int fd, off_t offset, int whence);
 int fcntl(int fd, int cmd, ...);
 int symlink(const char *target, const char *linkpath);
-int readlink(const char *path, char *buf, int bufsiz);
+ssize_t readlink(const char *path, char *buf, size_t bufsiz);
 int lstat(const char *path, struct stat *st);
 int loopsetup(int loopnum, const char *path, int offset, int nblocks);
 int loopteardown(int loopnum);
@@ -132,53 +141,59 @@ int ioctl(int fd, int request, ...);
 int kmsgread(void *buf, int max);
 int date(struct rtcdate *r);
 int halt(void);
-int getpid(void);
-int getppid(void);
-int getpgrp(void);
-int getsid(int pid);
-int getuid(void);
-int getgid(void);
-int getcwd(char*, int);
-int setpgid(int pid, int pgid);
-int setsid(void);
-int setuid(int uid);
-int setgid(int gid);
+pid_t getpid(void);
+pid_t getppid(void);
+pid_t getpgrp(void);
+pid_t getsid(pid_t pid);
+uid_t getuid(void);
+gid_t getgid(void);
+int __auxv6_sys_getcwd(char *buf, size_t size);
+char* getcwd(char*, size_t);
+int setpgid(pid_t pid, pid_t pgid);
+pid_t setsid(void);
+int setuid(uid_t uid);
+int setgid(gid_t gid);
 int sigsend(int pid, int signo);
 int sigaction(int signo, const struct sigaction *act, struct sigaction *oldact);
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
 int sigreturn(void);
-int alarm(int seconds);
-int tcsetpgrp(int pgid);
-int tcgetpgrp(void);
+unsigned int alarm(unsigned int seconds);
+#ifndef _UNISTD_H
+int tcsetpgrp(pid_t pgid);
+pid_t tcgetpgrp(void);
+#endif
 int tcgetattr(int fd, struct termios *termios_p);
 int tcsetattr(int fd, int optional_actions, const struct termios *termios_p);
-char* sbrk(int);
-int sleep(int);
+void* sbrk(intptr_t);
+unsigned int sleep(unsigned int);
 int uptime(void);
 int socket(int family, int type, int protocol);
 int bind(int sockfd, struct sockaddr_in *addr, int addrlen);
 int connect(int sockfd, struct sockaddr_in *addr, int addrlen);
-int send(int sockfd, const void *buf, int len);
-int recv(int sockfd, void *buf, int len);
-int recvtimeout(int sockfd, void *buf, int len, int timeout_ticks);
-int sendto(int sockfd, const void *buf, int len, int flags,
+ssize_t send(int sockfd, const void *buf, size_t len);
+ssize_t recv(int sockfd, void *buf, size_t len);
+ssize_t recvtimeout(int sockfd, void *buf, size_t len, int timeout_ticks);
+ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
            struct sockaddr_in *dst, int dstlen);
-int recvfrom(int sockfd, void *buf, int len, int flags,
+ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
              struct sockaddr_in *src, int *srclen);
 int listen(int sockfd, int backlog);
 int accept(int sockfd);
 
 int stat(const char*, struct stat*);
 char* strcpy(char*, const char*);
-void *memmove(void*, const void*, int);
-char* strchr(const char*, char c);
+void *memmove(void*, const void*, size_t);
+char* strchr(const char*, int c);
 int strcmp(const char*, const char*);
-int strncmp(const char*, const char*, uint);
-void printf(int, const char*, ...);
+int strncmp(const char*, const char*, size_t);
+int dprintf(int fd, const char *fmt, ...);
+#ifndef AUXV6_STDIO_H
+#define printf dprintf
+#endif
 char* gets(char*, int max);
-uint strlen(const char*);
-void* memset(void*, int, uint);
-void* malloc(uint);
+size_t strlen(const char*);
+void* memset(void*, int, size_t);
+void* malloc(size_t);
 void free(void*);
 int atoi(const char*);
 char* readpass(char*, int);

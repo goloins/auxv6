@@ -1488,7 +1488,7 @@ sbrktest(void)
   }
 
   a = sbrk(0);
-  c = sbrk(-(sbrk(0) - oldbrk));
+  c = sbrk(-((char*)sbrk(0) - oldbrk));
   if(c != a){
     printf(stdout, "sbrk downsize failed, a %x c %x\n", a, c);
     exit();
@@ -1541,8 +1541,8 @@ sbrktest(void)
     exit();
   }
 
-  if(sbrk(0) > oldbrk)
-    sbrk(-(sbrk(0) - oldbrk));
+  if((char*)sbrk(0) > oldbrk)
+    sbrk(-((char*)sbrk(0) - oldbrk));
 
   printf(stdout, "sbrk test OK\n");
 }

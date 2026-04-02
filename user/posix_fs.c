@@ -141,19 +141,25 @@ __posix_lstat(const char *path, struct stat *buf)
 }
 
 char *
-__posix_getcwd(char *buf, size_t size)
+getcwd(char *buf, size_t size)
 {
   if(buf == 0 || size == 0) {
     errno = EINVAL;
     return 0;
   }
   errno = 0;
-  if(getcwd(buf, (int)size) < 0) {
+  if(__auxv6_sys_getcwd(buf, size) < 0) {
     if(errno == 0)
       errno = ENOENT;
     return 0;
   }
   return buf;
+}
+
+char *
+__posix_getcwd(char *buf, size_t size)
+{
+  return getcwd(buf, size);
 }
 
 int

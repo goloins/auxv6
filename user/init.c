@@ -80,10 +80,10 @@ run_runlevel_script(char target)
   script_path[13] = target;
   pid = fork();
   if(pid == 0){
-    printf(1, "init: running runlevel script %s\n", script_path);
+    dprintf(1, "init: running runlevel script %s\n", script_path);
     exec("/bin/dash", script_argv);
-    printf(1, "init: runlevel script %s missing or failed\n", script_path);
-    exit();
+    dprintf(1, "init: runlevel script %s missing or failed\n", script_path);
+    exit(0);
   }
   if(pid > 0)
     wait();
@@ -107,7 +107,7 @@ maybe_process_runlevel_change(int *login_pid, char *cur_runlevel)
     return;
 
   prev = *cur_runlevel;
-  printf(1, "init: runlevel transition %c -> %c\n", prev, target);
+  dprintf(1, "init: runlevel transition %c -> %c\n", prev, target);
   if(*login_pid > 0)
     sigsend(*login_pid, SIGTERM);
   run_runlevel_script(target);
@@ -135,62 +135,62 @@ main(void)
   char cur_runlevel;
   struct sigaction sa;
 
-  printf(1, "init: starting up\n");
+  dprintf(1, "init: starting up\n");
 
-  printf(1, "init: attempting to open /dev/console\n");
+  dprintf(1, "init: attempting to open /dev/console\n");
   if(open("/dev/console", O_RDWR) < 0){
-    printf(1, "init: /dev/console open failed, creating it\n");
+    dprintf(1, "init: /dev/console open failed, creating it\n");
     mknod("/dev/console", M_IFCHR, 1, 1);
     if(open("/dev/console", O_RDWR) < 0){
-      printf(2, "init: cannot open /dev/console even after mknod\n");
+      dprintf(2, "init: cannot open /dev/console even after mknod\n");
     } else {
-      printf(1, "init: /dev/console created and opened\n");
+      dprintf(1, "init: /dev/console created and opened\n");
     }
   } else {
-    printf(1, "init: /dev/console already exists\n");
+    dprintf(1, "init: /dev/console already exists\n");
   }
 
-  printf(1, "init: creating /dev directory\n");
+  dprintf(1, "init: creating /dev directory\n");
   mkdir("/dev");
   make_tty_nodes();
   make_disk_nodes();
 
-  printf(1, "init: duping stdin to stdout and stderr\n");
+  dprintf(1, "init: duping stdin to stdout and stderr\n");
   dup(0);  // stdout
   dup(0);  // stderr
 
   // Best-effort boot mounts from /etc/fstab.
-  printf(1, "init: creating /proc directory\n");
+  dprintf(1, "init: creating /proc directory\n");
   mkdir("/proc");
-  printf(1, "init: creating /mnt directory\n");
+  dprintf(1, "init: creating /mnt directory\n");
   mkdir("/mnt");
   
-  printf(1, "init: forking mount process\n");
+  dprintf(1, "init: forking mount process\n");
   cpid = fork();
   if(cpid == 0){
-    printf(1, "init: child executing mount\n");
+    dprintf(1, "init: child executing mount\n");
     exec("/bin/mount", mount_argv);
-    printf(1, "init: exec mount failed\n");
-    exit();
+    dprintf(1, "init: exec mount failed\n");
+    exit(0);
   }
   if(cpid > 0){
-    printf(1, "init: waiting for mount (pid %d)\n", cpid);
+    dprintf(1, "init: waiting for mount (pid %d)\n", cpid);
     wait();
-    printf(1, "init: mount process exited\n");
+    dprintf(1, "init: mount process exited\n");
   }
 
-  printf(1, "init: forking rc script process\n");
+  dprintf(1, "init: forking rc script process\n");
   cpid = fork();
   if(cpid == 0){
-    printf(1, "init: child executing /etc/rc.d/rc.S with /bin/dash\n");
+    dprintf(1, "init: child executing /etc/rc.d/rc.S with /bin/dash\n");
     exec("/bin/dash", rc_argv);
-    printf(1, "init: rc script missing or failed; continuing\n");
-    exit();
+    dprintf(1, "init: rc script missing or failed; continuing\n");
+    exit(0);
   }
   if(cpid > 0){
-    printf(1, "init: waiting for rc script (pid %d)\n", cpid);
+    dprintf(1, "init: waiting for rc script (pid %d)\n", cpid);
     wait();
-    printf(1, "init: rc script process exited\n");
+    dprintf(1, "init: rc script process exited\n");
   }
 
   memset(&sa, 0, sizeof(sa));
@@ -203,24 +203,24 @@ main(void)
   run_runlevel_script(cur_runlevel);
 
   pid = -1;
-  printf(1, "init: entering main login loop\n");
+  dprintf(1, "init: entering main login loop\n");
   for(;;){
     maybe_process_runlevel_change(&pid, &cur_runlevel);
-    printf(1, "init: starting login\n");
+    dprintf(1, "init: starting login\n");
     pid = fork();
     if(pid < 0){
-      printf(1, "init: fork failed\n");
-      exit();
+      dprintf(1, "init: fork failed\n");
+      exit(0);
     }
     if(pid == 0){
-      printf(1, "init: child executing login\n");
+      dprintf(1, "init: child executing login\n");
       exec("/bin/login", argv);
-      printf(1, "init: exec login failed\n");
-      exit();
+      dprintf(1, "init: exec login failed\n");
+      exit(0);
     }
     while((wpid=wait()) >= 0 && wpid != pid){
       maybe_process_runlevel_change(&pid, &cur_runlevel);
-      printf(1, "zombie! wpid=%d pid=%d\n", wpid, pid);
+      dprintf(1, "zombie! wpid=%d pid=%d\n", wpid, pid);
     }
     pid = -1;
     maybe_process_runlevel_change(&pid, &cur_runlevel);

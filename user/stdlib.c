@@ -4,6 +4,7 @@
 
 #include "types.h"
 #include "auxv6/user.h"
+#include "stdlib.h"
 
 int
 atoi(const char *s)
@@ -277,6 +278,13 @@ llabs(long long j)
 static void (*_atexit_fns[32])(void);
 static int _atexit_count;
 
+static void
+auxv6_run_atexit_handlers(void)
+{
+  while(_atexit_count > 0)
+    _atexit_fns[--_atexit_count]();
+}
+
 int
 atexit(void (*func)(void))
 {
@@ -287,10 +295,37 @@ atexit(void (*func)(void))
 }
 
 void
+_Exit(int status)
+{
+  __auxv6_sys_exit(status);
+  __builtin_unreachable();
+}
+
+void
+__auxv6_libc_exit(int status)
+{
+  auxv6_run_atexit_handlers();
+  _Exit(status);
+}
+
+int
+at_quick_exit(void (*func)(void))
+{
+  return atexit(func);
+}
+
+void
+quick_exit(int status)
+{
+  auxv6_run_atexit_handlers();
+  _Exit(status);
+}
+
+void
 abort(void)
 {
   kill(getpid(), 6);
-  exit();
+  _Exit(EXIT_FAILURE);
   __builtin_unreachable();
 }
 

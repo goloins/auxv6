@@ -286,7 +286,7 @@ int             pipe_writable(struct pipe*);
 //PAGEBREAK: 16
 // proc.c
 int             cpuid(void);
-void            exit(void);
+void            exit(int status);
 int             fork(void);
 int             growproc(int);
 int             kill(int pid, int sig);

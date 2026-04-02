@@ -8,8 +8,15 @@
     int $T_SYSCALL; \
     ret
 
+#define SYSCALL_NUM(name, num) \
+  .globl name; \
+  name: \
+    movl $num, %eax; \
+    int $T_SYSCALL; \
+    ret
+
 SYSCALL(fork)
-SYSCALL(exit)
+SYSCALL_NUM(__auxv6_sys_exit, SYS_exit)
 SYSCALL(wait)
 SYSCALL(waitpid)
 SYSCALL(wait4)
@@ -35,7 +42,7 @@ SYSCALL(getpgrp)
 SYSCALL(getsid)
 SYSCALL(getuid)
 SYSCALL(getgid)
-SYSCALL(getcwd)
+SYSCALL_NUM(__auxv6_sys_getcwd, SYS_getcwd)
 SYSCALL(setpgid)
 SYSCALL(setsid)
 SYSCALL(setuid)

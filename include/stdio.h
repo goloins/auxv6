@@ -5,6 +5,10 @@
 #include "sys/types.h"
 #include "stdarg.h"
 
+#ifdef printf
+#undef printf
+#endif
+
 #ifndef EOF
 #define EOF (-1)
 #endif
@@ -42,6 +46,10 @@ int puts(const char *s);
 size_t fread(void *ptr, size_t size, size_t nmemb, FILE *fp);
 size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *fp);
 
+int vdprintf(int fd, const char *fmt, va_list ap);
+int dprintf(int fd, const char *fmt, ...);
+int vprintf(const char *fmt, va_list ap);
+int printf(const char *fmt, ...);
 int vfprintf(FILE *fp, const char *fmt, va_list ap);
 int fprintf(FILE *fp, const char *fmt, ...);
 int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
@@ -53,10 +61,6 @@ void perror(const char *s);
 
 ssize_t getdelim(char **lineptr, size_t *n, int delim, FILE *fp);
 ssize_t getline(char **lineptr, size_t *n, FILE *fp);
-
-/* Keep auxv6 native printf(fd, ...) intact and provide stdio-style macros. */
-#define vprintf(fmt, ap) vfprintf(stdout, (fmt), (ap))
-#define printf(...) fprintf(stdout, __VA_ARGS__)
 
 #define fileno(fp) ((fp) ? ((fp)->fd) : -1)
 

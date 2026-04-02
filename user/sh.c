@@ -723,7 +723,7 @@ sync_cwd_from_kernel(void)
 {
   char buf[CWD_MAX];
 
-  if(getcwd(buf, sizeof(buf)) >= 0 && buf[0] != 0)
+  if(getcwd(buf, sizeof(buf)) != 0 && buf[0] != 0)
     sh_copy(sh_cwd, buf, sizeof(sh_cwd));
 }
 

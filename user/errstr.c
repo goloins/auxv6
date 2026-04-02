@@ -2,10 +2,8 @@
  * errstr.c - errno storage and error-description helpers split out of user/ulib.c
  */
 
-#include "types.h"
-#include "auxv6/user.h"
-
-uint strlcpy(char *dst, const char *src, uint size);
+#include "errno.h"
+#include "string.h"
 
 int errno = 0;
 
@@ -69,7 +67,7 @@ strerror(int errnum)
 }
 
 char*
-strerror_r(int errnum, char *buf, uint buflen)
+strerror_r(int errnum, char *buf, size_t buflen)
 {
   const char *s;
 

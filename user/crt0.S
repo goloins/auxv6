@@ -1,0 +1,15 @@
+#include "syscall.h"
+#include "traps.h"
+
+.globl _start
+_start:
+  movl 4(%esp), %eax
+  movl 8(%esp), %edx
+  pushl %edx
+  pushl %eax
+  call main
+  pushl %eax
+  call exit
+
+1:
+  jmp 1b

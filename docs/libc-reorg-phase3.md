@@ -4,6 +4,8 @@ This tranche continues the libc cleanup by shrinking `user/ulib.c` down to the
 small legacy runtime core and moving the remaining extended string surface into
 files that match the public headers more directly.
 
+Phase 4 continuation is documented in `docs/libc-reorg-phase4.md`.
+
 ## Goals
 
 - Keep `user/ulib.c` limited to the tiny xv6-era runtime primitives.

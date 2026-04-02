@@ -7,11 +7,11 @@ main(void)
 {
   char buf[128];
 
-  if(getcwd(buf, sizeof(buf)) < 0){
-    printf(2, "pwd: getcwd failed\n");
-    exit();
+  if(getcwd(buf, sizeof(buf)) == 0){
+    dprintf(2, "pwd: getcwd failed\n");
+    exit(0);
   }
 
-  printf(1, "%s\n", buf);
-  exit();
+  dprintf(1, "%s\n", buf);
+  exit(0);
 }

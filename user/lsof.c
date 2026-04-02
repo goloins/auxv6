@@ -38,22 +38,22 @@ main(int argc, char *argv[])
   have_filter = 0;
   filter_pid = 0;
   if(argc > 2){
-    printf(2, "usage: lsof [pid]\n");
-    exit();
+    dprintf(2, "usage: lsof [pid]\n");
+    exit(0);
   }
   if(argc == 2){
     have_filter = 1;
     filter_pid = atoi(argv[1]);
     if(filter_pid <= 0){
-      printf(2, "lsof: invalid pid %s\n", argv[1]);
-      exit();
+      dprintf(2, "lsof: invalid pid %s\n", argv[1]);
+      exit(0);
     }
   }
 
   fd = open(LSOF_PATH, O_RDONLY);
   if(fd < 0){
-    printf(2, "lsof: cannot open %s\n", LSOF_PATH);
-    exit();
+    dprintf(2, "lsof: cannot open %s\n", LSOF_PATH);
+    exit(0);
   }
 
   llen = 0;
@@ -79,8 +79,8 @@ main(int argc, char *argv[])
 
   close(fd);
   if(n < 0){
-    printf(2, "lsof: read error\n");
-    exit();
+    dprintf(2, "lsof: read error\n");
+    exit(0);
   }
-  exit();
+  exit(0);
 }

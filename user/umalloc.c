@@ -63,7 +63,7 @@ morecore(uint nu)
 }
 
 void*
-malloc(uint nbytes)
+malloc(size_t nbytes)
 {
   Header *p, *prevp;
   uint nunits;
@@ -92,10 +92,10 @@ malloc(uint nbytes)
 }
 
 void*
-realloc(void *ptr, uint nbytes)
+realloc(void *ptr, size_t nbytes)
 {
   Header *bp;
-  uint oldbytes;
+  size_t oldbytes;
   void *new;
 
   if(!ptr)

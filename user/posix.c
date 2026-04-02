@@ -10,6 +10,7 @@
 #include "stat.h"
 #include "errno.h"
 #include "auxv6/user.h"
+#include "stdlib.h"
 
 int __posix_stat(const char *path, struct stat *buf);
 
@@ -120,8 +121,7 @@ posix_build_path(char *dst, int dstsz, const char *dir, const char *file)
 void
 _exit(int status)
 {
-  (void)status;
-  exit();
+  _Exit(status);
   __builtin_unreachable();
 }
 

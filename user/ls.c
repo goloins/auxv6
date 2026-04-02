@@ -201,24 +201,24 @@ ls(char *path)
   struct stat st;
 
   if((fd = open(path, 0)) < 0){
-    printf(2, "ls: cannot open %s\n", path);
+    dprintf(2, "ls: cannot open %s\n", path);
     return;
   }
 
   if(fstat(fd, &st) < 0){
-    printf(2, "ls: cannot stat %s\n", path);
+    dprintf(2, "ls: cannot stat %s\n", path);
     close(fd);
     return;
   }
 
   switch(st.st_type){
   case T_FILE:
-    printf(1, "%s %d %s %s %s %d%d%d%d\n", fmtname(path), st.st_type, uid_to_name(st.st_uid), gid_to_name(st.st_gid), fmtsize(st.st_size), (st.st_mode>>9)&7, (st.st_mode>>6)&7, (st.st_mode>>3)&7, st.st_mode&7);
+    dprintf(1, "%s %d %s %s %s %d%d%d%d\n", fmtname(path), st.st_type, uid_to_name(st.st_uid), gid_to_name(st.st_gid), fmtsize(st.st_size), (st.st_mode>>9)&7, (st.st_mode>>6)&7, (st.st_mode>>3)&7, st.st_mode&7);
     break;
 
   case T_DIR:
     if(strlen(path) + 1 + DIRSIZ + 1 > sizeof buf){
-      printf(1, "ls: path too long\n");
+      dprintf(1, "ls: path too long\n");
       break;
     }
     strcpy(buf, path);
@@ -230,7 +230,7 @@ ls(char *path)
 
       nent = getdents(fd, des, 16);
       if(nent < 0){
-        printf(1, "ls: getdents failed %s\n", path);
+        dprintf(1, "ls: getdents failed %s\n", path);
         break;
       }
       if(nent == 0)
@@ -240,10 +240,10 @@ ls(char *path)
         memmove(p, des[i].name, DIRSIZ);
         p[DIRSIZ] = 0;
         if(stat(buf, &st) < 0){
-          printf(1, "ls: cannot stat %s\n", buf);
+          dprintf(1, "ls: cannot stat %s\n", buf);
           continue;
         }
-        printf(1, "%s %d %s %s %s %d%d%d%d\n", fmtname(buf), st.st_type, uid_to_name(st.st_uid), gid_to_name(st.st_gid), fmtsize(st.st_size), (st.st_mode>>9)&7, (st.st_mode>>6)&7, (st.st_mode>>3)&7, st.st_mode&7);
+        dprintf(1, "%s %d %s %s %s %d%d%d%d\n", fmtname(buf), st.st_type, uid_to_name(st.st_uid), gid_to_name(st.st_gid), fmtsize(st.st_size), (st.st_mode>>9)&7, (st.st_mode>>6)&7, (st.st_mode>>3)&7, st.st_mode&7);
       }
     }
     break;
@@ -258,9 +258,9 @@ main(int argc, char *argv[])
 
   if(argc < 2){
     ls(".");
-    exit();
+    exit(0);
   }
   for(i=1; i<argc; i++)
     ls(argv[i]);
-  exit();
+  exit(0);
 }
