@@ -471,6 +471,7 @@ void            socket_poll_events(struct socket*, int*, int*, int*);
 
 // net device layer
 void            netdev_init(void);
+void            netdev_poll(void);
 int             if_register(struct ifnet*);
 struct ifnet*   if_get(char*);
 struct ifnet*   if_byindex(uint);

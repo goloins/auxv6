@@ -112,6 +112,7 @@ struct icmp_hdr {
 // Network interface operations.
 struct ifnet_ops {
   int (*if_output)(struct ifnet *ifp, struct mbuf *m);
+  void (*if_poll)(struct ifnet *ifp);
 };
 
 // Network interface descriptor.
@@ -167,6 +168,7 @@ struct arp_info {
 
 // Core network device layer.
 void netdev_init(void);
+void netdev_poll(void);
 int if_register(struct ifnet *ifp);
 struct ifnet* if_get(char *name);
 struct ifnet* if_byindex(uint ifindex);

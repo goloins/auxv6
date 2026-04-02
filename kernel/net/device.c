@@ -34,6 +34,28 @@ netdev_init(void)
 	netvsc_init();
 }
 
+void
+netdev_poll(void)
+{
+	struct ifnet *snapshot[MAXNETIF];
+	struct ifnet *ifp;
+	int n = 0;
+
+	acquire(&if_lock);
+	for(ifp = if_list; ifp && n < MAXNETIF; ifp = ifp->if_next)
+		snapshot[n++] = ifp;
+	release(&if_lock);
+
+	for(int i = 0; i < n; i++){
+		ifp = snapshot[i];
+		if(!ifp || !ifp->if_ops || !ifp->if_ops->if_poll)
+			continue;
+		if((ifp->if_flags & IFF_UP) == 0)
+			continue;
+		ifp->if_ops->if_poll(ifp);
+	}
+}
+
 int
 if_register(struct ifnet *ifp)
 {

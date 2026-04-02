@@ -204,6 +204,8 @@ trap(struct trapframe *tf)
       release(&tickslock);
       // Check all processes for expired alarms
       proc_check_alarms(ticks);
+      // Poll network devices for RX/TX completions.
+      netdev_poll();
       // TCP slow timer - every 10 ticks (100ms)
       if((ticks % 10) == 0)
         tcp_slowtimo();
