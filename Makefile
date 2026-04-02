@@ -298,6 +298,9 @@ _chvt: user/chvt
 _ln: user/ln
 	cp user/ln _ln
 
+_cp: user/cp
+	cp user/cp _cp
+
 _ls: user/ls
 	cp user/ls _ls
 
@@ -516,6 +519,7 @@ UPROGS=\
 	_login\
 	_getty\
 	_ln\
+	_cp\
 	_ls\
 	_lsblk\
 	_free\

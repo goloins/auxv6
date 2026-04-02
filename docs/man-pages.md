@@ -17,6 +17,7 @@ Generated: 2026-04-02
 | chmod | targetfs/usr/share/man/chmod.md | 2026-04-01 | user/chmod.c | source-derived usage/options |
 | chown | targetfs/usr/share/man/chown.md | 2026-04-01 | user/chown.c | source-derived usage/options |
 | chvt | targetfs/usr/share/man/chvt.md | 2026-04-01 | user/chvt.c | source-derived usage/options |
+| cp | targetfs/usr/share/man/cp.md | 2026-04-02 | user/cp.c | source-derived usage/options |
 | clear | targetfs/usr/share/man/clear.md | 2026-04-01 | user/clear.c | source-derived usage/options |
 | dash | targetfs/usr/share/man/dash.md | 2026-04-01 | ports/ignored | manual baseline page |
 | date | targetfs/usr/share/man/date.md | 2026-04-01 | user/date.c | source-derived usage/options |

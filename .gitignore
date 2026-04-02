@@ -40,6 +40,7 @@ user/login
 user/getty
 user/chvt
 user/ln
+user/cp
 user/ls
 user/man
 user/lsblk
