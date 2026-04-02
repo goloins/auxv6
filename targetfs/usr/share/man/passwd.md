@@ -1,20 +1,35 @@
 # passwd(1)
 
 ## Name
-passwd - Change account password.
+passwd - Change a user account password.
 
 ## Synopsis
-- usage: passwd [user]
+```
+passwd [user]
+```
 
 ## Duty
-Change account password.
+Prompt for a new password and update the `/etc/passwd` file. Without
+an argument, changes the password of the current user.
 
 ## Options
-- none detected
+None.
+
+## Arguments
+- `user` — Username whose password to change. Defaults to the current
+  user if omitted.
+
+## Notes
+- The new password is read interactively (no echo to terminal).
+- The password is stored directly in `/etc/passwd`. No shadow file is used.
+- Only root can change another user's password.
 
 ## Examples
-- passwd
+```
+passwd
+passwd root
+```
 
 ## Source Audit
 - Source file: user/passwd.c
-- Last updated: 2026-04-01
+- Last updated: 2026-04-02

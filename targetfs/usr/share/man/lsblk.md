@@ -4,17 +4,28 @@
 lsblk - List block devices.
 
 ## Synopsis
-- usage: lsblk
+```
+lsblk
+```
 
 ## Duty
-List block devices.
+Enumerate all block devices (hard disks and partitions) visible to the
+kernel. Shows the device name, type, block count, and mount status.
 
 ## Options
-- none detected
+None.
+
+## Output Columns
+- `NAME` — Device name (e.g. `hda`, `hda1`, `vda`)
+- `TYPE` — Device type (`disk` or `part`)
+- `BLOCKS` — Total number of 512-byte blocks
+- `MOUNTPOINT` — Where the device is currently mounted, or blank if not mounted
 
 ## Examples
-- lsblk
+```
+lsblk
+```
 
 ## Source Audit
 - Source file: user/lsblk.c
-- Last updated: 2026-04-01
+- Last updated: 2026-04-02

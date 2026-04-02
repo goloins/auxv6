@@ -1,20 +1,30 @@
 # fsregress(1)
 
 ## Name
-fsregress - Run filesystem regression checks.
+fsregress - Filesystem regression test suite.
 
 ## Synopsis
-- fsregress
+```
+fsregress
+```
 
 ## Duty
-Run filesystem regression checks.
+Run a basic regression pass against the mounted filesystem. Scans directories,
+reads directory entries via `getdents`, and runs `stat` on each entry to verify
+metadata consistency.
 
 ## Options
-- none detected
+None.
+
+## Notes
+- Tests are run on the root filesystem and current working directory.
+- Print `PASS` or `FAIL` for each check.
 
 ## Examples
-- fsregress
+```
+fsregress
+```
 
 ## Source Audit
 - Source file: user/fsregress.c
-- Last updated: 2026-04-01
+- Last updated: 2026-04-02

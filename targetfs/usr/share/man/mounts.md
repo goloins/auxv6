@@ -4,17 +4,28 @@
 mounts - List mounted filesystems.
 
 ## Synopsis
-- usage: mounts
+```
+mounts
+```
 
 ## Duty
-List mounted filesystems.
+Query the kernel and print the current mount table, showing each active
+mount with its device, flags, filesystem type, and mount point.
 
 ## Options
-- none detected
+None.
+
+## Output Columns
+- `dev` — Device major:minor or name
+- `flags` — Mount flags (e.g. `RO`, `NOSUID`)
+- `fstype` — Filesystem type (e.g. `ext2`, `tmpfs`, `proc`)
+- `path` — Mount point in the filesystem namespace
 
 ## Examples
-- mounts
+```
+mounts
+```
 
 ## Source Audit
 - Source file: user/mounts.c
-- Last updated: 2026-04-01
+- Last updated: 2026-04-02

@@ -1,20 +1,25 @@
 # pwd(1)
 
 ## Name
-pwd - Print working directory.
+pwd - Print the current working directory.
 
 ## Synopsis
-- pwd
+```
+pwd
+```
 
 ## Duty
-Print working directory.
+Print the absolute path of the current working directory using `getcwd(2)`.
 
 ## Options
-- none detected
+None.
 
 ## Examples
-- pwd
+```
+pwd
+# /home/user
+```
 
 ## Source Audit
 - Source file: user/pwd.c
-- Last updated: 2026-04-01
+- Last updated: 2026-04-02

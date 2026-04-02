@@ -1,20 +1,33 @@
 # login(1)
 
 ## Name
-login - Authenticate and start user session.
+login - Authenticate user and start a session.
 
 ## Synopsis
-- login
+```
+login
+```
 
 ## Duty
-Authenticate and start user session.
+Prompt for a username and password, authenticate against `/etc/passwd`,
+set up the user environment, and execute the user's login shell.
 
 ## Options
-- none detected
+None.
+
+## Notes
+- `login` is normally started by `getty` and should not be invoked directly.
+- Credentials are verified against the password field in `/etc/passwd`.
+- On successful login, the process UID/GID are set to the user's values and
+  the user's shell is exec'd.
+- After three failed attempts the process exits.
 
 ## Examples
-- login
+```
+# Invoked automatically by getty on each virtual terminal.
+login
+```
 
 ## Source Audit
 - Source file: user/login.c
-- Last updated: 2026-04-01
+- Last updated: 2026-04-02

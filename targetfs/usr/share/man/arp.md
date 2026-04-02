@@ -4,18 +4,29 @@
 arp - Display ARP cache entries.
 
 ## Synopsis
-- 52:usage:
-- usage: arp [-a]
+```
+arp [-a]
+```
 
 ## Duty
-Display ARP cache entries.
+Display the ARP (Address Resolution Protocol) table, which maps IPv4
+addresses to MAC (hardware) addresses on the local network.
 
 ## Options
-- `-a` (detected in source usage/option checks)
+- `-a` — List all ARP entries. This is the default behavior; specifying
+  `-a` is optional.
+
+## Output Columns
+- IP address
+- MAC address
+- Interface name
 
 ## Examples
-- arp
+```
+arp
+arp -a
+```
 
 ## Source Audit
 - Source file: user/arp.c
-- Last updated: 2026-04-01
+- Last updated: 2026-04-02

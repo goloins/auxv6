@@ -1,20 +1,32 @@
 # ps(1)
 
 ## Name
-ps - Show process list.
+ps - List running processes.
 
 ## Synopsis
-- usage: ps
+```
+ps
+```
 
 ## Duty
-Show process list.
+List all processes currently running on the system by reading the
+`/proc/ps` kernel interface.
 
 ## Options
-- none detected
+None.
+
+## Output Columns
+- `PID` — Process ID
+- `PPID` — Parent process ID
+- `STATE` — Process state (running, sleeping, zombie, etc.)
+- `NAME` — Command name
 
 ## Examples
-- ps
+```
+ps
+ps | grep sh
+```
 
 ## Source Audit
 - Source file: user/ps.c
-- Last updated: 2026-04-01
+- Last updated: 2026-04-02

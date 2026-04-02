@@ -1,21 +1,53 @@
 # sh(1)
 
 ## Name
-sh - Interactive shell and script runner.
+sh - Command interpreter (shell).
 
 ## Synopsis
-- usage: fg [%%jobid]
-- usage: bg [%%jobid]
+```
+sh
+sh script [args...]
+```
 
 ## Duty
-Interactive shell and script runner.
+An interactive command shell and script interpreter. Supports pipelines,
+I/O redirection, background jobs, variable expansion, and profile loading.
 
 ## Options
-- `-Winfinite-recursion` (detected in source usage/option checks)
+None. Shell behavior is controlled through the interactive session or
+environment variables.
+
+## Arguments
+- `script` — Path to a shell script to execute non-interactively.
+- `args...` — Arguments passed to the script as `$1`, `$2`, etc.
+
+## Builtin Commands
+- `cd [dir]` — Change the current directory. Defaults to `/` if omitted.
+- `exit [status]` — Exit the shell with optional exit status.
+- `jobs` — List background and stopped jobs.
+- `fg [%jobid]` — Bring a background or stopped job to the foreground.
+- `bg [%jobid]` — Resume a stopped job in the background.
+
+## Features
+- **Pipelines**: `cmd1 | cmd2`
+- **Redirection**: `cmd > file`, `cmd < file`, `cmd >> file`
+- **Background**: `cmd &`
+- **Variable expansion**: `$VAR`, `$PATH`
+- **Profile**: Reads `/etc/profile` on startup if it exists
+
+## Notes
+- `sh` is the login shell started by `login`.
+- Job control uses process groups (SIGSTOP/SIGCONT).
 
 ## Examples
-- sh
+```
+sh
+sh /etc/rc.local
+ls | grep sh
+jobs
+fg %1
+```
 
 ## Source Audit
 - Source file: user/sh.c
-- Last updated: 2026-04-01
+- Last updated: 2026-04-02

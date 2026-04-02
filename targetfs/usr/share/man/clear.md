@@ -1,20 +1,30 @@
 # clear(1)
 
 ## Name
-clear - Clear terminal display.
+clear - Clear the terminal screen.
 
 ## Synopsis
-- clear
+```
+clear
+```
 
 ## Duty
-Clear terminal display.
+Erases the visible content of the terminal and moves the cursor to the
+top-left corner by writing ANSI escape sequences to the console device.
 
 ## Options
-- none detected
+None.
+
+## Notes
+- Sends `\033[0m\033[2J\033[H` to the first open TTY found among stdin,
+  stdout, and stderr.
+- Does not restore terminal state or scroll history.
 
 ## Examples
-- clear
+```
+clear
+```
 
 ## Source Audit
 - Source file: user/clear.c
-- Last updated: 2026-04-01
+- Last updated: 2026-04-02

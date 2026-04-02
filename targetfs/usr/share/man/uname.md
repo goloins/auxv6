@@ -1,20 +1,33 @@
 # uname(1)
 
 ## Name
-uname - Print system name.
+uname - Print system name and hostname.
 
 ## Synopsis
-- usage: uname
+```
+uname
+```
 
 ## Duty
-Print system name.
+Print the kernel release name and the system hostname read from
+`/etc/hostname`.
 
 ## Options
-- none detected
+None.
+
+## Output Format
+```
+auxv6 hostname
+```
+- `auxv6` — Kernel/OS name (fixed)
+- `hostname` — System hostname read from `/etc/hostname`
 
 ## Examples
-- uname
+```
+uname
+# auxv6 myhost
+```
 
 ## Source Audit
 - Source file: user/uname.c
-- Last updated: 2026-04-01
+- Last updated: 2026-04-02

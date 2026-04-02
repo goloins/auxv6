@@ -1,20 +1,37 @@
 # telnet(1)
 
 ## Name
-telnet - Telnet-style TCP client.
+telnet - Telnet client.
 
 ## Synopsis
-- usage: telnet host [port]
+```
+telnet host [port]
+```
 
 ## Duty
-Telnet-style TCP client.
+Connect to a remote host using the Telnet protocol over TCP. Handles the
+IAC (Interpret As Command) control sequences and relays terminal I/O to
+and from the connection.
 
 ## Options
-- none detected
+None.
+
+## Arguments
+- `host` — Remote hostname or IP address to connect to.
+- `port` — TCP port number. Defaults to `23` (standard Telnet port).
+
+## Notes
+- IAC protocol negotiation is handled automatically.
+- Input from stdin is forwarded to the remote; remote data is written to
+  stdout.
+- Press Ctrl-C to terminate the session.
 
 ## Examples
-- telnet
+```
+telnet 192.168.1.5
+telnet 10.0.0.1 2323
+```
 
 ## Source Audit
 - Source file: user/telnet.c
-- Last updated: 2026-04-01
+- Last updated: 2026-04-02
