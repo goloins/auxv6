@@ -1,0 +1,53 @@
+# AHCI mount stress: repeated mount/write/umount/remount cycles on /dev/hdd.
+# The ahci-stress.img is pre-formatted ext2 on the host side.
+#
+# This script validates persistence across mount cycles and checks that the
+# AHCI telemetry endpoint remains readable for post-run diagnostics.
+
+mkdir /mnt/ahcitest
+
+# Confirm AHCI proc telemetry is available and has at least one online device.
+RAW cat /proc/ahci_tune
+EXPECT cmd_timeout_us=
+EXPECT dev=3
+
+# --- Cycle 1: mount, write, verify in-session ---
+mount /dev/hdd ext2 /mnt/ahcitest
+echo ahcidata1 > /mnt/ahcitest/f1
+cat /mnt/ahcitest/f1
+EXPECT ahcidata1
+umount /mnt/ahcitest
+
+# --- Cycle 2: remount, verify persistence, write second file ---
+mount /dev/hdd ext2 /mnt/ahcitest
+cat /mnt/ahcitest/f1
+EXPECT ahcidata1
+echo ahcidata2 > /mnt/ahcitest/f2
+cat /mnt/ahcitest/f2
+EXPECT ahcidata2
+umount /mnt/ahcitest
+
+# --- Cycle 3: remount, verify both files, write third file ---
+mount /dev/hdd ext2 /mnt/ahcitest
+cat /mnt/ahcitest/f1
+EXPECT ahcidata1
+cat /mnt/ahcitest/f2
+EXPECT ahcidata2
+echo ahcidata3 > /mnt/ahcitest/f3
+cat /mnt/ahcitest/f3
+EXPECT ahcidata3
+umount /mnt/ahcitest
+
+# --- Cycle 4: final remount, verify all files persist ---
+mount /dev/hdd ext2 /mnt/ahcitest
+cat /mnt/ahcitest/f1
+EXPECT ahcidata1
+cat /mnt/ahcitest/f2
+EXPECT ahcidata2
+cat /mnt/ahcitest/f3
+EXPECT ahcidata3
+umount /mnt/ahcitest
+
+# Print AHCI counters at end so harness logs include timeout/recovery totals.
+RAW cat /proc/ahci_tune
+EXPECT port=3

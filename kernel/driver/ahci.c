@@ -827,8 +827,23 @@ ahci_submit_rw(struct ahci_port *p, uint64_t lba, void *data,
         max_attempts = 1;
 
     for (attempt = 0; attempt < max_attempts; attempt++) {
-        if (ahci_wait_port_idle(sc, p->port_num, ahci_idle_timeout_us) < 0)
+        if (ahci_wait_port_idle(sc, p->port_num, ahci_idle_timeout_us) < 0) {
+            p->io_err++;
+            p->io_timeout++;
+            cprintf("ahci: port %d idle timeout before cmd write=%d lba=%d\n",
+                    p->port_num, is_write, (uint32_t)lba);
+            ahci_diag_port(sc, p->port_num, "port-idle-timeout");
+            if (ahci_port_recover(p, "port-idle-timeout") < 0) {
+                p->recover_fail++;
+                return -1;
+            }
+            if (attempt + 1 < max_attempts) {
+                p->io_retry++;
+                microdelay(50 * (attempt + 1));
+                continue;
+            }
             return -1;
+        }
 
         AHCIDBG("ahci: cmd port=%d dev=%d lba=%d sectors=%d write=%d attempt=%d\n",
                 p->port_num, p->dev_id, (uint32_t)lba, (int)nsectors,

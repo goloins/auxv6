@@ -748,6 +748,16 @@ vblk-stress.img:
 		exit 1; \
 	fi
 
+ahci-stress.img:
+	@if command -v mke2fs >/dev/null 2>&1; then \
+		mke2fs -q -t ext2 -F $@ 65536; \
+	elif [ -x /sbin/mke2fs ]; then \
+		/sbin/mke2fs -q -t ext2 -F $@ 65536; \
+	else \
+		echo "error: mke2fs not found; unable to create AHCI stress image" >&2; \
+		exit 1; \
+	fi
+
 vblk-reset:
 	rm -f vblk0.img vblk1.img
 	$(MAKE) vblk0.img vblk1.img
@@ -805,6 +815,16 @@ qemu-nox-virtioblkstress: aux.bootkern $(EXT2IMG) vblk-stress.img
 		-drive file=aux.bootkern,index=0,media=disk,format=raw \
 		-drive file=$(EXT2IMG),index=2,media=disk,format=raw \
 		-drive file=vblk-stress.img,if=virtio,format=raw \
+		$(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
+# AHCI mount stress: one extra AHCI-backed ext2 disk attached on port 3.
+qemu-nox-ahcistress: aux.bootkern $(EXT2IMG) ahci-stress.img
+	$(QEMU) -nographic \
+		-drive file=aux.bootkern,index=0,media=disk,format=raw \
+		-drive file=$(EXT2IMG),index=2,media=disk,format=raw \
+		-device ich9-ahci,id=ahci \
+		-drive file=ahci-stress.img,if=none,id=ahcidisk,format=raw \
+		-device ide-hd,drive=ahcidisk,bus=ahci.3 \
 		$(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 # Generic automated guest test template (extend by changing target + command file).
@@ -868,6 +888,11 @@ test-virtioblk-mount-stress: aux.bootkern $(EXT2IMG) vblk-stress.img
 	@$(MAKE) qemu-guesttest-template \
 		AUXV6_QEMU_TARGET=qemu-nox-virtioblkstress \
 		AUXV6_TEST_SCRIPT=tools/tests/virtioblk-mount-stress.cmds
+
+test-ahci-mount-stress: aux.bootkern $(EXT2IMG) ahci-stress.img
+	@$(MAKE) qemu-guesttest-template \
+		AUXV6_QEMU_TARGET=qemu-nox-ahcistress \
+		AUXV6_TEST_SCRIPT=tools/tests/ahci-mount-stress.cmds
 
 test-termcheck-smoke: aux.bootkern $(EXT2IMG)
 	@$(MAKE) qemu-guesttest-template \
