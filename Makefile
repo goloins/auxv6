@@ -136,6 +136,9 @@ LIBGCC := $(shell $(CC) -m32 -print-libgcc-file-name)
 # Never use host system headers for auxv6 guest code.
 CFLAGS += -nostdinc
 
+# Allow callers to append debug flags without clobbering base CFLAGS.
+CFLAGS += $(EXTRA_CFLAGS)
+
 # Disable PIE when possible (for Ubuntu 16.10 toolchain)
 ifneq ($(shell $(CC) -dumpspecs 2>/dev/null | grep -e '[^f]no-pie'),)
 CFLAGS += -fno-pie -no-pie
