@@ -1,0 +1,3 @@
+# terminal query/report focused regression
+termcheck --query-only --log /tmp/termcheck-query.log
+EXPECT termcheck: all checks passed

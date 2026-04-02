@@ -112,8 +112,20 @@ struct console_ansi_state {
   int newline_mode;
   int wraparound;
   int reverse_video;
+  int underline;
+  int italic;
+  int strikethrough;
+  int dim;
   int cursor_blink;
   int cursor_visible;
+  int mouse_x10;
+  int mouse_x11;
+  int mouse_sgr;
+  int mouse_urxvt;
+  int focus_event;
+  int alt_scroll;
+  int meta_eightbit;
+  int backarrow_key;
   int last_glyph;
   uint utf8_accum;
   int utf8_need;
@@ -179,8 +191,20 @@ static struct console_tty_state console_tty_default = {
     .newline_mode = 0,
     .wraparound = 1,
     .reverse_video = 0,
+    .underline = 0,
+    .italic = 0,
+    .strikethrough = 0,
+    .dim = 0,
     .cursor_blink = 1,
     .cursor_visible = 1,
+    .mouse_x10 = 0,
+    .mouse_x11 = 0,
+    .mouse_sgr = 0,
+    .mouse_urxvt = 0,
+    .focus_event = 0,
+    .alt_scroll = 0,
+    .meta_eightbit = 0,
+    .backarrow_key = 0,
     .last_glyph = -1,
     .alt_saved_attr = 0x07,
   },
@@ -933,6 +957,55 @@ ansi_apply_private_mode(struct console_tty_state *t, int mode, int set)
     t->ansi.wraparound = set ? 1 : 0;
   } else if(mode == 25) {
     t->ansi.cursor_visible = set ? 1 : 0;
+  } else if(mode == 1000) {
+    t->ansi.mouse_x10 = set ? 1 : 0;
+  } else if(mode == 1001) {
+    /* highlight mode - treat same as x10 */
+    t->ansi.mouse_x11 = set ? 1 : 0;
+  } else if(mode == 1002) {
+    /* button event tracking */
+    t->ansi.mouse_x11 = set ? 1 : 0;
+  } else if(mode == 1003) {
+    /* any event tracking */
+    t->ansi.mouse_x11 = set ? 1 : 0;
+  } else if(mode == 1004) {
+    /* focus event */
+    t->ansi.focus_event = set ? 1 : 0;
+  } else if(mode == 1005) {
+    /* UTF-8 mouse encoding */
+    t->ansi.mouse_sgr = set ? 1 : 0;
+  } else if(mode == 1006) {
+    /* SGR mouse encoding */
+    t->ansi.mouse_sgr = set ? 1 : 0;
+  } else if(mode == 1007) {
+    /* alt scroll */
+    t->ansi.alt_scroll = set ? 1 : 0;
+  } else if(mode == 1015) {
+    /* URXVT mouse encoding */
+    t->ansi.mouse_urxvt = set ? 1 : 0;
+  } else if(mode == 1034) {
+    /* meta escape mode */
+    t->ansi.meta_eightbit = set ? 0 : 1;
+  } else if(mode == 1035) {
+    /* numeric keypad mode */
+  } else if(mode == 1036) {
+    /* alt sends escape */
+    t->ansi.meta_eightbit = set ? 1 : 0;
+  } else if(mode == 1039) {
+    /* alt sends escape (alternative) */
+    t->ansi.meta_eightbit = set ? 1 : 0;
+  } else if(mode == 2004) {
+    /* bracketed paste mode */
+  } else if(mode == 9) {
+    /* X11 mouse - treat as x10 */
+    t->ansi.mouse_x10 = set ? 1 : 0;
+  } else if(mode == 67) {
+    /* backspace key mode */
+    t->ansi.backarrow_key = set ? 1 : 0;
+  } else if(mode == 69) {
+    /* alt keypad */
+  } else if(mode == 95) {
+    /* shift + F3 ... */
   } else if(mode == 1048) {
     if(set)
       ansi_save_cursor(t);
@@ -948,6 +1021,7 @@ ansi_apply_private_mode(struct console_tty_state *t, int mode, int set)
     }
   }
 }
+
 
 static void
 ansi_apply_mode(struct console_tty_state *t, int mode, int set)
