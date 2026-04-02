@@ -1,261 +1,224 @@
-# Plan: True single-image GRUB-booted auxv6
+# Roadmap: Single-image GRUB boot to ext2-root auxv6
 
-**TL;DR**: Replace the two-image QEMU setup (xv6.img bootblock + test_ext2.img rootfs) with a
-single `auxv6.img`: a 130 MB raw disk with an MBR partition table, one ext2 partition holding
-the rootfs + `/aux.kern`, and GRUB2 (via `grub-mkstandalone` — no host `grub-install` needed)
-embedded in the MBR gap. The kernel already has a multiboot1 header in `kernel/core/entry.S`;
-we extend it to save `EBX` before paging, parse the GRUB-supplied cmdline (`root=`, `init=`),
-and fall back to `mbi->boot_device` then a block scan. `xv6.img` is demoted to legacy-only.
+## Goal
+
+Ship one boot artifact, `auxv6.img`, that boots directly through GRUB into auxv6 and mounts
+ext2 root from its first MBR partition. Retire xv6fs boot paths and retire old-init compatibility
+paths. ext2 is the only supported root boot path for this flow.
+
+## Target State
+
+- One disk image: `auxv6.img`.
+- MBR partition table with partition 1 as ext2 root.
+- Root filesystem partition size: 512 MiB.
+- Kernel file in rootfs: `/aux.kern`.
+- GRUB loads kernel via multiboot and passes `root=/dev/hda1 init=/sbin/init`.
+- Kernel resolves root device at runtime from multiboot cmdline/device data, then ext2 scan fallback.
+- Make default run target boots this single image.
+- No xv6fs boot targets remain in normal developer workflow.
 
 ---
 
-## Decisions
+## Current Baseline (already true)
 
-- **Root detection**: cmdline `root=` wins; fall back to multiboot `boot_device`; fall back to
-  auto-scan first ext2-valid block device.
-- **Kernel location in rootfs**: `/aux.kern`
-- **GRUB tooling**: `grub-mkstandalone` — bakes all modules into `core.img`; requires only
-  `grub-pc-bin` + `grub-common` on host, no `grub-install` or on-disk module tree.
-- **xv6.img fate**: kept as legacy-only target for xv6fs regression; not the default build.
+- ext2-root is the default development boot path.
+- Kernel is already staged into targetfs as `targetfs/aux.kern` during `aux.kern` build.
+- IDE partition table parsing and partition-device offset translation are already implemented.
 
 ---
 
-## Phase 1 — Image sizing & kernel packaging
+## Phase A - Rootfs and build graph hardening (low risk)
 
-Steps are independent and can be done in parallel.
-
-### Step 1 — Increase ext2 image to 128 MB
+### A1. Increase staged ext2 root size to 512 MiB
 
 **File:** `tools/stage-ext2-root.sh`
 
-Change:
-```
-mke2fs ... 8192
-```
-to:
-```
-mke2fs ... 32768
-```
-(32 768 × 4 096-byte ext2 blocks = 128 MiB)
+- Set ext2 image block count to produce a 512 MiB image.
+- Keep current ownership behavior (`fakeroot`/`sudo` fallback) unchanged.
 
-### Step 2 — Copy kernel into rootfs staging
-
-**File:** `tools/stage-ext2-root.sh`
-
-Accept a `kernelfile` positional arg; after setting up the staging directory:
-```bash
-cp "$kernelfile" "$rootdir/aux.kern"
-```
+### A2. Make kernel freshness explicit for ext2 image builds
 
 **File:** `Makefile`
 
-Add `aux.kern` as a dependency of `test_ext2.img` (and the future `auxv6.img` target); pass
-it as an argument to the stage script.
+- Add `aux.kern` as an explicit prerequisite for `test_ext2.img` and related root image targets.
+- Keep targetfs-based kernel staging model; do not add parallel kernel-copy logic in stage script.
+
+### A3. Remove old-init image flow from rootfs plan
+
+**File:** `Makefile`
+
+- Remove `test_ext2_oldinit.img` and `qemu-oldinit` targets.
+- Remove `UPROGS_OLDINIT` path and old-init staging assumptions.
+
+Definition of done:
+
+1. `make test_ext2.img` reliably rebuilds with current kernel in rootfs.
+2. Generated ext2 image size is 512 MiB.
+3. Old-init image target family is gone.
 
 ---
 
-## Phase 2 — Multiboot info passthrough in kernel
+## Phase B - Multiboot runtime root/init plumbing (core feature)
 
-Depends on Phase 1 for end-to-end testing, but can be developed independently.
+### B1. Add multiboot interfaces
 
-### Step 3 — Add `include/multiboot.h`
+**Files:** `include/multiboot.h`, `kernel/core/multiboot.c`
 
-Define the multiboot1 `struct multiboot_info` per the GNU Multiboot specification:
-- Fields: `flags`, `mem_lower`, `mem_upper`, `boot_device`, `cmdline` (physical address),
-  `mods_count`, `mods_addr`, `mmap_length`, `mmap_addr`
-- `#define MULTIBOOT_MAGIC 0x2BADB002`
+- Add multiboot1 structure definitions and `MULTIBOOT_MAGIC`.
+- Add globals:
+  - `uint mboot_magic`
+  - `uint mboot_info_phys`
+  - `uint boot_rootdev`
+  - `char boot_init_path[64]`
 
-### Step 4 — Save EAX/EBX in `kernel/core/entry.S` before paging
+### B2. Capture GRUB registers before paging enable
 
-Right after the `entry:` label, before any CR4/CR3/CR0 modifications:
-```asm
-movl %eax, (V2P_WO(mboot_magic))
-movl %ebx, (V2P_WO(mboot_info_phys))
-```
+**File:** `kernel/core/entry.S`
 
-Declare `uint mboot_magic` and `uint mboot_info_phys` as globals in `kernel/core/multiboot.c`.
+- Save EAX/EBX immediately at `entry:` before CR4/CR3/CR0 changes.
 
-### Step 5 — Add `kernel/core/multiboot.c` — cmdline parser & root resolver
+### B3. Parse cmdline and boot_device
 
-`multiboot_init()` — called early in `main()` after basic memory setup:
+**File:** `kernel/core/multiboot.c`
 
-1. Validate `mboot_magic == MULTIBOOT_MAGIC`; if not, leave `boot_rootdev = 0` (fallback path)
-2. `mbi = P2V(mboot_info_phys)`
-3. If `mbi->flags & (1<<2)` (cmdline present):
-   - Parse `P2V(mbi->cmdline)` for `root=/dev/hdXN` → `DISK_PART_DEV(X, N)` (partition) or
-     `DISK_DEV(X)` (whole disk if no partition suffix)
-   - Parse `init=/path` → copy into global `char boot_init_path[64]`
-4. Else fall back to `mbi->boot_device`:
-   - Byte 3 (0x80 = hda, 0x81 = hdb, …) → disk index
-   - Byte 2 (0xFF = whole disk, else partition number) → `DISK_PART_DEV` or `DISK_DEV`
-5. Store resolved device number in `uint boot_rootdev`
+- Parse `root=/dev/hdXN` and map to `DISK_DEV`/`DISK_PART_DEV`.
+- Parse `init=/path` into `boot_init_path`.
+- If cmdline root missing, decode `boot_device` from multiboot info.
+- Keep behavior strict and deterministic; invalid values fall through to fallback.
 
-### Step 6 — Runtime root device & init path
+### B4. Hook runtime root selection into VFS init
 
 **File:** `kernel/fs/vfs.c`
 
-Replace `static uint vfs_rootdev = ROOTFS_DEV` with `extern uint boot_rootdev`. In
-`vfs_init()`, prefer `boot_rootdev` when non-zero; fall back to compile-time `ROOTFS_DEV`.
+- Prefer `boot_rootdev` when non-zero.
+- Fall back to compile-time `ROOTFS_DEV`.
+- If still unresolved or unusable, call ext2 root scan fallback.
+
+### B5. Hook runtime init path into init exec
 
 **File:** `kernel/core/proc.c`
 
-In `kinit_exec()`, prepend `boot_init_path` (if non-empty) before the hardcoded search list
-`{"/sbin/init", "/bin/init", "/init", 0}`.
+- Prepend `boot_init_path` to init candidate list when non-empty.
+- Keep built-in fallback list including `/sbin/init`.
 
-### Step 7 — Auto-scan fallback (last resort)
+### B6. Implement last-resort ext2 root scan fallback
 
-If `boot_rootdev` is still 0 after `multiboot_init()` (e.g., booted without GRUB), scan
-`DISK_DEV(0)`, `DISK_DEV(1)`, … testing each for a valid ext2 superblock signature (`0xEF53`
-at byte 1080). Implemented in `multiboot.c::multiboot_scan_for_rootdev()`; called from
-`vfs_init()` as the final fallback.
+**File:** `kernel/core/multiboot.c`
 
----
+- Scan eligible block devices and identify ext2 superblock signature.
+- Use first valid result as `boot_rootdev`.
 
-## Phase 3 — Partition block device support
+Definition of done:
 
-May run in parallel with Phase 2. This is the highest-risk scope item.
-
-### Step 8 — Verify / implement `DISK_PART_DEV` LBA offset translation
-
-1. Read `include/blockdev.h` and the IDE driver to determine whether `DISK_PART_DEV(disk,
-   part)` already offsets reads/writes by the partition's `start_lba`.
-2. If not implemented: during `ideinit()`, read sector 0 of each disk, validate the `0xAA55`
-   MBR signature, parse the four primary partition entries, and register
-   `(start_lba, size_lba)` per slot. `DISK_PART_DEV` I/O then adds `start_lba` to every
-   sector address.
-3. **Temporary bridge**: while partition support is being built, `boot_rootdev` can resolve to
-   `DISK_DEV(0)` (whole-disk). A separate `auxv6-nopart.img` target (no partition table,
-   raw ext2 from byte 0) lets Phases 1–2 and 4 be validated end-to-end immediately.
+1. Boot with explicit `root=/dev/hda1` mounts expected ext2 root.
+2. Boot without `root=` but valid `boot_device` still mounts correct root.
+3. Boot with neither path still reaches root via ext2 scan fallback.
 
 ---
 
-## Phase 4 — Single `auxv6.img` with GRUB
+## Phase C - Single-image builder and Make integration
 
-Depends on Phases 1 and 3.
+### C1. Add image builder script
 
-### Step 9 — Write `tools/build-auxv6-img.sh`
+**File:** `tools/build-auxv6-img.sh` (new)
 
-1. Check host deps: `grub-mkstandalone`, `sfdisk`, `mke2fs`; print install hint on failure:
-   `apt install grub-pc-bin grub-common`
-2. Detect GRUB i386-pc module directory: `/usr/lib/grub/i386-pc` or `/usr/share/grub/i386-pc`
-3. Write `<tmpdir>/grub.cfg`:
+- Validate host tools: `grub-mkstandalone`, `sfdisk`, `mke2fs`, `dd`.
+- Print actionable dependency hint when GRUB tools are missing:
+  `apt install grub-pc-bin grub-common`.
+- Build partition ext2 image from staged rootfs at 512 MiB.
+- Build full raw image with DOS/MBR label and partition 1 at sector 2048.
+- Embed GRUB `boot.img` + standalone `core.img` without host `grub-install`.
+- Install generated `grub.cfg` with one entry only:
+  - `multiboot /aux.kern root=/dev/hda1 init=/sbin/init`
 
-```
-set timeout=5
-set default=0
+### C2. Add `auxv6.img` target
 
-menuentry "auxv6" {
-  insmod ext2
-  insmod part_msdos
-  insmod multiboot
-  set root='(hd0,msdos1)'
-  multiboot /aux.kern root=/dev/hda1 init=/sbin/init
-  boot
-}
+**File:** `Makefile`
 
-menuentry "auxv6 (legacy init)" {
-  insmod ext2
-  insmod part_msdos
-  insmod multiboot
-  set root='(hd0,msdos1)'
-  multiboot /aux.kern root=/dev/hda1 init=/sbin/6init
-  boot
-}
-```
+- Add `auxv6.img` target using the new builder and staged rootfs.
+- Add image file to clean artifacts.
 
-4. Copy `grub.cfg` into staged rootdir at `boot/grub/grub.cfg`
-5. Build 128 MB ext2 partition image from staged rootdir:
-   `mke2fs -q -t ext2 -d <rootdir> -F <partimg> 32768`
-6. Create 130 MB disk image: `dd if=/dev/zero of=<output> bs=1M count=130`
-7. Partition with `sfdisk`: `label: dos`, partition 1 — start=2048, type=83 (Linux)
-8. Write ext2 partition image into disk at sector 2048:
-   `dd if=<partimg> of=<output> seek=2048 bs=512 conv=notrunc`
-9. Build self-contained GRUB core.img:
-   ```
-   grub-mkstandalone -O i386-pc -o core.img \
-     --modules="biosdisk part_msdos ext2 multiboot normal" \
-     /boot/grub/grub.cfg=<tmpdir>/grub.cfg
-   ```
-10. Embed GRUB into the disk image:
-    ```
-    dd if=<grub_dir>/boot.img of=<output> bs=446 count=1 conv=notrunc
-    dd if=core.img of=<output> seek=1 bs=512 conv=notrunc
-    ```
-    (Only 446 bytes of boot.img, preserving the MBR partition table at offset 446–511)
+### C3. Add and promote `qemu-auxv6`
 
-### Step 10 — Makefile `auxv6.img` target
+**File:** `Makefile`
 
-```makefile
-auxv6.img: aux.kern tools/build-auxv6-img.sh <rootdir-stamp>
-	sh tools/build-auxv6-img.sh .ext2root aux.kern auxv6.img
-```
+- Add `qemu-auxv6` to boot only `auxv6.img` as drive index 0.
+- Promote it to default local dev boot target after smoke tests pass.
 
-Add `auxv6.img` to `.gitignore` and the `clean` target.
+Definition of done:
 
-### Step 11 — Makefile `qemu-auxv6` target (new default)
-
-```makefile
-qemu-auxv6: auxv6.img
-	$(QEMU) -serial mon:stdio \
-	  -drive file=auxv6.img,index=0,media=disk,format=raw \
-	  $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
-```
+1. `make auxv6.img` builds reproducibly.
+2. `make qemu-auxv6` reaches login prompt using a single disk image.
+3. `/aux.kern` exists in guest root filesystem.
 
 ---
 
-## Phase 5 — Legacy preservation
+## Phase D - Remove xv6fs boot pathways from active workflow
 
-### Step 12 — Demote xv6.img
+### D1. Remove xv6fs boot path targets
 
-- Keep `xv6.img` build rule in Makefile as-is.
-- `qemu-xv6root` and all related `*-xv6root` targets: unchanged.
-- Remove `xv6.img` from any top-level default dependency chains.
-- Add a comment in Makefile noting that xv6.img is for regression testing only.
+**File:** `Makefile`
 
----
+- Remove xv6fs-focused boot targets from normal build/test path.
+- Remove boot combinations that depend on split bootblock+xv6fs assumptions.
 
-## Files modified / created
+### D2. Keep ext2 as sole supported root boot path
 
-| File | Change |
-|------|--------|
-| `tools/stage-ext2-root.sh` | +128 MB image size, +copy kernel to `/aux.kern` |
-| `tools/build-auxv6-img.sh` | **NEW** — full disk image builder with GRUB |
-| `kernel/core/entry.S` | Save EAX/EBX (multiboot regs) before paging setup |
-| `include/multiboot.h` | **NEW** — multiboot1 struct definitions |
-| `kernel/core/multiboot.c` | **NEW** — cmdline parser, boot_device decode, ext2 scan |
-| `kernel/fs/vfs.c` | Use runtime `boot_rootdev` instead of compile-time `ROOTFS_DEV` |
-| `kernel/core/proc.c` | Prepend `boot_init_path` to init search list |
-| `kernel/driver/ide.c` | MBR partition table parsing + LBA offset for `DISK_PART_DEV` |
-| `Makefile` | `auxv6.img` + `qemu-auxv6` targets; `aux.kern` dep on stage script |
+**Files:** `Makefile`, relevant docs in `docs/`
+
+- Update docs and target naming so ext2-root single-image is the canonical path.
+- Remove references that imply xv6fs remains a supported root boot option.
+
+Definition of done:
+
+1. Standard `make qemu`/`make qemu-nox` path uses single-image GRUB flow (or aliases to it).
+2. No remaining docs describe xv6fs as an active boot path.
 
 ---
 
-## Verification
+## Verification Matrix
 
-1. `make aux.kern && make auxv6.img` — image builds without errors
-2. `make qemu-auxv6` — QEMU boots; GRUB menu appears, counts down, selects first entry
-3. Kernel log shows: multiboot magic recognised, `root=/dev/hda1` parsed
-4. Kernel mounts ext2 from hda1, finds `/sbin/init`, reaches shell prompt
-5. `ls /aux.kern` inside the OS — kernel file present on the rootfs
-6. Select "auxv6 (legacy init)" entry — boots with `/sbin/6init` instead
-7. Remove `root=` from grub.cfg, rebuild — `boot_device` fallback still boots correctly
-8. `make qemu-xv6root` — still boots xv6fs, no regression
+1. `make aux.kern && make test_ext2.img`.
+2. Confirm `test_ext2.img` is 512 MiB.
+3. `make auxv6.img`.
+4. `make qemu-auxv6`:
+   - GRUB menu appears and boots default entry.
+   - Kernel logs show multiboot path accepted.
+   - Root mounts from `/dev/hda1`.
+   - `/sbin/init` exec succeeds.
+5. Rebuild with cmdline `root=` removed from GRUB config and verify `boot_device` path.
+6. Corrupt cmdline and `boot_device` inputs intentionally and verify ext2 scan fallback boots.
+7. Run existing ext2-root smoke tests from guest (`which`, `lsof`, `file`) after boot.
 
 ---
 
-## Further Considerations
+## Risks and Mitigations
 
-1. **Host dependency**: `grub-mkstandalone` needs `grub-pc-bin` + `grub-common`.
-   Ubuntu/Debian: `apt install grub-pc-bin grub-common`.
-   The build script must detect absence and print this one-liner before exiting non-zero.
+1. GRUB module/tool availability differs by distro.
+   - Mitigation: strict preflight checks and explicit install hint.
+2. Root-device parsing may accept malformed cmdline values.
+   - Mitigation: reject invalid forms and log chosen source (cmdline, boot_device, scan).
+3. Boot-target migration can break existing automation.
+   - Mitigation: keep alias targets briefly, then remove once scripts are updated.
 
-2. **Partition plumbing scope**: Step 8 (partition LBA offsetting in the block layer) is the
-   highest-risk item. If it requires significant kernel work, ship the temporary whole-disk
-   bridge first so the rest of the pipeline (GRUB boot, multiboot parsing, `/aux.kern` in
-   rootfs) can be verified independently.
+---
 
-3. **grub-mkstandalone vs grub-install**: `grub-mkstandalone` bakes every required GRUB module
-   directly into `core.img` — no `/boot/grub/i386-pc/*.mod` files are needed on the image at
-   runtime. This produces a fully self-contained build artifact and is the correct choice for a
-   custom OS image. Standard `grub-install` is designed for host OS installs and is explicitly
-   not used here.
+## Files Expected To Change
+
+- `tools/stage-ext2-root.sh`
+- `tools/build-auxv6-img.sh` (new)
+- `include/multiboot.h` (new)
+- `kernel/core/entry.S`
+- `kernel/core/multiboot.c` (new)
+- `kernel/fs/vfs.c`
+- `kernel/core/proc.c`
+- `Makefile`
+- Relevant docs under `docs/` (roadmap/boot documentation updates)
+
+---
+
+## End State Summary
+
+auxv6 boots from a single GRUB-enabled raw image (`auxv6.img`) directly into ext2-root userland,
+with runtime root/init selection from multiboot data and robust fallback behavior. xv6fs boot
+compatibility paths are removed from active development workflow.
