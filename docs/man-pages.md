@@ -4,7 +4,7 @@ Generated: 2026-04-02
 
 ## Scope
 - Enriched all utility man pages using source-derived usage and option extraction from user/*.c.
-- Added markdown formatting support in user/man.c for headings, lists, and code fences.
+- Added markdown formatting support in user/man.c for headings, lists, code fences, inline emphasis/code, links, ordered lists, block quotes, and horizontal rules.
 - ports directory deep analysis remains intentionally skipped; dash is baseline-documented.
 
 ## Tracking

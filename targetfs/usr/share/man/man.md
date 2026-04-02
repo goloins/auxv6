@@ -5,7 +5,8 @@ man - Display manual pages.
 
 ## Synopsis
 ```
-man [-l] topic
+man -l
+man topic
 ```
 
 ## Duty
@@ -13,8 +14,7 @@ Locate and render the manual page for `topic` from `/usr/share/man/<topic>.md`.
 Markdown formatting (headings, lists, code fences) is rendered for readability.
 
 ## Options
-- `-l` — Enable paging. Output is paused every 22 lines with a `--More--`
-  prompt. Press **Enter** to advance one page or **q** to quit.
+- `-l` — List available topics under `/usr/share/man`.
 
 ## Arguments
 - `topic` — Name of the command or topic to look up. Resolved as
@@ -23,17 +23,22 @@ Markdown formatting (headings, lists, code fences) is rendered for readability.
 ## Notes
 - Man pages are formatted in Markdown. Headings, bullet lists, and code
   fences receive visual treatment when displayed on a terminal.
-- Without `-l`, the full page is printed without pausing.
+- Inline formatting is also rendered for common constructs: `code`,
+  `**bold**`, `*emphasis*`, ordered lists, block quotes (`> ...`),
+  horizontal rules, and Markdown links (`[text](url)`).
+- When standard input and output are terminals, output is paged every
+  24 lines with a `--More--` prompt.
+- At the pager prompt, press **Enter** to advance one page or press
+  **q** to quit immediately.
 
 ## Examples
 ```
 man ls
-man -l grep
+man grep
+man -l
 man mount
 ```
 
 ## Source Audit
 - Source file: user/man.c
 - Last updated: 2026-04-02
-- Source file: user/man.c
-- Last updated: 2026-04-01

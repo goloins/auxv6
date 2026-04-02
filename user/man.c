@@ -3,14 +3,59 @@
 #include "auxv6/user.h"
 #include "fs.h"
 #include "fcntl.h"
+#include "termios.h"
 
 #define MAN_DIR "/usr/share/man"
-#define MAN_PAGE_LINES 22
+#define MAN_PAGE_LINES 24
 
 static char buf[512];
 static int pager_enabled;
 static int pager_lines;
 static int pager_quit;
+static int style_enabled;
+
+#define ANSI_RESET "\033[0m"
+#define ANSI_BOLD "\033[1m"
+#define ANSI_UNDERLINE "\033[4m"
+#define ANSI_REVERSE "\033[7m"
+
+static char
+read_pager_key(void)
+{
+  struct termios oldt;
+  struct termios newt;
+  char c;
+
+  c = 'q';
+  if(!isatty(0)) {
+    if(read(0, &c, 1) != 1)
+      c = 'q';
+    return c;
+  }
+
+  if(tcgetattr(0, &oldt) < 0) {
+    if(read(0, &c, 1) != 1)
+      c = 'q';
+    return c;
+  }
+
+  newt = oldt;
+  newt.c_lflag &= ~(ICANON | ECHO);
+  newt.c_cc[VMIN] = 1;
+  newt.c_cc[VTIME] = 0;
+
+  if(tcsetattr(0, TCSANOW, &newt) < 0) {
+    if(read(0, &c, 1) != 1)
+      c = 'q';
+    return c;
+  }
+
+  if(read(0, &c, 1) != 1)
+    c = 'q';
+
+  tcsetattr(0, TCSANOW, &oldt);
+  return c;
+}
 
 static void
 pager_prompt(void)
@@ -18,8 +63,7 @@ pager_prompt(void)
   char c;
 
   write(1, "--More-- (Enter:next, q:quit)", 29);
-  if(read(0, &c, 1) != 1)
-    c = 'q';
+  c = read_pager_key();
   write(1, "\r                             \r", 31);
 
   if(c == 'q' || c == 'Q')
@@ -46,7 +90,122 @@ putc1(char c)
 static void
 puts1(const char *s)
 {
-  write(1, s, strlen(s));
+  int i;
+
+  for(i = 0; s[i]; i++)
+    putc1(s[i]);
+}
+
+static void
+style_begin(const char *code)
+{
+  if(style_enabled)
+    puts1(code);
+}
+
+static void
+style_end(void)
+{
+  if(style_enabled)
+    puts1(ANSI_RESET);
+}
+
+static int
+find_closing(const char *s, int start, const char *tok, int tlen)
+{
+  int i;
+
+  for(i = start; s[i]; i++) {
+    if(strncmp(s + i, tok, tlen) == 0)
+      return i;
+  }
+  return -1;
+}
+
+static void
+render_span(const char *s, int start, int end)
+{
+  int i;
+
+  for(i = start; i < end; i++)
+    putc1(s[i]);
+}
+
+static void
+render_inline(char *line)
+{
+  int i;
+
+  for(i = 0; line[i]; ) {
+    int j;
+
+    if(line[i] == '`') {
+      j = find_closing(line, i + 1, "`", 1);
+      if(j > i + 1) {
+        style_begin(ANSI_REVERSE);
+        render_span(line, i + 1, j);
+        style_end();
+        i = j + 1;
+        continue;
+      }
+    }
+
+    if(line[i] == '*' && line[i + 1] == '*') {
+      j = find_closing(line, i + 2, "**", 2);
+      if(j > i + 2) {
+        style_begin(ANSI_BOLD);
+        render_span(line, i + 2, j);
+        style_end();
+        i = j + 2;
+        continue;
+      }
+    }
+
+    if(line[i] == '*') {
+      j = find_closing(line, i + 1, "*", 1);
+      if(j > i + 1) {
+        style_begin(ANSI_UNDERLINE);
+        render_span(line, i + 1, j);
+        style_end();
+        i = j + 1;
+        continue;
+      }
+    }
+
+    if(line[i] == '[') {
+      int k;
+      int l;
+
+      k = find_closing(line, i + 1, "]", 1);
+      if(k > i + 1 && line[k + 1] == '(') {
+        l = find_closing(line, k + 2, ")", 1);
+        if(l > k + 2) {
+          style_begin(ANSI_UNDERLINE);
+          render_span(line, i + 1, k);
+          style_end();
+          puts1(" (");
+          render_span(line, k + 2, l);
+          putc1(')');
+          i = l + 1;
+          continue;
+        }
+      }
+    }
+
+    putc1(line[i]);
+    i++;
+  }
+}
+
+static int
+is_ordered_list_item(char *line)
+{
+  int i;
+
+  i = 0;
+  while(line[i] >= '0' && line[i] <= '9')
+    i++;
+  return (i > 0 && line[i] == '.' && line[i + 1] == ' ');
 }
 
 static void
@@ -67,12 +226,22 @@ static void
 render_line(char *line, int *in_code)
 {
   int n;
+  int i;
 
   n = strlen(line);
   while(n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r'))
     line[--n] = 0;
 
-  if(strncmp(line, "```", 3) == 0) {
+  i = 0;
+  while(line[i] == ' ' || line[i] == '\t')
+    i++;
+
+  if(line[i] == 0) {
+    putc1('\n');
+    return;
+  }
+
+  if(strncmp(line + i, "```", 3) == 0) {
     *in_code = !*in_code;
     putc1('\n');
     return;
@@ -80,48 +249,82 @@ render_line(char *line, int *in_code)
 
   if(*in_code) {
     puts1("    ");
-    puts1(line);
+    puts1(line + i);
     putc1('\n');
     return;
   }
 
-  if(strncmp(line, "# ", 2) == 0) {
+  if(strncmp(line + i, "# ", 2) == 0) {
     putc1('\n');
-    print_upper(line + 2);
+    style_begin(ANSI_BOLD);
+    print_upper(line + i + 2);
+    style_end();
     puts1("\n\n");
     return;
   }
 
-  if(strncmp(line, "## ", 3) == 0) {
-    int i;
+  if(strncmp(line + i, "## ", 3) == 0) {
+    int j;
     int len;
 
     putc1('\n');
-    puts1(line + 3);
+    style_begin(ANSI_BOLD);
+    render_inline(line + i + 3);
+    style_end();
     putc1('\n');
-    len = strlen(line + 3);
-    for(i = 0; i < len; i++)
+    len = strlen(line + i + 3);
+    for(j = 0; j < len; j++)
       putc1('-');
     puts1("\n");
     return;
   }
 
-  if(strncmp(line, "### ", 4) == 0) {
+  if(strncmp(line + i, "### ", 4) == 0) {
     puts1("\n* ");
-    puts1(line + 4);
+    style_begin(ANSI_BOLD);
+    render_inline(line + i + 4);
+    style_end();
     puts1("\n");
     return;
   }
 
-  if(strncmp(line, "- ", 2) == 0) {
+  if(strncmp(line + i, "- ", 2) == 0) {
     puts1("  - ");
-    puts1(line + 2);
+    render_inline(line + i + 2);
     putc1('\n');
     return;
   }
 
-  puts1(line);
-  putc1('\n');
+  if(is_ordered_list_item(line + i)) {
+    int j;
+
+    j = 0;
+    while(line[i + j] >= '0' && line[i + j] <= '9')
+      j++;
+    puts1("  ");
+    render_span(line + i, 0, j);
+    puts1(") ");
+    render_inline(line + i + j + 2);
+    putc1('\n');
+    return;
+  }
+
+  if(strncmp(line + i, "> ", 2) == 0) {
+    style_begin(ANSI_BOLD);
+    puts1("| ");
+    style_end();
+    render_inline(line + i + 2);
+    putc1('\n');
+    return;
+  }
+
+  if(strcmp(line + i, "---") == 0 || strcmp(line + i, "***") == 0 || strcmp(line + i, "___") == 0) {
+    puts1("----------------------------------------\n");
+    return;
+  }
+
+  render_inline(line + i);
+    putc1('\n');
 }
 
 static void
@@ -159,6 +362,7 @@ render_markdown_file(const char *path)
     return -1;
 
   pager_enabled = isatty(0) && isatty(1);
+  style_enabled = isatty(1);
   pager_lines = 0;
   pager_quit = 0;
 
