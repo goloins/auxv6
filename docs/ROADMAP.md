@@ -3,7 +3,7 @@
 ## Project Overview
 
 auxv6 is an xv6-derived Unix-like operating system with significant enhancements including:
-- Multi-backend VFS layer (xv6fs, ext2, msdosfs, procfs)
+- Multi-backend VFS layer (xv6fs, ext2, msdosfs, procfs, tmpfs)
 - BSD-style networking with TCP/IP stack
 - Signal handling infrastructure
 - Job control with process groups, sessions, terminal control

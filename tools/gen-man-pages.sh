@@ -44,6 +44,7 @@ utility_duty() {
     man) echo "Render and display manual pages." ;;
     mkdir) echo "Create directories." ;;
     mount) echo "Mount filesystems." ;;
+    mktmpfs) echo "Create a tmpfs mount with a size limit." ;;
     mounts) echo "List mounted filesystems." ;;
     mounttest) echo "Mount/unmount regression utility." ;;
     mv) echo "Move or rename files." ;;
@@ -84,7 +85,7 @@ utility_duty() {
   esac
 }
 
-utilities="arp cat chgrp chmod chown chvt clear dash date devman df dmesg echo fatregress forktest free fsregress getty grep id ifconfig init ip isotest kill killall ln login losetup ls lsblk lspci man mkdir mount mounts mounttest mv netcat netinfo netstat nslookup passwd ping ps pwd rarp reset rm route runlevel sh sigtest sockettest stressfs su symlinktest tail tcptest telinit telnet termcheck termdemo time umount uname usertests v6dhcpd wc whoami zombie"
+utilities="arp cat chgrp chmod chown chvt clear dash date devman df dmesg echo fatregress forktest free fsregress getty grep id ifconfig init ip isotest kill killall ln login losetup ls lsblk lspci man mkdir mount mktmpfs mounts mounttest mv netcat netinfo netstat nslookup passwd ping ps pwd rarp reset rm route runlevel sh sigtest sockettest stressfs su symlinktest tail tcptest telinit telnet termcheck termdemo time umount uname usertests v6dhcpd wc whoami zombie"
 
 for util in $utilities; do
   src="$ROOT_DIR/user/$util.c"

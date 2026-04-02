@@ -200,7 +200,7 @@ run_roundtrip(int unit, int iteration)
     return VBLKTEST_ERR_ENSURE_DIR;
 
   flags = MNT_MAKEDEV(dev);
-  if(mount(mountpoint, "ext2", flags) < 0)
+  if(mount(mountpoint, "ext2", flags, 0, 0) < 0)
     return VBLKTEST_ERR_MOUNT;
 
   strcpy(filepath, mountpoint);

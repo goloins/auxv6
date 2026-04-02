@@ -25,6 +25,7 @@ struct vnode_ops {
   int (*read)(struct inode *ip, char *dst, uint off, uint n);
   int (*write)(struct inode *ip, char *src, uint off, uint n);
   int (*truncate)(struct inode *ip);
+  int (*drop)(struct inode *ip);
   int (*stat)(struct inode *ip, struct stat *st);
   int (*setattr)(struct inode *ip,
                  int set_mode, int mode,
@@ -73,6 +74,8 @@ struct mount {
   struct inode *mountpoint;
   struct vfs *fs;
   void *fs_data;
+  const void *data;
+  int datalen;
 };
 
 struct vfs_mount_info {
@@ -94,7 +97,8 @@ int vfs_lookup(char *path, struct vnode *vn);
 int vfs_lookup_follow(char *path, struct vnode *vn);
 int vfs_lookup_parent(char *path, char *name, struct vnode *vn);
 void vfs_vnode_drop(struct vnode *vn);
-int vfs_register_mount(struct vfs *fs, int dev, int flags, char *path);
+int vfs_register_mount(struct vfs *fs, int dev, int flags, char *path,
+                       const void *data, int datalen);
 int vfs_unmount(char *path);
 uint vfs_root_dev(void);
 int vfs_is_root_inode(struct inode *ip);
@@ -109,5 +113,7 @@ void* vfs_dev_fs_data(uint dev);
 void vfs_xv6fs_init(struct vfs *fs);
 void vfs_ext2_init(struct vfs *fs);
 void vfs_msdosfs_init(struct vfs *fs);
-void vfs_procfs_init(struct vfs *fs);void vfs_isofs_init(struct vfs *fs);
+void vfs_procfs_init(struct vfs *fs);
+void vfs_isofs_init(struct vfs *fs);
+void vfs_tmpfs_init(struct vfs *fs);
 #endif

@@ -121,7 +121,7 @@ test_iso_mount(void)
   int loop_devnum = 40 + LOOP_DEV;  /* LOOP_DEV_BASE + loopnum */
   int flags = 0x10000 | (loop_devnum << 16);  /* MNT_HASDEV with device number */
   
-  r = mount(MOUNT_POINT, "isofs", flags);
+  r = mount(MOUNT_POINT, "isofs", flags, 0, 0);
   test_result("mount(isofs)", r >= 0);
   
   if(r < 0){

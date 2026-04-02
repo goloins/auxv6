@@ -169,7 +169,7 @@ struct inode*   vfs_nameiparent(char*, char*);
 int             vfs_lookup(char*, struct vnode*);
 int             vfs_lookup_parent(char*, char*, struct vnode*);
 void            vfs_vnode_drop(struct vnode*);
-int             vfs_register_mount(struct vfs*, int, int, char*);
+int             vfs_register_mount(struct vfs*, int, int, char*, const void*, int);
 int             vfs_unmount(char*);
 uint            vfs_root_dev(void);
 int             vfs_is_root_inode(struct inode*);
@@ -186,7 +186,9 @@ int             ext2_block_usage(uint dev, uint *total_blocks, uint *free_blocks
 void            vfs_xv6fs_init(struct vfs*);
 void            vfs_ext2_init(struct vfs*);
 void            vfs_msdosfs_init(struct vfs*);
-void            vfs_procfs_init(struct vfs*);void            vfs_isofs_init(struct vfs*);
+void            vfs_procfs_init(struct vfs*);
+void            vfs_isofs_init(struct vfs*);
+void            vfs_tmpfs_init(struct vfs*);
 // ide.c
 void            ideinit(void);
 void            ideintr(void);

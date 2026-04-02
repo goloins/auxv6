@@ -51,6 +51,7 @@ user/mkdir
 user/mount
 user/mounts
 user/mounttest
+user/mktmpfs
 user/losetup
 user/isotest
 user/looptest

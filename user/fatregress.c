@@ -182,7 +182,7 @@ main(void)
   }
 
   ensure_dir(FAT_MOUNT_PATH);
-  if(mount(FAT_MOUNT_PATH, FAT_FSTYPE, FAT_DEV_FLAGS) < 0)
+  if(mount(FAT_MOUNT_PATH, FAT_FSTYPE, FAT_DEV_FLAGS, 0, 0) < 0)
     fail("mount", FAT_MOUNT_PATH);
 
   read_expect("/fat/hello.txt", "hello from auxv6 fat image\n");

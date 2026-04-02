@@ -20,6 +20,7 @@
 #include "fs.h"
 #include "buf.h"
 #include "file.h"
+#include "vfs.h"
 
 #define min(a, b) ((a) < (b) ? (a) : (b))
 #define DEFAULT_FILE_MODE (M_IRUSR | M_IWUSR | M_IRGRP | M_IROTH)
@@ -428,11 +429,23 @@ iput(struct inode *ip)
     int r = ip->ref;
     release(&icache.lock);
     if(r == 1){
-      // inode has no links and no other references: truncate and free.
-      itrunc(ip);
-      ip->type = 0;
-      iupdate(ip);
-      ip->valid = 0;
+      const struct vnode_ops *ops;
+
+      ops = vfs_dev_vops(ip->dev);
+      if(ops && ops->drop){
+        ops->drop(ip);
+        ip->type = 0;
+        ip->valid = 0;
+      } else if(vfs_dev_is_xv6fs(ip->dev)){
+        // inode has no links and no other references: truncate and free.
+        itrunc(ip);
+        ip->type = 0;
+        iupdate(ip);
+        ip->valid = 0;
+      } else {
+        ip->type = 0;
+        ip->valid = 0;
+      }
     }
   }
   releasesleep(&ip->lock);

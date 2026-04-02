@@ -246,11 +246,14 @@ vfs_attach_mount_locked(struct vfs *fs, int dev, int flags, char *path,
   mounts[slot].mountpoint = mountpoint;
   mounts[slot].fs_data = fs_data;
   mounts[slot].fs = fs;
+  mounts[slot].data = 0;
+  mounts[slot].datalen = 0;
   return 0;
 }
 
 static int
-vfs_mount_register_inode(struct vfs *fs, int dev, int flags, char *path, struct inode *mountpoint)
+vfs_mount_register_inode(struct vfs *fs, int dev, int flags, char *path,
+                         struct inode *mountpoint, const void *data, int datalen)
 {
   int slot;
   void *fs_data;
@@ -277,6 +280,8 @@ vfs_mount_register_inode(struct vfs *fs, int dev, int flags, char *path, struct 
   mounts[slot].fs = 0;
   mounts[slot].fs_data = 0;
   mounts[slot].mountpoint = mountpoint;
+  mounts[slot].data = data;
+  mounts[slot].datalen = datalen;
 
   release(&vfslock);
 
@@ -291,6 +296,8 @@ vfs_mount_register_inode(struct vfs *fs, int dev, int flags, char *path, struct 
     safestrcpy(mctx.path, path, sizeof(mctx.path));
     mctx.mountpoint = mountpoint;
     mctx.fs = fs;
+    mctx.data = data;
+    mctx.datalen = datalen;
     if(fs->mount_init(&mctx) < 0){
       acquire(&vfslock);
       mounts[slot].used = 0;
@@ -302,6 +309,8 @@ vfs_mount_register_inode(struct vfs *fs, int dev, int flags, char *path, struct 
       mounts[slot].mountpoint = 0;
       mounts[slot].fs = 0;
       mounts[slot].fs_data = 0;
+      mounts[slot].data = 0;
+      mounts[slot].datalen = 0;
       release(&vfslock);
       return -1;
     }
@@ -335,7 +344,8 @@ vfs_mount_register_inode(struct vfs *fs, int dev, int flags, char *path, struct 
 }
 
 int
-vfs_register_mount(struct vfs *fs, int dev, int flags, char *path)
+vfs_register_mount(struct vfs *fs, int dev, int flags, char *path,
+                   const void *data, int datalen)
 {
   struct vnode vn;
 
@@ -352,7 +362,7 @@ vfs_register_mount(struct vfs *fs, int dev, int flags, char *path)
   if(vfs_lookup(path, &vn) < 0)
     return -1;
 
-  if(vfs_mount_register_inode(fs, dev, flags, path, vn.ip) < 0){
+  if(vfs_mount_register_inode(fs, dev, flags, path, vn.ip, data, datalen) < 0){
     VFSDBG("vfs: mount register failed path=%s fs=%s dev=%d\n", path, fs->name, dev);
     vfs_vnode_drop(&vn);
     return -1;
@@ -414,6 +424,8 @@ vfs_unmount(char *path)
         m->mountpoint = 0;
         m->fs = 0;
         m->fs_data = 0;
+        m->data = 0;
+        m->datalen = 0;
         break;
       }
     }

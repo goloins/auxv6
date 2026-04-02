@@ -1,6 +1,6 @@
 # auxv6 Man Pages
 
-Generated: 2026-04-01
+Generated: 2026-04-02
 
 ## Scope
 - Enriched all utility man pages using source-derived usage and option extraction from user/*.c.
@@ -45,8 +45,9 @@ Generated: 2026-04-01
 | ls | targetfs/usr/share/man/ls.md | 2026-04-01 | user/ls.c | source-derived usage/options |
 | man | targetfs/usr/share/man/man.md | 2026-04-01 | user/man.c | source-derived usage/options |
 | mkdir | targetfs/usr/share/man/mkdir.md | 2026-04-01 | user/mkdir.c | source-derived usage/options |
-| mounts | targetfs/usr/share/man/mounts.md | 2026-04-01 | user/mounts.c | source-derived usage/options |
 | mount | targetfs/usr/share/man/mount.md | 2026-04-02 | user/mount.c | source-derived usage/options |
+| mktmpfs | targetfs/usr/share/man/mktmpfs.md | 2026-04-02 | user/mktmpfs.c | source-derived usage/options |
+| mounts | targetfs/usr/share/man/mounts.md | 2026-04-01 | user/mounts.c | source-derived usage/options |
 | mounttest | targetfs/usr/share/man/mounttest.md | 2026-04-01 | user/mounttest.c | source-derived usage/options |
 | mv | targetfs/usr/share/man/mv.md | 2026-04-01 | user/mv.c | source-derived usage/options |
 | netcat | targetfs/usr/share/man/netcat.md | 2026-04-01 | user/netcat.c | source-derived usage/options |

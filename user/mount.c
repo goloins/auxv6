@@ -108,7 +108,7 @@ mount_cli(char *a1, char *a2, char *a3, char *a4)
   if(dev >= 0)
     flags |= MNT_MAKEDEV(dev);
 
-  if(mount(path, fstype, flags) < 0){
+  if(mount(path, fstype, flags, 0, 0) < 0){
     dprintf(2, "mount: %s %s failed\n", path, fstype);
     return -1;
   }
@@ -313,7 +313,7 @@ mount_from_fstab(const char *fstab)
       flags = (f2[0] == 0) ? 0 : parse_flags(f2);
     }
 
-    if(mount(path, fstype, flags) < 0){
+    if(mount(path, fstype, flags, 0, 0) < 0){
       dprintf(2, "mount: %s %s failed\n", path, fstype);
       failed++;
     } else {

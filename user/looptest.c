@@ -147,7 +147,7 @@ test_busy_teardown(void)
     mkdir(MOUNT_POINT);
 
   flags = MNT_MAKEDEV(LOOP_DEV_BASE + LOOP_DEV);
-  r = mount(MOUNT_POINT, "isofs", flags);
+  r = mount(MOUNT_POINT, "isofs", flags, 0, 0);
   record_result("mount loop-backed iso", r == 0);
   if(r < 0){
     loopteardown(LOOP_DEV);

@@ -147,7 +147,7 @@ test_mount_persist(void)
   }
 
   flags = MNT_MAKEDEV(HD_DISK_DEV(AHCI_UNIT));
-  if(mount(AHCI_MOUNT, "ext2", flags) < 0){
+  if(mount(AHCI_MOUNT, "ext2", flags, 0, 0) < 0){
     record_result("ahci mount", 0);
     return -1;
   }
@@ -195,7 +195,7 @@ test_mount_persist(void)
   else
     record_result("ahci umount", 1);
 
-  if(mount(AHCI_MOUNT, "ext2", flags) < 0){
+  if(mount(AHCI_MOUNT, "ext2", flags, 0, 0) < 0){
     record_result("ahci remount", 0);
     return -1;
   }
@@ -267,7 +267,7 @@ test_injection(void)
   }
 
   flags = MNT_MAKEDEV(HD_DISK_DEV(AHCI_UNIT));
-  if(mount(AHCI_INJ_MOUNT, "ext2", flags) < 0){
+  if(mount(AHCI_INJ_MOUNT, "ext2", flags, 0, 0) < 0){
     record_result("ahci injection mount", 0);
     reset_injector();
     return -1;

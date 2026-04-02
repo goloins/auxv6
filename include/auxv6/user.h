@@ -110,7 +110,8 @@ int arpinfo(struct arpinfo *out, int max);
 int routeadd(uint dst, uint mask, uint gateway, uint src, int ifindex);
 int routedel(uint dst, uint mask, int ifindex);
 int netifsetaddr(int ifindex, uint addr, uint mask);
-int mount(const char *path, const char *fstype, int flags);
+int mount(const char *path, const char *fstype, int flags,
+		  const void *data, int datalen);
 int umount(const char *path);
 int devblocks(int dev);
 int getdents(int fd, struct dirent *ents, int max);

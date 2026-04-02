@@ -12,6 +12,7 @@ OBJS = \
 	kernel/fs/vfs_ext2.o\
 	kernel/fs/vfs_msdosfs.o\
 	kernel/fs/vfs_isofs.o\
+	kernel/fs/vfs_tmpfs.o\
 	kernel/driver/ide.o\
 	kernel/driver/ioapic.o\
 	kernel/driver/pci.o\
@@ -342,6 +343,9 @@ _mounttest: user/mounttest
 _mount: user/mount
 	cp user/mount _mount
 
+_mktmpfs: user/mktmpfs
+	cp user/mktmpfs _mktmpfs
+
 _mv: user/mv
 	cp user/mv _mv
 
@@ -520,6 +524,7 @@ UPROGS=\
 	_lspci\
 	_mkdir\
 	_mount\
+	_mktmpfs\
 	_mounts\
 	_mounttest\
 	_mv\
@@ -634,6 +639,7 @@ clean:
 	$(USER_STAGE_DIR) \
 	user/runlevel user/telinit \
 	user/mount user/mounts user/mounttest user/umount \
+	user/mktmpfs \
 	user/losetup user/isotest user/looptest user/vblktest \
 	user/ahcitest \
 	user/man \
@@ -680,6 +686,7 @@ EXT2ROOT_FSTAB ?= $(TARGETFS_ETC)/fstab.ext2root
 ROOTFS_COMMON_FILES = README $(TARGETFS_ETC)/hosts $(EXT2ROOT_FSTAB) $(TARGETFS_ETC)/profile $(TARGETFS_ETC)/termcap $(TARGETFS_ETC)/passwd $(TARGETFS_ETC)/groups $(TARGETFS_ETC)/hostname $(TARGETFS_ETC)/motd $(TARGETFS_ETC)/resolv.conf $(TARGETFS_SBIN)/mount.ext2 $(TARGETFS_SBIN)/mount.msdosfs $(TARGETFS_SBIN)/mount.isofs $(TARGETFS_SBIN)/mount.xv6fs $(TARGETFS_DIR)/tmp/test.iso
 ROOTFS_RC_FILES = $(TARGETFS_ETC)/rc.S $(TARGETFS_ETC)/rc.0 $(TARGETFS_ETC)/rc.1 $(TARGETFS_ETC)/rc.2 $(TARGETFS_ETC)/rc.3 $(TARGETFS_ETC)/rc.6
 ROOTFS_MAN_FILES = $(wildcard $(TARGETFS_MAN_DIR)/*.md)
+ROOTFS_TARGETFS_FILES = $(shell find $(TARGETFS_DIR) -type f -o -type l 2>/dev/null)
 FATIMG ?= test_fat.img
 FATROOT_STAGE ?= .fatroot
 # qemu* targets already depend on $(EXT2IMG), so always attach it as index=2.
@@ -706,8 +713,8 @@ $(TARGETFS_DIR)/tmp/test.iso:
 	fi
 	rm -rf .isoroot
 #nice
-test_ext2.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) $(UPROGS)
-	sh tools/stage-ext2-root.sh .ext2root $(EXT2IMG) $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) $(UPROGS)
+test_ext2.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) $(UPROGS)
+	sh tools/stage-ext2-root.sh .ext2root $(EXT2IMG) $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) $(UPROGS)
 
 test_ext2_oldinit.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(UPROGS_OLDINIT)
 	sh tools/stage-ext2-root.sh .ext2root-oldinit test_ext2_oldinit.img $(ROOTFS_COMMON_FILES) $(UPROGS_OLDINIT)

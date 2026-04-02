@@ -21,6 +21,7 @@
 #define DEFAULT_CREATE_DIR_MODE (M_IRUSR | M_IWUSR | M_IXUSR | M_IRGRP | M_IXGRP | M_IROTH | M_IXOTH)
 #define DEFAULT_CREATE_DEV_MODE (M_IRUSR | M_IWUSR | M_IRGRP | M_IWGRP | M_IROTH | M_IWOTH)
 #define GETCWD_MAX_DEPTH 32
+#define MOUNT_DATA_MAX 256
 
 static int create_default_mode(short type);
 static int create_device_mode(int mode);
@@ -32,6 +33,7 @@ static int inode_is_owner_or_root(struct inode *ip);
 static int inode_is_root_user(void);
 static struct inode* vfs_resolve(char *path);
 static struct inode* vfs_resolve_parent(char *path, char *name);
+static int tmpfs_alloc_dev(void);
 
 #define SELECT_BITS_PER_WORD (8 * sizeof(uint))
 #define SELECT_WORDS ((NOFILE + SELECT_BITS_PER_WORD - 1) / SELECT_BITS_PER_WORD)
@@ -1319,6 +1321,8 @@ sys_mount(void)
 {
   char *path, *fstype;
   int flags;
+  char *data;
+  int datalen;
   int mount_flags;
   int has_dev_override;
   int dev_override;
@@ -1326,6 +1330,7 @@ sys_mount(void)
   struct vfs *fs;
   char path_buf[256];
   char fstype_buf[256];
+  char data_buf[MOUNT_DATA_MAX + 1];
 
   if(argstr(0, &path) < 0)
     return -1;
@@ -1333,10 +1338,24 @@ sys_mount(void)
     return -1;
   if(argint(2, &flags) < 0)
     return -1;
+  if(argint(4, &datalen) < 0)
+    return -1;
+  if(datalen < 0)
+    return -1;
 
   // Copy strings to kernel space
   safestrcpy(path_buf, path, sizeof(path_buf));
   safestrcpy(fstype_buf, fstype, sizeof(fstype_buf));
+  data_buf[0] = 0;
+  data = 0;
+  if(datalen > 0){
+    if(datalen > MOUNT_DATA_MAX)
+      return -1;
+    if(argptr(3, &data, datalen) < 0)
+      return -1;
+    memmove(data_buf, data, datalen);
+    data_buf[datalen] = 0;
+  }
 
   has_dev_override = MNT_HASDEV(flags);
   dev_override = -1;
@@ -1370,6 +1389,8 @@ sys_mount(void)
             memcmp(fstype_buf, "iso9660", 8) == 0 ||
             memcmp(fstype_buf, "cd9660", 7) == 0) {
     vfs_isofs_init(fs);
+  } else if(memcmp(fstype_buf, "tmpfs", 6) == 0) {
+    vfs_tmpfs_init(fs);
   } else {
     kfree((void*)fs);
     return -1;
@@ -1389,14 +1410,42 @@ sys_mount(void)
           memcmp(fstype_buf, "iso9660", 8) == 0 ||
           memcmp(fstype_buf, "cd9660", 7) == 0)
     dev = has_dev_override ? dev_override : DISK_DEV(3);
+  else if(memcmp(fstype_buf, "tmpfs", 6) == 0){
+    if(has_dev_override){
+      if(dev_override < TMPFSDEV_BASE ||
+         dev_override >= TMPFSDEV_BASE + TMPFSDEV_MAX)
+        return -1;
+      if(vfs_dev_is_mounted(dev_override))
+        return -1;
+      dev = dev_override;
+    } else {
+      dev = tmpfs_alloc_dev();
+    }
+  }
 
-  if(vfs_register_mount(fs, dev, mount_flags, path_buf) < 0){
+  if(dev < 0)
+    return -1;
+
+  if(vfs_register_mount(fs, dev, mount_flags, path_buf,
+                        data_buf[0] ? data_buf : 0, datalen) < 0){
     MOUNTDBG("sys_mount: failed path=%s type=%s dev=%d\n", path_buf, fstype_buf, dev);
     return -1;
   }
 
   MOUNTDBG("sys_mount: ok path=%s type=%s dev=%d\n", path_buf, fstype_buf, dev);
   return 0;
+}
+
+static int
+tmpfs_alloc_dev(void)
+{
+  int dev;
+
+  for(dev = TMPFSDEV_BASE; dev < TMPFSDEV_BASE + TMPFSDEV_MAX; dev++){
+    if(!vfs_dev_is_mounted(dev))
+      return dev;
+  }
+  return -1;
 }
 
 int
