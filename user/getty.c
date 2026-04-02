@@ -1,8 +1,8 @@
-#include "../include/types.h"
-#include "../include/stat.h"
-#include "../include/user.h"
-#include "../include/fcntl.h"
-#include "../include/posix/sys/ioctl.h"
+#include "types.h"
+#include "stat.h"
+#include "auxv6/user.h"
+#include "fcntl.h"
+#include "sys/ioctl.h"
 
 #define MAX_TTYS 8
 

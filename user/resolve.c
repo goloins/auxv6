@@ -1,8 +1,8 @@
-#include "../include/types.h"
-#include "../include/user.h"
-#include "../include/fcntl.h"
-#include "../include/socket.h"
-#include "../include/net.h"
+#include "types.h"
+#include "auxv6/user.h"
+#include "fcntl.h"
+#include "socket.h"
+#include "net.h"
 
 #define DNS_PORT 53
 #define DNS_MAX_SERVERS 3

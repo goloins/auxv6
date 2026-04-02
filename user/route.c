@@ -1,5 +1,5 @@
-#include "../include/types.h"
-#include "../include/user.h"
+#include "types.h"
+#include "auxv6/user.h"
 #include "netcommon.h"
 
 static void

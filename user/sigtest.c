@@ -1,9 +1,9 @@
 // Signal delivery test program
 
-#include "../include/types.h"
-#include "../include/stat.h"
-#include "../include/user.h"
-#include "../include/signal.h"
+#include "types.h"
+#include "stat.h"
+#include "auxv6/user.h"
+#include "signal.h"
 
 volatile int signal_received = 0;
 volatile int signal_number = 0;

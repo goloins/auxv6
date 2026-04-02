@@ -1,6 +1,6 @@
-#include "../include/types.h"
-#include "../include/stat.h"
-#include "../include/user.h"
+#include "types.h"
+#include "stat.h"
+#include "auxv6/user.h"
 
 static int
 parse_mode(const char *s)

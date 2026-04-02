@@ -1,10 +1,10 @@
 // init: The initial user-level program
 
-#include "../include/types.h"
-#include "../include/stat.h"
-#include "../include/user.h"
-#include "../include/fcntl.h"
-#include "../include/signal.h"
+#include "types.h"
+#include "stat.h"
+#include "auxv6/user.h"
+#include "fcntl.h"
+#include "signal.h"
 
 char *argv[] = { "login", 0 };
 char *mount_argv[] = { "mount", "/etc/fstab", 0 };

@@ -1,7 +1,7 @@
-#include "../include/types.h"
-#include "../include/user.h"
-#include "../include/socket.h"
-#include "../include/net.h"
+#include "types.h"
+#include "auxv6/user.h"
+#include "socket.h"
+#include "net.h"
 
 static int
 parse_ipv4(const char *s, uint *out)

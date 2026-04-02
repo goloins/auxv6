@@ -1,7 +1,7 @@
-#include "../include/types.h"
-#include "../include/user.h"
-#include "../include/termios.h"
-#include "../include/posix/sys/ioctl.h"
+#include "types.h"
+#include "auxv6/user.h"
+#include "termios.h"
+#include "sys/ioctl.h"
 
 static void
 set_sane_termios(int fd)

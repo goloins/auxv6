@@ -1,21 +1,34 @@
-#ifndef _SYS_TIME_H
-#define _SYS_TIME_H
+/*
+ * <sys/time.h> - POSIX time structures
+ */
 
-#include "types.h"
+#ifndef AUXV6_SYS_TIME_H
+#define AUXV6_SYS_TIME_H
+
+#include "sys/types.h"
 
 struct timeval {
-  int tv_sec;
-  int tv_usec;
+    time_t      tv_sec;
+    suseconds_t tv_usec;
 };
 
 struct timezone {
-  int tz_minuteswest;
-  int tz_dsttime;
+    int tz_minuteswest;
+    int tz_dsttime;
 };
 
 struct timespec {
-  int tv_sec;
-  long tv_nsec;
+    time_t tv_sec;
+    long   tv_nsec;
 };
 
-#endif
+static inline int gettimeofday(struct timeval *tv, struct timezone *tz) {
+    (void)tz;
+    if (tv) {
+        tv->tv_sec = 0;
+        tv->tv_usec = 0;
+    }
+    return 0;
+}
+
+#endif /* AUXV6_SYS_TIME_H */

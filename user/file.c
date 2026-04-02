@@ -1,7 +1,7 @@
 #include "types.h"
 #include "fcntl.h"
 #include "stat.h"
-#include "user.h"
+#include "auxv6/user.h"
 
 #define PROBE_SIZE 4096
 

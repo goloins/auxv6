@@ -1,6 +1,6 @@
 #include "types.h"
 #include "fcntl.h"
-#include "user.h"
+#include "auxv6/user.h"
 
 #define LSOF_PATH "/proc/lsof"
 

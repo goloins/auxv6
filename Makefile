@@ -127,7 +127,7 @@ OBJCOPY = $(TOOLPREFIX)objcopy
 OBJDUMP = $(TOOLPREFIX)objdump
 CFLAGS = -fno-pic -static -fno-builtin -fno-strict-aliasing -O2 -Wall -MD -ggdb -m32 -Werror -fno-omit-frame-pointer -Iinclude
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
-ASFLAGS = -m32 -gdwarf-2 -Wa,-divide
+ASFLAGS = -m32 -gdwarf-2 -Wa,-divide -Iinclude
 # FreeBSD ld wants ``elf_i386_fbsd''
 LDFLAGS += -m $(shell $(LD) -V | grep elf_i386 2>/dev/null | head -n 1)
 LIBGCC := $(shell $(CC) -m32 -print-libgcc-file-name)
@@ -206,7 +206,9 @@ tags: $(OBJS) kernel/boot/entryother.S user/_init
 kernel/core/vectors.S: tools/vectors.pl
 	./tools/vectors.pl > kernel/core/vectors.S
 
-ULIB = user/ulib.o user/usys.o user/printf.o user/umalloc.o user/resolve.o user/posix.o user/stdio.o user/regex.o user/calloc.o
+LIBC_OBJS = user/ulib.o user/umalloc.o user/tty.o user/inet.o user/fmt.o user/dirent.o user/env.o user/stdlib.o user/posix_fs.o user/posix.o user/stdio.o user/regex.o user/calloc.o
+LIBAUXV6_OBJS = user/usys.o user/printf.o user/resolve.o
+ULIB = $(LIBC_OBJS) $(LIBAUXV6_OBJS)
 
 USER_STAGE_DIR = user/.stage
 

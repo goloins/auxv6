@@ -1,6 +1,6 @@
 #include "types.h"
 #include "date.h"
-#include "user.h"
+#include "auxv6/user.h"
 
 int
 main(int argc, char *argv[])

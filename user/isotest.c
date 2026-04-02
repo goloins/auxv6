@@ -9,11 +9,11 @@
  * - Clean unmounting
  */
 
-#include "../include/types.h"
-#include "../include/stat.h"
-#include "../include/fs.h"
-#include "../include/user.h"
-#include "../include/fcntl.h"
+#include "types.h"
+#include "stat.h"
+#include "fs.h"
+#include "auxv6/user.h"
+#include "fcntl.h"
 
 #define TEST_ISO "/test.iso"
 #define MOUNT_POINT "/mnt/iso"

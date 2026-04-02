@@ -1,7 +1,7 @@
-#include "../include/types.h"
-#include "../include/user.h"
-#include "../include/socket.h"
-#include "../include/termios.h"
+#include "types.h"
+#include "auxv6/user.h"
+#include "socket.h"
+#include "termios.h"
 
 #define TELNET_DEFAULT_PORT 23
 #define TELNET_BUF 512

@@ -1,9 +1,9 @@
-#ifndef _STDIO_H
-#define _STDIO_H
+#ifndef AUXV6_STDIO_H
+#define AUXV6_STDIO_H
 
 #include "stddef.h"
 #include "sys/types.h"
-#include "posix/stdarg.h"
+#include "stdarg.h"
 
 #ifndef EOF
 #define EOF (-1)
@@ -11,7 +11,7 @@
 
 #ifndef BUFSIZ
 #define BUFSIZ 512
-#endif
+#endif /* AUXV6_STDIO_H */
 
 typedef struct __auxv6_FILE FILE;
 

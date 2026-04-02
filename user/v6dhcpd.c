@@ -1,8 +1,8 @@
-#include "../include/types.h"
-#include "../include/user.h"
-#include "../include/socket.h"
-#include "../include/net.h"
-#include "../include/fcntl.h"
+#include "types.h"
+#include "auxv6/user.h"
+#include "socket.h"
+#include "net.h"
+#include "fcntl.h"
 #include "netcommon.h"
 
 #define DHCP_CLIENT_PORT 68

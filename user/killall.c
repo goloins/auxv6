@@ -1,7 +1,7 @@
 #include "types.h"
 #include "fcntl.h"
 #include "signal.h"
-#include "user.h"
+#include "auxv6/user.h"
 
 #define PS_PATH "/proc/ps"
 #define PS_BUF_SIZE 512

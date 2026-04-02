@@ -23,7 +23,7 @@
 #include "poll.h"
 #include "stddef.h"
 #include "termios.h"
-#include "posix/sys/ioctl.h"
+#include "sys/ioctl.h"
 
 /* POSIX version identification */
 #define _POSIX_VERSION          200809L

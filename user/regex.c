@@ -1,6 +1,6 @@
-#include "../include/types.h"
-#include "../include/user.h"
-#include "../include/regex.h"
+#include "types.h"
+#include "auxv6/user.h"
+#include "regex.h"
 
 enum rnode_type {
   RN_EMPTY = 0,

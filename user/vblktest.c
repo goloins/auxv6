@@ -1,7 +1,7 @@
 #include "types.h"
 #include "stat.h"
 #include "fs.h"
-#include "user.h"
+#include "auxv6/user.h"
 #include "fcntl.h"
 
 #define VBLKTEST_MAX_DISKS 4

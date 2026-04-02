@@ -1,8 +1,8 @@
-#include "../include/types.h"
-#include "../include/fcntl.h"
-#include "../include/errno.h"
-#include "../include/user.h"
-#include "../include/stdio.h"
+#include "types.h"
+#include "fcntl.h"
+#include "errno.h"
+#include "auxv6/user.h"
+#include "stdio.h"
 
 #define F_CAN_READ  0x01
 #define F_CAN_WRITE 0x02

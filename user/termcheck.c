@@ -1,10 +1,9 @@
-#include "../include/types.h"
-#include "../include/user.h"
-#include "../include/fcntl.h"
-#include "../include/termios.h"
-#include "../include/posix/sys/ioctl.h"
+#include "types.h"
+#include "auxv6/user.h"
+#include "fcntl.h"
+#include "termios.h"
+#include "sys/ioctl.h"
 
-int ptsname_r(int fd, char *buf, uint buflen);
 static int collect_query_reply(int fd, const char *query, char *buf, int buflen);
 
 #define PTY_SHELL_SESSIONS 3

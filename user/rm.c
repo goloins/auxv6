@@ -1,8 +1,8 @@
-#include "../include/types.h"
-#include "../include/stat.h"
-#include "../include/user.h"
-#include "../include/fcntl.h"
-#include "../include/fs.h"
+#include "types.h"
+#include "stat.h"
+#include "auxv6/user.h"
+#include "fcntl.h"
+#include "fs.h"
 
 int
 rm_path(char *path, int recursive)

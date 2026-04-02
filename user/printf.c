@@ -1,6 +1,6 @@
-#include "../include/types.h"
-#include "../include/stat.h"
-#include "../include/user.h"
+#include "types.h"
+#include "stat.h"
+#include "auxv6/user.h"
 
 static void
 bufflush(int fd, char *out, int *pos)

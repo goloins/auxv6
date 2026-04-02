@@ -1,5 +1,5 @@
-#include "../include/types.h"
-#include "../include/user.h"
+#include "types.h"
+#include "auxv6/user.h"
 
 static void
 print_ipv4(uint ip)

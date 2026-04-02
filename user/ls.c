@@ -1,8 +1,8 @@
-#include "../include/types.h"
-#include "../include/stat.h"
-#include "../include/user.h"
-#include "../include/fs.h"
-#include "../include/fcntl.h"
+#include "types.h"
+#include "stat.h"
+#include "auxv6/user.h"
+#include "fs.h"
+#include "fcntl.h"
 
 static char*
 uid_to_name(int uid)

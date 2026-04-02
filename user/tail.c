@@ -1,7 +1,7 @@
-#include "../include/types.h"
-#include "../include/stat.h"
-#include "../include/fcntl.h"
-#include "../include/user.h"
+#include "types.h"
+#include "stat.h"
+#include "fcntl.h"
+#include "auxv6/user.h"
 
 #define TAIL_BUFSZ 4096
 #define DEFAULT_LINES 10

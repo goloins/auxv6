@@ -1,6 +1,6 @@
-#include "../include/types.h"
-#include "../include/user.h"
-#include "../include/socket.h"
+#include "types.h"
+#include "auxv6/user.h"
+#include "socket.h"
 
 int
 main(int argc, char *argv[])
