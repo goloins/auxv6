@@ -12,3 +12,7 @@
 #define NBUF         (MAXOPBLOCKS*3)  // size of disk block cache
 #define FSSIZE       3000  // size of file system in blocks
 
+// User stack policy for exec(): one guard region plus usable stack pages.
+#define USER_STACK_GUARD_PAGES 1
+#define USER_STACK_PAGES       4
+

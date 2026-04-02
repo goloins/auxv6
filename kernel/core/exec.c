@@ -173,12 +173,21 @@ exec_internal(char *path, char **argv, int depth)
   end_op();
   ip = 0;
 
-  // Allocate two pages at the next page boundary.
-  // Make the first inaccessible.  Use the second as the user stack.
-  sz = PGROUNDUP(sz);
-  if((sz = allocuvm(pgdir, sz, sz + 2*PGSIZE)) == 0)
-    goto bad;
-  clearpteu(pgdir, (char*)(sz - 2*PGSIZE));
+  // Allocate guard + stack pages at the next page boundary.
+  // Guard pages are made inaccessible; stack grows downward from sp=sz.
+  {
+    uint stack_total = (USER_STACK_GUARD_PAGES + USER_STACK_PAGES) * PGSIZE;
+    uint stack_base;
+    int g;
+
+    sz = PGROUNDUP(sz);
+    if((sz = allocuvm(pgdir, sz, sz + stack_total)) == 0)
+      goto bad;
+
+    stack_base = sz - stack_total;
+    for(g = 0; g < USER_STACK_GUARD_PAGES; g++)
+      clearpteu(pgdir, (char*)(stack_base + g * PGSIZE));
+  }
   sp = sz;
 
   // Push argument strings, prepare rest of stack in ustack.

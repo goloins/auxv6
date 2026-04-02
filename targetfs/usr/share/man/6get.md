@@ -5,7 +5,9 @@
 
 ## Synopsis
 ```sh
-6get [-o output] http://host[:port]/path
+6get [-d] [-q] [-o output] http://host[:port]/path
+6get -h | --help
+6get -V | --version
 ```
 
 ## Duty
@@ -13,7 +15,11 @@ Connect to an HTTP server over TCP, issue a simple `GET` request, and save the
 response body to a local file.
 
 ## Options
+- `-d` - Enable debug logging to stderr.
+- `-q` - Quiet mode; suppress normal progress/status output.
 - `-o output` - Write to `output` instead of deriving a filename from the URL path.
+- `-h`, `--help` - Print usage.
+- `-V`, `--version` - Print tool version string.
 
 ## URL Format
 - Only `http://` URLs are supported.
@@ -25,6 +31,8 @@ response body to a local file.
 - Requires a successful `2xx` status code.
 - Derived output filename uses the final URL path component.
 - If the URL path ends in `/`, `index.html` is used.
+- Prints connectivity progress and HTTP status by default.
+- Follows up to 4 HTTP redirects when `Location` points to another HTTP URL.
 
 ## Examples
 ```sh
@@ -34,8 +42,12 @@ response body to a local file.
 
 ## Limitations
 - No TLS/HTTPS support.
-- No redirect following.
+- Redirect targets requiring HTTPS are not followed.
 - No chunked-transfer decoding.
+
+## Diagnostics
+- `https://...` URLs fail explicitly because TLS is not implemented yet.
+- `3xx` responses print `Location`; HTTP redirects are followed automatically.
 
 ## Source Audit
 - Source file: user/6get.c

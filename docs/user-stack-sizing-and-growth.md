@@ -12,18 +12,22 @@ and what to implement next so we do not keep rediscovering the same issue.
 
 ## Current auxv6 behavior
 
-Current `exec` stack policy is effectively:
+Current `exec` stack policy is:
 
-- Allocate two pages after program image alignment.
-- Mark the lower page inaccessible as a guard page.
-- Use the upper page as the entire user stack.
+- Allocate `USER_STACK_GUARD_PAGES + USER_STACK_PAGES` after program image alignment.
+- Mark guard pages inaccessible.
+- Use the remaining pages as the initial user stack.
 
 In code:
 
-- `kernel/core/exec.c`: `allocuvm(..., sz + 2*PGSIZE)`, `clearpteu(...)`, `sp = sz`.
+- `kernel/core/exec.c`: stack-region allocation loop using
+   `USER_STACK_GUARD_PAGES` and `USER_STACK_PAGES`.
+- `include/param.h`:
+   - `USER_STACK_GUARD_PAGES = 1`
+   - `USER_STACK_PAGES = 4`
 - `include/mmu.h`: `PGSIZE == 4096`.
 
-So current user stack budget is one page (4 KiB), minus argv/setup overhead.
+So current default user stack budget is 4 pages (16 KiB), minus argv/setup overhead.
 
 ## Comparison to mainstream Unix
 
@@ -45,26 +49,20 @@ crashes, and can waste debugging time.
 
 ## Recommended plan
 
-### Phase 1 (recommended now): larger fixed stack
+### Phase 1 (implemented): larger fixed stack
 
 Keep current model, but increase stack pages at `exec` time.
 
-Suggested default:
+Implemented default:
 
-- Guard page: 1 page (unchanged).
-- User stack: 4 to 8 pages (16 KiB to 32 KiB).
+- Guard page: 1 page.
+- User stack: 4 pages (16 KiB).
 
-Implementation sketch:
+Implementation notes:
 
-1. Add constants, for example:
-   - `USER_STACK_GUARD_PAGES = 1`
-   - `USER_STACK_PAGES = 4` (or 8)
-2. Update stack allocation in `kernel/core/exec.c` to allocate
-   `USER_STACK_GUARD_PAGES + USER_STACK_PAGES`.
-3. Keep guard page as non-user-accessible (`clearpteu` on guard range).
-4. Set initial `sp` to top of stack region as today.
-5. Mirror policy in early init process setup path (`userinit`) so behavior is
-   consistent for all processes.
+1. Constants live in `include/param.h` and can be tuned without changing `exec.c`.
+2. `kernel/core/exec.c` now allocates `(guard + stack)` pages and guards the low region.
+3. Initial `sp` remains at the top of the allocated stack region.
 
 Pros:
 
