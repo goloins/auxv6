@@ -20,6 +20,8 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - **AHCI deterministic recovery-injection follow-up landed 2026-04-02:** `/proc/ahci_tune` now supports bounded fault injection controls (`test_fail_mode=none|timeout|tfes|idle`, `test_fail_count=N`) and exposes `test_fail_remaining` plus `last_fail_class` for automation assertions. New guest coverage in `tools/tests/ahci-retry-stress.cmds` plus `make test-ahci-retry-stress` verifies retry/recover behavior for timeout, TFES, and idle-stall classes while confirming post-recovery filesystem I/O.
 - **AHCI long-run endurance follow-up landed 2026-04-02:** guest automation now includes `tools/tests/ahci-mount-soak.cmds` and `make test-ahci-mount-soak` (24 mount/write/umount cycles with persistence checks), plus `make test-ahci-regression` as an aggregate AHCI suite. The guest harness template now passes through `AUXV6_CHECK_RC` so shell-scripted command sequences can fail fast on non-zero rc.
 - **AHCI retry debug follow-up landed 2026-04-02:** added a freeze-focused debug path for intermittent stalls near early retry setup (`RUN: mkdir /mnt/ahciretry`). New `tools/tests/ahci-retry-stress-debug.cmds` emits explicit breadcrumbs and pre/post state snapshots (`/proc/ahci_tune`, `mounts`, `/mnt` listing), and `make test-ahci-retry-stress-debug` now runs that script through the expect harness with `AUXV6_LOG_USER=1` plus a wider timeout for high-fidelity capture when reproducing hangs.
+- **AHCI interrupt + multi-slot follow-up landed 2026-04-02:** AHCI now registers an IRQ handler and uses interrupt-driven completion waits with a polling fallback, plus per-port slot allocation across the full HBA command-slot depth (no more slot-0-only path). `/proc/ahci_tune` telemetry now includes `recover_ok`, `intr`, and last-error snapshots (`last_is`, `last_tfd`, `last_serr`, `last_ci`, `last_sact`) per port.
+- **AHCI queue-depth enablement landed 2026-04-02:** AHCI now allows multiple in-flight commands per port with slot-availability blocking and recovery-sequence abort handling, unblocking real queue depth under concurrent I/O.
 - **toolchain hardening follow-up landed 2026-04-02:** auxv6 guest builds are now explicitly hardened against accidental host-surface bleed-through. The root `Makefile` and `ports/dash-0.5.12/Makefile.auxv6` now compile guest code with `-nostdinc` so auxv6 headers are authoritative, and both build paths now run explicit `toolchain-check` probes to verify `-m32` actually produces `__i386__` and that the selected `libgcc` exports required 32-bit 64-bit-division helper symbols (for example `__divmoddi4`/`__udivdi3`/`__divdi3`). This converts late link failures into early actionable toolchain errors and prevents silent fallback to incompatible host runtime archives.
 - **libc portability phase 6 tranche-2 stream-buffering closeout completed 2026-04-02:** the last obvious stdio gap in tranche 2 is now in-tree. `include/stdio.h` gained `_IOFBF`, `_IOLBF`, `_IONBF`, plus `setvbuf`, `setbuf`, and `setlinebuf`; `user/stdio.c` now tracks per-stream output-buffer state, flushes buffered output through `fflush`, and supports truthful unbuffered, fully buffered, and line-buffered behavior for fd-backed writable streams. Validation passed with a canonical buffering probe under `-Werror`, a sudo rebuild of `user/stdio.o` and `aux.kern`, and the usual sudo dash-port rebuild with no new downstream failures beyond the long-standing `signames.c` warnings and RWX linker warning.
 - **libc portability phase 6 tranche-2 time landing completed 2026-04-02:** the time/civil-calendar half of tranche 2 is now in-tree. auxv6 gained canonical `time.h`; `include/sys/time.h` no longer carries a zero-valued `gettimeofday` stub; and `user/timecore.c` now provides `gettimeofday`, `clock_gettime`, `time`, `difftime`, `gmtime[_r]`, `localtime[_r]`, `mktime`, `asctime[_r]`, `ctime[_r]`, and `strftime`. The implementation deliberately reuses the existing `date()` and `uptime()` primitives instead of adding new syscall ABI in this patch. Validation passed with a canonical `time.h` / `sys/time.h` compile probe under `-Werror`, a sudo rebuild of `user/timecore.o` plus representative `user/date` and `user/time` links, and the usual sudo dash-port rebuild with no new downstream failures.
@@ -142,7 +144,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 ### 🚧 Early Or Stubbed (0-49%)
 | Subsystem | Status | Notes |
 |-----------|--------|-------|
-| Modern storage | 40% | AHCI has polling DMA read/write; NVMe has I/O queue and basic RW path |
+| Modern storage | 60% | AHCI has interrupt-driven completion + multi-slot in-flight queue depth; NVMe has I/O queue and basic RW path |
 | Btrfs | None | Planned read-only support |
 | NFS | None | Planned; requires XDR/RPC infrastructure |
 | Device hotplug/eventing | None | Planned kernel event path for live node add/remove beyond boot-time `devman -s` |
@@ -337,7 +339,7 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 **Estimate:** 1-2 weeks
 
 ### 3.2 AHCI/SATA Driver [ADVANCED PARTIAL]
-**Status:** SATA identify + blockdev registration + polling DMA read/write + timeout/recover diagnostics landed; interrupt and queue-depth work still pending  
+**Status:** SATA identify + blockdev registration + DMA read/write now use interrupt-driven completion with multi-slot in-flight queue depth.  
 **Files:** `kernel/driver/ahci.c`, `include/pci.h`, `include/blockdev.h`  
 **Value:** Real hardware support  
 
@@ -349,8 +351,8 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 - [x] Read `IDENTIFY DEVICE` to populate capacity and sector size for `bdev_set_nblocks`
 
 **Follow-up hardening (after basic works):**
-- [ ] Move from polling to interrupt-assisted completion
-- [ ] Support additional command slots and batched I/O
+- [x] Move from polling to interrupt-assisted completion
+- [x] Support additional command slots and batched I/O (slot allocator + per-slot tables; still serialized)
 - [ ] Add ATAPI path split (kept out of MVP)
 - [x] Add runtime AHCI timeout/counter tuning and observability (`/proc/ahci_tune`)
 - [x] Add dedicated AHCI guest endurance harness (`make test-ahci-mount-stress`)
