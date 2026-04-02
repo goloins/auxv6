@@ -6,11 +6,9 @@ NEVER USE THE xv6 MKFS. USE ONE OF THE HOST TOOLS. MK2FS WORKS GREAT AND IS FOR 
 
 We should avoid adding anything that should be core c library function to posix.c unless absolutely necessary, and instead add it to the actual c library/headers.
 
-Our native shell DOES NOT SUPPORT MOST COMMON THINGS. Use dash or get creative if you need custom scripts.
-
 Whenever a document in docs/ is relevant to a change, update it. If there isn't a relevant document, add one. If there is a relevant document but it doesn't cover the change, update it to cover the change.
 
-TESTS WILL BE BINARIES RAN BY ME, THE USER. NO HARNESSES, NO AUTOMATED TESTING FRAMEWORKS, NO CI. JUST BINARIES THAT I CAN RUN AND SEE THE OUTPUT OF. MAKE SURE TO DOCUMENT HOW TO RUN THE TESTS AND WHAT OUTPUT TO EXPECT. ADD DEBUG FLAGS, IF NEEDED, ENABLE EXISTING ONES. NO MORE HARENESSES. 
+If you want to iterate over changes, building/making is recommended (make qemu or make qemu-nox). If you want to run a specific test, you can run it directly from the qemu console. If that doesn't work, bail out IMMEDIATELY and give me the command to run. Do not write a test and then spend hours trying to get it to run. Do not write a test and spend minutes trying to get it to run. Just give me the command and I'll run it for you. No harnesses, no automated boots, none of that. The session will be terminated. This is not negotiable.
 
 When creating userland tools, make sure there is an entry in .gitignore for the binary and that it will
 be cleaned up by make clean. Ensure you build a manpage for the tool and add it to the documentation. I don't want any binaries ending up in staged or in the repo or in the build output that aren't tracked by git or documented.
@@ -40,7 +38,6 @@ When stubbing out driver support: consult documentation for the driver, but also
 
 Don't be afraid to add new built targets to makefile. If you need a configuration with a specific set of hardware, don't be afraid to add a new target with the correct qemu options and document it.
 
-*BIG IF* If you can't get the terminal/console/output from qemu working, rather that iterate over trying to get it working, just throw me the command and a list of things to run and how much output you need (from boot or just from program run) and I'll run it to you. Not ideal, but I don't want you to get stuck on something like that for a long time.
 
 Other footguns (don't ignore these): 
 
