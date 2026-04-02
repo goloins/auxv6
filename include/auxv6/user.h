@@ -81,14 +81,7 @@ struct arpinfo {
 
 pid_t fork(void);
 void __auxv6_sys_exit(int status) __attribute__((noreturn));
-void __auxv6_libc_exit(int status) __asm__("exit") __attribute__((noreturn));
-#ifndef _STDLIB_H
-#define __AUXV6_EXIT_CHOOSE(_0, _1, NAME, ...) NAME
-#define __AUXV6_EXIT0() __auxv6_libc_exit(0)
-#define __AUXV6_EXIT1(status) __auxv6_libc_exit(status)
-#define exit(...) \
-	__AUXV6_EXIT_CHOOSE(_, ##__VA_ARGS__, __AUXV6_EXIT1, __AUXV6_EXIT0)(__VA_ARGS__)
-#endif
+void exit(int status) __attribute__((noreturn));
 pid_t wait(void);
 pid_t waitpid(pid_t pid, int *status, int options);
 pid_t wait4(pid_t pid, int *status, int options, void *rusage);
@@ -187,9 +180,6 @@ char* strchr(const char*, int c);
 int strcmp(const char*, const char*);
 int strncmp(const char*, const char*, size_t);
 int dprintf(int fd, const char *fmt, ...);
-#ifndef AUXV6_STDIO_H
-#define printf dprintf
-#endif
 char* gets(char*, int max);
 size_t strlen(const char*);
 void* memset(void*, int, size_t);

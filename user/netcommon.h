@@ -7,7 +7,7 @@
 static void __attribute__((unused))
 net_print_ipv4(uint ip)
 {
-  printf(1, "%d.%d.%d.%d",
+  dprintf(1, "%d.%d.%d.%d",
          (ip >> 24) & 0xff,
          (ip >> 16) & 0xff,
          (ip >> 8) & 0xff,
@@ -26,14 +26,14 @@ net_print_mac(uchar *mac)
       nonzero = 1;
   }
   if(!nonzero) {
-    printf(1, "-");
+    dprintf(1, "-");
     return;
   }
 
   for(i = 0; i < 6; i++) {
     if(i > 0)
-      printf(1, ":");
-    printf(1, "%02x", mac[i]);
+      dprintf(1, ":");
+    dprintf(1, "%02x", mac[i]);
   }
 }
 
@@ -122,7 +122,7 @@ net_load_ifs(struct netifinfo *ifs, int max)
 
   n = netifinfo(ifs, max);
   if(n < 0)
-    printf(2, "net: netifinfo failed\n");
+    dprintf(2, "net: netifinfo failed\n");
   return n;
 }
 
@@ -144,20 +144,20 @@ net_show_interfaces(struct netifinfo *ifs, int n)
   int i;
 
   for(i = 0; i < n; i++) {
-    printf(1, "%s: flags=0x%x mtu %d\n", ifs[i].if_name, ifs[i].if_flags, ifs[i].if_mtu);
-    printf(1, "    inet ");
+    dprintf(1, "%s: flags=0x%x mtu %d\n", ifs[i].if_name, ifs[i].if_flags, ifs[i].if_mtu);
+    dprintf(1, "    inet ");
     if(ifs[i].if_addr)
       net_print_ipv4(ifs[i].if_addr);
     else
-      printf(1, "-");
-    printf(1, " netmask ");
+      dprintf(1, "-");
+    dprintf(1, " netmask ");
     if(ifs[i].if_netmask)
       net_print_ipv4(ifs[i].if_netmask);
     else
-      printf(1, "-");
-    printf(1, " ether ");
+      dprintf(1, "-");
+    dprintf(1, " ether ");
     net_print_mac(ifs[i].if_hwaddr);
-    printf(1, "\n");
+    dprintf(1, "\n");
   }
 }
 

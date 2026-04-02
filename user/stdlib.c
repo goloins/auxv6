@@ -302,7 +302,7 @@ _Exit(int status)
 }
 
 void
-__auxv6_libc_exit(int status)
+exit(int status)
 {
   auxv6_run_atexit_handlers();
   _Exit(status);

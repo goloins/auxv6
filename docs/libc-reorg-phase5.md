@@ -1,9 +1,9 @@
 # libc Reorganization Phase 5
 
 This tranche starts the ABI cleanup itself instead of only reconciling header
-surfaces. The goal is to make the standard C and POSIX entry points real,
-while keeping narrowly scoped source-compatibility shims in the native auxv6
-header during the transition.
+surfaces. The goal is to make the standard C and POSIX entry points real.
+The temporary native-header compatibility shims used during the transition
+have now been removed.
 
 ## Goals
 
@@ -31,40 +31,36 @@ header during the transition.
   - `user/posix_fs.c` now owns the standard `getcwd` function.
   - `user/printf.c` now exports `dprintf`/`vdprintf`.
   - `user/stdio.c` now exports real `printf`/`vprintf`.
-- Kept temporary native-source compatibility in `include/auxv6/user.h`:
-  - `printf` maps to `dprintf` when `stdio.h` is not active.
-  - `exit()` and `exit(status)` calls are still accepted in auxv6-native code
-    through a variadic compatibility macro that targets the real libc `exit`
-    symbol, while `stdlib.h` can undefine that shim.
+- Completed the native-header cleanup:
+  - `include/auxv6/user.h` now declares plain `exit(int)` and `dprintf(...)`
+    with no `printf` or variadic `exit` compatibility macros.
+  - `user/stdlib.c` now exports the public `exit` symbol directly instead of
+    an internal alias.
 
 ## Validation So Far
 
-- Direct mixed-header probes passed for:
+- Direct compile probes passed for the cleaned ABI surface:
 
 ```c
 #include "auxv6/user.h"
-int main(void){ exit(); dprintf(2, "x\n"); return 0; }
-```
-
-```c
-#include "auxv6/user.h"
-#include "stdlib.h"
-int main(void){ exit(1); }
+int main(void){ dprintf(2, "x\n"); exit(0); }
 ```
 
 ```c
 #include "auxv6/user.h"
 #include "stdio.h"
-int main(void){ printf("x\n"); dprintf(2, "y\n"); return 0; }
+#include "stdlib.h"
+int main(void){ printf("x\n"); dprintf(2, "y\n"); exit(1); }
 ```
 
-```c
-#include "auxv6/user.h"
-#include "unistd.h"
-int main(void){ char buf[32]; return getcwd(buf, sizeof(buf)) ? 0 : 1; }
-```
-
-- `make aux.kern` completed successfully after the kernel/user exit ABI change.
+- `make aux.kern` completed successfully after removing the native
+  compatibility macros.
+- A direct search audit found no remaining `printf -> dprintf`, variadic
+  `exit(...)`, or `__auxv6_libc_exit` references in tracked source.
+- A follow-up `nslookup` smoke compile caught one remaining header-level
+  dependency in `user/netcommon.h`; it has now been converted to explicit
+  `dprintf(...)`, and the same scan is now clean across `user/*.h`, `user/*.c`,
+  and `user/*.S`.
 - The dash-independent fallback boot path also passed: after switching the ISO
   helper to prefer `mkisofs` on this host, `sudo make qemu-oldinit` completed
   successfully and confirmed that the old-init path still boots under the new
@@ -76,6 +72,12 @@ int main(void){ char buf[32]; return getcwd(buf, sizeof(buf)) ? 0 : 1; }
   through stale local rules. After aligning `ports/dash-0.5.12/Makefile.auxv6`
   with the current `_start` entry and runtime split, `sudo make qemu-nox`
   successfully booted through `/bin/dash /etc/rc.d/rc.S` and reached login.
+- After removing the final native-header bridge, `sudo make -f
+  ports/dash-0.5.12/Makefile.auxv6 clean all` still completed successfully.
+  The remaining output was limited to existing warnings in the compatibility
+  headers (`MAXPATHLEN`, `SIZE_MAX`) and dash's `signames.c` table.
+- A host-side rebuild of `_nslookup`, `_ifconfig`, `_netinfo`, `_route`,
+  `_arp`, and `_ip` also passed after the `user/netcommon.h` follow-up.
 - Representative user objects compiled successfully across the updated runtime
   and compatibility-heavy programs, including `sh`, `init`, `termcheck`, and
   `usertests`.
@@ -86,9 +88,11 @@ int main(void){ char buf[32]; return getcwd(buf, sizeof(buf)) ? 0 : 1; }
 
 ## In Progress
 
-- Sweep remaining in-tree code that should stop depending on the native
-  compatibility macros.
-- Update roadmap and repo-memory notes as the tranche progresses.
+- Follow-on polish outside the ABI bridge itself:
+  - `environ`/`envp` startup handoff is still carried by the existing userspace
+    bootstrap path.
+  - The dash/compat warning noise is separate from the ABI surface cleanup and
+    can be addressed independently.
 
 ## Source Sweep Started
 
@@ -154,17 +158,23 @@ int main(void){ char buf[32]; return getcwd(buf, sizeof(buf)) ? 0 : 1; }
   - legacy old-init and small leaf tools
   - network utilities and socket self-tests
 
+## Compatibility Layer Removed
+
+- The remaining mechanical sweep is now complete for the `printf`/`exit`
+  compatibility surface in `user/*.c`.
+- `include/auxv6/user.h` no longer carries either of the transitional bridge
+  macros:
+  - no `printf -> dprintf` remap
+  - no variadic `exit(...)` shim
+- `user/stdlib.c` now exports `exit(int)` directly.
+- Post-cleanup search audits found no remaining bridge references in tracked
+  source.
+
 ## Remaining Cleanup Boundary
 
-- The real ABI shift is in place, but a smaller set of larger interactive,
-  network, and test programs still rely on the native-source compatibility
-  macros from `include/auxv6/user.h` instead of calling `dprintf` and
-  `exit(status)` directly.
-- The highest-signal remaining holdouts are now concentrated in files such as
-  `user/termcheck.c`, `user/sh.c`, `user/login.c`, `user/losetup.c`,
-  `user/netcat.c`, `user/ip.c`, `user/su.c`, `user/v6dhcpd.c`, and some larger
-  regression/self-test sources.
+- The userland source sweep for `printf`/`exit` compatibility is no longer the
+  open boundary for phase 5.
 - No `envp` startup handoff was added yet; `_start` now standardizes the
   `main(argc, argv)` entry path, but `environ` still comes from the existing
   userspace bootstrap in `user/posix.c`.
-- The next source-cleanup pass can now be mechanical instead of architectural.
+- Remaining follow-up is now about post-ABI polish rather than bridge removal.
