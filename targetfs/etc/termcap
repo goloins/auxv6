@@ -5,6 +5,12 @@ vt100|auxv6-vt100|auxv6 console and pty:\
 	:co#80:li#24:\
 	:cl=\E[H\E[2J:ce=\E[K:cd=\E[J:\
 	:cm=\E[%i%d;%dH:ho=\E[H:ll=\E[24;1H:\
+	:up=\E[A:do=\E[B:nd=\E[C:le=\E[D:\
+	:al=\E[L:dl=\E[M:dc=\E[P:ic=\E[@:\
+	:im=\E[4h:ei=\E[4l:sf=\E[S:sr=\EM:\
+	:ti=\E[?1049h:te=\E[?1049l:\
+	:ks=\E[?1h:ke=\E[?1l:\
+	:vi=\E[?25l:ve=\E[?25h:vs=\E[?12h\E[?25h:\
 	:so=\E[7m:se=\E[27m:us=\E[4m:ue=\E[24m:\
 	:md=\E[1m:me=\E[0m:mr=\E[7m:\
 	:ku=\EOA:kd=\EOB:kr=\EOC:kl=\EOD:\

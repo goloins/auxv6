@@ -777,6 +777,7 @@ qemu-nox-virtioblkstress: aux.bootkern $(EXT2IMG) vblk-stress.img
 
 # Generic automated guest test template (extend by changing target + command file).
 AUXV6_QEMU_TARGET ?= qemu-nox
+AUXV6_MAKE_CMD ?=
 AUXV6_TEST_SCRIPT ?=
 AUXV6_EXPECT_TIMEOUT ?= 240
 AUXV6_HALT ?= 1
@@ -791,11 +792,30 @@ qemu-guesttest-template:
 		echo "example: make qemu-guesttest-template AUXV6_QEMU_TARGET=qemu-nox-virtioblktest AUXV6_TEST_SCRIPT=tools/tests/virtioblk-smoke.cmds" >&2; \
 		exit 1; \
 	fi
-	@AUXV6_QEMU_TARGET="$(AUXV6_QEMU_TARGET)" \
+	@mkcmd="$(AUXV6_MAKE_CMD)"; \
+	if [ -z "$$mkcmd" ]; then \
+		if [ "$$(uname -s)" = "Darwin" ]; then \
+			mkcmd="sudo make"; \
+		else \
+			mkcmd="make"; \
+		fi; \
+	fi; \
+	AUXV6_MAKE_CMD="$$mkcmd" \
+	 AUXV6_QEMU_TARGET="$(AUXV6_QEMU_TARGET)" \
 	 AUXV6_TEST_SCRIPT="$(AUXV6_TEST_SCRIPT)" \
 	 AUXV6_EXPECT_TIMEOUT="$(AUXV6_EXPECT_TIMEOUT)" \
 	 AUXV6_HALT="$(AUXV6_HALT)" \
-	 expect tools/qemu-guest-test.exp
+	 expect tools/qemu-guest-test.exp; \
+	rc=$$?; \
+	if [ $$rc -ne 0 ]; then \
+		echo "guesttest: harness failed; force-killing stale qemu-system-i386" >&2; \
+		if [ "$$(uname -s)" = "Darwin" ]; then \
+			sudo -n killall -9 qemu-system-i386 >/dev/null 2>&1 || true; \
+		else \
+			killall -9 qemu-system-i386 >/dev/null 2>&1 || true; \
+		fi; \
+		exit $$rc; \
+	fi
 
 test-virtioblk-smoke: aux.bootkern $(EXT2IMG) vblk0.img vblk1.img
 	@$(MAKE) qemu-guesttest-template \
@@ -816,6 +836,31 @@ test-virtioblk-mount-stress: aux.bootkern $(EXT2IMG) vblk-stress.img
 	@$(MAKE) qemu-guesttest-template \
 		AUXV6_QEMU_TARGET=qemu-nox-virtioblkstress \
 		AUXV6_TEST_SCRIPT=tools/tests/virtioblk-mount-stress.cmds
+
+test-termcheck-smoke: aux.bootkern $(EXT2IMG)
+	@$(MAKE) qemu-guesttest-template \
+		AUXV6_QEMU_TARGET=qemu-nox \
+		AUXV6_TEST_SCRIPT=tools/tests/termcheck-smoke.cmds
+
+test-termcheck-full: aux.bootkern $(EXT2IMG)
+	@$(MAKE) qemu-guesttest-template \
+		AUXV6_QEMU_TARGET=qemu-nox \
+		AUXV6_TEST_SCRIPT=tools/tests/termcheck-full.cmds
+
+test-terminal-regression: aux.bootkern $(EXT2IMG)
+	@$(MAKE) test-termcheck-full
+	@$(MAKE) test-termdemo-smoke
+	@$(MAKE) test-termcap-smoke
+
+test-termdemo-smoke: aux.bootkern $(EXT2IMG)
+	@$(MAKE) qemu-guesttest-template \
+		AUXV6_QEMU_TARGET=qemu-nox \
+		AUXV6_TEST_SCRIPT=tools/tests/termdemo-smoke.cmds
+
+test-termcap-smoke: aux.bootkern $(EXT2IMG)
+	@$(MAKE) qemu-guesttest-template \
+		AUXV6_QEMU_TARGET=qemu-nox \
+		AUXV6_TEST_SCRIPT=tools/tests/termcap-smoke.cmds
 
 # CUT HERE
 # prepare dist for students

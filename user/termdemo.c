@@ -71,6 +71,22 @@ main(void)
   put("\033(0mqqqj\033(B");
   put("\n");
 
+  put("Insert mode test: ");
+  put("ABCDE");
+  put("\033[5D\033[4hX\033[4l");
+  put("  (expect XABCD)\n");
+
+  put("No-wrap test (DECAWM off):\n");
+  put("\033[?7l");
+  for(i = 0; i < 90; i++)
+    put("W");
+  put("\033[?7h\n");
+
+  put("Erase chars test: ");
+  put("123456789");
+  put("\033[5D\033[3X");
+  put("  (middle should clear)\n");
+
   put("Alternate screen test starts in 1s...\n");
   sleep(100);
   put("\033[?1049h\033[2J\033[H");

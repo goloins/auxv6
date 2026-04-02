@@ -22,15 +22,23 @@ Already landed:
 4. `TIOCGWINSZ`/`TIOCSWINSZ` and `SIGWINCH` propagation.
 5. ANSI/CSI handling sufficient for many line-editor and shell redraw paths.
 6. Linux-compatible ioctl termios/queue compatibility (`TCGETS`, `TCSETS*`, `FIONREAD`/`TIOCINQ`, `TIOCOUTQ`).
-7. Minimal PTY pair support with `/dev/ptmx` and `/dev/pts/0` data-path + tty ioctls.
+7. Dynamic PTY allocation via `/dev/ptmx` -> `/dev/pts/N`, with per-endpoint termios/winsize/ioctl routing.
 8. Baseline `TERM=vt100` + `/etc/termcap` staging for capability discovery.
+9. DECSET/DECRST parser tranche: multi-parameter `CSI ? ... h/l`, autowrap mode (`?7`), and insert mode (`CSI 4 h/l`).
+10. PTY ioctl semantics tranche: `TIOCSCTTY` now binds PTY foreground process group to caller `pgid`, and termcheck covers `TIOCSPGRP/TIOCGPGRP` roundtrip on PTY slave fds.
+11. ANSI parser extension tranche: added `CSI X` (erase chars), `CSI b` (repeat last glyph), `CSI d`/`CSI e`/`CSI a` cursor ops, and `CSI ! p` soft reset handling.
+12. Terminal query compatibility tranche: `CSI 5n`/`CSI 6n` DSR replies are now synthesized into tty input (`ESC[0n`, `ESC[row;colR`) including DEC-private variants.
+13. PTY job-control tranche: PTY slave read/write now enforce background signal semantics (`SIGTTIN`/`SIGTTOU` with `TOSTOP`) and termcheck validates isolation.
+14. Device attribute query tranche: `ESC Z` and `CSI c` now return a primary DA response (`ESC[?1;0c`), and termcheck validates DSR/DA roundtrips.
+15. Terminal query/parsing follow-up tranche: console now supports secondary DA (`CSI > c` -> `ESC[>0;0;0c`) and termcheck now validates DEC-private CPR (`CSI ?6n`) plus cursor/wrap/REP parser probes (`?7` wrap toggling, `CSI X`, `CSI b`, `CSI 4 h/l`).
+16. Terminal mode-query tranche: console now supports mode query replies for `CSI Ps $ p` and `CSI ? Ps $ p` (RMQ/DECRQM), returning `CSI Ps ; Pm $ y` / `CSI ? Ps ; Pm $ y`; termcheck full mode now validates insert mode (`Ps=4`) and cursor-visibility private mode (`Ps=25`) set/reset query responses.
+17. Terminal DEC/private matrix follow-up: termcheck full mode now validates additional mode query transitions (private `?1`, `?7`, `?6`, `?5`, `?12`, `?1049` and standard `20`), unknown-mode query fallback (`Pm=0`), origin/scroll-region cursor invariants (`DECSTBM` + DECOM interaction for `CUP`/`CPR`), and alt-screen cursor save/restore invariants across `?1049h/l`.
 
 Still missing or incomplete for nano/curses-class reliability:
-1. PTY implementation is currently single-pair and static (`/dev/ptmx` <-> `/dev/pts/0`), without dynamic `/dev/pts/N` allocation.
-2. Session/controlling-tty integration for PTYs is still partial; job control remains console-centric.
-3. Terminal capability stack is termcap-only baseline; full terminfo database/tooling is still absent.
-4. ANSI parser does not yet cover full DEC/private mode behavior expected by some curses implementations.
-5. No configurable locale/wide-char width model akin full `wcwidth`/grapheme correctness for advanced TUI glyph handling.
+1. Session/controlling-tty integration for PTYs is still partial; job control still needs deeper session semantics beyond basic per-PTY foreground checks.
+2. Terminal capability stack is termcap-only baseline; full terminfo database/tooling is still absent, but `/etc/termcap` now includes broader fullscreen capabilities (`ti/te`, `ks/ke`, `vi/ve/vs`, `im/ei`, `al/dl/dc/ic`, cursor movement aliases) with guest smoke checks to keep coverage stable.
+3. ANSI parser still lacks portions of DEC/private behavior used by some curses implementations (for example full device-status reports, richer private mode matrix, and advanced terminal report sequences).
+4. No configurable locale/wide-char width model akin full `wcwidth`/grapheme correctness for advanced TUI glyph handling.
 
 ## Staged Roadmap (Week-by-Week)
 

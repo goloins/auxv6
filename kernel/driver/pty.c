@@ -25,6 +25,8 @@ struct pty_pair {
   int allocated;
   int master_refs;
   int slave_refs;
+  int ctty_set;
+  int ctty_sid;
   struct termios termios;
   struct winsize winsize;
   int fg_pgid;
@@ -66,6 +68,8 @@ pty_pair_init_defaults(struct pty_pair *pty)
   pty->termios.c_cc[VSUSP] = 26;
   pty->winsize.ws_row = 24;
   pty->winsize.ws_col = 80;
+  pty->ctty_set = 0;
+  pty->ctty_sid = -1;
   pty->fg_pgid = 1;
 }
 
@@ -322,6 +326,18 @@ pty_ioctl_file(struct file *f, int request, uint arg)
     return 0;
 
   case 0x540E:  /* TIOCSCTTY */
+    acquire(&ptys.lock);
+    if(!pty->allocated){
+      release(&ptys.lock);
+      return -1;
+    }
+    if(myproc()) {
+      pty->ctty_set = 1;
+      pty->ctty_sid = myproc()->sid;
+    }
+    if(myproc() && myproc()->pgid > 0)
+      pty->fg_pgid = myproc()->pgid;
+    release(&ptys.lock);
     return 0;
 
   case 0x54A3:  /* TIOCISATTY */
@@ -339,6 +355,7 @@ pty_fileread(struct file *f, char *dst, int n)
   struct pty_chan *in;
   int peer_refs;
   int rc;
+  int send_ttin;
 
   if(pty_lookup_file(f, &pty) < 0)
     return -1;
@@ -348,6 +365,22 @@ pty_fileread(struct file *f, char *dst, int n)
     release(&ptys.lock);
     return -1;
   }
+  send_ttin = 0;
+  if(f->pty_side == PTY_SIDE_SLAVE &&
+     myproc() &&
+      pty->ctty_set &&
+      myproc()->sid == pty->ctty_sid &&
+     myproc()->pgid != 0 &&
+     myproc()->pgid != pty->fg_pgid)
+    send_ttin = 1;
+  if(send_ttin) {
+    int pgid;
+    pgid = myproc()->pgid;
+    release(&ptys.lock);
+    proc_signal_pgid(pgid, SIGTTIN);
+    return -1;
+  }
+
   if(f->pty_side == PTY_SIDE_MASTER) {
     in = &pty->to_master;
     peer_refs = pty->slave_refs;
@@ -373,6 +406,7 @@ pty_filewrite(struct file *f, char *src, int n)
   struct pty_chan *out;
   int peer_refs;
   int rc;
+  int send_ttou;
 
   if(pty_lookup_file(f, &pty) < 0)
     return -1;
@@ -382,6 +416,23 @@ pty_filewrite(struct file *f, char *src, int n)
     release(&ptys.lock);
     return -1;
   }
+  send_ttou = 0;
+  if(f->pty_side == PTY_SIDE_SLAVE &&
+     myproc() &&
+      pty->ctty_set &&
+      myproc()->sid == pty->ctty_sid &&
+     myproc()->pgid != 0 &&
+     myproc()->pgid != pty->fg_pgid &&
+     (pty->termios.c_lflag & TOSTOP))
+    send_ttou = 1;
+  if(send_ttou) {
+    int pgid;
+    pgid = myproc()->pgid;
+    release(&ptys.lock);
+    proc_signal_pgid(pgid, SIGTTOU);
+    return -1;
+  }
+
   if(f->pty_side == PTY_SIDE_MASTER) {
     out = &pty->to_slave;
     peer_refs = pty->slave_refs;

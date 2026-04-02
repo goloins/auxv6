@@ -10,10 +10,9 @@
  * - Function declarations
  *
  * TODO:
- * - [ ] Implement lseek, dup2, access, pathconf, sysconf, confstr
- * - [ ] Implement isatty, ttyname, getlogin
- * - [ ] Implement alarm, pause
- * - [ ] Implement symlink, readlink
+ * - [ ] Implement access, pathconf, sysconf, confstr
+ * - [ ] Implement getlogin
+ * - [ ] Implement pause
  */
 
 #ifndef _UNISTD_H
@@ -24,6 +23,7 @@
 #include "poll.h"
 #include "stddef.h"
 #include "termios.h"
+#include "posix/sys/ioctl.h"
 
 /* POSIX version identification */
 #define _POSIX_VERSION          200809L
@@ -240,8 +240,22 @@ int     tcsetpgrp(int pgid);    /* auxv6 native */
 int     tcgetpgrp(void);        /* auxv6 native */
 #endif
 
-static inline int tcsetpgrp_posix(int fd, pid_t pgrp) { (void)fd; return tcsetpgrp((int)pgrp); }
-static inline pid_t tcgetpgrp_posix(int fd)            { (void)fd; return (pid_t)tcgetpgrp(); }
+static inline int tcsetpgrp_posix(int fd, pid_t pgrp) {
+  int pg;
+
+  pg = (int)pgrp;
+  if(ioctl(fd, TIOCSPGRP, &pg) == 0)
+    return 0;
+  return tcsetpgrp((int)pgrp);
+}
+
+static inline pid_t tcgetpgrp_posix(int fd) {
+  int pg;
+
+  if(ioctl(fd, TIOCGPGRP, &pg) == 0)
+    return (pid_t)pg;
+  return (pid_t)tcgetpgrp();
+}
 
 /* For ported code that uses the standard names via macro override */
 #ifdef _POSIX_COMPAT_TC

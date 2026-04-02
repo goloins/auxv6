@@ -6,6 +6,8 @@ NEVER USE THE xv6 MKFS. USE ONE OF THE HOST TOOLS. MK2FS WORKS GREAT AND IS FOR 
 
 We should avoid adding anything that should be core c library function to posix.c unless absolutely necessary, and instead add it to ulib.
 
+Our native shell DOES NOT SUPPORT MOST COMMON THINGS. Use dash or get creative if you need custom scripts.
+
 Whenever a document in docs/ is relevant to a change, update it. If there isn't a relevant document, add one. If there is a relevant document but it doesn't cover the change, update it to cover the change.
 
 When creating userland tools, make sure there is an entry in .gitignore for the binary and that it will

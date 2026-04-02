@@ -3,6 +3,7 @@
 # Generic auxv6 guest test harness.
 # Environment variables:
 #   AUXV6_QEMU_TARGET   make target to spawn (default: qemu-nox)
+#   AUXV6_MAKE_CMD      make command prefix used to launch target (default: make)
 #   AUXV6_TEST_SCRIPT   command file to run inside guest shell (required)
 #   AUXV6_LOGIN_USER    login user (default: root)
 #   AUXV6_LOGIN_PASS    login password (default: root)
@@ -10,6 +11,7 @@
 #   AUXV6_EXPECT_TIMEOUT timeout in seconds (default: 240)
 #   AUXV6_HALT          halt guest at end: 1=yes, 0=no (default: 1)
 #   AUXV6_CHECK_RC      check command rc via $? probe: 1=yes, 0=no (default: 0)
+#   AUXV6_LOG_USER      echo raw guest output to host terminal: 1=yes, 0=no (default: 0)
 
 proc getenv_or_default {name default} {
     if {[info exists ::env($name)] && $::env($name) ne ""} {
@@ -18,16 +20,80 @@ proc getenv_or_default {name default} {
     return $default
 }
 
+proc terminate_guest {request_halt} {
+    set old_timeout $::timeout
+    set ::timeout 5
+
+    if {$request_halt eq "1"} {
+        catch {send "halt\r"}
+    } else {
+        catch {send "exit\r"}
+    }
+
+    if {[catch {
+        expect {
+            eof {}
+            timeout {
+                catch {send "\001x"}
+                catch {
+                    expect {
+                        eof {}
+                        timeout {}
+                    }
+                }
+            }
+        }
+    }]} {
+        # Spawn may already be closed; teardown is best-effort.
+    }
+
+    set ::timeout $old_timeout
+}
+
+proc safe_fail {msg} {
+    puts stderr $msg
+    terminate_guest "1"
+    exit 1
+}
+
+proc startup_fail {msg detail} {
+    puts stderr $msg
+    if {$detail ne ""} {
+        puts stderr "startup output:"
+        puts stderr $detail
+    }
+    exit 1
+}
+
+proc normalize_output {s} {
+    set out $s
+
+    # Drop CSI and simple ESC-prefixed control sequences.
+    regsub -all -- {\x1B\[[0-?]*[ -/]*[@-~]} $out "" out
+    regsub -all -- {\x1B[][()#][0-9A-Za-z]} $out "" out
+    regsub -all -- {\x1B.} $out "" out
+
+    # Fold CR to NL and remove remaining non-printable bytes.
+    regsub -all -- {\r} $out "\n" out
+    regsub -all -- {[^\x09\x0A\x20-\x7E]} $out "" out
+    return $out
+}
+
 set target [getenv_or_default "AUXV6_QEMU_TARGET" "qemu-nox"]
+set make_cmd [getenv_or_default "AUXV6_MAKE_CMD" "make"]
 set script [getenv_or_default "AUXV6_TEST_SCRIPT" ""]
 set user [getenv_or_default "AUXV6_LOGIN_USER" "root"]
 set pass [getenv_or_default "AUXV6_LOGIN_PASS" "root"]
 set prompt [getenv_or_default "AUXV6_PROMPT" "#"]
 set halt_guest [getenv_or_default "AUXV6_HALT" "1"]
 set check_rc [getenv_or_default "AUXV6_CHECK_RC" "0"]
+set log_user_enabled [getenv_or_default "AUXV6_LOG_USER" "0"]
 set timeout [expr {[getenv_or_default "AUXV6_EXPECT_TIMEOUT" "240"] + 0}]
 set rc_marker "__AUXV6_RC__"
+set cmd_marker "__AUXV6_CMD_DONE__"
+set cmd_marker_re {(^|[\r\n])__AUXV6_CMD_DONE__([\r\n]|$)}
 set last_output ""
+set last_output_norm ""
 
 if {$script eq ""} {
     puts stderr "AUXV6_TEST_SCRIPT is required"
@@ -39,12 +105,47 @@ if {![file exists $script]} {
     exit 2
 }
 
-spawn make $target
-expect "login:"
-send "$user\r"
-expect "password:"
-send "$pass\r"
-expect $prompt
+set make_argv [split $make_cmd " "]
+spawn {*}$make_argv $target
+if {$log_user_enabled eq "0"} {
+    log_user 0
+} else {
+    log_user 1
+}
+match_max 131072
+expect {
+    "login:" {}
+    eof {
+        startup_fail "FAIL: guest launcher exited before login prompt" $expect_out(buffer)
+    }
+    timeout {
+        startup_fail "FAIL: timeout waiting for login prompt" ""
+    }
+}
+if {[catch {send "$user\r"} emsg]} {
+    startup_fail "FAIL: could not send login user to guest" $emsg
+}
+expect {
+    "password:" {}
+    eof {
+        startup_fail "FAIL: guest session closed before password prompt" $expect_out(buffer)
+    }
+    timeout {
+        startup_fail "FAIL: timeout waiting for password prompt" ""
+    }
+}
+if {[catch {send "$pass\r"} emsg]} {
+    startup_fail "FAIL: could not send password to guest" $emsg
+}
+expect {
+    -re $prompt {}
+    eof {
+        startup_fail "FAIL: guest session closed before shell prompt" $expect_out(buffer)
+    }
+    timeout {
+        startup_fail "FAIL: timeout waiting for shell prompt" ""
+    }
+}
 
 set fh [open $script r]
 while {[gets $fh line] >= 0} {
@@ -59,55 +160,66 @@ while {[gets $fh line] >= 0} {
     if {[string first "EXPECT " $line] == 0} {
         set pat [string range $line 7 end]
         if {$pat eq ""} {
-            puts stderr "FAIL: empty EXPECT pattern"
-            send "halt\r"
-            expect eof
-            exit 1
+            safe_fail "FAIL: empty EXPECT pattern"
         }
-        if {![regexp -- $pat $last_output]} {
-            puts stderr "FAIL: EXPECT pattern not found: $pat"
-            send "halt\r"
-            expect eof
-            exit 1
+        if {![regexp -- $pat $last_output] && ![regexp -- $pat $last_output_norm]} {
+            safe_fail "FAIL: EXPECT pattern not found: $pat"
+        }
+        continue
+    }
+
+    if {[string first "RAW " $line] == 0} {
+        set raw_cmd [string trim [string range $line 4 end]]
+        if {$raw_cmd eq ""} {
+            safe_fail "FAIL: empty RAW command"
+        }
+
+        puts "RUN: $raw_cmd"
+        send "$raw_cmd\r"
+        send "echo $cmd_marker\r"
+        expect {
+            -re $cmd_marker_re {
+                set last_output $expect_out(buffer)
+                set last_output_norm [normalize_output $last_output]
+            }
+            timeout {
+                safe_fail "FAIL: timeout while waiting for RAW command completion: $raw_cmd"
+            }
         }
         continue
     }
 
     puts "RUN: $line"
     send "$line\r"
-    expect $prompt
-    set last_output $expect_out(buffer)
-
-    if {$check_rc ne "1"} {
-        continue
-    }
-
-    send "echo $rc_marker:$?\r"
+    send "echo $cmd_marker\r"
     expect {
-        -re "$rc_marker:0" {
-            # command succeeded
-        }
-        -re [format {%s:([0-9]+)} $rc_marker] {
-            set rc $expect_out(1,string)
-            puts stderr "FAIL: command returned rc=$rc: $line"
-            send "halt\r"
-            expect eof
-            exit 1
+        -re $cmd_marker_re {
+            set last_output $expect_out(buffer)
+            set last_output_norm [normalize_output $last_output]
+            if {$check_rc eq "1"} {
+                send "echo $rc_marker:$?\r"
+                expect {
+                    -re [format {%s:([0-9]+)} $rc_marker] {
+                        set rc $expect_out(1,string)
+                        if {$rc ne "0"} {
+                            safe_fail "FAIL: command returned rc=$rc: $line"
+                        }
+                    }
+                    timeout {
+                        safe_fail "FAIL: timeout while waiting for rc probe: $line"
+                    }
+                }
+            }
         }
         timeout {
-            puts stderr "FAIL: timeout while checking rc for command: $line"
-            send "halt\r"
-            expect eof
-            exit 1
+            safe_fail "FAIL: timeout while waiting for command completion: $line"
         }
     }
-    expect $prompt
 }
 close $fh
 
 if {$halt_guest eq "0"} {
-    send "exit\r"
+    terminate_guest "0"
 } else {
-    send "halt\r"
+    terminate_guest "1"
 }
-expect eof

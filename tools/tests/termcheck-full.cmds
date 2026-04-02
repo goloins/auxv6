@@ -1,0 +1,3 @@
+# terminal/tty/pty full regression
+RAW termcheck
+EXPECT termcheck: all checks passed

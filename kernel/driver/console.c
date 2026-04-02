@@ -95,6 +95,9 @@ struct console_ansi_state {
   int nparams;
   int cur_param;
   int question;
+  int greater;
+  int dollar;
+  int bang;
   uchar attr;
   int scroll_top;
   int scroll_bot;
@@ -105,7 +108,13 @@ struct console_ansi_state {
   int gl_charset;
   int cursor_keys_app;
   int origin_mode;
+  int insert_mode;
+  int newline_mode;
+  int wraparound;
+  int reverse_video;
+  int cursor_blink;
   int cursor_visible;
+  int last_glyph;
   uint utf8_accum;
   int utf8_need;
   uint utf8_min;
@@ -166,7 +175,13 @@ static struct console_tty_state console_tty_default = {
     .gl_charset = 0,
     .cursor_keys_app = 0,
     .origin_mode = 0,
+    .insert_mode = 0,
+    .newline_mode = 0,
+    .wraparound = 1,
+    .reverse_video = 0,
+    .cursor_blink = 1,
     .cursor_visible = 1,
+    .last_glyph = -1,
     .alt_saved_attr = 0x07,
   },
 };
@@ -742,6 +757,10 @@ console_flush_tty_locked(struct console_tty_state *t)
 static void
 cga_write_cursor(int pos)
 {
+  if(pos < 0)
+    pos = 0;
+  if(pos >= 25*80)
+    pos = 25*80 - 1;
   cga_cursor = pos;
   if(cga_render_offscreen)
     return;
@@ -893,6 +912,218 @@ ansi_leave_alt_screen(struct console_tty_state *t)
   cga_write_cursor(t->ansi.alt_saved_cursor);
   t->ansi.attr = t->ansi.alt_saved_attr;
   t->ansi.alt_active = 0;
+}
+
+static void
+ansi_apply_private_mode(struct console_tty_state *t, int mode, int set)
+{
+  if(mode == 1) {
+    t->ansi.cursor_keys_app = set ? 1 : 0;
+  } else if(mode == 6) {
+    t->ansi.origin_mode = set ? 1 : 0;
+    if(set)
+      cga_write_cursor(t->ansi.scroll_top * 80);
+    else
+      cga_write_cursor(0);
+  } else if(mode == 5) {
+    t->ansi.reverse_video = set ? 1 : 0;
+  } else if(mode == 12) {
+    t->ansi.cursor_blink = set ? 1 : 0;
+  } else if(mode == 7) {
+    t->ansi.wraparound = set ? 1 : 0;
+  } else if(mode == 25) {
+    t->ansi.cursor_visible = set ? 1 : 0;
+  } else if(mode == 1048) {
+    if(set)
+      ansi_save_cursor(t);
+    else
+      ansi_restore_cursor(t);
+  } else if(mode == 47 || mode == 1047 || mode == 1049) {
+    if(set) {
+      ansi_save_cursor(t);
+      ansi_enter_alt_screen(t);
+    } else {
+      ansi_leave_alt_screen(t);
+      ansi_restore_cursor(t);
+    }
+  }
+}
+
+static void
+ansi_apply_mode(struct console_tty_state *t, int mode, int set)
+{
+  if(mode == 4)
+    t->ansi.insert_mode = set ? 1 : 0;
+  else if(mode == 20)
+    t->ansi.newline_mode = set ? 1 : 0;
+}
+
+static int
+ansi_mode_state(struct console_tty_state *t, int mode)
+{
+  if(mode == 4)
+    return t->ansi.insert_mode ? 1 : 2;
+  if(mode == 20)
+    return t->ansi.newline_mode ? 1 : 2;
+  return 0;
+}
+
+static int
+ansi_private_mode_state(struct console_tty_state *t, int mode)
+{
+  if(mode == 1)
+    return t->ansi.cursor_keys_app ? 1 : 2;
+  if(mode == 6)
+    return t->ansi.origin_mode ? 1 : 2;
+  if(mode == 5)
+    return t->ansi.reverse_video ? 1 : 2;
+  if(mode == 12)
+    return t->ansi.cursor_blink ? 1 : 2;
+  if(mode == 7)
+    return t->ansi.wraparound ? 1 : 2;
+  if(mode == 25)
+    return t->ansi.cursor_visible ? 1 : 2;
+  if(mode == 47 || mode == 1047 || mode == 1049)
+    return t->ansi.alt_active ? 1 : 2;
+  return 0;
+}
+
+static void
+ansi_soft_reset(struct console_tty_state *t)
+{
+  t->ansi.attr = 0x07;
+  t->ansi.scroll_top = 0;
+  t->ansi.scroll_bot = 23;
+  t->ansi.g0_charset = ANSI_CS_ASCII;
+  t->ansi.g1_charset = ANSI_CS_ASCII;
+  t->ansi.gl_charset = 0;
+  t->ansi.cursor_keys_app = 0;
+  t->ansi.origin_mode = 0;
+  t->ansi.insert_mode = 0;
+  t->ansi.newline_mode = 0;
+  t->ansi.wraparound = 1;
+  t->ansi.reverse_video = 0;
+  t->ansi.cursor_blink = 1;
+  t->ansi.cursor_visible = 1;
+  t->ansi.utf8_need = 0;
+  t->ansi.question = 0;
+  t->ansi.greater = 0;
+  t->ansi.dollar = 0;
+  t->ansi.bang = 0;
+}
+
+static void
+console_queue_input_byte_locked(struct console_tty_state *t, char ch)
+{
+  uint cap;
+
+  cap = (uint)sizeof(t->input.buf);
+  if(t->input.e - t->input.r >= cap)
+    return;
+  t->input.buf[t->input.e++ % cap] = ch;
+}
+
+static void
+console_queue_input_uint_locked(struct console_tty_state *t, int v)
+{
+  char tmp[12];
+  int n;
+
+  if(v == 0) {
+    console_queue_input_byte_locked(t, '0');
+    return;
+  }
+  if(v < 0)
+    v = 1;
+  n = 0;
+  while(v > 0 && n < (int)sizeof(tmp)) {
+    tmp[n++] = (char)('0' + (v % 10));
+    v /= 10;
+  }
+  while(n > 0)
+    console_queue_input_byte_locked(t, tmp[--n]);
+}
+
+static void
+console_queue_input_cstr_locked(struct console_tty_state *t, const char *s)
+{
+  if(s == 0)
+    return;
+  while(*s)
+    console_queue_input_byte_locked(t, *s++);
+}
+
+static void
+console_queue_dsr_reply_locked(struct console_tty_state *t, int dec_private, int mode)
+{
+  int row;
+  int col;
+
+  if(mode == 5) {
+    console_queue_input_byte_locked(t, '\033');
+    console_queue_input_byte_locked(t, '[');
+    if(dec_private)
+      console_queue_input_byte_locked(t, '?');
+    console_queue_input_byte_locked(t, '0');
+    console_queue_input_byte_locked(t, 'n');
+  } else if(mode == 6) {
+    row = (cga_cursor / 80) + 1;
+    col = (cga_cursor % 80) + 1;
+    console_queue_input_byte_locked(t, '\033');
+    console_queue_input_byte_locked(t, '[');
+    if(dec_private)
+      console_queue_input_byte_locked(t, '?');
+    console_queue_input_uint_locked(t, row);
+    console_queue_input_byte_locked(t, ';');
+    console_queue_input_uint_locked(t, col);
+    console_queue_input_byte_locked(t, 'R');
+  } else {
+    return;
+  }
+
+  t->input.w = t->input.e;
+  wakeup(&t->input.r);
+}
+
+static void
+console_queue_da_reply_locked(struct console_tty_state *t, int dec_private, int secondary)
+{
+  (void)dec_private;
+
+  console_queue_input_byte_locked(t, '\033');
+  console_queue_input_byte_locked(t, '[');
+  if(secondary) {
+    console_queue_input_byte_locked(t, '>');
+    console_queue_input_cstr_locked(t, "0;0;0c");
+  } else {
+    console_queue_input_byte_locked(t, '?');
+    console_queue_input_cstr_locked(t, "1;0c");
+  }
+  t->input.w = t->input.e;
+  wakeup(&t->input.r);
+}
+
+static void
+console_queue_mode_reply_locked(struct console_tty_state *t, int dec_private, int mode)
+{
+  int state;
+
+  if(dec_private)
+    state = ansi_private_mode_state(t, mode);
+  else
+    state = ansi_mode_state(t, mode);
+
+  console_queue_input_byte_locked(t, '\033');
+  console_queue_input_byte_locked(t, '[');
+  if(dec_private)
+    console_queue_input_byte_locked(t, '?');
+  console_queue_input_uint_locked(t, mode);
+  console_queue_input_byte_locked(t, ';');
+  console_queue_input_uint_locked(t, state);
+  console_queue_input_cstr_locked(t, "$y");
+
+  t->input.w = t->input.e;
+  wakeup(&t->input.r);
 }
 
 static int
@@ -1071,15 +1302,23 @@ cgaputc_ansi(struct console_tty_state *t, int c)
       c = ansi_decode_utf8_or_single(t, c);
       if(c < 0)
         return;
+      t->ansi.last_glyph = c;
+      if(t->ansi.insert_mode && col < 79)
+        memmove(crt + pos + 1, crt + pos, (79 - col) * sizeof(ushort));
       crt[pos] = (ushort)((c & 0xff) | ((ushort)a << 8));
-      pos++;
       if(col == 79) {
-        if(row == t->ansi.scroll_bot) {
-          cga_scroll_up(t->ansi.scroll_top, t->ansi.scroll_bot, 1, a);
-          pos = t->ansi.scroll_bot * 80;
+        if(t->ansi.wraparound) {
+          if(row == t->ansi.scroll_bot) {
+            cga_scroll_up(t->ansi.scroll_top, t->ansi.scroll_bot, 1, a);
+            pos = t->ansi.scroll_bot * 80;
+          } else {
+            pos = (row < 24) ? (row+1)*80 : 24*80;
+          }
         } else {
-          pos = (row < 24) ? (row+1)*80 : 24*80;
+          pos = row * 80 + 79;
         }
+      } else {
+        pos++;
       }
       cga_write_cursor(pos);
     }
@@ -1087,7 +1326,7 @@ cgaputc_ansi(struct console_tty_state *t, int c)
 
   case ANSI_ESC:
     if(c == '[') {
-      t->ansi.state=ANSI_CSI; t->ansi.nparams=0; t->ansi.cur_param=0; t->ansi.question=0;
+      t->ansi.state=ANSI_CSI; t->ansi.nparams=0; t->ansi.cur_param=0; t->ansi.question=0; t->ansi.greater=0; t->ansi.dollar=0; t->ansi.bang=0;
       memset(t->ansi.params, 0, sizeof(t->ansi.params));
       return;
     }
@@ -1097,12 +1336,11 @@ cgaputc_ansi(struct console_tty_state *t, int c)
     if(c == '7') { ansi_save_cursor(t); t->ansi.state = ANSI_NORMAL; return; }
     if(c == '8') { ansi_restore_cursor(t); t->ansi.state = ANSI_NORMAL; return; }
     if(c == 'c') {
-      t->ansi.attr=0x07; t->ansi.scroll_top=0; t->ansi.scroll_bot=23;
-      t->ansi.g0_charset = ANSI_CS_ASCII;
-      t->ansi.g1_charset = ANSI_CS_ASCII;
-      t->ansi.gl_charset = 0;
-      t->ansi.utf8_need = 0;
+      ansi_leave_alt_screen(t);
+      ansi_soft_reset(t);
       cga_fill(0, 25*80, 0x07); cga_write_cursor(0);
+    } else if(c == 'Z') {
+      console_queue_da_reply_locked(t, 1, 0);
     } else if(c == 'M') {
       if(row == t->ansi.scroll_top)
         cga_scroll_down(t->ansi.scroll_top, t->ansi.scroll_bot, 1, a);
@@ -1128,6 +1366,9 @@ cgaputc_ansi(struct console_tty_state *t, int c)
 
   case ANSI_CSI:
     if(c == '?') { t->ansi.question=1; return; }
+    if(c == '>') { t->ansi.greater=1; return; }
+    if(c == '$') { t->ansi.dollar=1; return; }
+    if(c == '!') { t->ansi.bang=1; return; }
     if(c >= '0' && c <= '9') {
       t->ansi.cur_param = t->ansi.cur_param*10 + (c-'0'); return;
     }
@@ -1142,10 +1383,22 @@ cgaputc_ansi(struct console_tty_state *t, int c)
     p2 = (t->ansi.nparams>=2) ? t->ansi.params[1] : 0;
 
     switch(c) {
+    case 'a': n=p1?p1:1; c2=col+n; if(c2>79)c2=79; cga_write_cursor(row*80+c2); break;
     case 'A': n=p1?p1:1; r2=row-n; if(r2<t->ansi.scroll_top)r2=t->ansi.scroll_top; cga_write_cursor(r2*80+col); break;
     case 'B': n=p1?p1:1; r2=row+n; if(r2>t->ansi.scroll_bot)r2=t->ansi.scroll_bot; cga_write_cursor(r2*80+col); break;
     case 'C': n=p1?p1:1; c2=col+n; if(c2>79)c2=79; cga_write_cursor(row*80+c2); break;
     case 'D': n=p1?p1:1; c2=col-n; if(c2<0)c2=0; cga_write_cursor(row*80+c2); break;
+    case 'd':
+      row_base = t->ansi.origin_mode ? t->ansi.scroll_top : 0;
+      row_max = t->ansi.origin_mode ? t->ansi.scroll_bot : 24;
+      r2 = (p1 ? p1 - 1 : 0) + row_base;
+      if(r2 < row_base)
+        r2 = row_base;
+      if(r2 > row_max)
+        r2 = row_max;
+      cga_write_cursor(r2*80+col);
+      break;
+    case 'e': n=p1?p1:1; r2=row+n; if(r2>t->ansi.scroll_bot)r2=t->ansi.scroll_bot; cga_write_cursor(r2*80+col); break;
     case 'E': n=p1?p1:1; r2=row+n; if(r2>24)r2=24; cga_write_cursor(r2*80); break;
     case 'F': n=p1?p1:1; r2=row-n; if(r2<0)r2=0; cga_write_cursor(r2*80); break;
     case 'G': c2=p1?p1-1:0; if(c2<0)c2=0; if(c2>79)c2=79; cga_write_cursor(row*80+c2); break;
@@ -1179,6 +1432,17 @@ cgaputc_ansi(struct console_tty_state *t, int c)
       int av=80-col; n=p1?p1:1; if(n>av)n=av;
       memmove(crt+pos, crt+pos+n, (av-n)*sizeof(ushort));
       cga_fill(pos+av-n, pos+av, a); break; }
+    case 'X': {
+      int av=80-col; n=p1?p1:1; if(n>av)n=av;
+      cga_fill(pos, pos+n, a); break; }
+    case 'b':
+      n = p1 ? p1 : 1;
+      if(t->ansi.last_glyph >= 0) {
+        int rep;
+        for(rep = 0; rep < n; rep++)
+          cgaputc_ansi(t, t->ansi.last_glyph);
+      }
+      break;
     case '@': {
       int av=80-col; int i2; n=p1?p1:1; if(n>av)n=av;
       for(i2=av-1; i2>=n; i2--) crt[pos+i2]=crt[pos+i2-n];
@@ -1221,37 +1485,49 @@ cgaputc_ansi(struct console_tty_state *t, int c)
     case 'u':
       ansi_restore_cursor(t);
       break;
+    case 'p':
+      if(t->ansi.bang)
+        ansi_soft_reset(t);
+      else if(t->ansi.dollar)
+        console_queue_mode_reply_locked(t, t->ansi.question, p1);
+      break;
+    case 'n':
+      if(!t->ansi.bang)
+        console_queue_dsr_reply_locked(t, t->ansi.question, p1);
+      break;
+    case 'c':
+      if(!t->ansi.bang)
+        console_queue_da_reply_locked(t, t->ansi.question, t->ansi.greater);
+      break;
     case 'h':
-      if(t->ansi.question) {
-        if(p1 == 1)
-          t->ansi.cursor_keys_app = 1;
-        else if(p1 == 6) {
-          t->ansi.origin_mode = 1;
-          cga_write_cursor(t->ansi.scroll_top * 80);
-        } else if(p1 == 25)
-          t->ansi.cursor_visible = 1;
-        else if(p1 == 1048)
-          ansi_save_cursor(t);
-        else if(p1 == 47 || p1 == 1047 || p1 == 1049) {
-          ansi_save_cursor(t);
-          ansi_enter_alt_screen(t);
+      if(t->ansi.nparams == 0) {
+        if(t->ansi.question)
+          ansi_apply_private_mode(t, 0, 1);
+        else
+          ansi_apply_mode(t, 0, 1);
+      } else {
+        int i2;
+        for(i2 = 0; i2 < t->ansi.nparams; i2++) {
+          if(t->ansi.question)
+            ansi_apply_private_mode(t, t->ansi.params[i2], 1);
+          else
+            ansi_apply_mode(t, t->ansi.params[i2], 1);
         }
       }
       break;
     case 'l':
-      if(t->ansi.question) {
-        if(p1 == 1)
-          t->ansi.cursor_keys_app = 0;
-        else if(p1 == 6) {
-          t->ansi.origin_mode = 0;
-          cga_write_cursor(0);
-        } else if(p1 == 25)
-          t->ansi.cursor_visible = 0;
-        else if(p1 == 1048)
-          ansi_restore_cursor(t);
-        else if(p1 == 47 || p1 == 1047 || p1 == 1049) {
-          ansi_leave_alt_screen(t);
-          ansi_restore_cursor(t);
+      if(t->ansi.nparams == 0) {
+        if(t->ansi.question)
+          ansi_apply_private_mode(t, 0, 0);
+        else
+          ansi_apply_mode(t, 0, 0);
+      } else {
+        int i2;
+        for(i2 = 0; i2 < t->ansi.nparams; i2++) {
+          if(t->ansi.question)
+            ansi_apply_private_mode(t, t->ansi.params[i2], 0);
+          else
+            ansi_apply_mode(t, t->ansi.params[i2], 0);
         }
       }
       break;

@@ -1,0 +1,18 @@
+# termcap capability presence smoke
+RAW cat /etc/termcap
+EXPECT :ti=
+EXPECT :te=
+EXPECT :ks=
+EXPECT :ke=
+EXPECT :vi=
+EXPECT :ve=
+EXPECT :im=
+EXPECT :ei=
+EXPECT :al=
+EXPECT :dl=
+EXPECT :dc=
+EXPECT :ic=
+EXPECT 1049h
+EXPECT 1049l
+EXPECT 25l
+EXPECT 25h
