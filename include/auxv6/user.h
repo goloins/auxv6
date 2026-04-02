@@ -86,7 +86,7 @@ pid_t wait(void);
 pid_t waitpid(pid_t pid, int *status, int options);
 pid_t wait4(pid_t pid, int *status, int options, void *rusage);
 int waitid(id_t idtype, id_t id, siginfo_t *info, int options);
-int pipe(int*);
+int pipe(int pipefd[2]);
 ssize_t write(int, const void*, size_t);
 ssize_t read(int, void*, size_t);
 int close(int);

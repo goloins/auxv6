@@ -268,3 +268,40 @@ openpty(int *amaster, int *aslave, char *name,
   *aslave = sfd;
   return 0;
 }
+
+int
+posix_openpt(int flags)
+{
+  int oflags;
+
+  if((flags & 0x3) != O_RDWR) {
+    errno = EINVAL;
+    return -1;
+  }
+  if((flags & ~(O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC)) != 0) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  oflags = O_RDWR | (flags & O_NONBLOCK);
+  return open("/dev/ptmx", oflags);
+}
+
+int
+grantpt(int fd)
+{
+  int ptn;
+
+  if(ioctl(fd, TIOCGPTN, &ptn) < 0) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  return 0;
+}
+
+int
+unlockpt(int fd)
+{
+  return grantpt(fd);
+}

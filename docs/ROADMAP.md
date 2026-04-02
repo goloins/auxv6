@@ -16,6 +16,8 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 
 ## Recent Progress (2026-03-30 to 2026-04-02)
 
+- **libc portability phase 6 tranche-1 initial landing completed 2026-04-02:** the first post-ABI portability slice is now in-tree. auxv6 gained canonical top-level `limits.h`, `inttypes.h`, `setjmp.h`, and `sys/resource.h`; the corresponding `include/posix/*` headers now forward to those canonical headers; and new runtime buckets landed for configuration/login/sleep helpers, `realpath`, and the `mk*temp` family. `user/posix.c` now provides `execl`, `execlp`, and `system`, while `user/tty.c` now provides `posix_openpt`, `grantpt`, and `unlockpt`. Validation passed with a canonical-header compile probe under `-Werror`, a sudo rebuild of the touched libc objects, and a sudo dash-port rebuild after updating `ports/dash-0.5.12/Makefile.auxv6` to link the new runtime objects.
+- **libc portability phase 6 plan recorded 2026-04-02:** auxv6 now has an explicit post-ABI userland target: shell/coreutils/findutils-grade POSIX software, C locale only, with threads treated as an explicit but separate kernel-plus-libc stream. The next libc work is split into tranches rather than a broad completeness wishlist. Tranche 1 is scoped to userland-only, high-payoff portability work: truthful public headers, promotion of wrapper-only canonical headers, and implementation of helpers such as `system`, `realpath`, the `mk*temp` family, `getlogin_r`, `pause`, `confstr`/`pathconf`, and PTY POSIX wrappers.
 - **libc ABI cleanup phase 5 bridge removal landed 2026-04-02:** the temporary native-header bridge is gone. `include/auxv6/user.h` now declares plain `exit(int)` and `dprintf(...)` with no `exit(...)` variadic shim or `printf` macro remap, and `user/stdlib.c` now exports the public `exit` symbol directly. The in-tree source sweep is complete for that bridge surface, with no remaining `printf -> dprintf`, variadic `exit(...)`, or `__auxv6_libc_exit` references in tracked source. Validation passed with direct compile probes against the cleaned header surface, `make aux.kern`, and `sudo make -f ports/dash-0.5.12/Makefile.auxv6 clean all`; the dash rebuild still links successfully and only emits pre-existing warning noise from the compatibility headers and `signames.c`.
 - **libc ABI cleanup phase 5 smoke follow-up landed 2026-04-02:** a user `nslookup` compile smoke caught one remaining header-level fd-style `printf` dependency in `user/netcommon.h` that the earlier source-only sweep had missed. That helper header now uses explicit `dprintf(...)`, the fd-style `printf` audit is clean across `user/*.h`, `user/*.c`, and `user/*.S`, and a host-side rebuild of `_nslookup`, `_ifconfig`, `_netinfo`, `_route`, `_arp`, and `_ip` passed afterward.
 
@@ -136,6 +138,35 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | Btrfs | None | Planned read-only support |
 | NFS | None | Planned; requires XDR/RPC infrastructure |
 | Device hotplug/eventing | None | Planned kernel event path for live node add/remove beyond boot-time `devman -s` |
+
+---
+
+## Libc / POSIX Portability Target
+
+- Primary userland target: shell/coreutils/findutils-grade POSIX software.
+- Locale target: C locale only.
+- The immediate libc priority is a truthful and useful public surface, not a
+  larger set of aspirational declarations.
+- Threading is now an explicit requirement, but it is tracked as a separate
+  kernel-plus-libc stream so smaller portability wins are not blocked on the
+  thread design itself.
+
+### Planned Tranches
+
+1. Tranche 1: truthful surface and low-kernel-dependency portability helpers.
+  Promote wrapper-only canonical headers and implement userspace-only helpers
+  such as `system`, `realpath`, `mk*temp`, `getlogin_r`, `pause`,
+  `confstr`/`pathconf`, and PTY POSIX wrappers.
+2. Tranche 2: time and stream correctness. Replace stub time surfaces and add
+  stdio positioning and scanning APIs that portable tools expect.
+3. Tranche 3: shell, text, and find surfaces. Add `fnmatch`, `glob`,
+  `scandir`/`alphasort`, one tree-walk API (`nftw` or `fts`), and minimal
+  C-locale plumbing.
+4. Tranche 4: identity and portability polish. Add `pwd.h`/`grp.h` lookups and
+  clean up any declarations that still do not meet the target profile.
+5. Parallel thread-enablement track: replace placeholder `pthread_*` types with
+  a real shared-address-space thread model, TLS-ready libc state, and a
+  minimal pthread subset once the kernel/runtime pieces exist.
 
 ---
 

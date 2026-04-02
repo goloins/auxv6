@@ -108,6 +108,9 @@ RUNTIME_OBJS := \
   $(ROOT)/user/fmt.o \
   $(ROOT)/user/dirent.o \
   $(ROOT)/user/env.o \
+  $(ROOT)/user/conf.o \
+  $(ROOT)/user/path.o \
+  $(ROOT)/user/tempfile.o \
   $(ROOT)/user/stdlib.o \
   $(ROOT)/user/posix_fs.o \
   $(ROOT)/user/posix.o \

@@ -5,6 +5,8 @@ surfaces. The goal is to make the standard C and POSIX entry points real.
 The temporary native-header compatibility shims used during the transition
 have now been removed.
 
+Phase 6 continuation is documented in `docs/libc-reorg-phase6.md`.
+
 ## Goals
 
 - Stop linking user programs directly at `main` and introduce a real `_start`
@@ -88,6 +90,9 @@ int main(void){ printf("x\n"); dprintf(2, "y\n"); exit(1); }
 
 ## In Progress
 
+- Phase 6 planning is now documented in `docs/libc-reorg-phase6.md` for the
+  post-ABI portability push: shell/coreutils/findutils-grade POSIX userland,
+  C locale only, with threads as a separate kernel-plus-libc track.
 - Follow-on polish outside the ABI bridge itself:
   - `environ`/`envp` startup handoff is still carried by the existing userspace
     bootstrap path.

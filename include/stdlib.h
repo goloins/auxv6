@@ -3,13 +3,10 @@
  *
  * POSIX.1-2017 / C11 compatible definitions
  *
- * TODO:
- * - [ ] Implement random number generation (rand, srand)
- * - [ ] Implement environment functions (getenv, setenv, putenv, unsetenv)
- * - [ ] Implement program termination (exit, _Exit, atexit, at_quick_exit)
- * - [ ] Implement searching and sorting (qsort, bsearch)
- * - [ ] Implement integer arithmetic (abs, labs, div, ldiv)
- * - [ ] Implement multibyte/wide character conversion
+ * Tranche 1 note:
+ * - the standard helper surface is being filled in around the post-ABI libc
+ *   split; the remaining large gaps are time, locale, and broader
+ *   wide-character support rather than the basic process/path/tempfile layer.
  */
 
 #ifndef _STDLIB_H

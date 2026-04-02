@@ -9,10 +9,9 @@
  * - Standard symbolic constants
  * - Function declarations
  *
- * TODO:
- * - [ ] Implement access, pathconf, sysconf, confstr
- * - [ ] Implement getlogin
- * - [ ] Implement pause
+ * Tranche 1 note:
+ * - configuration, login, PTY, and path/tempfile portability helpers are
+ *   being filled in incrementally after the ABI cleanup.
  */
 
 #ifndef _UNISTD_H
@@ -74,10 +73,10 @@
 #define _SC_VERSION             9
 #define _SC_PAGESIZE            30
 #define _SC_PAGE_SIZE           _SC_PAGESIZE
-#define _SC_PHYS_PAGES          84
-#define _SC_AVPHYS_PAGES        85
 #define _SC_NPROCESSORS_CONF    83
 #define _SC_NPROCESSORS_ONLN    84
+#define _SC_PHYS_PAGES          85
+#define _SC_AVPHYS_PAGES        86
 
 /* Values for confstr() */
 #define _CS_PATH                0

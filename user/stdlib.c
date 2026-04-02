@@ -3,6 +3,7 @@
  */
 
 #include "types.h"
+#include "errno.h"
 #include "auxv6/user.h"
 #include "stdlib.h"
 
@@ -392,6 +393,7 @@ qsort(void *base, uint nmemb, uint size,
 }
 
 static unsigned int _rand_seed = 1;
+static char *_rand_state;
 
 int __attribute__((weak))
 rand(void)
@@ -404,4 +406,162 @@ void __attribute__((weak))
 srand(unsigned int seed)
 {
   _rand_seed = seed;
+}
+
+int __attribute__((weak))
+rand_r(unsigned int *seedp)
+{
+  if(seedp == 0)
+    return rand();
+  *seedp = *seedp * 1103515245u + 12345u;
+  return (int)((*seedp >> 16) & 0x7fff);
+}
+
+long __attribute__((weak))
+random(void)
+{
+  return (long)rand();
+}
+
+void __attribute__((weak))
+srandom(unsigned int seed)
+{
+  srand(seed);
+}
+
+char* __attribute__((weak))
+initstate(unsigned int seed, char *state, size_t n)
+{
+  char *old;
+
+  old = _rand_state;
+  if(state == 0 || n < sizeof(unsigned int)) {
+    errno = EINVAL;
+    return 0;
+  }
+  _rand_state = state;
+  memmove(_rand_state, &seed, sizeof(seed));
+  _rand_seed = seed;
+  return old ? old : state;
+}
+
+char* __attribute__((weak))
+setstate(char *state)
+{
+  char *old;
+
+  if(state == 0) {
+    errno = EINVAL;
+    return 0;
+  }
+  old = _rand_state;
+  _rand_state = state;
+  memmove(&_rand_seed, _rand_state, sizeof(_rand_seed));
+  return old ? old : state;
+}
+
+div_t
+div(int numer, int denom)
+{
+  div_t out;
+
+  out.quot = numer / denom;
+  out.rem = numer % denom;
+  return out;
+}
+
+ldiv_t
+ldiv(long numer, long denom)
+{
+  ldiv_t out;
+
+  out.quot = numer / denom;
+  out.rem = numer % denom;
+  return out;
+}
+
+lldiv_t
+lldiv(long long numer, long long denom)
+{
+  lldiv_t out;
+
+  out.quot = numer / denom;
+  out.rem = numer % denom;
+  return out;
+}
+
+int
+mblen(const char *s, size_t n)
+{
+  if(s == 0)
+    return 0;
+  if(n == 0)
+    return -1;
+  return *s == '\0' ? 0 : 1;
+}
+
+int
+mbtowc(wchar_t *pwc, const char *s, size_t n)
+{
+  if(s == 0)
+    return 0;
+  if(n == 0)
+    return -1;
+  if(*s == '\0') {
+    if(pwc)
+      *pwc = 0;
+    return 0;
+  }
+  if(pwc)
+    *pwc = (unsigned char)*s;
+  return 1;
+}
+
+int
+wctomb(char *s, wchar_t wchar)
+{
+  if(s == 0)
+    return 0;
+  if((unsigned long)wchar > 0xffUL) {
+    errno = EILSEQ;
+    return -1;
+  }
+  *s = (char)wchar;
+  return 1;
+}
+
+size_t
+mbstowcs(wchar_t *dest, const char *src, size_t n)
+{
+  size_t i;
+
+  if(src == 0)
+    return 0;
+  for(i = 0; src[i] != '\0'; i++) {
+    if(dest && i < n)
+      dest[i] = (unsigned char)src[i];
+  }
+  if(dest && i < n)
+    dest[i] = 0;
+  return i;
+}
+
+size_t
+wcstombs(char *dest, const wchar_t *src, size_t n)
+{
+  size_t i;
+
+  if(src == 0)
+    return 0;
+  for(i = 0; src[i] != 0; i++) {
+    if((unsigned long)src[i] > 0xffUL) {
+      errno = EILSEQ;
+      return (size_t)-1;
+    }
+    if(dest && i < n)
+      dest[i] = (char)src[i];
+  }
+  if(dest && i < n)
+    dest[i] = '\0';
+  return i;
 }

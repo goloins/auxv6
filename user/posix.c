@@ -9,6 +9,8 @@
 #include "types.h"
 #include "stat.h"
 #include "errno.h"
+#include "stdarg.h"
+#include "unistd.h"
 #include "auxv6/user.h"
 #include "stdlib.h"
 
@@ -32,23 +34,6 @@ getgroups(int n, gid_t *groups)
   /* Only one group: the primary gid. */
   if(n >= 1) groups[0] = getgid();
   return (n >= 1) ? 1 : 0;
-}
-
-/* -------------------------------------------------------------------------
- * sysconf — system configuration constants
- * ------------------------------------------------------------------------- */
-long
-sysconf(int name)
-{
-  switch(name) {
-  case 2:   return 100;   /* _SC_CLK_TCK   — 100 Hz */
-  case 4:   return 20;    /* _SC_OPEN_MAX  — same as NOFILE in param.h */
-  case 5:   return 256;   /* _SC_CHILD_MAX */
-  case 8:   return 4096;  /* _SC_PAGESIZE  — 4 KB pages */
-  case 30:  return 256;   /* _SC_NAME_MAX  */
-  case 36:  return 256;   /* _SC_PATH_MAX  */
-  default:  return -1;
-  }
 }
 
 /* -------------------------------------------------------------------------
@@ -112,6 +97,39 @@ posix_build_path(char *dst, int dstsz, const char *dir, const char *file)
     dst[dlen++] = '/';
   memmove(dst + dlen, file, flen + 1);
   return 0;
+}
+
+static int
+posix_exec_variadic(int use_path, const char *file, const char *arg, va_list ap)
+{
+  va_list ap_count;
+  char **argv;
+  const char *s;
+  int argc;
+  int i;
+  int rc;
+
+  argc = 1;
+  __builtin_va_copy(ap_count, ap);
+  while((s = va_arg(ap_count, const char*)) != 0)
+    argc++;
+  va_end(ap_count);
+
+  argv = malloc((argc + 1) * sizeof(char*));
+  if(argv == 0) {
+    errno = ENOMEM;
+    return -1;
+  }
+
+  argv[0] = (char*)arg;
+  i = 1;
+  while((s = va_arg(ap, const char*)) != 0)
+    argv[i++] = (char*)s;
+  argv[i] = 0;
+
+  rc = use_path ? execvp(file, argv) : execv(file, argv);
+  free(argv);
+  return rc;
 }
 
 /* -------------------------------------------------------------------------
@@ -179,6 +197,30 @@ int
 execv(const char *path, char *const argv[])
 {
   return execve(path, argv, environ);
+}
+
+int
+execl(const char *path, const char *arg, ...)
+{
+  va_list ap;
+  int rc;
+
+  va_start(ap, arg);
+  rc = posix_exec_variadic(0, path, arg, ap);
+  va_end(ap);
+  return rc;
+}
+
+int
+execlp(const char *file, const char *arg, ...)
+{
+  va_list ap;
+  int rc;
+
+  va_start(ap, arg);
+  rc = posix_exec_variadic(1, file, arg, ap);
+  va_end(ap);
+  return rc;
 }
 
 int
@@ -264,6 +306,42 @@ sigsuspend(const sigset_t *mask)
   sigprocmask(SIG_SETMASK, &old, 0);
   errno = EINTR;
   return -1;
+}
+
+int
+system(const char *command)
+{
+  struct stat st;
+  int pid;
+  int status;
+
+  if(command == 0) {
+    if(__posix_stat("/bin/sh", &st) == 0)
+      return 1;
+    if(__posix_stat("/bin/dash", &st) == 0)
+      return 1;
+    return 0;
+  }
+
+  pid = fork();
+  if(pid < 0)
+    return -1;
+
+  if(pid == 0) {
+    char *argv_sh[] = { "sh", "-c", (char*)command, 0 };
+    char *argv_dash[] = { "dash", "-c", (char*)command, 0 };
+
+    execve("/bin/sh", argv_sh, environ);
+    execve("/bin/dash", argv_dash, environ);
+    _exit(127);
+  }
+
+  for(;;) {
+    if(waitpid(pid, &status, 0) >= 0)
+      return status;
+    if(errno != EINTR)
+      return -1;
+  }
 }
 /*
  * open64() — large-file open alias; auxv6 has no 64-bit file distinction.
