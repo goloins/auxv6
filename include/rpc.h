@@ -108,6 +108,9 @@ int xdr_rpc_auth(XDR *xdrs, rpc_auth *auth);
 int xdr_rpc_call_header(XDR *xdrs, rpc_call_header *call);
 int xdr_rpc_reply_header(XDR *xdrs, rpc_reply_header *reply);
 int xdr_rpc_msg_header(XDR *xdrs, rpc_msg_header *msg);
+int rpc_udp_send(rpc_client *client, char *callbuf, uint calllen);
+int rpc_udp_exchange(rpc_client *client, char *callbuf, uint calllen,
+                     char *replybuf, uint replycap, uint *replylen);
 
 /* RPC client functions */
 rpc_client *rpc_create(uint prog, uint vers, struct in_addr server, ushort port);

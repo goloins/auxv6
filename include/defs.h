@@ -472,6 +472,9 @@ int             socket_deliver(struct sockaddr_in*, struct sockaddr_in*, char*, 
 int             socket_deliver_raw(uchar, struct sockaddr_in*, struct sockaddr_in*, char*, uint);
 int             socket_stream_connect(struct socket*, struct sockaddr_in*);
 void            socket_poll_events(struct socket*, int*, int*, int*);
+int             ksock_open_udp(struct socket**);
+int             ksock_sendto(struct socket*, struct sockaddr_in*, char*, uint);
+int             ksock_recvfrom_timeout(struct socket*, char*, uint, int, struct sockaddr_in*);
 
 // net device layer
 void            netdev_init(void);

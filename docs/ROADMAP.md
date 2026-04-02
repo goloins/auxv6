@@ -124,6 +124,16 @@ Primary goal: convert recently landed features into a more reliable baseline whi
 - Implement portmapper probe and minimal MOUNT protocol path.
 - Land a read-only NFS v3 mount path as the first filesystem client milestone.
 
+**Current status (2026-04-02):**
+- XDR + RPC codec path landed in kernel.
+- Kernel-internal UDP RPC transport is integrated via socket layer helpers
+  (`ksock_open_udp`, `ksock_sendto`, `ksock_recvfrom_timeout`) and `rpc_call()` now
+  performs real UDP send/receive with timeout and RPC reply validation.
+- MOUNT portmapper (`PMAPPROC_GETPORT`) and MOUNT/UMOUNT requests now run over the
+  integrated RPC UDP path.
+- NFSv3 procedures (`GETATTR`, `LOOKUP`, `READ`, `READDIR`) now execute RPC requests
+  over UDP through the shared RPC transport.
+
 **Definition of done:**
 - `mount -t nfs server:/export /mnt/nfs` succeeds in basic read-only tests.
 - `ls /mnt/nfs` and `cat /mnt/nfs/file.txt` work on a simple export.

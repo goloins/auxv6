@@ -102,8 +102,80 @@ rpc_destroy(rpc_client *client)
 {
   if (client == NULL)
     return;
-  /* TODO: Close socket when UDP layer is integrated */
   kfree((char *)client);
+}
+
+int
+rpc_udp_send(rpc_client *client, char *callbuf, uint calllen)
+{
+  struct socket *sock;
+  struct sockaddr_in dst;
+  int sent;
+
+  if (client == NULL || callbuf == NULL || calllen == 0)
+    return -1;
+
+  if (ksock_open_udp(&sock) < 0)
+    return -1;
+
+  memset(&dst, 0, sizeof(dst));
+  dst.sin_family = AF_INET;
+  dst.sin_addr = client->server.s_addr;
+  dst.sin_port = client->port;
+
+  sent = ksock_sendto(sock, &dst, callbuf, calllen);
+  socket_close(sock);
+  if (sent < 0)
+    return -1;
+
+  return 0;
+}
+
+int
+rpc_udp_exchange(rpc_client *client, char *callbuf, uint calllen,
+                 char *replybuf, uint replycap, uint *replylen)
+{
+  struct socket *sock;
+  struct sockaddr_in dst;
+  struct sockaddr_in src;
+  int sent;
+  int timeout_ticks;
+  int n;
+
+  if (client == NULL || callbuf == NULL || calllen == 0 ||
+      replybuf == NULL || replylen == NULL)
+    return -1;
+
+  if (ksock_open_udp(&sock) < 0)
+    return -1;
+
+  memset(&dst, 0, sizeof(dst));
+  dst.sin_family = AF_INET;
+  dst.sin_addr = client->server.s_addr;
+  dst.sin_port = client->port;
+
+  sent = ksock_sendto(sock, &dst, callbuf, calllen);
+  if (sent < 0) {
+    socket_close(sock);
+    return -1;
+  }
+
+  timeout_ticks = (int)((client->timeout_ms + 9) / 10);
+  if (timeout_ticks <= 0)
+    timeout_ticks = 1;
+
+  n = ksock_recvfrom_timeout(sock, replybuf, replycap, timeout_ticks, &src);
+  socket_close(sock);
+  if (n <= 0)
+    return -1;
+
+  if (src.sin_addr != client->server.s_addr)
+    return -1;
+  if (src.sin_port != client->port)
+    return -1;
+
+  *replylen = (uint)n;
+  return 0;
 }
 
 /*
@@ -122,9 +194,15 @@ rpc_call(rpc_client *client, uint proc,
          void *result)
 {
   char callbuf[2048];
+  char replybuf[2048];
   XDR callxdr;
+  XDR replyxdr;
   rpc_msg_header msg_hdr;
+  rpc_msg_header reply_msg;
   rpc_call_header call_hdr;
+  rpc_reply_header reply_hdr;
+  uint calllen;
+  uint replylen;
 
   if (client == NULL)
     return -1;
@@ -157,10 +235,33 @@ rpc_call(rpc_client *client, uint proc,
   if (xdr_args != NULL && !xdr_args(&callxdr, args))
     return -1;
 
-  /* uint calllen = xdr_getpos(&callxdr); */  /* TODO: Send via UDP */
+  calllen = xdr_getpos(&callxdr);
 
-  /* TODO: Send callbuf via UDP to client->server:client->port */
-  /* TODO: Receive reply and decode using xdr_result */
+  if (xdr_result == NULL)
+    return rpc_udp_send(client, callbuf, calllen);
+
+  if (rpc_udp_exchange(client, callbuf, calllen,
+                       replybuf, sizeof(replybuf), &replylen) < 0)
+    return -1;
+
+  xdr_init(&replyxdr, replybuf, replylen, XDR_DECODE);
+
+  if (!xdr_rpc_msg_header(&replyxdr, &reply_msg))
+    return -1;
+  if (reply_msg.mtype != REPLY)
+    return -1;
+  if (reply_msg.xid != msg_hdr.xid)
+    return -1;
+
+  if (!xdr_rpc_reply_header(&replyxdr, &reply_hdr))
+    return -1;
+  if (reply_hdr.stat != MSG_ACCEPTED)
+    return -1;
+  if (reply_hdr.u.accept_stat != SUCCESS)
+    return -1;
+
+  if (!xdr_result(&replyxdr, result))
+    return -1;
 
   return 0;
 }

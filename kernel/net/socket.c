@@ -520,6 +520,143 @@ socket_deref(struct socket *s)
   release(&socket_lock);
 }
 
+int
+ksock_open_udp(struct socket **out)
+{
+  struct socket *s;
+
+  if(out == 0)
+    return -1;
+
+  s = socket_alloc();
+  if(s == 0)
+    return -1;
+
+  s->family = AF_INET;
+  s->type = SOCK_DGRAM;
+  s->protocol = IPPROTO_UDP;
+  s->state = SOCK_CLOSED;
+
+  if(socket_buffers_init(s) < 0) {
+    socket_deref(s);
+    return -1;
+  }
+
+  *out = s;
+  return 0;
+}
+
+int
+ksock_sendto(struct socket *s, struct sockaddr_in *dst, char *buf, uint len)
+{
+  struct sockaddr_in src;
+  struct ifnet *ifp;
+  uint route_src;
+
+  if(s == 0 || dst == 0 || buf == 0)
+    return -1;
+  if(dst->sin_family != AF_INET || dst->sin_addr == 0 || dst->sin_port == 0)
+    return -1;
+  if(len > MBUF_SIZE - sizeof(struct udp_hdr))
+    return -1;
+
+  acquire(&socket_lock);
+  if(s->type != SOCK_DGRAM || s->family != AF_INET) {
+    release(&socket_lock);
+    return -1;
+  }
+  memmove(&src, &s->local_addr, sizeof(src));
+  release(&socket_lock);
+
+  route_src = 0;
+  ifp = route_lookup(dst->sin_addr, &route_src, 0);
+  if(ifp == 0)
+    return -1;
+
+  if(src.sin_addr == 0)
+    src.sin_addr = route_src;
+
+  if(src.sin_port == 0) {
+    ushort p;
+
+    acquire(&socket_lock);
+    if(s->local_addr.sin_port == 0) {
+      p = alloc_ephemeral_port_locked();
+      if(p == 0) {
+        release(&socket_lock);
+        return -1;
+      }
+      s->local_addr.sin_family = AF_INET;
+      s->local_addr.sin_port = p;
+      s->local_addr.sin_addr = src.sin_addr;
+      if(s->state == SOCK_CLOSED)
+        s->state = SOCK_BOUND;
+    }
+    src.sin_port = s->local_addr.sin_port;
+    release(&socket_lock);
+  }
+
+  if(udp_output(ifp, &src, dst, buf, len) < 0)
+    return -1;
+
+  return (int)len;
+}
+
+int
+ksock_recvfrom_timeout(struct socket *s, char *buf, uint len, int timeout_ticks,
+                       struct sockaddr_in *src)
+{
+  int n;
+  uint start;
+  uint now;
+  struct sockaddr_in peer;
+
+  if(s == 0 || buf == 0)
+    return -1;
+  if(timeout_ticks < 0)
+    return -1;
+  if(timeout_ticks == 0)
+    return 0;
+
+  acquire(&tickslock);
+  start = ticks;
+  release(&tickslock);
+
+  acquire(&socket_lock);
+  while(s->recv_len == 0) {
+    release(&socket_lock);
+
+    acquire(&tickslock);
+    now = ticks;
+    if(now - start >= (uint)timeout_ticks) {
+      release(&tickslock);
+      return 0;
+    }
+    sleep(&ticks, &tickslock);
+    release(&tickslock);
+
+    acquire(&socket_lock);
+  }
+
+  n = (int)len;
+  if((uint)n > s->recv_len)
+    n = (int)s->recv_len;
+
+  if(n > 0)
+    memmove(buf, s->recv_buf, (uint)n);
+  if((uint)n < s->recv_len)
+    memmove(s->recv_buf, s->recv_buf + n, s->recv_len - (uint)n);
+  s->recv_len -= (uint)n;
+  memmove(&peer, &s->remote_addr, sizeof(peer));
+
+  release(&socket_lock);
+
+  if(src)
+    memmove(src, &peer, sizeof(peer));
+
+  return n;
+}
+
 // ============ SYSCALL HANDLERS ============
 
 // socket(family, type, protocol) syscall

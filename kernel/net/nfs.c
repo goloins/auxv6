@@ -240,6 +240,54 @@ xdr_readdir3res(void *xdrs_ptr, readdir3res *res)
   return 1;
 }
 
+static int
+xdr_getattr3args_rpc(XDR *xdrs, void *args)
+{
+  return xdr_getattr3args((void *)xdrs, (getattr3args *)args);
+}
+
+static int
+xdr_getattr3res_rpc(XDR *xdrs, void *res)
+{
+  return xdr_getattr3res((void *)xdrs, (getattr3res *)res);
+}
+
+static int
+xdr_lookup3args_rpc(XDR *xdrs, void *args)
+{
+  return xdr_lookup3args((void *)xdrs, (lookup3args *)args);
+}
+
+static int
+xdr_lookup3res_rpc(XDR *xdrs, void *res)
+{
+  return xdr_lookup3res((void *)xdrs, (lookup3res *)res);
+}
+
+static int
+xdr_read3args_rpc(XDR *xdrs, void *args)
+{
+  return xdr_read3args((void *)xdrs, (read3args *)args);
+}
+
+static int
+xdr_read3res_rpc(XDR *xdrs, void *res)
+{
+  return xdr_read3res((void *)xdrs, (read3res *)res);
+}
+
+static int
+xdr_readdir3args_rpc(XDR *xdrs, void *args)
+{
+  return xdr_readdir3args((void *)xdrs, (readdir3args *)args);
+}
+
+static int
+xdr_readdir3res_rpc(XDR *xdrs, void *res)
+{
+  return xdr_readdir3res((void *)xdrs, (readdir3res *)res);
+}
+
 /*
  * Get file attributes via NFS GETATTR
  */
@@ -247,10 +295,6 @@ int
 nfs_getattr(nfs_mount *mnt, fhandle3 *fh, fattr3 *attr)
 {
   rpc_client *client;
-  XDR xdrs;
-  char callbuf[512];
-  rpc_msg_header msg_hdr;
-  rpc_call_header call_hdr;
   getattr3args args;
   getattr3res res;
 
@@ -261,42 +305,17 @@ nfs_getattr(nfs_mount *mnt, fhandle3 *fh, fattr3 *attr)
   client = rpc_create(NFS_PROGRAM, NFS_VERSION, mnt->server, mnt->nfs_port);
   if (client == NULL)
     return -1;
-  /* Initialize response structure */
   memset(&res, 0, sizeof(res));
-  /* Initialize response structure */
-  memset(&res, 0, sizeof(res));
-
-  /* Build GETATTR call */
-  msg_hdr.xid = client->xid++;
-  msg_hdr.mtype = CALL;
-
-  memset(&call_hdr, 0, sizeof(call_hdr));
-  call_hdr.rpcvers = RPC_MSG_VERSION;
-  call_hdr.prog = NFS_PROGRAM;
-  call_hdr.vers = NFS_VERSION;
-  call_hdr.proc = NFSPROC_GETATTR;
-  call_hdr.cred.flavor = AUTH_NONE;
-  call_hdr.cred.len = 0;
-  call_hdr.verf.flavor = AUTH_NONE;
-  call_hdr.verf.len = 0;
 
   /* Prepare arguments */
   args.object = *fh;
 
-  /* Encode GETATTR call */
-  xdr_init(&xdrs, callbuf, sizeof(callbuf), XDR_ENCODE);
-
-  if (!xdr_rpc_msg_header(&xdrs, &msg_hdr))
+  if (rpc_call(client, NFSPROC_GETATTR,
+               xdr_getattr3args_rpc, &args,
+               xdr_getattr3res_rpc, &res) < 0)
     goto error;
-
-  if (!xdr_rpc_call_header(&xdrs, &call_hdr))
+  if (res.status != NFS3_OK)
     goto error;
-
-  if (!xdr_getattr3args(&xdrs, &args))
-    goto error;
-
-  /* TODO: Send callbuf via UDP */
-  /* TODO: Receive reply and decode getattr3res */
 
   *attr = res.obj_attributes;
   rpc_destroy(client);
@@ -314,10 +333,6 @@ int
 nfs_lookup(nfs_mount *mnt, fhandle3 *dir, const char *name, fhandle3 *obj)
 {
   rpc_client *client;
-  XDR xdrs;
-  char callbuf[512];
-  rpc_msg_header msg_hdr;
-  rpc_call_header call_hdr;
   lookup3args args;
   lookup3res res;
 
@@ -332,20 +347,6 @@ nfs_lookup(nfs_mount *mnt, fhandle3 *dir, const char *name, fhandle3 *obj)
   /* Initialize response structure */
   memset(&res, 0, sizeof(res));
 
-  /* Build LOOKUP call */
-  msg_hdr.xid = client->xid++;
-  msg_hdr.mtype = CALL;
-
-  memset(&call_hdr, 0, sizeof(call_hdr));
-  call_hdr.rpcvers = RPC_MSG_VERSION;
-  call_hdr.prog = NFS_PROGRAM;
-  call_hdr.vers = NFS_VERSION;
-  call_hdr.proc = NFSPROC_LOOKUP;
-  call_hdr.cred.flavor = AUTH_NONE;
-  call_hdr.cred.len = 0;
-  call_hdr.verf.flavor = AUTH_NONE;
-  call_hdr.verf.len = 0;
-
   /* Prepare arguments */
   args.dir = *dir;
   if (strlen(name) >= sizeof(args.name) - 1)
@@ -353,20 +354,12 @@ nfs_lookup(nfs_mount *mnt, fhandle3 *dir, const char *name, fhandle3 *obj)
   memcpy(args.name, (void *)name, strlen(name));
   args.name[strlen(name)] = '\0';
 
-  /* Encode LOOKUP call */
-  xdr_init(&xdrs, callbuf, sizeof(callbuf), XDR_ENCODE);
-
-  if (!xdr_rpc_msg_header(&xdrs, &msg_hdr))
+  if (rpc_call(client, NFSPROC_LOOKUP,
+               xdr_lookup3args_rpc, &args,
+               xdr_lookup3res_rpc, &res) < 0)
     goto error;
-
-  if (!xdr_rpc_call_header(&xdrs, &call_hdr))
+  if (res.status != NFS3_OK)
     goto error;
-
-  if (!xdr_lookup3args(&xdrs, &args))
-    goto error;
-
-  /* TODO: Send callbuf via UDP */
-  /* TODO: Receive reply and decode lookup3res */
 
   *obj = res.object;
   rpc_destroy(client);
@@ -384,10 +377,6 @@ int
 nfs_read(nfs_mount *mnt, fhandle3 *fh, ulong offset, uint count, char *buf, uint *nread)
 {
   rpc_client *client;
-  XDR xdrs;
-  char callbuf[512];
-  rpc_msg_header msg_hdr;
-  rpc_call_header call_hdr;
   read3args args;
   read3res res;
 
@@ -402,40 +391,22 @@ nfs_read(nfs_mount *mnt, fhandle3 *fh, ulong offset, uint count, char *buf, uint
   /* Initialize response structure */
   memset(&res, 0, sizeof(res));
 
-  /* Build READ call */
-  msg_hdr.xid = client->xid++;
-  msg_hdr.mtype = CALL;
-
-  memset(&call_hdr, 0, sizeof(call_hdr));
-  call_hdr.rpcvers = RPC_MSG_VERSION;
-  call_hdr.prog = NFS_PROGRAM;
-  call_hdr.vers = NFS_VERSION;
-  call_hdr.proc = NFSPROC_READ;
-  call_hdr.cred.flavor = AUTH_NONE;
-  call_hdr.cred.len = 0;
-  call_hdr.verf.flavor = AUTH_NONE;
-  call_hdr.verf.len = 0;
-
   /* Prepare arguments */
   args.file = *fh;
   args.offset = offset;
   args.count = count;
 
-  /* Encode READ call */
-  xdr_init(&xdrs, callbuf, sizeof(callbuf), XDR_ENCODE);
-
-  if (!xdr_rpc_msg_header(&xdrs, &msg_hdr))
+  if (rpc_call(client, NFSPROC_READ,
+               xdr_read3args_rpc, &args,
+               xdr_read3res_rpc, &res) < 0)
+    goto error;
+  if (res.status != NFS3_OK)
     goto error;
 
-  if (!xdr_rpc_call_header(&xdrs, &call_hdr))
-    goto error;
-
-  if (!xdr_read3args(&xdrs, &args))
-    goto error;
-
-  /* TODO: Send callbuf via UDP */
-  /* TODO: Receive reply and decode read3res */
-  /* TODO: Copy res.data to buf */
+  if (res.count > count)
+    res.count = count;
+  if (res.data && res.count > 0)
+    memcpy(buf, res.data, res.count);
 
   *nread = res.count;
   rpc_destroy(client);
@@ -453,10 +424,6 @@ int
 nfs_readdir(nfs_mount *mnt, fhandle3 *dir, ulong cookie, char *cookieverf, entry3 *entries, uint *count)
 {
   rpc_client *client;
-  XDR xdrs;
-  char callbuf[512];
-  rpc_msg_header msg_hdr;
-  rpc_call_header call_hdr;
   readdir3args args;
   readdir3res res;
 
@@ -471,20 +438,6 @@ nfs_readdir(nfs_mount *mnt, fhandle3 *dir, ulong cookie, char *cookieverf, entry
   /* Initialize response structure */
   memset(&res, 0, sizeof(res));
 
-  /* Build READDIR call */
-  msg_hdr.xid = client->xid++;
-  msg_hdr.mtype = CALL;
-
-  memset(&call_hdr, 0, sizeof(call_hdr));
-  call_hdr.rpcvers = RPC_MSG_VERSION;
-  call_hdr.prog = NFS_PROGRAM;
-  call_hdr.vers = NFS_VERSION;
-  call_hdr.proc = NFSPROC_READDIR;
-  call_hdr.cred.flavor = AUTH_NONE;
-  call_hdr.cred.len = 0;
-  call_hdr.verf.flavor = AUTH_NONE;
-  call_hdr.verf.len = 0;
-
   /* Prepare arguments */
   args.dir = *dir;
   args.cookie = cookie;
@@ -494,20 +447,14 @@ nfs_readdir(nfs_mount *mnt, fhandle3 *dir, ulong cookie, char *cookieverf, entry
     memset(args.cookieverf, 0, 8);
   args.count = 4096;  /* Request 4KB of directory entries */
 
-  /* Encode READDIR call */
-  xdr_init(&xdrs, callbuf, sizeof(callbuf), XDR_ENCODE);
-
-  if (!xdr_rpc_msg_header(&xdrs, &msg_hdr))
+  if (rpc_call(client, NFSPROC_READDIR,
+               xdr_readdir3args_rpc, &args,
+               xdr_readdir3res_rpc, &res) < 0)
+    goto error;
+  if (res.status != NFS3_OK)
     goto error;
 
-  if (!xdr_rpc_call_header(&xdrs, &call_hdr))
-    goto error;
-
-  if (!xdr_readdir3args(&xdrs, &args))
-    goto error;
-
-  /* TODO: Send callbuf via UDP */
-  /* TODO: Receive reply and decode readdir3res */
+  (void)entries;
 
   *count = res.entries_count;
   rpc_destroy(client);

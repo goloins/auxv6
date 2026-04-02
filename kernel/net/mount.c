@@ -74,6 +74,46 @@ xdr_umnt_args(void *xdrs_ptr, umnt_args *args)
   return xdr_string(xdrs, (char **)&args->dirpath, sizeof(args->dirpath));
 }
 
+static int
+xdr_mount_args_rpc(XDR *xdrs, void *args)
+{
+  return xdr_mount_args((void *)xdrs, (mount_args *)args);
+}
+
+static int
+xdr_mount_res_rpc(XDR *xdrs, void *res)
+{
+  return xdr_mount_res((void *)xdrs, (mount_res *)res);
+}
+
+static int
+xdr_umnt_args_rpc(XDR *xdrs, void *args)
+{
+  return xdr_umnt_args((void *)xdrs, (umnt_args *)args);
+}
+
+static int
+xdr_uint_rpc(XDR *xdrs, void *arg)
+{
+  return xdr_uint(xdrs, (uint *)arg);
+}
+
+static int
+xdr_pmap_call_rpc(XDR *xdrs, void *arg)
+{
+  pmap_call *p = (pmap_call *)arg;
+
+  if (!xdr_uint(xdrs, &p->prog))
+    return 0;
+  if (!xdr_uint(xdrs, &p->vers))
+    return 0;
+  if (!xdr_uint(xdrs, &p->prot))
+    return 0;
+  if (!xdr_uint(xdrs, &p->port))
+    return 0;
+  return 1;
+}
+
 /*
  * Portmapper probe to find service port
  * 
@@ -83,11 +123,8 @@ xdr_umnt_args(void *xdrs_ptr, umnt_args *args)
 ushort
 pmap_getport(struct in_addr server, uint prog, uint vers, uint prot)
 {
-  XDR xdrs;
-  char callbuf[256];
   rpc_client *pmapClient;
-  rpc_msg_header msg_hdr;
-  rpc_call_header call_hdr;
+  pmap_call args;
   uint result_port = 0;
 
   /* Create RPC client for portmapper (port 111) */
@@ -95,44 +132,16 @@ pmap_getport(struct in_addr server, uint prog, uint vers, uint prot)
   if (pmapClient == NULL)
     return 0;
 
-  /* Build GETPORT call */
-  msg_hdr.xid = pmapClient->xid++;
-  msg_hdr.mtype = CALL;
+  args.prog = prog;
+  args.vers = vers;
+  args.prot = prot;
+  args.port = 0;
 
-  memset(&call_hdr, 0, sizeof(call_hdr));
-  call_hdr.rpcvers = RPC_MSG_VERSION;
-  call_hdr.prog = PMAPPROG;
-  call_hdr.vers = PMAPVERS;
-  call_hdr.proc = PMAPPROC_GETPORT;
-  call_hdr.cred.flavor = AUTH_NONE;
-  call_hdr.cred.len = 0;
-  call_hdr.verf.flavor = AUTH_NONE;
-  call_hdr.verf.len = 0;
+  if (rpc_call(pmapClient, PMAPPROC_GETPORT,
+               xdr_pmap_call_rpc, &args,
+               xdr_uint_rpc, &result_port) < 0)
+    result_port = 0;
 
-  /* Encode GETPORT call */
-  xdr_init(&xdrs, callbuf, sizeof(callbuf), XDR_ENCODE);
-
-  if (!xdr_rpc_msg_header(&xdrs, &msg_hdr))
-    goto cleanup;
-
-  if (!xdr_rpc_call_header(&xdrs, &call_hdr))
-    goto cleanup;
-
-  /* Encode GETPORT arguments (4 uint32s: prog, vers, prot, port) */
-  if (!xdr_uint(&xdrs, &prog))
-    goto cleanup;
-  if (!xdr_uint(&xdrs, &vers))
-    goto cleanup;
-  if (!xdr_uint(&xdrs, &prot))
-    goto cleanup;
-
-  /* TODO: Send callbuf via UDP to server:111 */
-  /* TODO: Receive reply and decode result_port */
-  /* For now, stub returns 0 */
-
-  result_port = 0;
-
-cleanup:
   rpc_destroy(pmapClient);
   return (ushort)result_port;
 }
@@ -147,11 +156,8 @@ int
 mount_nfs(struct in_addr server, const char *export, fhandle3 *fh, uint *auth_flavor)
 {
   rpc_client *client;
-  XDR xdrs;
-  char callbuf[512];
-  rpc_msg_header msg_hdr;
-  rpc_call_header call_hdr;
   mount_args args;
+  mount_res res;
   uint mount_port;
   int ret = -1;
 
@@ -167,41 +173,28 @@ mount_nfs(struct in_addr server, const char *export, fhandle3 *fh, uint *auth_fl
   if (client == NULL)
     return -1;
 
-  /* Build MOUNT call */
-  msg_hdr.xid = client->xid++;
-  msg_hdr.mtype = CALL;
-
-  memset(&call_hdr, 0, sizeof(call_hdr));
-  call_hdr.rpcvers = RPC_MSG_VERSION;
-  call_hdr.prog = MOUNT_PROGRAM;
-  call_hdr.vers = MOUNT_VERSION;
-  call_hdr.proc = MOUNTPROC_MNT;
-  call_hdr.cred.flavor = AUTH_NONE;
-  call_hdr.cred.len = 0;
-  call_hdr.verf.flavor = AUTH_NONE;
-  call_hdr.verf.len = 0;
-
   /* Prepare mount args */
   memset(&args, 0, sizeof(args));
   if (strlen(export) >= sizeof(args.dirpath) - 1)
     goto cleanup;
   memcpy(args.dirpath, (void *)export, strlen(export));
+  memset(&res, 0, sizeof(res));
 
-  /* Encode MOUNT call */
-  xdr_init(&xdrs, callbuf, sizeof(callbuf), XDR_ENCODE);
-
-  if (!xdr_rpc_msg_header(&xdrs, &msg_hdr))
+  if (rpc_call(client, MOUNTPROC_MNT,
+               xdr_mount_args_rpc, &args,
+               xdr_mount_res_rpc, &res) < 0)
     goto cleanup;
 
-  if (!xdr_rpc_call_header(&xdrs, &call_hdr))
+  if (res.status != MNT_OK)
     goto cleanup;
 
-  if (!xdr_mount_args(&xdrs, &args))
-    goto cleanup;
-
-  /* TODO: Send callbuf via UDP to server:mount_port */
-  /* TODO: Receive reply and decode mount_res */
-  /* TODO: Extract fhandle and auth_flavor from response */
+  *fh = res.fhandle;
+  if (auth_flavor != NULL) {
+    if (res.auth_flavors_len > 0)
+      *auth_flavor = res.auth_flavors[0];
+    else
+      *auth_flavor = AUTH_NONE;
+  }
 
   ret = 0;
 
@@ -217,10 +210,6 @@ int
 umount_nfs(struct in_addr server, const char *export)
 {
   rpc_client *client;
-  XDR xdrs;
-  char callbuf[512];
-  rpc_msg_header msg_hdr;
-  rpc_call_header call_hdr;
   umnt_args args;
   uint mount_port;
   int ret = -1;
@@ -235,40 +224,16 @@ umount_nfs(struct in_addr server, const char *export)
   if (client == NULL)
     return -1;
 
-  /* Build UNMOUNT call */
-  msg_hdr.xid = client->xid++;
-  msg_hdr.mtype = CALL;
-
-  memset(&call_hdr, 0, sizeof(call_hdr));
-  call_hdr.rpcvers = RPC_MSG_VERSION;
-  call_hdr.prog = MOUNT_PROGRAM;
-  call_hdr.vers = MOUNT_VERSION;
-  call_hdr.proc = MOUNTPROC_UMNT;
-  call_hdr.cred.flavor = AUTH_NONE;
-  call_hdr.cred.len = 0;
-  call_hdr.verf.flavor = AUTH_NONE;
-  call_hdr.verf.len = 0;
-
   /* Prepare args */
   memset(&args, 0, sizeof(args));
   if (strlen(export) >= sizeof(args.dirpath) - 1)
     goto cleanup;
   memcpy(args.dirpath, (void *)export, strlen(export));
 
-  /* Encode UNMOUNT call */
-  xdr_init(&xdrs, callbuf, sizeof(callbuf), XDR_ENCODE);
-
-  if (!xdr_rpc_msg_header(&xdrs, &msg_hdr))
+  if (rpc_call(client, MOUNTPROC_UMNT,
+               xdr_umnt_args_rpc, &args,
+               0, 0) < 0)
     goto cleanup;
-
-  if (!xdr_rpc_call_header(&xdrs, &call_hdr))
-    goto cleanup;
-
-  if (!xdr_umnt_args(&xdrs, &args))
-    goto cleanup;
-
-  /* TODO: Send callbuf via UDP */
-  /* UMNT doesn't require a response, just send and return */
 
   ret = 0;
 
