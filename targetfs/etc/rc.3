@@ -2,5 +2,8 @@
 
 echo "rc.3: default multi-user mode"
 
+echo "rc.3: creating tmpfs (32M)"
+mktmpfs /tmp 32M
+
 echo "rc.3: starting v6dhcpd"
 /bin/v6dhcpd
