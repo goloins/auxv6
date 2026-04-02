@@ -133,6 +133,12 @@ Primary goal: convert recently landed features into a more reliable baseline whi
   integrated RPC UDP path.
 - NFSv3 procedures (`GETATTR`, `LOOKUP`, `READ`, `READDIR`) now execute RPC requests
   over UDP through the shared RPC transport.
+- VFS NFS backend (`kernel/fs/vfs_nfs.c`) is wired as a read-only filesystem type,
+  with mount-time source parsing (`server:/export`), root handle acquisition, and
+  basic `namei`/`dirlookup`/`read`/`stat` vnode plumbing.
+- `mount` userspace now passes NFS source strings to `mount(2)` so
+  `mount server:/share nfs /mnt/nfs` maps into kernel mount data.
+- Detailed notes: `docs/nfs-v3-integration.md`.
 
 **Definition of done:**
 - `mount -t nfs server:/export /mnt/nfs` succeeds in basic read-only tests.

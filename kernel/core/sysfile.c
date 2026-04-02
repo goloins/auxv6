@@ -34,6 +34,7 @@ static int inode_is_root_user(void);
 static struct inode* vfs_resolve(char *path);
 static struct inode* vfs_resolve_parent(char *path, char *name);
 static int tmpfs_alloc_dev(void);
+static int nfs_alloc_dev(void);
 
 #define SELECT_BITS_PER_WORD (8 * sizeof(uint))
 #define SELECT_WORDS ((NOFILE + SELECT_BITS_PER_WORD - 1) / SELECT_BITS_PER_WORD)
@@ -1391,6 +1392,8 @@ sys_mount(void)
     vfs_isofs_init(fs);
   } else if(memcmp(fstype_buf, "tmpfs", 6) == 0) {
     vfs_tmpfs_init(fs);
+  } else if(memcmp(fstype_buf, "nfs", 4) == 0) {
+    vfs_nfs_init(fs);
   } else {
     kfree((void*)fs);
     return -1;
@@ -1421,6 +1424,17 @@ sys_mount(void)
     } else {
       dev = tmpfs_alloc_dev();
     }
+  } else if(memcmp(fstype_buf, "nfs", 4) == 0){
+    if(has_dev_override){
+      if(dev_override < NFSDEV_BASE ||
+         dev_override >= NFSDEV_BASE + NFSDEV_MAX)
+        return -1;
+      if(vfs_dev_is_mounted(dev_override))
+        return -1;
+      dev = dev_override;
+    } else {
+      dev = nfs_alloc_dev();
+    }
   }
 
   if(dev < 0)
@@ -1445,6 +1459,19 @@ tmpfs_alloc_dev(void)
     if(!vfs_dev_is_mounted(dev))
       return dev;
   }
+  return -1;
+}
+
+static int
+nfs_alloc_dev(void)
+{
+  int dev;
+
+  for(dev = NFSDEV_BASE; dev < NFSDEV_BASE + NFSDEV_MAX; dev++){
+    if(vfs_dev_is_mounted(dev) == 0)
+      return dev;
+  }
+
   return -1;
 }
 

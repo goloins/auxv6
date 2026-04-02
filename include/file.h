@@ -57,6 +57,8 @@ extern struct devsw devsw[];
 
 #define PROCFSDEV 31
 #define EXT2DEV DISK_DEV(2)
+#define NFSDEV_BASE 44
+#define NFSDEV_MAX 4
 #define TMPFSDEV_BASE 48
 #define TMPFSDEV_MAX 8
 

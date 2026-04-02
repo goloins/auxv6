@@ -100,5 +100,7 @@ int xdr_fhandle3(void *xdrs, fhandle3 *fhp);
  */
 struct in_addr;
 ushort pmap_getport(struct in_addr server, uint prog, uint vers, uint prot);
+int mount_nfs(struct in_addr server, const char *export, fhandle3 *fh, uint *auth_flavor);
+int umount_nfs(struct in_addr server, const char *export);
 
 #endif /* _MOUNT_H_ */

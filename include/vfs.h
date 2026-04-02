@@ -116,4 +116,5 @@ void vfs_msdosfs_init(struct vfs *fs);
 void vfs_procfs_init(struct vfs *fs);
 void vfs_isofs_init(struct vfs *fs);
 void vfs_tmpfs_init(struct vfs *fs);
+void vfs_nfs_init(struct vfs *fs);
 #endif

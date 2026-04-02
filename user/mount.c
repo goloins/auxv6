@@ -84,11 +84,21 @@ mount_cli(char *a1, char *a2, char *a3, char *a4)
   int flags;
   char *path;
   char *fstype;
+  char *src;
+  int srclen;
 
   dev = -1;
   flags = (a4 && a4[0]) ? parse_flags(a4) : 0;
+  src = 0;
+  srclen = 0;
 
-  if(looks_like_dev_token(a1) && !looks_like_mount_path(a2) && looks_like_mount_path(a3)){
+  if(strchr(a1, ':') && !looks_like_mount_path(a1) &&
+     strcmp(a2, "nfs") == 0 && looks_like_mount_path(a3)){
+    // mount <server:/export> nfs <path> [opts]
+    fstype = a2;
+    path = a3;
+    src = a1;
+  } else if(looks_like_dev_token(a1) && !looks_like_mount_path(a2) && looks_like_mount_path(a3)){
     // mount <dev> <fstype> <path> [opts]
     dev = parse_dev_token(a1);
     fstype = a2;
@@ -108,7 +118,10 @@ mount_cli(char *a1, char *a2, char *a3, char *a4)
   if(dev >= 0)
     flags |= MNT_MAKEDEV(dev);
 
-  if(mount(path, fstype, flags, 0, 0) < 0){
+  if(src)
+    srclen = strlen(src);
+
+  if(mount(path, fstype, flags, src, srclen) < 0){
     dprintf(2, "mount: %s %s failed\n", path, fstype);
     return -1;
   }
@@ -240,6 +253,7 @@ mount_from_fstab(const char *fstab)
     char *f3;
     char *path;
     char *fstype;
+    char *src;
     int flags;
 
     nl = line;
@@ -289,6 +303,8 @@ mount_from_fstab(const char *fstab)
       cur++;
     *cur = 0;
 
+    src = 0;
+
     // Accept both formats:
     // 1) <mountpoint> <fstype> <opts>
     // 2) <dev> <mountpoint> <fstype> <opts>
@@ -306,6 +322,8 @@ mount_from_fstab(const char *fstab)
           continue;
         }
         flags |= MNT_MAKEDEV(dev);
+      } else if(strcmp(fstype, "nfs") == 0 && strchr(f0, ':')) {
+        src = f0;
       }
     } else {
       path = f0;
@@ -313,7 +331,7 @@ mount_from_fstab(const char *fstab)
       flags = (f2[0] == 0) ? 0 : parse_flags(f2);
     }
 
-    if(mount(path, fstype, flags, 0, 0) < 0){
+    if(mount(path, fstype, flags, src, src ? strlen(src) : 0) < 0){
       dprintf(2, "mount: %s %s failed\n", path, fstype);
       failed++;
     } else {
