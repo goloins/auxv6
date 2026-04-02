@@ -89,6 +89,7 @@ Control filesystem and driver diagnostic output:
 | `DBG_MOUNT` | Mount operation details (ext2, isofs) | `AUXV6_DEBUG` |
 | `DBG_EXT2` | Ext2 filesystem details | `AUXV6_DEBUG` |
 | `DBG_IDE` | IDE driver diagnostics | `AUXV6_DEBUG` |
+| `DBG_EXEC` | exec/load diagnostics (including stack allocation policy) | `AUXV6_DEBUG` |
 | `DBG_AHCI` | AHCI controller diagnostics | 0 (always off) |
 
 ### AHCI Runtime Tuning (`/proc/ahci_tune`)
@@ -195,6 +196,14 @@ echo test_fail_count=2 > /proc/ahci_tune
 - `socket: out of sockets`
 - `bind: invalid address length`
 - `bind: invalid socket fd N`
+
+### Runtime: Exec Stack Allocation
+**Flag:** `DBG_EXEC`  
+**File:** `kernel/core/exec.c`
+
+| Message | When |
+|---------|------|
+| `exec: <path> stack guard=G pages stack=S pages total=B bytes` | On successful user stack region setup during `exec()` |
 
 ---
 

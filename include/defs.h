@@ -100,6 +100,10 @@ void            pty_poll_events(struct file *f, int *rd, int *wr, int *err);
 #define DBG_IDE AUXV6_DEBUG
 #endif
 
+#ifndef DBG_EXEC
+#define DBG_EXEC AUXV6_DEBUG
+#endif
+
 #ifndef DBG_AHCI
 #define DBG_AHCI 1
 #endif
@@ -113,6 +117,7 @@ void            pty_poll_events(struct file *f, int *rd, int *wr, int *err);
 #define MOUNTDBG(...) do { if(DBG_MOUNT) cprintf(__VA_ARGS__); } while(0)
 #define EXT2DBG(...)  do { if(DBG_EXT2) cprintf(__VA_ARGS__); } while(0)
 #define IDEDBG(...)   do { if(DBG_IDE) cprintf(__VA_ARGS__); } while(0)
+#define EXECDBG(...)  do { if(DBG_EXEC) cprintf(__VA_ARGS__); } while(0)
 #define AHCIDBG(...)  do { if(DBG_AHCI) cprintf(__VA_ARGS__); } while(0)
 
 // Boot information macro - for verbose discovery and enumeration details

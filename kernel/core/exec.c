@@ -187,6 +187,9 @@ exec_internal(char *path, char **argv, int depth)
     stack_base = sz - stack_total;
     for(g = 0; g < USER_STACK_GUARD_PAGES; g++)
       clearpteu(pgdir, (char*)(stack_base + g * PGSIZE));
+
+    EXECDBG("exec: %s stack guard=%d pages stack=%d pages total=%d bytes\n",
+            path, USER_STACK_GUARD_PAGES, USER_STACK_PAGES, stack_total);
   }
   sp = sz;
 
