@@ -26,10 +26,10 @@ static void
 test_result(char *name, int success)
 {
   if(success){
-    printf(1, "[PASS] %s\n", name);
+    dprintf(1, "[PASS] %s\n", name);
     passed++;
   } else {
-    printf(1, "[FAIL] %s\n", name);
+    dprintf(1, "[FAIL] %s\n", name);
     failed++;
   }
 }
@@ -74,12 +74,12 @@ test_loop_setup(void)
 {
   int r;
   
-  printf(1, "\n=== Testing Loop Device Setup ===\n");
+  dprintf(1, "\n=== Testing Loop Device Setup ===\n");
   
   /* Check if test ISO exists */
   if(!file_exists(TEST_ISO)){
-    printf(2, "Warning: %s not found, some tests will be skipped\n", TEST_ISO);
-    printf(2, "Create a test ISO first using: mkisofs -o /test.iso /some/directory\n");
+    dprintf(2, "Warning: %s not found, some tests will be skipped\n", TEST_ISO);
+    dprintf(2, "Create a test ISO first using: mkisofs -o /test.iso /some/directory\n");
     return;
   }
   
@@ -88,7 +88,7 @@ test_loop_setup(void)
   test_result("loopsetup()", r >= 0);
   
   if(r < 0){
-    printf(2, "Cannot continue tests without loop device\n");
+    dprintf(2, "Cannot continue tests without loop device\n");
     return;
   }
   
@@ -96,7 +96,7 @@ test_loop_setup(void)
   uint inum, offset, nblocks, flags;
   r = loopstatus(LOOP_DEV, &inum, &offset, &nblocks, &flags);
   test_result("loopstatus()", r > 0);
-  printf(1, "  Loop device has %d blocks, offset %d, mounted=%s, backing inode %d\n",
+  dprintf(1, "  Loop device has %d blocks, offset %d, mounted=%s, backing inode %d\n",
          nblocks, offset, (flags & LOOP_STATUS_MOUNTED) ? "yes" : "no", inum);
 }
 
@@ -105,13 +105,13 @@ test_iso_mount(void)
 {
   int r;
   
-  printf(1, "\n=== Testing ISO Filesystem Mount ===\n");
+  dprintf(1, "\n=== Testing ISO Filesystem Mount ===\n");
   
   /* Create mount point */
   if(!is_directory(MOUNT_POINT)){
     r = mkdir(MOUNT_POINT);
     if(r < 0 && !is_directory(MOUNT_POINT)){
-      printf(2, "Cannot create mount point %s\n", MOUNT_POINT);
+      dprintf(2, "Cannot create mount point %s\n", MOUNT_POINT);
       return;
     }
   }
@@ -125,7 +125,7 @@ test_iso_mount(void)
   test_result("mount(isofs)", r >= 0);
   
   if(r < 0){
-    printf(2, "Mount failed, cannot continue directory tests\n");
+    dprintf(2, "Mount failed, cannot continue directory tests\n");
     return;
   }
   
@@ -140,7 +140,7 @@ test_directory_operations(void)
   struct dirent de;
   int count = 0;
   
-  printf(1, "\n=== Testing Directory Operations ===\n");
+  dprintf(1, "\n=== Testing Directory Operations ===\n");
   
   /* Open and read root directory */
   fd = open(MOUNT_POINT, O_RDONLY);
@@ -149,17 +149,17 @@ test_directory_operations(void)
   if(fd < 0)
     return;
   
-  printf(1, "Directory listing of %s:\n", MOUNT_POINT);
+  dprintf(1, "Directory listing of %s:\n", MOUNT_POINT);
   while(read(fd, &de, sizeof(de)) == sizeof(de)){
     if(de.inum == 0)
       continue;
-    printf(1, "  %s (inum=%d)\n", de.name, de.inum);
+    dprintf(1, "  %s (inum=%d)\n", de.name, de.inum);
     count++;
   }
   close(fd);
   
   test_result("directory has entries", count > 0);
-  printf(1, "  Found %d entries\n", count);
+  dprintf(1, "  Found %d entries\n", count);
 }
 
 static void
@@ -169,7 +169,7 @@ test_file_reading(void)
   char path[64];
   int n;
   
-  printf(1, "\n=== Testing File Reading ===\n");
+  dprintf(1, "\n=== Testing File Reading ===\n");
   
   /* Try to read a file called README if it exists */
   strcpy(path, MOUNT_POINT);
@@ -179,10 +179,10 @@ test_file_reading(void)
     n = read_file_content(path, buf, sizeof(buf));
     test_result("read README", n > 0);
     if(n > 0){
-      printf(1, "  First %d bytes: %.50s%s\n", n, buf, n > 50 ? "..." : "");
+      dprintf(1, "  First %d bytes: %.50s%s\n", n, buf, n > 50 ? "..." : "");
     }
   } else {
-    printf(1, "  No README file found (not an error)\n");
+    dprintf(1, "  No README file found (not an error)\n");
   }
   
   /* Try to read a file called test.txt if it exists */
@@ -193,7 +193,7 @@ test_file_reading(void)
     n = read_file_content(path, buf, sizeof(buf));
     test_result("read TEST.TXT", n >= 0);
     if(n > 0){
-      printf(1, "  Content: %s\n", buf);
+      dprintf(1, "  Content: %s\n", buf);
     }
   }
 }
@@ -203,7 +203,7 @@ test_cleanup(void)
 {
   int r;
   
-  printf(1, "\n=== Cleanup ===\n");
+  dprintf(1, "\n=== Cleanup ===\n");
   
   /* Unmount */
   r = umount(MOUNT_POINT);
@@ -217,14 +217,14 @@ test_cleanup(void)
 int
 main(int argc, char *argv[])
 {
-  printf(1, "ISO Filesystem Test Suite\n");
-  printf(1, "==========================\n");
+  dprintf(1, "ISO Filesystem Test Suite\n");
+  dprintf(1, "==========================\n");
   
   if(argc > 1 && strcmp(argv[1], "-h") == 0){
-    printf(1, "Usage: isotest\n");
-    printf(1, "\nTests loop device and ISO filesystem functionality.\n");
-    printf(1, "Expects %s to exist (create with mkisofs on host).\n", TEST_ISO);
-    exit();
+    dprintf(1, "Usage: isotest\n");
+    dprintf(1, "\nTests loop device and ISO filesystem functionality.\n");
+    dprintf(1, "Expects %s to exist (create with mkisofs on host).\n", TEST_ISO);
+    exit(0);
   }
   
   test_loop_setup();
@@ -233,13 +233,13 @@ main(int argc, char *argv[])
   test_file_reading();
   test_cleanup();
   
-  printf(1, "\n==========================\n");
-  printf(1, "Results: %d passed, %d failed\n", passed, failed);
+  dprintf(1, "\n==========================\n");
+  dprintf(1, "Results: %d passed, %d failed\n", passed, failed);
   
   if(failed > 0)
-    printf(1, "\nSome tests failed. Check output above.\n");
+    dprintf(1, "\nSome tests failed. Check output above.\n");
   else
-    printf(1, "\nAll tests passed!\n");
+    dprintf(1, "\nAll tests passed!\n");
   
-  exit();
+  exit(0);
 }

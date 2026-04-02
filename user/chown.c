@@ -109,23 +109,23 @@ main(int argc, char *argv[])
   int gid;
 
   if(argc < 3){
-    printf(2, "usage: chown owner file...\n");
-    exit();
+    dprintf(2, "usage: chown owner file...\n");
+    exit(0);
   }
 
   uid = parse_decimal(argv[1]);
   gid = -1;
   if(uid < 0 && lookup_user(argv[1], &uid, &gid) < 0){
-    printf(2, "chown: unknown owner %s\n", argv[1]);
-    exit();
+    dprintf(2, "chown: unknown owner %s\n", argv[1]);
+    exit(0);
   }
 
   for(i = 2; i < argc; i++){
     if(chown(argv[i], uid, gid) < 0){
-      printf(2, "chown: %s failed\n", argv[i]);
+      dprintf(2, "chown: %s failed\n", argv[i]);
       break;
     }
   }
 
-  exit();
+  exit(0);
 }

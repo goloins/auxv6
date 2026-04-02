@@ -319,33 +319,33 @@ main(int argc, char *argv[])
   }
 
   for(;;) {
-    printf(1, "login: ");
+    dprintf(1, "login: ");
     memset(user, 0, sizeof(user));
     if(gets(user, sizeof(user)) == 0)
-      exit();
+      exit(0);
 
     trim_trailing_ws(user);
     if(user[0] == 0)
       continue;
 
     if(lookup_user(user, &ent) < 0) {
-      printf(1, "login: unknown user %s\n", user);
+      dprintf(1, "login: unknown user %s\n", user);
       continue;
     }
 
-    printf(1, "password: ");
+    dprintf(1, "password: ");
     memset(pass, 0, sizeof(pass));
     if(readpass(pass, sizeof(pass)) == 0)
-      exit();
+      exit(0);
     trim_trailing_ws(pass);
 
     if(strcmp(pass, ent.pass) != 0) {
-      printf(1, "login: authentication failed\n");
+      dprintf(1, "login: authentication failed\n");
       continue;
     }
 
     if(setgid(ent.gid) < 0 || setuid(ent.uid) < 0) {
-      printf(1, "login: permission denied\n");
+      dprintf(1, "login: permission denied\n");
       continue;
     }
 
@@ -358,6 +358,6 @@ main(int argc, char *argv[])
     sh_argv[1] = 0;
     exec(ent.shell, sh_argv);
 
-    printf(1, "login: exec %s failed\n", ent.shell);
+    dprintf(1, "login: exec %s failed\n", ent.shell);
   }
 }

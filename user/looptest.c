@@ -19,10 +19,10 @@ static void
 record_result(char *name, int ok)
 {
   if(ok){
-    printf(1, "[PASS] %s\n", name);
+    dprintf(1, "[PASS] %s\n", name);
     passed++;
   } else {
-    printf(1, "[FAIL] %s\n", name);
+    dprintf(1, "[FAIL] %s\n", name);
     failed++;
   }
 }
@@ -30,7 +30,7 @@ record_result(char *name, int ok)
 static void
 record_skip(char *name, char *reason)
 {
-  printf(1, "[SKIP] %s (%s)\n", name, reason);
+  dprintf(1, "[SKIP] %s (%s)\n", name, reason);
   skipped++;
 }
 
@@ -71,7 +71,7 @@ test_setup_validation(void)
 {
   int r;
 
-  printf(1, "\n=== setup validation ===\n");
+  dprintf(1, "\n=== setup validation ===\n");
 
   cleanup_loop();
 
@@ -94,7 +94,7 @@ test_status_metadata(void)
   uint nblocks;
   uint flags;
 
-  printf(1, "\n=== status metadata ===\n");
+  dprintf(1, "\n=== status metadata ===\n");
 
   cleanup_loop();
 
@@ -129,7 +129,7 @@ test_busy_teardown(void)
   uint nblocks;
   uint lflags;
 
-  printf(1, "\n=== mounted busy teardown guard ===\n");
+  dprintf(1, "\n=== mounted busy teardown guard ===\n");
 
   if(stat(TEST_ISO, &st) < 0){
     record_skip("mounted loop teardown guard", "/test.iso missing");
@@ -175,12 +175,12 @@ test_busy_teardown(void)
 int
 main(void)
 {
-  printf(1, "Loop Device Test Suite\n");
-  printf(1, "======================\n");
+  dprintf(1, "Loop Device Test Suite\n");
+  dprintf(1, "======================\n");
 
   if(make_test_image() < 0){
-    printf(2, "looptest: failed to create %s\n", TEST_IMG);
-    exit();
+    dprintf(2, "looptest: failed to create %s\n", TEST_IMG);
+    exit(0);
   }
 
   test_setup_validation();
@@ -189,7 +189,7 @@ main(void)
 
   unlink(TEST_IMG);
 
-  printf(1, "\n======================\n");
-  printf(1, "Results: %d passed, %d failed, %d skipped\n", passed, failed, skipped);
-  exit();
+  dprintf(1, "\n======================\n");
+  dprintf(1, "Results: %d passed, %d failed, %d skipped\n", passed, failed, skipped);
+  exit(0);
 }

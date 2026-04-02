@@ -93,11 +93,11 @@ struct dhcp_offer {
 static void
 usage(void)
 {
-  printf(2, "usage: v6dhcpd [ifname]\n");
-  printf(2, "       v6dhcpd acquire [ifname]\n");
-  printf(2, "       v6dhcpd renew [ifname]\n");
-  printf(2, "       v6dhcpd release [ifname]\n");
-  exit();
+  dprintf(2, "usage: v6dhcpd [ifname]\n");
+  dprintf(2, "       v6dhcpd acquire [ifname]\n");
+  dprintf(2, "       v6dhcpd renew [ifname]\n");
+  dprintf(2, "       v6dhcpd release [ifname]\n");
+  exit(0);
 }
 
 static uint
@@ -574,19 +574,19 @@ apply_lease(struct netifinfo *ifp, struct v6dhcpd_lease *lease)
 static void
 print_lease(struct netifinfo *ifp, struct v6dhcpd_lease *lease, const char *tag)
 {
-  printf(1, "%s: %s ", ifp->if_name, tag);
+  dprintf(1, "%s: %s ", ifp->if_name, tag);
   net_print_ipv4(lease->addr);
-  printf(1, " netmask ");
+  dprintf(1, " netmask ");
   net_print_ipv4(lease->mask);
   if(lease->router) {
-    printf(1, " router ");
+    dprintf(1, " router ");
     net_print_ipv4(lease->router);
   }
   if(lease->server_id) {
-    printf(1, " server ");
+    dprintf(1, " server ");
     net_print_ipv4(lease->server_id);
   }
-  printf(1, "\n");
+  dprintf(1, "\n");
 }
 
 static int
@@ -711,7 +711,7 @@ release_lease(struct netifinfo *ifp, struct v6dhcpd_lease *lease)
 
   clear_config(ifp);
   delete_lease(ifp->if_name);
-  printf(1, "%s: released\n", ifp->if_name);
+  dprintf(1, "%s: released\n", ifp->if_name);
   return 0;
 }
 
@@ -753,7 +753,7 @@ main(int argc, char *argv[])
 
   n = net_load_ifs(ifs, NETIFINFO_MAX);
   if(n < 0)
-    exit();
+    exit(0);
 
   if(ifname)
     ifp = net_find_if(ifs, n, ifname);
@@ -761,12 +761,12 @@ main(int argc, char *argv[])
     ifp = find_default_if(ifs, n);
 
   if(ifp == 0) {
-    printf(2, "v6dhcpd: no suitable interface found\n");
-    exit();
+    dprintf(2, "v6dhcpd: no suitable interface found\n");
+    exit(0);
   }
   if(!mac_present(ifp->if_hwaddr)) {
-    printf(2, "v6dhcpd: interface %s has no ethernet address\n", ifp->if_name);
-    exit();
+    dprintf(2, "v6dhcpd: interface %s has no ethernet address\n", ifp->if_name);
+    exit(0);
   }
 
   memset(&lease, 0, sizeof(lease));
@@ -775,29 +775,29 @@ main(int argc, char *argv[])
 
   if(mode == V6DHCPD_MODE_RELEASE) {
     if(release_lease(ifp, lease.magic == V6DHCPD_LEASE_MAGIC ? &lease : 0) < 0) {
-      printf(2, "v6dhcpd: release failed on %s\n", ifp->if_name);
-      exit();
+      dprintf(2, "v6dhcpd: release failed on %s\n", ifp->if_name);
+      exit(0);
     }
-    exit();
+    exit(0);
   }
 
   if(mode == V6DHCPD_MODE_RENEW) {
     if(renew_lease(ifp, lease.magic == V6DHCPD_LEASE_MAGIC ? &lease : 0) < 0 &&
        acquire_lease(ifp) < 0) {
-      printf(2, "v6dhcpd: renew failed on %s\n", ifp->if_name);
-      exit();
+      dprintf(2, "v6dhcpd: renew failed on %s\n", ifp->if_name);
+      exit(0);
     }
-    exit();
+    exit(0);
   }
 
   if(mode == V6DHCPD_MODE_AUTO && lease.magic == V6DHCPD_LEASE_MAGIC) {
     if(renew_lease(ifp, &lease) == 0)
-      exit();
+      exit(0);
   }
 
   if(acquire_lease(ifp) < 0) {
-    printf(2, "v6dhcpd: acquire failed on %s\n", ifp->if_name);
-    exit();
+    dprintf(2, "v6dhcpd: acquire failed on %s\n", ifp->if_name);
+    exit(0);
   }
-  exit();
+  exit(0);
 }

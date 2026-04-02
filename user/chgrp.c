@@ -87,24 +87,24 @@ main(int argc, char *argv[])
   int gid;
 
   if(argc < 3){
-    printf(2, "usage: chgrp group file...\n");
-    exit();
+    dprintf(2, "usage: chgrp group file...\n");
+    exit(0);
   }
 
   gid = parse_decimal(argv[1]);
   if(gid < 0)
     gid = lookup_gid(argv[1]);
   if(gid < 0){
-    printf(2, "chgrp: unknown group %s\n", argv[1]);
-    exit();
+    dprintf(2, "chgrp: unknown group %s\n", argv[1]);
+    exit(0);
   }
 
   for(i = 2; i < argc; i++){
     if(chown(argv[i], -1, gid) < 0){
-      printf(2, "chgrp: %s failed\n", argv[i]);
+      dprintf(2, "chgrp: %s failed\n", argv[i]);
       break;
     }
   }
 
-  exit();
+  exit(0);
 }

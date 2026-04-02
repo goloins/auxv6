@@ -130,7 +130,7 @@ runcmd(struct cmd *cmd)
   struct redircmd *rcmd;
 
   if(cmd == 0)
-    exit();
+    exit(0);
 
   switch(cmd->type){
   default:
@@ -139,17 +139,17 @@ runcmd(struct cmd *cmd)
   case EXEC:
     ecmd = (struct execcmd*)cmd;
     if(ecmd->argv[0] == 0)
-      exit();
+      exit(0);
     exec_with_path(ecmd->argv[0], ecmd->argv);
-    printf(2, "%s: command not found\n", ecmd->argv[0]);
+    dprintf(2, "%s: command not found\n", ecmd->argv[0]);
     break;
 
   case REDIR:
     rcmd = (struct redircmd*)cmd;
     close(rcmd->fd);
     if(open(rcmd->file, rcmd->mode) < 0){
-      printf(2, "cannot open %s for output (permission denied?)\n", rcmd->file);
-      exit();
+      dprintf(2, "cannot open %s for output (permission denied?)\n", rcmd->file);
+      exit(0);
     }
     runcmd(rcmd->cmd);
     break;
@@ -192,7 +192,7 @@ runcmd(struct cmd *cmd)
       runcmd(bcmd->cmd);
     break;
   }
-  exit();
+  exit(0);
 }
 #pragma GCC diagnostic pop
 
@@ -202,7 +202,7 @@ getcmd(char *buf, int nbuf)
   char prompt[256];
 
   prompt_string(prompt, sizeof(prompt));
-  printf(2, "%s", prompt);
+  dprintf(2, "%s", prompt);
   memset(buf, 0, nbuf);
   gets(buf, nbuf);
   if(buf[0] == 0) // EOF
@@ -262,7 +262,7 @@ main(void)
         path = sh_home;
       }
       if(chdir(path) < 0)
-        printf(2, "cannot cd %s\n", path);
+        dprintf(2, "cannot cd %s\n", path);
       else
         update_cwd_after_cd(path);
       continue;
@@ -281,7 +281,7 @@ main(void)
       int jid = add_job(pid, buf, JOB_RUNNING);
       jobs_critical_leave(&oldmask);
       if(jid > 0)
-        printf(2, "[%d] %d\n", jid, pid);
+        dprintf(2, "[%d] %d\n", jid, pid);
       continue;
     }
 
@@ -293,7 +293,7 @@ main(void)
         int jid = add_job(pid, buf, JOB_STOPPED);
         jobs_critical_leave(&oldmask);
         if(jid > 0)
-          printf(2, "[%d] stopped\n", jid);
+          dprintf(2, "[%d] stopped\n", jid);
         break;
       }
       if(WIFEXITED(status) || WIFSIGNALED(status))
@@ -302,7 +302,7 @@ main(void)
 
     tcsetpgrp(shell_pgid);
   }
-  exit();
+  exit(0);
 }
 
 void
@@ -737,21 +737,21 @@ print_shell_var(const char *key)
     sh_uid = uid;
 
   if(strcmp(key, "PATH") == 0)
-    printf(2, "PATH=%s\n", sh_path);
+    dprintf(2, "PATH=%s\n", sh_path);
   else if(strcmp(key, "PROMPT") == 0)
-    printf(2, "PROMPT=%s\n", sh_prompt);
+    dprintf(2, "PROMPT=%s\n", sh_prompt);
   else if(strcmp(key, "USER") == 0)
-    printf(2, "USER=%s\n", sh_user);
+    dprintf(2, "USER=%s\n", sh_user);
   else if(strcmp(key, "HOST") == 0)
-    printf(2, "HOST=%s\n", sh_host);
+    dprintf(2, "HOST=%s\n", sh_host);
   else if(strcmp(key, "HOME") == 0)
-    printf(2, "HOME=%s\n", sh_home);
+    dprintf(2, "HOME=%s\n", sh_home);
   else if(strcmp(key, "UID") == 0)
-    printf(2, "UID=%d\n", sh_uid);
+    dprintf(2, "UID=%d\n", sh_uid);
   else if(strcmp(key, "PWD") == 0)
-    printf(2, "PWD=%s\n", sh_cwd);
+    dprintf(2, "PWD=%s\n", sh_cwd);
   else
-    printf(2, "set: unknown variable %s\n", key);
+    dprintf(2, "set: unknown variable %s\n", key);
 }
 
 void
@@ -763,13 +763,13 @@ print_shell_vars(void)
   if(uid >= 0)
     sh_uid = uid;
 
-  printf(2, "PATH=%s\n", sh_path);
-  printf(2, "PROMPT=%s\n", sh_prompt);
-  printf(2, "USER=%s\n", sh_user);
-  printf(2, "HOST=%s\n", sh_host);
-  printf(2, "HOME=%s\n", sh_home);
-  printf(2, "UID=%d\n", sh_uid);
-  printf(2, "PWD=%s\n", sh_cwd);
+  dprintf(2, "PATH=%s\n", sh_path);
+  dprintf(2, "PROMPT=%s\n", sh_prompt);
+  dprintf(2, "USER=%s\n", sh_user);
+  dprintf(2, "HOST=%s\n", sh_host);
+  dprintf(2, "HOME=%s\n", sh_home);
+  dprintf(2, "UID=%d\n", sh_uid);
+  dprintf(2, "PWD=%s\n", sh_cwd);
 }
 
 void
@@ -834,8 +834,8 @@ exec_with_path(char *cmd, char **argv)
 void
 panic(char *s)
 {
-  printf(2, "%s\n", s);
-  exit();
+  dprintf(2, "%s\n", s);
+  exit(0);
 }
 
 int
@@ -1026,7 +1026,7 @@ print_jobs(void)
       continue;
     marker = (i == latest) ? '+' : ' ';
     state = (jobs[i].state == JOB_STOPPED) ? "stopped" : "running";
-    printf(2, "[%d]%c %s %d %s\n", jobs[i].jid, marker, state, jobs[i].pgid, jobs[i].cmd);
+    dprintf(2, "[%d]%c %s %d %s\n", jobs[i].jid, marker, state, jobs[i].pgid, jobs[i].cmd);
   }
 }
 
@@ -1139,7 +1139,7 @@ maybe_builtin(char *buf, int shell_pgid)
 
     klen = eq - arg;
     if(klen <= 0 || klen >= (int)sizeof(key)) {
-      printf(2, "set: invalid variable name\n");
+      dprintf(2, "set: invalid variable name\n");
       return 1;
     }
     memmove(key, arg, klen);
@@ -1158,20 +1158,20 @@ maybe_builtin(char *buf, int shell_pgid)
       idx = find_latest_job_index();
       if(idx < 0) {
         jobs_critical_leave(&oldmask);
-        printf(2, "fg: no current job\n");
+        dprintf(2, "fg: no current job\n");
         return 1;
       }
     } else {
       if(parse_job_arg(arg, &jid) < 0) {
         jobs_critical_leave(&oldmask);
-        printf(2, "usage: fg [%%jobid]\n");
+        dprintf(2, "usage: fg [%%jobid]\n");
         return 1;
       }
 
       idx = find_job_by_jid(jid);
       if(idx < 0) {
         jobs_critical_leave(&oldmask);
-        printf(2, "fg: no such job %d\n", jid);
+        dprintf(2, "fg: no such job %d\n", jid);
         return 1;
       }
     }
@@ -1219,20 +1219,20 @@ maybe_builtin(char *buf, int shell_pgid)
       idx = find_latest_job_index();
       if(idx < 0) {
         jobs_critical_leave(&oldmask);
-        printf(2, "bg: no current job\n");
+        dprintf(2, "bg: no current job\n");
         return 1;
       }
     } else {
       if(parse_job_arg(arg, &jid) < 0) {
         jobs_critical_leave(&oldmask);
-        printf(2, "usage: bg [%%jobid]\n");
+        dprintf(2, "usage: bg [%%jobid]\n");
         return 1;
       }
 
       idx = find_job_by_jid(jid);
       if(idx < 0) {
         jobs_critical_leave(&oldmask);
-        printf(2, "bg: no such job %d\n", jid);
+        dprintf(2, "bg: no such job %d\n", jid);
         return 1;
       }
     }
@@ -1393,7 +1393,7 @@ parsecmd(char *s)
   cmd = parseline(&s, es);
   peek(&s, es, "");
   if(s != es){
-    printf(2, "leftovers: %s\n", s);
+    dprintf(2, "leftovers: %s\n", s);
     panic("syntax");
   }
   nulterminate(cmd);

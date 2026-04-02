@@ -5,11 +5,11 @@
 static void
 usage(void)
 {
-  printf(2, "usage: ifconfig\n");
-  printf(2, "       ifconfig <ifname>\n");
-  printf(2, "       ifconfig <ifname> <addr> netmask <mask>\n");
-  printf(2, "       ifconfig <ifname> inet <addr> netmask <mask>\n");
-  exit();
+  dprintf(2, "usage: ifconfig\n");
+  dprintf(2, "       ifconfig <ifname>\n");
+  dprintf(2, "       ifconfig <ifname> <addr> netmask <mask>\n");
+  dprintf(2, "       ifconfig <ifname> inet <addr> netmask <mask>\n");
+  exit(0);
 }
 
 int
@@ -23,25 +23,25 @@ main(int argc, char *argv[])
 
   n = net_load_ifs(ifs, NETIFINFO_MAX);
   if(n < 0)
-    exit();
+    exit(0);
 
   if(argc == 2 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0))
     usage();
 
   if(argc == 1) {
     net_show_interfaces(ifs, n);
-    exit();
+    exit(0);
   }
 
   ifp = net_find_if(ifs, n, argv[1]);
   if(ifp == 0) {
-    printf(2, "ifconfig: unknown interface %s\n", argv[1]);
-    exit();
+    dprintf(2, "ifconfig: unknown interface %s\n", argv[1]);
+    exit(0);
   }
 
   if(argc == 2) {
     net_show_interfaces(ifp, 1);
-    exit();
+    exit(0);
   }
 
   if(argc == 4) {
@@ -58,15 +58,15 @@ main(int argc, char *argv[])
   }
 
   if(netifsetaddr(ifp->if_index, addr, mask) < 0) {
-    printf(2, "ifconfig: netifsetaddr failed\n");
-    exit();
+    dprintf(2, "ifconfig: netifsetaddr failed\n");
+    exit(0);
   }
 
   n = net_load_ifs(ifs, NETIFINFO_MAX);
   if(n < 0)
-    exit();
+    exit(0);
   ifp = net_find_if(ifs, n, argv[1]);
   if(ifp)
     net_show_interfaces(ifp, 1);
-  exit();
+  exit(0);
 }

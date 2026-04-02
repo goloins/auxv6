@@ -17,9 +17,9 @@ check(const char *name, int ok)
 {
   checks++;
   if(ok)
-    printf(1, "  PASS: %s\n", name);
+    dprintf(1, "  PASS: %s\n", name);
   else {
-    printf(1, "  FAIL: %s\n", name);
+    dprintf(1, "  FAIL: %s\n", name);
     errors++;
   }
 }
@@ -38,7 +38,7 @@ test_sendto_autobind(void)
   struct sockaddr_in saddr, src;
   int srclen;
 
-  printf(1, "[1] sendto autobind + recvfrom-with-src:\n");
+  dprintf(1, "[1] sendto autobind + recvfrom-with-src:\n");
 
   sfd = socket(AF_INET, SOCK_DGRAM, 0);
   if(sfd < 0){ check("server socket open", 0); return; }
@@ -61,11 +61,11 @@ test_sendto_autobind(void)
   if(pid == 0){
     /* Child – unbound sender; auto-bind happens inside sendto. */
     cfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if(cfd < 0) exit();
+    if(cfd < 0) exit(0);
     n = sendto(cfd, msg, strlen(msg) + 1, 0, &saddr, sizeof(saddr));
     close(cfd);
-    if(n < 0) exit();
-    exit();
+    if(n < 0) exit(0);
+    exit(0);
   }
 
   /* Parent – server-side recvfrom. */
@@ -100,7 +100,7 @@ test_roundtrip_null_src(void)
   struct sockaddr_in saddr, caddr, src;
   int srclen;
 
-  printf(1, "[2] round-trip + recvfrom(NULL src):\n");
+  dprintf(1, "[2] round-trip + recvfrom(NULL src):\n");
 
   sfd = socket(AF_INET, SOCK_DGRAM, 0);
   cfd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -127,11 +127,11 @@ test_roundtrip_null_src(void)
     /* Child – client: send request, receive reply with NULL src pointer. */
     close(sfd);
     n = sendto(cfd, req, strlen(req) + 1, 0, &saddr, sizeof(saddr));
-    if(n < 0){ close(cfd); exit(); }
+    if(n < 0){ close(cfd); exit(0); }
     /* recvfrom with NULL src and NULL srclen – must not fault. */
     n = recvfrom(cfd, buf, sizeof(buf) - 1, 0, 0, 0);
     close(cfd);
-    exit();
+    exit(0);
   }
 
   /* Parent – server: receive request, verify, then reply. */
@@ -171,7 +171,7 @@ test_sendto_connected(void)
   struct sockaddr_in saddr, caddr, src;
   int srclen;
 
-  printf(1, "[3] sendto(NULL dst) via connected socket:\n");
+  dprintf(1, "[3] sendto(NULL dst) via connected socket:\n");
 
   sfd = socket(AF_INET, SOCK_DGRAM, 0);
   cfd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -201,8 +201,8 @@ test_sendto_connected(void)
     close(sfd);
     n = sendto(cfd, msg, strlen(msg) + 1, 0, 0, 0);
     close(cfd);
-    if(n < 0) exit();
-    exit();
+    if(n < 0) exit(0);
+    exit(0);
   }
 
   /* Parent – server side. */
@@ -231,16 +231,16 @@ main(int argc, char *argv[])
   (void)argc;
   (void)argv;
 
-  printf(1, "udptest: starting\n");
+  dprintf(1, "udptest: starting\n");
 
   test_sendto_autobind();
   test_roundtrip_null_src();
   test_sendto_connected();
 
   if(errors == 0)
-    printf(1, "udptest: PASS %d checks\n", checks);
+    dprintf(1, "udptest: PASS %d checks\n", checks);
   else
-    printf(1, "udptest: FAIL %d/%d checks failed\n", errors, checks);
+    dprintf(1, "udptest: FAIL %d/%d checks failed\n", errors, checks);
 
-  exit();
+  exit(0);
 }

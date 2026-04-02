@@ -22,9 +22,9 @@ main(int argc, char *argv[])
 
     fd = open("/proc/pci", O_RDONLY);
     if (fd < 0) {
-        printf(2, "lspci: cannot open /proc/pci\n");
-        printf(2, "hint: mount -t procfs proc /proc\n");
-        exit();
+        dprintf(2, "lspci: cannot open /proc/pci\n");
+        dprintf(2, "hint: mount -t procfs proc /proc\n");
+        exit(0);
     }
 
     while ((n = read(fd, buf, sizeof(buf))) > 0) {
@@ -32,5 +32,5 @@ main(int argc, char *argv[])
     }
 
     close(fd);
-    exit();
+    exit(0);
 }

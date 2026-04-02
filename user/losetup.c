@@ -18,11 +18,11 @@
 static void
 print_usage(void)
 {
-  printf(2, "Usage:\n");
-  printf(2, "  losetup                           - list all loop devices\n");
-  printf(2, "  losetup /dev/loopN /path/to/file  - setup loop device N with file\n");
-  printf(2, "  losetup -d /dev/loopN             - detach loop device N\n");
-  printf(2, "  losetup -f /path/to/file          - setup first free loop with file\n");
+  dprintf(2, "Usage:\n");
+  dprintf(2, "  losetup                           - list all loop devices\n");
+  dprintf(2, "  losetup /dev/loopN /path/to/file  - setup loop device N with file\n");
+  dprintf(2, "  losetup -d /dev/loopN             - detach loop device N\n");
+  dprintf(2, "  losetup -f /path/to/file          - setup first free loop with file\n");
 }
 
 static int
@@ -36,7 +36,7 @@ parse_loop_num(char *dev)
     p += 5;
   
   if(strncmp(p, "loop", 4) != 0){
-    printf(2, "losetup: invalid device '%s', expected /dev/loopN\n", dev);
+    dprintf(2, "losetup: invalid device '%s', expected /dev/loopN\n", dev);
     return -1;
   }
   
@@ -44,7 +44,7 @@ parse_loop_num(char *dev)
   num = atoi(p);
   
   if(num < 0 || num >= NLOOP){
-    printf(2, "losetup: loop number %d out of range (0-%d)\n", num, NLOOP - 1);
+    dprintf(2, "losetup: loop number %d out of range (0-%d)\n", num, NLOOP - 1);
     return -1;
   }
   
@@ -58,28 +58,28 @@ list_loops(void)
   uint inum, offset, nblocks, flags;
   int active_count = 0;
   
-  printf(1, "NAME       ACTIVE  BLOCKS  OFFSET  MOUNTED  INODE\n");
+  dprintf(1, "NAME       ACTIVE  BLOCKS  OFFSET  MOUNTED  INODE\n");
   
   for(i = 0; i < NLOOP; i++){
     int status = loopstatus(i, &inum, &offset, &nblocks, &flags);
     
     if(status < 0){
-      printf(2, "/dev/loop%d: error getting status\n", i);
+      dprintf(2, "/dev/loop%d: error getting status\n", i);
       continue;
     }
     
     if(status > 0){
-      printf(1, "/dev/loop%d  yes     %d      %d       %s      %d\n",
+      dprintf(1, "/dev/loop%d  yes     %d      %d       %s      %d\n",
              i, nblocks, offset,
              (flags & LOOP_STATUS_MOUNTED) ? "yes" : "no",
              inum);
       active_count++;
     } else {
-      printf(1, "/dev/loop%d  no      -       -       -        -\n", i);
+      dprintf(1, "/dev/loop%d  no      -       -       -        -\n", i);
     }
   }
   
-  printf(1, "\n%d of %d loop devices in use\n", active_count, NLOOP);
+  dprintf(1, "\n%d of %d loop devices in use\n", active_count, NLOOP);
 }
 
 static int
@@ -90,12 +90,12 @@ setup_loop(int loopnum, char *file)
   
   /* Check file exists */
   if(stat(file, &st) < 0){
-    printf(2, "losetup: cannot stat '%s'\n", file);
+    dprintf(2, "losetup: cannot stat '%s'\n", file);
     return -1;
   }
   
   if(st.st_type != T_FILE){
-    printf(2, "losetup: '%s' is not a regular file\n", file);
+    dprintf(2, "losetup: '%s' is not a regular file\n", file);
     return -1;
   }
   
@@ -103,11 +103,11 @@ setup_loop(int loopnum, char *file)
   r = loopsetup(loopnum, file, 0, 0);  /* offset=0, nblocks=auto */
   
   if(r < 0){
-    printf(2, "losetup: failed to setup /dev/loop%d with '%s'\n", loopnum, file);
+    dprintf(2, "losetup: failed to setup /dev/loop%d with '%s'\n", loopnum, file);
     return -1;
   }
   
-  printf(1, "/dev/loop%d: set up with '%s' (%d bytes)\n", loopnum, file, st.st_size);
+  dprintf(1, "/dev/loop%d: set up with '%s' (%d bytes)\n", loopnum, file, st.st_size);
   
   /* Create the device node if it doesn't exist */
   char devpath[16];
@@ -117,7 +117,7 @@ setup_loop(int loopnum, char *file)
   
   if(stat(devpath, &st) < 0){
     if(mknod(devpath, M_IFBLK | 0660, 2, LOOP_DEV_BASE + loopnum) < 0){
-      printf(2, "losetup: warning: could not create %s device node\n", devpath);
+      dprintf(2, "losetup: warning: could not create %s device node\n", devpath);
     }
   }
   
@@ -130,11 +130,11 @@ detach_loop(int loopnum)
   int r = loopteardown(loopnum);
   
   if(r < 0){
-    printf(2, "losetup: failed to detach /dev/loop%d\n", loopnum);
+    dprintf(2, "losetup: failed to detach /dev/loop%d\n", loopnum);
     return -1;
   }
   
-  printf(1, "/dev/loop%d: detached\n", loopnum);
+  dprintf(1, "/dev/loop%d: detached\n", loopnum);
   return 0;
 }
 
@@ -146,21 +146,21 @@ main(int argc, char *argv[])
   if(argc == 1){
     /* List all loop devices */
     list_loops();
-    exit();
+    exit(0);
   }
   
   if(argc == 2 && strcmp(argv[1], "-h") == 0){
     print_usage();
-    exit();
+    exit(0);
   }
   
   if(argc == 3 && strcmp(argv[1], "-d") == 0){
     /* Detach loop device */
     loopnum = parse_loop_num(argv[2]);
     if(loopnum < 0)
-      exit();
+      exit(0);
     detach_loop(loopnum);
-    exit();
+    exit(0);
   }
   
   if(argc == 3 && strcmp(argv[1], "-f") == 0){
@@ -172,22 +172,22 @@ main(int argc, char *argv[])
         break;
     }
     if(loopnum >= NLOOP){
-      printf(2, "losetup: no free loop devices available\n");
-      exit();
+      dprintf(2, "losetup: no free loop devices available\n");
+      exit(0);
     }
     setup_loop(loopnum, argv[2]);
-    exit();
+    exit(0);
   }
   
   if(argc == 3){
     /* Setup loop device */
     loopnum = parse_loop_num(argv[1]);
     if(loopnum < 0)
-      exit();
+      exit(0);
     setup_loop(loopnum, argv[2]);
-    exit();
+    exit(0);
   }
   
   print_usage();
-  exit();
+  exit(0);
 }

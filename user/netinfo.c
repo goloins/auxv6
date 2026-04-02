@@ -4,7 +4,7 @@
 static void
 print_ipv4(uint ip)
 {
-  printf(1, "%d.%d.%d.%d",
+  dprintf(1, "%d.%d.%d.%d",
          (ip >> 24) & 0xff,
          (ip >> 16) & 0xff,
          (ip >> 8) & 0xff,
@@ -23,16 +23,16 @@ print_mac(uchar *mac)
       nonzero = 1;
   }
   if(!nonzero) {
-    printf(1, "-\n");
+    dprintf(1, "-\n");
     return;
   }
 
   for(i = 0; i < 6; i++) {
     if(i > 0)
-      printf(1, ":");
-    printf(1, "%02x", mac[i]);
+      dprintf(1, ":");
+    dprintf(1, "%02x", mac[i]);
   }
-  printf(1, "\n");
+  dprintf(1, "\n");
 }
 
 static int
@@ -90,34 +90,34 @@ dump_state(void)
 
   nif = netifinfo(ifs, NETIFINFO_MAX);
   if(nif < 0) {
-    printf(2, "netinfo: netifinfo failed\n");
+    dprintf(2, "netinfo: netifinfo failed\n");
     return;
   }
 
-  printf(1, "Interfaces (%d):\n", nif);
+  dprintf(1, "Interfaces (%d):\n", nif);
   for(i = 0; i < nif; i++) {
-    printf(1, "  %s (if%d) mtu=%d flags=0x%x addr=",
+    dprintf(1, "  %s (if%d) mtu=%d flags=0x%x addr=",
       ifs[i].if_name, ifs[i].if_index, ifs[i].if_mtu, ifs[i].if_flags);
     if(ifs[i].if_addr)
       print_ipv4(ifs[i].if_addr);
     else
-      printf(1, "-");
-    printf(1, " mask=");
+      dprintf(1, "-");
+    dprintf(1, " mask=");
     if(ifs[i].if_netmask)
       print_ipv4(ifs[i].if_netmask);
     else
-      printf(1, "-");
-    printf(1, " mac=");
+      dprintf(1, "-");
+    dprintf(1, " mac=");
     print_mac(ifs[i].if_hwaddr);
   }
 
   nrt = routeinfo(rts, ROUTEINFO_MAX);
   if(nrt < 0) {
-    printf(2, "netinfo: routeinfo failed\n");
+    dprintf(2, "netinfo: routeinfo failed\n");
     return;
   }
 
-  printf(1, "Routes (%d):\n", nrt);
+  dprintf(1, "Routes (%d):\n", nrt);
   for(i = 0; i < nrt; i++) {
     ifname = "?";
     for(j = 0; j < nif; j++) {
@@ -127,15 +127,15 @@ dump_state(void)
       }
     }
 
-    printf(1, "  %s (if%d) dst=", ifname, rts[i].if_index);
+    dprintf(1, "  %s (if%d) dst=", ifname, rts[i].if_index);
     print_ipv4(rts[i].rt_dst);
-    printf(1, " mask=");
+    dprintf(1, " mask=");
     print_ipv4(rts[i].rt_mask);
-    printf(1, " gw=");
+    dprintf(1, " gw=");
     print_ipv4(rts[i].rt_gateway);
-    printf(1, " src=");
+    dprintf(1, " src=");
     print_ipv4(rts[i].rt_src);
-    printf(1, " flags=0x%x\n", rts[i].rt_flags);
+    dprintf(1, " flags=0x%x\n", rts[i].rt_flags);
   }
 }
 
@@ -151,57 +151,57 @@ main(int argc, char *argv[])
 
   if(argc == 1) {
     dump_state();
-    exit();
+    exit(0);
   }
 
   if(argc == 5 && strcmp(argv[1], "addr") == 0) {
     if(parse_ipv4(argv[3], &addr) < 0 ||
        parse_ipv4(argv[4], &mask) < 0) {
-      printf(2, "netinfo: invalid IPv4 value\n");
-      exit();
+      dprintf(2, "netinfo: invalid IPv4 value\n");
+      exit(0);
     }
 
     ifindex = atoi(argv[2]);
     if(ifindex <= 0) {
-      printf(2, "netinfo: invalid ifindex\n");
-      exit();
+      dprintf(2, "netinfo: invalid ifindex\n");
+      exit(0);
     }
 
     if(netifsetaddr(ifindex, addr, mask) < 0) {
-      printf(2, "netinfo: netifsetaddr failed\n");
-      exit();
+      dprintf(2, "netinfo: netifsetaddr failed\n");
+      exit(0);
     }
 
     dump_state();
-    exit();
+    exit(0);
   }
 
   if(argc != 7 || strcmp(argv[1], "add") != 0) {
-    printf(2, "usage: netinfo\n");
-    printf(2, "       netinfo addr <ifindex> <addr> <mask>\n");
-    printf(2, "       netinfo add <dst> <mask> <gw|-> <src|-> <ifindex>\n");
-    exit();
+    dprintf(2, "usage: netinfo\n");
+    dprintf(2, "       netinfo addr <ifindex> <addr> <mask>\n");
+    dprintf(2, "       netinfo add <dst> <mask> <gw|-> <src|-> <ifindex>\n");
+    exit(0);
   }
 
   if(parse_ipv4(argv[2], &dst) < 0 ||
      parse_ipv4(argv[3], &mask) < 0 ||
      parse_ipv4(argv[4], &gw) < 0 ||
      parse_ipv4(argv[5], &src) < 0) {
-    printf(2, "netinfo: invalid IPv4 value\n");
-    exit();
+    dprintf(2, "netinfo: invalid IPv4 value\n");
+    exit(0);
   }
 
   ifindex = atoi(argv[6]);
   if(ifindex <= 0) {
-    printf(2, "netinfo: invalid ifindex\n");
-    exit();
+    dprintf(2, "netinfo: invalid ifindex\n");
+    exit(0);
   }
 
   if(routeadd(dst, mask, gw, src, ifindex) < 0) {
-    printf(2, "netinfo: routeadd failed\n");
-    exit();
+    dprintf(2, "netinfo: routeadd failed\n");
+    exit(0);
   }
 
   dump_state();
-  exit();
+  exit(0);
 }

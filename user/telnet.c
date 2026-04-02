@@ -22,8 +22,8 @@
 static void
 usage(void)
 {
-  printf(2, "usage: telnet host [port]\n");
-  exit();
+  dprintf(2, "usage: telnet host [port]\n");
+  exit(0);
 }
 
 static int
@@ -47,13 +47,13 @@ open_telnet(const char *host, int port)
   struct sockaddr_in dst;
 
   if(resolve_ipv4(host, &ip) < 0) {
-    printf(2, "telnet: cannot resolve host %s\n", host);
+    dprintf(2, "telnet: cannot resolve host %s\n", host);
     return -1;
   }
 
   fd = socket(AF_INET, SOCK_STREAM, 0);
   if(fd < 0) {
-    printf(2, "telnet: socket failed\n");
+    dprintf(2, "telnet: socket failed\n");
     return -1;
   }
 
@@ -63,7 +63,7 @@ open_telnet(const char *host, int port)
   dst.sin_addr = ip;
 
   if(connect(fd, &dst, sizeof(dst)) < 0) {
-    printf(2, "telnet: connect failed\n");
+    dprintf(2, "telnet: connect failed\n");
     close(fd);
     return -1;
   }
@@ -181,26 +181,26 @@ main(int argc, char **argv)
   if(argc == 3) {
     port = parse_port(argv[2]);
     if(port < 0) {
-      printf(2, "telnet: invalid port\n");
-      exit();
+      dprintf(2, "telnet: invalid port\n");
+      exit(0);
     }
   }
 
   fd = open_telnet(argv[1], port);
   if(fd < 0)
-    exit();
+    exit(0);
 
   raw_ok = (stdin_raw_enable(&oldt) == 0);
   if(raw_ok)
-    printf(2, "telnet: connected (Ctrl-], Ctrl-C, or Ctrl-Z to quit)\n");
+    dprintf(2, "telnet: connected (Ctrl-], Ctrl-C, or Ctrl-Z to quit)\n");
 
   pid = fork();
   if(pid < 0) {
-    printf(2, "telnet: fork failed\n");
+    dprintf(2, "telnet: fork failed\n");
     if(raw_ok)
       tcsetattr(0, TCSANOW, &oldt);
     close(fd);
-    exit();
+    exit(0);
   }
 
   if(pid == 0) {
@@ -231,7 +231,7 @@ main(int argc, char **argv)
         break;
     }
     close(fd);
-    exit();
+    exit(0);
   }
 
   for(;;) {
@@ -262,5 +262,5 @@ main(int argc, char **argv)
   if(raw_ok)
     tcsetattr(0, TCSANOW, &oldt);
   close(fd);
-  exit();
+  exit(0);
 }

@@ -8,17 +8,17 @@ void test_basic_symlink(void)
   int fd;
   struct stat st, st_link;
 
-  printf(1, "=== Test 1: Basic symlink creation and following ===\n");
+  dprintf(1, "=== Test 1: Basic symlink creation and following ===\n");
 
   // Create a test file
   unlink("/tmp/testfile");
   fd = open("/tmp/testfile", O_CREATE | O_WRONLY);
   if(fd < 0){
-    printf(2, "Failed to create test file\n");
+    dprintf(2, "Failed to create test file\n");
     return;
   }
   if(write(fd, "hello world\n", 12) != 12){
-    printf(2, "Failed to write to test file\n");
+    dprintf(2, "Failed to write to test file\n");
     close(fd);
     return;
   }
@@ -27,61 +27,61 @@ void test_basic_symlink(void)
   // Create a symlink to the test file
   unlink("/tmp/testlink");
   if(symlink("/tmp/testfile", "/tmp/testlink") < 0){
-    printf(2, "Failed to create symlink\n");
+    dprintf(2, "Failed to create symlink\n");
     return;
   }
 
   // Test stat (should follow symlink to target)
   if(stat("/tmp/testlink", &st) < 0){
-    printf(2, "stat /tmp/testlink failed\n");
+    dprintf(2, "stat /tmp/testlink failed\n");
     return;
   }
-  printf(1, "stat /tmp/testlink: type=%d size=%d\n", st.st_type, st.st_size);
+  dprintf(1, "stat /tmp/testlink: type=%d size=%d\n", st.st_type, st.st_size);
 
   // Test lstat (should return link properties, not target)
   if(lstat("/tmp/testlink", &st_link) < 0){
-    printf(2, "lstat /tmp/testlink failed\n");
+    dprintf(2, "lstat /tmp/testlink failed\n");
     return;
   }
-  printf(1, "lstat /tmp/testlink: type=%d size=%d\n", st_link.st_type, st_link.st_size);
+  dprintf(1, "lstat /tmp/testlink: type=%d size=%d\n", st_link.st_type, st_link.st_size);
 
   if(st_link.st_type == T_SYMLINK){
-    printf(1, "✓ lstat correctly returned T_SYMLINK\n");
+    dprintf(1, "✓ lstat correctly returned T_SYMLINK\n");
   } else {
-    printf(2, "✗ lstat returned type %d instead of T_SYMLINK\n", st_link.st_type);
+    dprintf(2, "✗ lstat returned type %d instead of T_SYMLINK\n", st_link.st_type);
   }
 
   // Test reading through symlink
-  printf(1, "Reading through symlink:\n");
+  dprintf(1, "Reading through symlink:\n");
   fd = open("/tmp/testlink", O_RDONLY);
   if(fd < 0){
-    printf(2, "Failed to open symlink\n");
+    dprintf(2, "Failed to open symlink\n");
     return;
   }
   char buf[64];
   int nread = read(fd, buf, sizeof(buf) - 1);
   if(nread > 0){
     buf[nread] = 0;
-    printf(1, "Read %d bytes: %s", nread, buf);
+    dprintf(1, "Read %d bytes: %s", nread, buf);
   } else {
-    printf(2, "Failed to read through symlink\n");
+    dprintf(2, "Failed to read through symlink\n");
   }
   close(fd);
 
-  printf(1, "\n");
+  dprintf(1, "\n");
 }
 
 void test_symlink_chain(void)
 {
   int fd;
 
-  printf(1, "=== Test 2: Symlink chains ===\n");
+  dprintf(1, "=== Test 2: Symlink chains ===\n");
 
   // Create chain: link1 -> link2 -> link3 -> file
   unlink("/tmp/chainfile");
   fd = open("/tmp/chainfile", O_CREATE | O_WRONLY);
   if(fd < 0){
-    printf(2, "Failed to create chain file\n");
+    dprintf(2, "Failed to create chain file\n");
     return;
   }
   write(fd, "chain content\n", 14);
@@ -89,39 +89,39 @@ void test_symlink_chain(void)
 
   unlink("/tmp/link3");
   if(symlink("/tmp/chainfile", "/tmp/link3") < 0){
-    printf(2, "Failed to create link3\n");
+    dprintf(2, "Failed to create link3\n");
     return;
   }
 
   unlink("/tmp/link2");
   if(symlink("/tmp/link3", "/tmp/link2") < 0){
-    printf(2, "Failed to create link2\n");
+    dprintf(2, "Failed to create link2\n");
     return;
   }
 
   unlink("/tmp/link1");
   if(symlink("/tmp/link2", "/tmp/link1") < 0){
-    printf(2, "Failed to create link1\n");
+    dprintf(2, "Failed to create link1\n");
     return;
   }
 
   // Try to read through chain
   fd = open("/tmp/link1", O_RDONLY);
   if(fd < 0){
-    printf(2, "Failed to open /tmp/link1\n");
+    dprintf(2, "Failed to open /tmp/link1\n");
     return;
   }
   char buf[64];
   int nread = read(fd, buf, sizeof(buf) - 1);
   if(nread > 0){
     buf[nread] = 0;
-    printf(1, "Successfully read through chain: %s", buf);
+    dprintf(1, "Successfully read through chain: %s", buf);
   } else {
-    printf(2, "Failed to read through symlink chain\n");
+    dprintf(2, "Failed to read through symlink chain\n");
   }
   close(fd);
 
-  printf(1, "\n");
+  dprintf(1, "\n");
 }
 
 void test_readlink(void)
@@ -129,44 +129,44 @@ void test_readlink(void)
   char buf[256];
   int len;
 
-  printf(1, "=== Test 3: readlink syscall ===\n");
+  dprintf(1, "=== Test 3: readlink syscall ===\n");
 
   // Create a symlink
   unlink("/tmp/readlinktest");
   if(symlink("/some/target/path", "/tmp/readlinktest") < 0){
-    printf(2, "Failed to create symlink\n");
+    dprintf(2, "Failed to create symlink\n");
     return;
   }
 
   // Read the symlink target
   len = readlink("/tmp/readlinktest", buf, sizeof(buf) - 1);
   if(len < 0){
-    printf(2, "readlink failed\n");
+    dprintf(2, "readlink failed\n");
     return;
   }
   buf[len] = 0;
-  printf(1, "readlink /tmp/readlinktest: %s\n", buf);
+  dprintf(1, "readlink /tmp/readlinktest: %s\n", buf);
 
   if(strcmp(buf, "/some/target/path") == 0){
-    printf(1, "✓ readlink returned correct target\n");
+    dprintf(1, "✓ readlink returned correct target\n");
   } else {
-    printf(2, "✗ readlink returned wrong target: %s\n", buf);
+    dprintf(2, "✗ readlink returned wrong target: %s\n", buf);
   }
 
-  printf(1, "\n");
+  dprintf(1, "\n");
 }
 
 void test_intermediate_symlink(void)
 {
   int fd;
 
-  printf(1, "=== Test 4: Symlink in directory path ===\n");
+  dprintf(1, "=== Test 4: Symlink in directory path ===\n");
 
   // Create /tmp/realdir/testfile
   mkdir("/tmp/realdir");
   fd = open("/tmp/realdir/testfile", O_CREATE | O_WRONLY);
   if(fd < 0){
-    printf(2, "Failed to create /tmp/realdir/testfile\n");
+    dprintf(2, "Failed to create /tmp/realdir/testfile\n");
     return;
   }
   write(fd, "real content\n", 13);
@@ -175,27 +175,27 @@ void test_intermediate_symlink(void)
   // Create /tmp/linkdir -> /tmp/realdir
   unlink("/tmp/linkdir");
   if(symlink("/tmp/realdir", "/tmp/linkdir") < 0){
-    printf(2, "Failed to create /tmp/linkdir\n");
+    dprintf(2, "Failed to create /tmp/linkdir\n");
     return;
   }
 
   // Try to access through symlink
   fd = open("/tmp/linkdir/testfile", O_RDONLY);
   if(fd < 0){
-    printf(2, "Failed to open /tmp/linkdir/testfile\n");
+    dprintf(2, "Failed to open /tmp/linkdir/testfile\n");
     return;
   }
   char buf[64];
   int nread = read(fd, buf, sizeof(buf) - 1);
   if(nread > 0){
     buf[nread] = 0;
-    printf(1, "✓ Successfully accessed file through symlink dir: %s", buf);
+    dprintf(1, "✓ Successfully accessed file through symlink dir: %s", buf);
   } else {
-    printf(2, "✗ Failed to read through symlink dir\n");
+    dprintf(2, "✗ Failed to read through symlink dir\n");
   }
   close(fd);
 
-  printf(1, "\n");
+  dprintf(1, "\n");
 }
 
 void test_symlink_loop_detection(void)
@@ -203,46 +203,46 @@ void test_symlink_loop_detection(void)
   int fd;
   struct stat st;
 
-  printf(1, "=== Test 5: Symlink loop detection ===\n");
+  dprintf(1, "=== Test 5: Symlink loop detection ===\n");
 
   unlink("/tmp/loop_a");
   unlink("/tmp/loop_b");
 
   if(symlink("/tmp/loop_b", "/tmp/loop_a") < 0){
-    printf(2, "Failed to create /tmp/loop_a\n");
+    dprintf(2, "Failed to create /tmp/loop_a\n");
     return;
   }
   if(symlink("/tmp/loop_a", "/tmp/loop_b") < 0){
-    printf(2, "Failed to create /tmp/loop_b\n");
+    dprintf(2, "Failed to create /tmp/loop_b\n");
     return;
   }
 
   // lstat should still succeed on the link inode itself.
   if(lstat("/tmp/loop_a", &st) < 0){
-    printf(2, "lstat /tmp/loop_a failed\n");
+    dprintf(2, "lstat /tmp/loop_a failed\n");
     return;
   }
   if(st.st_type == T_SYMLINK)
-    printf(1, "✓ lstat works on loop member\n");
+    dprintf(1, "✓ lstat works on loop member\n");
   else
-    printf(2, "✗ lstat type mismatch on loop member: %d\n", st.st_type);
+    dprintf(2, "✗ lstat type mismatch on loop member: %d\n", st.st_type);
 
   // Following should fail because this is an infinite loop.
   if(stat("/tmp/loop_a", &st) < 0){
-    printf(1, "✓ stat failed on symlink loop as expected\n");
+    dprintf(1, "✓ stat failed on symlink loop as expected\n");
   } else {
-    printf(2, "✗ stat unexpectedly succeeded on symlink loop\n");
+    dprintf(2, "✗ stat unexpectedly succeeded on symlink loop\n");
   }
 
   fd = open("/tmp/loop_a", O_RDONLY);
   if(fd < 0){
-    printf(1, "✓ open failed on symlink loop as expected\n");
+    dprintf(1, "✓ open failed on symlink loop as expected\n");
   } else {
-    printf(2, "✗ open unexpectedly succeeded on symlink loop\n");
+    dprintf(2, "✗ open unexpectedly succeeded on symlink loop\n");
     close(fd);
   }
 
-  printf(1, "\n");
+  dprintf(1, "\n");
 }
 
 void test_relative_symlink_edges(void)
@@ -251,7 +251,7 @@ void test_relative_symlink_edges(void)
   char buf[64];
   int nread;
 
-  printf(1, "=== Test 6: Relative symlink edge cases ===\n");
+  dprintf(1, "=== Test 6: Relative symlink edge cases ===\n");
 
   mkdir("/tmp/relsym");
   mkdir("/tmp/relsym/base");
@@ -261,7 +261,7 @@ void test_relative_symlink_edges(void)
   unlink("/tmp/relsym/base/file");
   fd = open("/tmp/relsym/base/file", O_CREATE | O_WRONLY);
   if(fd < 0){
-    printf(2, "Failed to create /tmp/relsym/base/file\n");
+    dprintf(2, "Failed to create /tmp/relsym/base/file\n");
     return;
   }
   write(fd, "rel content\n", 12);
@@ -270,61 +270,61 @@ void test_relative_symlink_edges(void)
   // ./ target relative to link directory.
   unlink("/tmp/relsym/dot_link");
   if(symlink("./base", "/tmp/relsym/dot_link") < 0){
-    printf(2, "Failed to create dot_link\n");
+    dprintf(2, "Failed to create dot_link\n");
     return;
   }
 
   fd = open("/tmp/relsym/dot_link/file", O_RDONLY);
   if(fd < 0){
-    printf(2, "✗ Failed to open through ./ relative symlink\n");
+    dprintf(2, "✗ Failed to open through ./ relative symlink\n");
     return;
   }
   nread = read(fd, buf, sizeof(buf) - 1);
   close(fd);
   if(nread > 0){
     buf[nread] = 0;
-    printf(1, "✓ ./ relative symlink resolved: %s", buf);
+    dprintf(1, "✓ ./ relative symlink resolved: %s", buf);
   } else {
-    printf(2, "✗ Read failed through ./ relative symlink\n");
+    dprintf(2, "✗ Read failed through ./ relative symlink\n");
     return;
   }
 
   // ../ target from a nested directory.
   unlink("/tmp/relsym/one/two/up_link");
   if(symlink("../../base", "/tmp/relsym/one/two/up_link") < 0){
-    printf(2, "Failed to create up_link\n");
+    dprintf(2, "Failed to create up_link\n");
     return;
   }
 
   fd = open("/tmp/relsym/one/two/up_link/file", O_RDONLY);
   if(fd < 0){
-    printf(2, "✗ Failed to open through ../ relative symlink\n");
+    dprintf(2, "✗ Failed to open through ../ relative symlink\n");
     return;
   }
   nread = read(fd, buf, sizeof(buf) - 1);
   close(fd);
   if(nread > 0){
     buf[nread] = 0;
-    printf(1, "✓ ../ relative symlink resolved: %s", buf);
+    dprintf(1, "✓ ../ relative symlink resolved: %s", buf);
   } else {
-    printf(2, "✗ Read failed through ../ relative symlink\n");
+    dprintf(2, "✗ Read failed through ../ relative symlink\n");
     return;
   }
 
   // Multiple slashes should normalize during resolution.
   fd = open("/tmp//relsym///dot_link//file", O_RDONLY);
   if(fd < 0){
-    printf(2, "✗ Failed to open path with repeated slashes\n");
+    dprintf(2, "✗ Failed to open path with repeated slashes\n");
     return;
   }
   nread = read(fd, buf, sizeof(buf) - 1);
   close(fd);
   if(nread > 0)
-    printf(1, "✓ Repeated-slash path resolved through symlink\n");
+    dprintf(1, "✓ Repeated-slash path resolved through symlink\n");
   else
-    printf(2, "✗ Read failed for repeated-slash path\n");
+    dprintf(2, "✗ Read failed for repeated-slash path\n");
 
-  printf(1, "\n");
+  dprintf(1, "\n");
 }
 
 void test_symlink_depth_boundary(void)
@@ -335,12 +335,12 @@ void test_symlink_depth_boundary(void)
   char name[64];
   char target[64];
 
-  printf(1, "=== Test 7: Symlink depth boundary ===\n");
+  dprintf(1, "=== Test 7: Symlink depth boundary ===\n");
 
   unlink("/tmp/depth_file");
   fd = open("/tmp/depth_file", O_CREATE | O_WRONLY);
   if(fd < 0){
-    printf(2, "Failed to create /tmp/depth_file\n");
+    dprintf(2, "Failed to create /tmp/depth_file\n");
     return;
   }
   write(fd, "depth content\n", 14);
@@ -364,46 +364,46 @@ void test_symlink_depth_boundary(void)
     }
 
     if(symlink(target, name) < 0){
-      printf(2, "Failed to create %s -> %s\n", name, target);
+      dprintf(2, "Failed to create %s -> %s\n", name, target);
       return;
     }
   }
 
   // 9-link chain should fail when SYMLOOP_MAX is 8.
   if(stat("/tmp/depth_link0", &st) < 0){
-    printf(1, "✓ 9-link chain failed as expected\n");
+    dprintf(1, "✓ 9-link chain failed as expected\n");
   } else {
-    printf(2, "✗ 9-link chain unexpectedly resolved\n");
+    dprintf(2, "✗ 9-link chain unexpectedly resolved\n");
   }
 
   // 8-link chain (start at link1) should still succeed.
   if(stat("/tmp/depth_link1", &st) < 0){
-    printf(2, "✗ 8-link chain unexpectedly failed\n");
+    dprintf(2, "✗ 8-link chain unexpectedly failed\n");
   } else {
-    printf(1, "✓ 8-link chain resolved successfully\n");
+    dprintf(1, "✓ 8-link chain resolved successfully\n");
   }
 
   fd = open("/tmp/depth_link1", O_RDONLY);
   if(fd < 0){
-    printf(2, "✗ open failed on 8-link chain\n");
+    dprintf(2, "✗ open failed on 8-link chain\n");
   } else {
     char buf[64];
     int nread = read(fd, buf, sizeof(buf) - 1);
     close(fd);
     if(nread > 0)
-      printf(1, "✓ open/read succeeded on 8-link chain\n");
+      dprintf(1, "✓ open/read succeeded on 8-link chain\n");
     else
-      printf(2, "✗ read failed on 8-link chain\n");
+      dprintf(2, "✗ read failed on 8-link chain\n");
   }
 
-  printf(1, "\n");
+  dprintf(1, "\n");
 }
 
 int
 main(int argc, char *argv[])
 {
-  printf(1, "Symlink Testing Suite\n");
-  printf(1, "======================\n\n");
+  dprintf(1, "Symlink Testing Suite\n");
+  dprintf(1, "======================\n\n");
 
   // Ensure /tmp exists
   mkdir("/tmp");
@@ -416,6 +416,6 @@ main(int argc, char *argv[])
   test_relative_symlink_edges();
   test_symlink_depth_boundary();
 
-  printf(1, "=== All tests completed ===\n");
-  exit();
+  dprintf(1, "=== All tests completed ===\n");
+  exit(0);
 }

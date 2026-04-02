@@ -103,7 +103,7 @@ mount_cli(char *a1, char *a2, char *a3, char *a4)
     flags |= MNT_MAKEDEV(dev);
 
   if(mount(path, fstype, flags) < 0){
-    printf(2, "mount: %s %s failed\n", path, fstype);
+    dprintf(2, "mount: %s %s failed\n", path, fstype);
     return -1;
   }
 
@@ -210,14 +210,14 @@ mount_from_fstab(const char *fstab)
 
   fd = open(fstab, O_RDONLY);
   if(fd < 0){
-    printf(2, "mount: cannot open %s\n", fstab);
+    dprintf(2, "mount: cannot open %s\n", fstab);
     return -1;
   }
 
   n = read(fd, buf, sizeof(buf) - 1);
   close(fd);
   if(n < 0){
-    printf(2, "mount: cannot read %s\n", fstab);
+    dprintf(2, "mount: cannot read %s\n", fstab);
     return -1;
   }
   buf[n] = 0;
@@ -295,7 +295,7 @@ mount_from_fstab(const char *fstab)
       dev = parse_dev_token(f0);
       if(dev >= 0){
         if(devblocks(dev) <= 0){
-          printf(1, "mount: skip %s (dev %s not present)\n", path, f0);
+          dprintf(1, "mount: skip %s (dev %s not present)\n", path, f0);
           line = nl;
           continue;
         }
@@ -308,7 +308,7 @@ mount_from_fstab(const char *fstab)
     }
 
     if(mount(path, fstype, flags) < 0){
-      printf(2, "mount: %s %s failed\n", path, fstype);
+      dprintf(2, "mount: %s %s failed\n", path, fstype);
       failed++;
     } else {
       mounted++;
@@ -332,23 +332,23 @@ main(int argc, char *argv[])
 
     n = mountinfo(entries, MOUNTINFO_MAX);
     if(n < 0){
-      printf(2, "mount: mountinfo failed\n");
-      exit();
+      dprintf(2, "mount: mountinfo failed\n");
+      exit(0);
     }
     for(i = 0; i < n; i++)
-      printf(1, "%s on %s flags=%d\n", entries[i].fstype, entries[i].path, entries[i].flags);
-    exit();
+      dprintf(1, "%s on %s flags=%d\n", entries[i].fstype, entries[i].path, entries[i].flags);
+    exit(0);
   }
 
   if(argc == 2){
     if(mount_from_fstab(argv[1]) < 0)
-      exit();
-    exit();
+      exit(0);
+    exit(0);
   }
 
   if(argc < 3 || argc > 5){
-    printf(2, "usage: mount [fstab]|<path> <fstype> [flags]|<dev> <fstype> <path> [flags]\n");
-    exit();
+    dprintf(2, "usage: mount [fstab]|<path> <fstype> [flags]|<dev> <fstype> <path> [flags]\n");
+    exit(0);
   }
 
   if(argc == 3)
@@ -358,5 +358,5 @@ main(int argc, char *argv[])
   else
     mount_cli(argv[1], argv[2], argv[3], argv[4]);
 
-  exit();
+  exit(0);
 }

@@ -7,9 +7,9 @@
 static void
 usage(void)
 {
-    printf(2, "usage: netcat [-u] host port\n");
-    printf(2, "       netcat -l [-u] [host] port\n");
-    exit();
+    dprintf(2, "usage: netcat [-u] host port\n");
+    dprintf(2, "       netcat -l [-u] [host] port\n");
+    exit(0);
 }
 
 static int
@@ -42,7 +42,7 @@ relay_stdio_socket(int fd)
 
     pid = fork();
     if(pid < 0) {
-        printf(2, "netcat: fork failed\n");
+        dprintf(2, "netcat: fork failed\n");
         return;
     }
 
@@ -52,7 +52,7 @@ relay_stdio_socket(int fd)
                 break;
         }
         close(fd);
-        exit();
+        exit(0);
     }
 
     while((n = recv(fd, buf, sizeof(buf))) > 0) {
@@ -72,13 +72,13 @@ open_client_socket(int type, const char *host, int port)
     struct sockaddr_in dst;
 
     if(resolve_host(host, &ip) < 0) {
-        printf(2, "netcat: cannot resolve host %s\n", host);
+        dprintf(2, "netcat: cannot resolve host %s\n", host);
         return -1;
     }
 
     fd = socket(AF_INET, type, 0);
     if(fd < 0) {
-        printf(2, "netcat: socket failed\n");
+        dprintf(2, "netcat: socket failed\n");
         return -1;
     }
 
@@ -88,7 +88,7 @@ open_client_socket(int type, const char *host, int port)
     dst.sin_addr = ip;
 
     if(connect(fd, &dst, sizeof(dst)) < 0) {
-        printf(2, "netcat: connect failed\n");
+        dprintf(2, "netcat: connect failed\n");
         close(fd);
         return -1;
     }
@@ -106,14 +106,14 @@ open_server_socket(int type, const char *host, int port)
     ip = INADDR_ANY;
     if(host && host[0]) {
         if(resolve_host(host, &ip) < 0) {
-            printf(2, "netcat: cannot resolve host %s\n", host);
+            dprintf(2, "netcat: cannot resolve host %s\n", host);
             return -1;
         }
     }
 
     fd = socket(AF_INET, type, 0);
     if(fd < 0) {
-        printf(2, "netcat: socket failed\n");
+        dprintf(2, "netcat: socket failed\n");
         return -1;
     }
 
@@ -123,13 +123,13 @@ open_server_socket(int type, const char *host, int port)
     src.sin_addr = ip;
 
     if(bind(fd, &src, sizeof(src)) < 0) {
-        printf(2, "netcat: bind failed\n");
+        dprintf(2, "netcat: bind failed\n");
         close(fd);
         return -1;
     }
 
     if(type == SOCK_STREAM && listen(fd, 1) < 0) {
-        printf(2, "netcat: listen failed\n");
+        dprintf(2, "netcat: listen failed\n");
         close(fd);
         return -1;
     }
@@ -171,17 +171,17 @@ main(int argc, char **argv)
         host = argv[i];
         port = parse_port(argv[i + 1]);
         if(port < 0) {
-            printf(2, "netcat: invalid port\n");
-            exit();
+            dprintf(2, "netcat: invalid port\n");
+            exit(0);
         }
 
         fd = open_client_socket(socktype, host, port);
         if(fd < 0)
-            exit();
+            exit(0);
 
         relay_stdio_socket(fd);
         close(fd);
-        exit();
+        exit(0);
     }
 
     if(i + 1 == argc) {
@@ -196,21 +196,21 @@ main(int argc, char **argv)
     }
 
     if(port < 0) {
-        printf(2, "netcat: invalid port\n");
-        exit();
+        dprintf(2, "netcat: invalid port\n");
+        exit(0);
     }
 
     fd = open_server_socket(socktype, host, port);
     if(fd < 0)
-        exit();
+        exit(0);
 
     if(socktype == SOCK_STREAM) {
         int cfd;
         cfd = accept(fd);
         if(cfd < 0) {
-            printf(2, "netcat: accept failed\n");
+            dprintf(2, "netcat: accept failed\n");
             close(fd);
-            exit();
+            exit(0);
         }
         relay_stdio_socket(cfd);
         close(cfd);
@@ -222,5 +222,5 @@ main(int argc, char **argv)
     }
 
     close(fd);
-    exit();
+    exit(0);
 }

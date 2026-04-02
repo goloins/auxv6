@@ -97,8 +97,8 @@ main(int argc, char *argv[])
   argi = 1;
 
   if(argc < 2){
-    printf(2, "usage: killall [-signo] name...\n");
-    exit();
+    dprintf(2, "usage: killall [-signo] name...\n");
+    exit(0);
   }
 
   if(argv[argi][0] == '-'){
@@ -107,14 +107,14 @@ main(int argc, char *argv[])
   }
 
   if(argi >= argc){
-    printf(2, "usage: killall [-signo] name...\n");
-    exit();
+    dprintf(2, "usage: killall [-signo] name...\n");
+    exit(0);
   }
 
   fd = open(PS_PATH, O_RDONLY);
   if(fd < 0){
-    printf(2, "killall: cannot open %s\n", PS_PATH);
-    exit();
+    dprintf(2, "killall: cannot open %s\n", PS_PATH);
+    exit(0);
   }
 
   self = getpid();
@@ -143,12 +143,12 @@ main(int argc, char *argv[])
             if(pid > 1 && pid != self){
               if(sigsend(pid, sig) == 0){
                 killed++;
-                printf(1, "killall: matched pid %d (%s)\n", pid, pname);
+                dprintf(1, "killall: matched pid %d (%s)\n", pid, pname);
               } else {
-                printf(2, "killall: matched pid %d (%s), signal failed\n", pid, pname);
+                dprintf(2, "killall: matched pid %d (%s), signal failed\n", pid, pname);
               }
             } else {
-              printf(1, "killall: matched pid %d (%s), skipped\n", pid, pname);
+              dprintf(1, "killall: matched pid %d (%s), skipped\n", pid, pname);
             }
             break;
           }
@@ -161,15 +161,15 @@ main(int argc, char *argv[])
   close(fd);
 
   if(nread < 0){
-    printf(2, "killall: read error\n");
-    exit();
+    dprintf(2, "killall: read error\n");
+    exit(0);
   }
 
   if(found == 0){
-    printf(2, "killall: no matching processes\n");
-    exit();
+    dprintf(2, "killall: no matching processes\n");
+    exit(0);
   }
 
-  printf(1, "killall: matched %d, signaled %d\n", found, killed);
-  exit();
+  dprintf(1, "killall: matched %d, signaled %d\n", found, killed);
+  exit(0);
 }

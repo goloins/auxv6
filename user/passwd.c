@@ -316,8 +316,8 @@ main(int argc, char *argv[])
   char *target_name;
 
   if(argc > 2) {
-    printf(2, "usage: passwd [user]\n");
-    exit();
+    dprintf(2, "usage: passwd [user]\n");
+    exit(0);
   }
 
   uid = getuid();
@@ -325,64 +325,64 @@ main(int argc, char *argv[])
     uid = 0;
 
   if(lookup_user_by_uid(uid, &cur) < 0) {
-    printf(2, "passwd: cannot resolve current user\n");
-    exit();
+    dprintf(2, "passwd: cannot resolve current user\n");
+    exit(0);
   }
 
   target_name = (argc == 2) ? argv[1] : cur.user;
   if(lookup_user_by_name(target_name, &target) < 0) {
-    printf(2, "passwd: unknown user %s\n", target_name);
-    exit();
+    dprintf(2, "passwd: unknown user %s\n", target_name);
+    exit(0);
   }
 
   if(uid != 0 && strcmp(cur.user, target.user) != 0) {
-    printf(2, "passwd: permission denied\n");
-    exit();
+    dprintf(2, "passwd: permission denied\n");
+    exit(0);
   }
 
   if(uid != 0) {
-    printf(1, "Current password: ");
+    dprintf(1, "Current password: ");
     memset(oldpw, 0, sizeof(oldpw));
     if(readpass(oldpw, sizeof(oldpw)) == 0)
-      exit();
+      exit(0);
     trim_trailing_ws(oldpw);
 
     if(strcmp(oldpw, target.pass) != 0) {
-      printf(2, "passwd: authentication failed\n");
-      exit();
+      dprintf(2, "passwd: authentication failed\n");
+      exit(0);
     }
   }
 
-  printf(1, "New password: ");
+  dprintf(1, "New password: ");
   memset(newpw, 0, sizeof(newpw));
   if(readpass(newpw, sizeof(newpw)) == 0)
-    exit();
+    exit(0);
   trim_trailing_ws(newpw);
 
-  printf(1, "Retype new password: ");
+  dprintf(1, "Retype new password: ");
   memset(confpw, 0, sizeof(confpw));
   if(readpass(confpw, sizeof(confpw)) == 0)
-    exit();
+    exit(0);
   trim_trailing_ws(confpw);
 
   if(newpw[0] == 0) {
-    printf(2, "passwd: empty password not allowed\n");
-    exit();
+    dprintf(2, "passwd: empty password not allowed\n");
+    exit(0);
   }
   if(strchr(newpw, ':') || strchr(newpw, '\n') || strchr(newpw, '\r')) {
-    printf(2, "passwd: invalid characters in password\n");
-    exit();
+    dprintf(2, "passwd: invalid characters in password\n");
+    exit(0);
   }
   if(strcmp(newpw, confpw) != 0) {
-    printf(2, "passwd: passwords do not match\n");
-    exit();
+    dprintf(2, "passwd: passwords do not match\n");
+    exit(0);
   }
 
   if(update_password(target.user, newpw) < 0) {
-    printf(2, "passwd: failed to update /etc/passwd\n");
-    exit();
+    dprintf(2, "passwd: failed to update /etc/passwd\n");
+    exit(0);
   }
 
-  printf(1, "passwd: password updated for %s\n", target.user);
-  exit();
+  dprintf(1, "passwd: password updated for %s\n", target.user);
+  exit(0);
 }

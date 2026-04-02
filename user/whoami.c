@@ -91,6 +91,6 @@ main(void)
 
   if(lookup_user(getuid(), name, sizeof(name)) < 0)
     strcpy(name, "unknown");
-  printf(1, "%s\n", name);
-  exit();
+  dprintf(1, "%s\n", name);
+  exit(0);
 }

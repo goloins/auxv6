@@ -99,19 +99,19 @@ main(int argc, char *argv[])
   if(argc == 2 && strcmp(argv[1], "-h") == 0)
     human = 1;
   else if(argc != 1){
-    printf(2, "usage: df [-h]\n");
-    exit();
+    dprintf(2, "usage: df [-h]\n");
+    exit(0);
   }
 
   if(read_text("/proc/mountstats", text, sizeof(text)) < 0){
-    printf(2, "df: cannot read /proc/mountstats\n");
-    exit();
+    dprintf(2, "df: cannot read /proc/mountstats\n");
+    exit(0);
   }
 
   if(!human)
-    printf(1, "Filesystem 1K-blocks      Used Available Mounted on\n");
+    dprintf(1, "Filesystem 1K-blocks      Used Available Mounted on\n");
   else
-    printf(1, "Filesystem      Size      Used     Avail Mounted on\n");
+    dprintf(1, "Filesystem      Size      Used     Avail Mounted on\n");
 
   p = text;
   while(*p){
@@ -145,7 +145,7 @@ main(int argc, char *argv[])
     used = total - freeb;
 
     if(!human){
-      printf(1, "%-10s %9d %9d %9d %s\n",
+      dprintf(1, "%-10s %9d %9d %9d %s\n",
              tok[2],
              (total * bsize) / 1024,
              (used * bsize) / 1024,
@@ -158,12 +158,12 @@ main(int argc, char *argv[])
             humanize_parts(total_bytes, &htotal, &utotal);
             humanize_parts(used_bytes, &hused, &uused);
             humanize_parts(avail_bytes, &havail, &uavail);
-            printf(1, "%-10s %8u%c %8u%c %8u%c %s\n",
+            dprintf(1, "%-10s %8u%c %8u%c %8u%c %s\n",
               tok[2], htotal, utotal, hused, uused, havail, uavail, tok[1]);
     }
 
     (void)dev;
   }
 
-  exit();
+  exit(0);
 }

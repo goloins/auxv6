@@ -76,8 +76,8 @@ main(int argc, char *argv[])
   recursive = 0;
 
   if(argc < 2){
-    printf(2, "Usage: rm [-r] files...\n");
-    exit();
+    dprintf(2, "Usage: rm [-r] files...\n");
+    exit(0);
   }
 
   for(i = 1; i < argc; i++) {
@@ -85,22 +85,22 @@ main(int argc, char *argv[])
       if(strcmp(argv[i], "-r") == 0)
         recursive = 1;
       else {
-        printf(2, "rm: unknown option %s\n", argv[i]);
-        exit();
+        dprintf(2, "rm: unknown option %s\n", argv[i]);
+        exit(0);
       }
       continue;
     }
 
     ret = rm_path(argv[i], recursive);
     if(ret == -2) {
-      printf(2, "rm: %s is a directory (use -r)\n", argv[i]);
+      dprintf(2, "rm: %s is a directory (use -r)\n", argv[i]);
       break;
     }
     if(ret < 0){
-      printf(2, "rm: %s failed to delete\n", argv[i]);
+      dprintf(2, "rm: %s failed to delete\n", argv[i]);
       break;
     }
   }
 
-  exit();
+  exit(0);
 }

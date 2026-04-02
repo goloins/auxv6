@@ -313,12 +313,12 @@ devman_create_node(const char *path, int type, short major, short minor, uint mo
 
   /* Create the device node */
   if(mknod((char *)path, type | (mode & 0777), major, minor) < 0) {
-    printf(2, "devman: failed to create %s\n", path);
+    dprintf(2, "devman: failed to create %s\n", path);
     return -1;
   }
 
   if(debug_mode) {
-    printf(1, "devman: created %s (major=%d, minor=%d, mode=%03o)\n",
+    dprintf(1, "devman: created %s (major=%d, minor=%d, mode=%03o)\n",
            path, major, minor, mode & 0777);
   }
 
@@ -337,21 +337,21 @@ devman_scan_and_create(void)
   int created_line_len;
 
   if(debug_mode)
-    printf(1, "devman: scanning devices\n");
+    dprintf(1, "devman: scanning devices\n");
   
   devman_enumerate_block_devices();
   if(debug_mode)
-    printf(1, "devman: found %d block/loop devices\n", ndevices);
+    dprintf(1, "devman: found %d block/loop devices\n", ndevices);
   
   changed = ndevices;
   devman_enumerate_pty_devices();
   if(debug_mode)
-    printf(1, "devman: found %d pty/tty devices\n", ndevices - changed);
+    dprintf(1, "devman: found %d pty/tty devices\n", ndevices - changed);
 
   created = 0;
   created_line[0] = 0;
   created_line_len = 0;
-  printf(1, "devman: creating devices");
+  dprintf(1, "devman: creating devices");
 
   /* Create all devices with sensible defaults */
   for(i = 0; i < ndevices; i++) {
@@ -404,17 +404,17 @@ devman_scan_and_create(void)
       }
 
       /* Append to the same logical line without terminal redraw tricks. */
-      printf(1, " %s", name);
+      dprintf(1, " %s", name);
     }
   }
 
   if(created == 0)
-    printf(1, " (none)\n");
+    dprintf(1, " (none)\n");
   else
-    printf(1, "\n");
+    dprintf(1, "\n");
 
   if(debug_mode)
-    printf(1, "devman: done creating %d/%d device nodes\n", created, ndevices);
+    dprintf(1, "devman: done creating %d/%d device nodes\n", created, ndevices);
 }
 
 int
@@ -426,21 +426,21 @@ main(int argc, char *argv[])
     if(strcmp(argv[1], "-s") == 0 || strcmp(argv[1], "--scan") == 0) {
       scan_mode = 1;
     } else {
-      printf(2, "usage: %s [-s|--scan]\n", argv[0]);
-      printf(2, "  -s, --scan    Scan and create all device nodes\n");
-      exit();
+      dprintf(2, "usage: %s [-s|--scan]\n", argv[0]);
+      dprintf(2, "  -s, --scan    Scan and create all device nodes\n");
+      exit(0);
     }
   }
 
   if(scan_mode) {
     devman_load_config();
     if(debug_mode)
-      printf(1, "devman: device node manager (scan mode, debug=%d)\n", debug_mode);
+      dprintf(1, "devman: device node manager (scan mode, debug=%d)\n", debug_mode);
     devman_scan_and_create();
   } else {
-    printf(2, "devman: no mode specified (try -s for scan mode)\n");
-    exit();
+    dprintf(2, "devman: no mode specified (try -s for scan mode)\n");
+    exit(0);
   }
 
-  exit();
+  exit(0);
 }

@@ -144,14 +144,14 @@ main(int argc, char *argv[])
   struct passwd_entry ent;
 
   if(argc > 2) {
-    printf(2, "usage: su [user]\n");
-    exit();
+    dprintf(2, "usage: su [user]\n");
+    exit(0);
   }
 
   target = (argc == 2) ? argv[1] : "root";
   if(lookup_user(target, &ent) < 0) {
-    printf(2, "su: unknown user %s\n", target);
-    exit();
+    dprintf(2, "su: unknown user %s\n", target);
+    exit(0);
   }
 
   uid = getuid();
@@ -159,21 +159,21 @@ main(int argc, char *argv[])
     uid = 0;
 
   if(uid != 0) {
-    printf(1, "Password: ");
+    dprintf(1, "Password: ");
     memset(pass, 0, sizeof(pass));
     if(readpass(pass, sizeof(pass)) == 0)
-      exit();
+      exit(0);
     trim_trailing_ws(pass);
 
     if(strcmp(pass, ent.pass) != 0) {
-      printf(2, "su: authentication failed\n");
-      exit();
+      dprintf(2, "su: authentication failed\n");
+      exit(0);
     }
   }
 
   if(setgid(ent.gid) < 0 || setuid(ent.uid) < 0) {
-    printf(2, "su: permission denied\n");
-    exit();
+    dprintf(2, "su: permission denied\n");
+    exit(0);
   }
 
   if(ent.home[0])
@@ -183,6 +183,6 @@ main(int argc, char *argv[])
   sh_argv[1] = 0;
   exec(ent.shell, sh_argv);
 
-  printf(2, "su: exec %s failed\n", ent.shell);
-  exit();
+  dprintf(2, "su: exec %s failed\n", ent.shell);
+  exit(0);
 }

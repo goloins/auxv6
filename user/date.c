@@ -8,16 +8,16 @@ main(int argc, char *argv[])
   struct rtcdate r;
 
   if(argc != 1){
-    printf(2, "usage: date\n");
-    exit();
+    dprintf(2, "usage: date\n");
+    exit(0);
   }
 
   if(date(&r) < 0){
-    printf(2, "date: failed to read RTC\n");
-    exit();
+    dprintf(2, "date: failed to read RTC\n");
+    exit(0);
   }
 
-  printf(1, "%d-%02d-%02d %02d:%02d:%02d UTC\n",
+  dprintf(1, "%d-%02d-%02d %02d:%02d:%02d UTC\n",
          r.year, r.month, r.day, r.hour, r.minute, r.second);
-  exit();
+  exit(0);
 }

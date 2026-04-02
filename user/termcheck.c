@@ -40,7 +40,7 @@ tc_log_line(const char *s)
 static void
 tc_report(int outfd, const char *line)
 {
-  printf(outfd, "%s\n", line);
+  dprintf(outfd, "%s\n", line);
   tc_log_line(line);
 }
 
@@ -50,7 +50,7 @@ tc_report_failcount(int fails)
   char tmp[12];
   int n;
 
-  printf(2, "termcheck: %d checks failed\n", fails);
+  dprintf(2, "termcheck: %d checks failed\n", fails);
   if(tc_log_fd < 0)
     return;
 
@@ -131,14 +131,14 @@ tc_debug_query_fail(const char *label, const char *query, const char *expected, 
   if(!tc_debug_query)
     return;
 
-  printf(2, "DEBUG query fail: %s\n", label);
-  printf(2, "  expected token: %s\n", expected);
-  printf(2, "  query bytes: ");
+  dprintf(2, "DEBUG query fail: %s\n", label);
+  dprintf(2, "  expected token: %s\n", expected);
+  dprintf(2, "  query bytes: ");
   tc_debug_emit_escaped(2, query, strlen(query));
-  printf(2, "\n");
-  printf(2, "  reply bytes: ");
+  dprintf(2, "\n");
+  dprintf(2, "  reply bytes: ");
   tc_debug_emit_escaped(2, buf, n > 0 ? n : 0);
-  printf(2, "\n");
+  dprintf(2, "\n");
 
   tc_log_line("DEBUG query fail");
   tc_log_raw("  label: ");
@@ -218,7 +218,7 @@ spawn_shell_on_pty(struct pty_shell_session *sess, int idx)
 
     sfd = open(sname, O_RDWR);
     if(sfd < 0)
-      exit();
+      exit(0);
 
     (void)ioctl(sfd, TIOCSCTTY, 0);
 
@@ -281,7 +281,7 @@ check_multi_pty_shells(void)
       cleanup_shell_sessions(sess, PTY_SHELL_SESSIONS);
       return -1;
     }
-    printf(1, "termcheck: spawned shell on PTY %d\n", i);
+    dprintf(1, "termcheck: spawned shell on PTY %d\n", i);
   }
 
   for(i = 0; i < PTY_SHELL_SESSIONS; i++) {
@@ -328,7 +328,7 @@ check_multi_pty_shells(void)
 
       if(contains_token(out, got, sess[i].marker)) {
         if(!sess[i].seen)
-          printf(1, "termcheck: shell PTY %d produced marker %s\n", i, sess[i].marker);
+          dprintf(1, "termcheck: shell PTY %d produced marker %s\n", i, sess[i].marker);
         sess[i].seen = 1;
       }
 
@@ -367,7 +367,7 @@ check_multi_pty_shells(void)
   if(!all_seen)
     return -1;
 
-  printf(1, "termcheck: all PTY shells terminated\n");
+  dprintf(1, "termcheck: all PTY shells terminated\n");
   return 0;
 }
 
@@ -442,7 +442,7 @@ check_pty_max_stress(void)
     }
 
     if(count1 < best) {
-      printf(2, "termcheck: pty stress regression cycle %d count=%d best=%d\n", i + 1, count1, best);
+      dprintf(2, "termcheck: pty stress regression cycle %d count=%d best=%d\n", i + 1, count1, best);
       close_pty_batch(mfds, sfds, count1);
       return -1;
     }
@@ -464,7 +464,7 @@ check_pty_max_stress(void)
     if(extra >= 0) {
       close(extra);
       close_pty_batch(mfds, sfds, count1);
-      printf(2, "termcheck: pty stress expected ptmx allocation failure at count=%d\n", count1);
+      dprintf(2, "termcheck: pty stress expected ptmx allocation failure at count=%d\n", count1);
       return -1;
     }
 
@@ -473,7 +473,7 @@ check_pty_max_stress(void)
     /* Re-open immediately to detect teardown leaks in the same cycle. */
     count2 = open_pty_batch(mfds, sfds, PTY_STRESS_CAP);
     if(count2 < count1) {
-      printf(2, "termcheck: pty stress leak? cycle %d count1=%d count2=%d\n", i + 1, count1, count2);
+      dprintf(2, "termcheck: pty stress leak? cycle %d count1=%d count2=%d\n", i + 1, count1, count2);
       close_pty_batch(mfds, sfds, count2);
       return -1;
     }
@@ -481,14 +481,14 @@ check_pty_max_stress(void)
       best = count2;
     close_pty_batch(mfds, sfds, count2);
 
-    printf(1, "termcheck: pty stress cycle %d/%d counts=%d,%d best=%d\n", i + 1, PTY_STRESS_CYCLES, count1, count2, best);
+    dprintf(1, "termcheck: pty stress cycle %d/%d counts=%d,%d best=%d\n", i + 1, PTY_STRESS_CYCLES, count1, count2, best);
     sleep(1);
   }
 
   if(best < PTY_SHELL_SESSIONS)
     return -1;
   if(slave_missing_seen)
-    printf(1, "termcheck: note: some /dev/pts/N slave nodes missing during max stress; master pressure test still valid\n");
+    dprintf(1, "termcheck: note: some /dev/pts/N slave nodes missing during max stress; master pressure test still valid\n");
   return 0;
 }
 
@@ -971,7 +971,7 @@ check_pty_bg_signal_isolation(void)
     mark = bg_sig_seen ? '1' : '0';
     (void)write(p[1], &mark, 1);
     close(p[1]);
-    exit();
+    exit(0);
   }
 
   close(p[1]);
@@ -1024,7 +1024,7 @@ check_pty_bg_signal_isolation(void)
     mark = bg_sig_seen ? '1' : '0';
     (void)write(p[1], &mark, 1);
     close(p[1]);
-    exit();
+    exit(0);
   }
 
   close(p[1]);
@@ -1617,7 +1617,7 @@ main(int argc, char **argv)
     tc_report(2, "termcheck: no tty fd available");
     if(tc_log_fd >= 0)
       close(tc_log_fd);
-    exit();
+    exit(0);
   }
 
   fails = 0;
@@ -1773,6 +1773,6 @@ main(int argc, char **argv)
   if(tc_log_fd >= 0)
     close(tc_log_fd);
 
-  exit();
+  exit(0);
   return 0;
 }

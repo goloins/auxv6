@@ -32,10 +32,10 @@ static void
 record_result(char *name, int ok)
 {
   if(ok){
-    printf(1, "[PASS] %s\n", name);
+    dprintf(1, "[PASS] %s\n", name);
     passed++;
   } else {
-    printf(1, "[FAIL] %s\n", name);
+    dprintf(1, "[FAIL] %s\n", name);
     failed++;
   }
 }
@@ -43,7 +43,7 @@ record_result(char *name, int ok)
 static void
 record_skip(char *name, char *reason)
 {
-  printf(1, "[SKIP] %s (%s)\n", name, reason);
+  dprintf(1, "[SKIP] %s (%s)\n", name, reason);
   skipped++;
 }
 
@@ -287,7 +287,7 @@ test_enumeration(int expected_min, int *units, int *nunits)
   }
 
   *nunits = count;
-  printf(1, "Detected %d virtio-blk disks\n", count);
+  dprintf(1, "Detected %d virtio-blk disks\n", count);
   record_result("virtio-blk enumeration", count >= expected_min);
 }
 
@@ -322,16 +322,16 @@ test_mount_io_cycles(int *units, int nunits)
     int rc;
 
     unit = units[i];
-    printf(1, "Testing vd%c cycle 0\n", 'a' + unit);
+    dprintf(1, "Testing vd%c cycle 0\n", 'a' + unit);
     rc = run_roundtrip(unit, 0);
     if(rc != VBLKTEST_OK)
-      printf(1, "  failure stage: %s\n", roundtrip_error_name(rc));
+      dprintf(1, "  failure stage: %s\n", roundtrip_error_name(rc));
     record_result("mount/write/read/umount cycle", rc == VBLKTEST_OK);
 
-    printf(1, "Testing vd%c cycle 1\n", 'a' + unit);
+    dprintf(1, "Testing vd%c cycle 1\n", 'a' + unit);
     rc = run_roundtrip(unit, 1);
     if(rc != VBLKTEST_OK)
-      printf(1, "  failure stage: %s\n", roundtrip_error_name(rc));
+      dprintf(1, "  failure stage: %s\n", roundtrip_error_name(rc));
     record_result("repeat mount/write/read/umount cycle", rc == VBLKTEST_OK);
   }
 
@@ -359,22 +359,22 @@ main(int argc, char *argv[])
 
   expected_min = 2;
   if(argc > 2){
-    printf(2, "usage: vblktest [expected-min-disks]\n");
-    exit();
+    dprintf(2, "usage: vblktest [expected-min-disks]\n");
+    exit(0);
   }
   if(argc == 2)
     expected_min = atoi(argv[1]);
   if(expected_min < 0)
     expected_min = 0;
 
-  printf(1, "Virtio Block Regression Suite\n");
-  printf(1, "============================\n");
+  dprintf(1, "Virtio Block Regression Suite\n");
+  dprintf(1, "============================\n");
 
   test_enumeration(expected_min, units, &nunits);
   test_procfs_visible();
   test_mount_io_cycles(units, nunits);
 
-  printf(1, "\n============================\n");
-  printf(1, "Results: %d passed, %d failed, %d skipped\n", passed, failed, skipped);
-  exit();
+  dprintf(1, "\n============================\n");
+  dprintf(1, "Results: %d passed, %d failed, %d skipped\n", passed, failed, skipped);
+  exit(0);
 }

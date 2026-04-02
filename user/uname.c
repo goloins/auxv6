@@ -44,19 +44,19 @@ main(int argc, char *argv[])
   char host[HOST_MAX];
 
   if(argc != 1){
-    printf(2, "usage: uname\n");
-    exit();
+    dprintf(2, "usage: uname\n");
+    exit(0);
   }
 
   if(uname(release, sizeof(release)) < 0){
-    printf(2, "uname: syscall failed\n");
-    exit();
+    dprintf(2, "uname: syscall failed\n");
+    exit(0);
   }
 
   if(load_hostname(host, sizeof(host)) < 0)
-    printf(1, "%s\n", release);
+    dprintf(1, "%s\n", release);
   else
-    printf(1, "%s %s\n", release, host);
+    dprintf(1, "%s %s\n", release, host);
 
-  exit();
+  exit(0);
 }
