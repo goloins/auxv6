@@ -10,6 +10,10 @@
 
 #define COPY_BUF_SIZE 4096
 
+// Keep the transfer buffer out of the user stack. cp's call chain already has
+// sizable stack frames; a 4 KiB local buffer can overflow and corrupt state.
+static char copy_buf[COPY_BUF_SIZE];
+
 struct cp_options {
   int recursive;
   int preserve;
@@ -108,25 +112,30 @@ confirm_overwrite(const char *path)
 }
 
 static int
-copy_file_data(int src_fd, int dst_fd)
+copy_file_data(int src_fd, int dst_fd, int *bytes_out)
 {
-  char buf[COPY_BUF_SIZE];
   int n;
+  int total;
 
-  while((n = read(src_fd, buf, sizeof(buf))) > 0) {
+  total = 0;
+
+  while((n = read(src_fd, copy_buf, sizeof(copy_buf))) > 0) {
     int off;
 
     off = 0;
     while(off < n) {
-      int w = write(dst_fd, buf + off, n - off);
+      int w = write(dst_fd, copy_buf + off, n - off);
       if(w <= 0)
         return -1;
       off += w;
     }
+    total += n;
   }
 
   if(n < 0)
     return -1;
+  if(bytes_out)
+    *bytes_out = total;
   return 0;
 }
 
@@ -139,6 +148,7 @@ copy_file(const char *src, const char *dst, const struct stat *st,
   int src_fd;
   int dst_fd;
   int rc;
+  int copied;
 
   dst_exists = (stat(dst, &dstst) == 0);
   if(dst_exists && dstst.st_type == T_DIR) {
@@ -170,11 +180,20 @@ copy_file(const char *src, const char *dst, const struct stat *st,
     return -1;
   }
 
-  rc = copy_file_data(src_fd, dst_fd);
+  copied = 0;
+  rc = copy_file_data(src_fd, dst_fd, &copied);
+  if(rc == 0 && copied == 0 && st->st_size > 0) {
+    if(lseek(src_fd, 0, SEEK_SET) >= 0 && lseek(dst_fd, 0, SEEK_SET) >= 0)
+      rc = copy_file_data(src_fd, dst_fd, &copied);
+  }
   close(src_fd);
   close(dst_fd);
   if(rc < 0) {
     dprintf(2, "cp: failed to copy %s\n", src);
+    return -1;
+  }
+  if(copied == 0 && st->st_size > 0) {
+    dprintf(2, "cp: read returned no data for %s\n", src);
     return -1;
   }
 
