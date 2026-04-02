@@ -11,6 +11,7 @@ This document tracks the current state of auxv6 graphics support as it exists in
 **Build and boot integration:**
 - `Makefile` already links `kernel/graphics/framebuffer.o`, `kernel/graphics/display.o`, `kernel/graphics/font.o`, `kernel/graphics/render.o`, and `kernel/driver/virtio_gpu.o` into `aux.kern`.
 - `kernel/core/main.c` already initializes `display_init()`, `pci_init()`, and `virtio_gpu_init()` before `consoleinit()`.
+- QEMU graphics runs should currently attach virtio-gpu in legacy-compatible mode (`disable-modern=on`) because the in-tree virtio transport still uses the legacy PCI I/O interface.
 
 **Framebuffer core:**
 - `kernel/graphics/framebuffer.c` provides DMA-backed framebuffer allocation.
@@ -29,12 +30,13 @@ This document tracks the current state of auxv6 graphics support as it exists in
 
 **VirtIO-GPU:**
 - `kernel/driver/virtio_gpu.c` probes the PCI device, negotiates features, creates control and cursor queues, registers an IRQ handler, and registers a display device.
+- Initial scanout discovery now uses `GET_DISPLAY_INFO` to populate one preferred virtio-gpu mode in the display-device state.
 - Resource creation, backing attach, scanout selection, transfer-to-host, and flush commands are implemented and used by the current console mirror path.
 - The command path is still synchronous polling rather than a fully asynchronous response or fence model.
 
 **Console integration:**
-- `kernel/driver/console.c` can create a `640x400` `PIXFMT_XRGB8888` framebuffer on the primary display device.
-- The active tty is mirrored into a VT surface and flushed to the display through the generic display ops.
+- `kernel/driver/console.c` now allocates its framebuffer from the discovered display mode when one is present, with `640x400` kept as a fallback.
+- The active tty is mirrored into an 80x25 VT surface, centered within the framebuffer, and flushed through the generic display ops.
 - `/proc/gfxstats` exposes framebuffer mirror counters (`sync_calls`, `cells_changed`, `cells_rendered`, `flush_calls`, `flush_pixels`).
 
 ### What This Means Right Now
@@ -52,7 +54,7 @@ The normal console path still writes through the legacy CGA-style text path and 
 
 ### 2. Real Display Geometry
 
-The current console graphics path hardcodes a `640x400` framebuffer. The virtio-gpu driver has a `GET_DISPLAY_INFO` request, but current mode sizing does not yet flow from real device-reported scanout geometry.
+The virtio-gpu driver now records preferred scanout geometry from `GET_DISPLAY_INFO`, and the current console graphics path now allocates its framebuffer from that discovered mode. The remaining gap is that the logical tty surface is still the existing fixed 80x25 model rather than a terminal grid derived from the display geometry.
 
 ### 3. Honest Display Model
 
@@ -95,13 +97,11 @@ Definition of done:
 Primary target: replace the fixed `640x400` mirror surface with a device-reported scanout configuration.
 
 Work items:
-- Use virtio-gpu `GET_DISPLAY_INFO` during bring-up.
-- Populate display device mode or connector state from the actual scanout report.
-- Allocate the console framebuffer from the selected mode rather than a constant size.
+- Size the console VT grid from the selected display mode instead of the current fixed 80x25 surface.
 - Keep a conservative fallback mode if discovery fails.
 
 Definition of done:
-- Console framebuffer dimensions match the active virtio-gpu scanout instead of a hardcoded size.
+- Console framebuffer dimensions and terminal grid both match the active display path rather than local fixed constants.
 
 ### Phase 3: Finish Terminal Rendering For Real Workloads
 
@@ -178,4 +178,4 @@ Definition of done:
 - **VirtIO-GPU:** good enough for the current mirror path, not yet a full userspace-facing graphics stack.
 - **Userspace graphics ABI:** planned only; not implemented.
 
-**Current state:** framebuffer support is real and in use, but the system is still in the mirror phase rather than the true framebuffer-console phase.
+**Current state:** framebuffer support is real and in use, the console now consumes discovered framebuffer geometry, but the system is still in the mirror phase rather than the true framebuffer-console phase.

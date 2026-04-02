@@ -10,12 +10,12 @@
  *
  * TODO Phase 1:
  * - [x] PCI device detection
- * - [ ] Virtqueue setup
- * - [ ] Feature negotiation
- * - [ ] GET_DISPLAY_INFO command
- * - [ ] Resource creation
- * - [ ] Mode setting
- * - [ ] Simple scanout
+ * - [x] Virtqueue setup
+ * - [x] Feature negotiation
+ * - [x] GET_DISPLAY_INFO command and scanout discovery
+ * - [x] Resource creation
+ * - [x] Simple scanout
+ * - [ ] Full mode-setting lifecycle beyond initial scanout discovery
  *
  * TODO Phase 2:
  * - [ ] Async command handling and responses
@@ -35,11 +35,28 @@
 
 #define VIRTIO_GPU_MAX_INSTANCES 4
 
+struct virtio_gpu_connector_bundle {
+    struct display_connector connector;
+    struct display_mode mode;
+};
+
 static struct virtio_gpu_softc virtio_gpu_instances[VIRTIO_GPU_MAX_INSTANCES];
 static int virtio_gpu_count = 0;
 static struct spinlock virtio_gpu_lock;
 
+static void
+virtio_gpu_uartlog(const char *msg)
+{
+    const char *p;
+
+    if(!msg)
+        return;
+    for(p = msg; *p; p++)
+        uartputc(*p);
+}
+
 /* Forward declarations */
+static int virtio_gpu_display_probe(struct display_device *dev);
 static void virtio_gpu_irq_handler(int irq, void *arg);
 static void virtio_gpu_intr(struct virtio_dev *vdev);
 static int virtio_gpu_display_set_scanout(struct display_device *dev,
@@ -55,14 +72,141 @@ static int virtio_gpu_display_flush_region(struct display_device *dev,
                                            struct dirty_rect *region);
 static int virtio_gpu_display_flush(struct display_device *dev,
                                     struct framebuffer *fb);
+static int virtio_gpu_refresh_display_info(struct virtio_gpu_softc *sc);
+static int virtio_gpu_pick_scanout(struct virtio_gpu_softc *sc, int require_enabled);
 
 static const struct display_device_ops virtio_gpu_display_ops = {
+    .probe = virtio_gpu_display_probe,
     .create_framebuffer = virtio_gpu_display_create_framebuffer,
     .destroy_framebuffer = virtio_gpu_display_destroy_framebuffer,
     .set_scanout = virtio_gpu_display_set_scanout,
     .flush_region = virtio_gpu_display_flush_region,
     .flush = virtio_gpu_display_flush,
 };
+
+static int
+virtio_gpu_pick_scanout(struct virtio_gpu_softc *sc, int require_enabled)
+{
+    int i;
+
+    if(!sc)
+        return -1;
+
+    for(i = 0; i < VIRTIO_GPU_MAX_SCANOUTS; i++) {
+        if(sc->scanouts[i].width == 0 || sc->scanouts[i].height == 0)
+            continue;
+        if(require_enabled && !sc->scanouts[i].enabled)
+            continue;
+        return i;
+    }
+
+    return -1;
+}
+
+static int
+virtio_gpu_refresh_display_info(struct virtio_gpu_softc *sc)
+{
+    struct virtio_gpu_resp_display_info resp;
+    int i;
+    int count;
+
+    if(!sc)
+        return -1;
+
+    memset(&resp, 0, sizeof(resp));
+    if(virtio_gpu_cmd_get_display_info(sc, &resp) < 0)
+        return -1;
+    if(resp.hdr.type != VIRTIO_GPU_RESP_OK_DISPLAY_INFO)
+        return -1;
+
+    acquire(&sc->lock);
+    memset(sc->scanouts, 0, sizeof(sc->scanouts));
+    count = 0;
+    for(i = 0; i < VIRTIO_GPU_MAX_SCANOUTS; i++) {
+        sc->scanouts[i].enabled = resp.pmodes[i].enabled ? 1 : 0;
+        sc->scanouts[i].width = resp.pmodes[i].r.width;
+        sc->scanouts[i].height = resp.pmodes[i].r.height;
+        if(sc->scanouts[i].width != 0 && sc->scanouts[i].height != 0)
+            count++;
+    }
+    sc->num_scanouts = (uint)count;
+    release(&sc->lock);
+
+    return count > 0 ? 0 : -1;
+}
+
+static int
+virtio_gpu_display_probe(struct display_device *dev)
+{
+    struct virtio_gpu_softc *sc;
+    struct virtio_gpu_connector_bundle *bundle;
+    int scanout_id;
+    uint width;
+    uint height;
+
+    if(!dev)
+        return -1;
+
+    sc = (struct virtio_gpu_softc *)dev->driver_data;
+    if(!sc)
+        return -1;
+
+    if(virtio_gpu_refresh_display_info(sc) < 0) {
+        cprintf("virtio_gpu: GET_DISPLAY_INFO failed\n");
+        return -1;
+    }
+
+    scanout_id = virtio_gpu_pick_scanout(sc, 1);
+    if(scanout_id < 0)
+        scanout_id = virtio_gpu_pick_scanout(sc, 0);
+    if(scanout_id < 0) {
+        cprintf("virtio_gpu: no usable scanout reported\n");
+        return -1;
+    }
+
+    if(!dev->connectors) {
+        bundle = (struct virtio_gpu_connector_bundle *)kalloc();
+        if(!bundle)
+            return -1;
+        dev->connectors = &bundle->connector;
+        dev->num_connectors = 1;
+    }
+
+    bundle = (struct virtio_gpu_connector_bundle *)dev->connectors;
+    memset(bundle, 0, sizeof(*bundle));
+    width = sc->scanouts[scanout_id].width;
+    height = sc->scanouts[scanout_id].height;
+
+    bundle->connector.connector_id = (uint)scanout_id;
+    bundle->connector.type = CONN_VIRTUAL;
+    bundle->connector.status = sc->scanouts[scanout_id].enabled ?
+                               CONN_STATUS_CONNECTED : CONN_STATUS_UNKNOWN;
+    bundle->connector.modes = &bundle->mode;
+    bundle->connector.num_modes = 1;
+    bundle->connector.preferred_mode = 0;
+    memmove(bundle->connector.name, "Virtual-1", sizeof("Virtual-1"));
+
+    bundle->mode.width = width;
+    bundle->mode.height = height;
+    bundle->mode.hdisplay = width;
+    bundle->mode.vdisplay = height;
+    bundle->mode.pixfmt = PIXFMT_XRGB8888;
+    memmove(bundle->mode.name, "virtio-preferred", sizeof("virtio-preferred"));
+
+    dev->current_mode = &bundle->mode;
+    dev->max_width = width;
+    dev->max_height = height;
+    dev->min_width = width;
+    dev->min_height = height;
+    dev->max_framebuffers = VIRTIO_GPU_MAX_RESOURCES;
+
+    if(dev->crtcs && dev->num_crtcs > 0) {
+        dev->crtcs[0].connector_id = bundle->connector.connector_id;
+        dev->crtcs[0].mode = &bundle->mode;
+    }
+
+    return 0;
+}
 
 /*
  * Probe for VirtIO GPU device
@@ -107,6 +251,9 @@ virtio_gpu_probe(struct pci_dev *pci)
         release(&virtio_gpu_lock);
         return -1;
     }
+
+    /* Match the working virtio blk/net handshake sequence. */
+    virtio_set_status(vdev, VIRTIO_STATUS_ACK | VIRTIO_STATUS_DRIVER);
 
     /* Initialize driver state */
     initlock(&sc->lock, "virtio_gpu");
@@ -563,17 +710,22 @@ virtio_gpu_display_create_framebuffer(struct display_device *dev,
         return 0;
 
     format = virtio_gpu_format_from_pixfmt(pixfmt);
-    if(format == 0)
+    if(format == 0) {
+        virtio_gpu_uartlog("virtio_gpu: unsupported framebuffer pixfmt\n");
         return 0;
+    }
 
     fb = fb_alloc(width, height, pixfmt);
-    if(!fb)
+    if(!fb) {
+        virtio_gpu_uartlog("virtio_gpu: fb_alloc failed\n");
         return 0;
+    }
 
     acquire(&sc->lock);
     slot = virtio_gpu_alloc_resource_slot(sc);
     release(&sc->lock);
     if(slot < 0) {
+        virtio_gpu_uartlog("virtio_gpu: no free resource slots\n");
         fb_free(fb);
         return 0;
     }
@@ -583,6 +735,7 @@ virtio_gpu_display_create_framebuffer(struct display_device *dev,
                                          (uint32_t)format,
                                          (uint32_t)width,
                                          (uint32_t)height) < 0) {
+        virtio_gpu_uartlog("virtio_gpu: RESOURCE_CREATE_2D failed\n");
         fb_free(fb);
         return 0;
     }
@@ -592,6 +745,7 @@ virtio_gpu_display_create_framebuffer(struct display_device *dev,
     entry.padding = 0;
     if(virtio_gpu_cmd_resource_attach_backing(sc, (uint32_t)resource_id,
                                               &entry, 1) < 0) {
+        virtio_gpu_uartlog("virtio_gpu: RESOURCE_ATTACH_BACKING failed\n");
         virtio_gpu_cmd_resource_unref(sc, (uint32_t)resource_id);
         fb_free(fb);
         return 0;
@@ -663,8 +817,10 @@ virtio_gpu_display_set_scanout(struct display_device *dev,
     release(&sc->lock);
 
     if(virtio_gpu_cmd_set_scanout(sc, 0, rid, 0, 0,
-                                  fb->width, fb->height) < 0)
+                                  fb->width, fb->height) < 0) {
+        virtio_gpu_uartlog("virtio_gpu: SET_SCANOUT failed\n");
         return -1;
+    }
 
     crtc->front = fb;
     crtc->enabled = 1;

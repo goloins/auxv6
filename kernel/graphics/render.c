@@ -36,10 +36,39 @@ ansi_index_to_pixel(struct vt_surface *vts, int idx)
 }
 
 static void
+render_cell_metrics(struct vt_surface *vts, int *cell_w_out, int *cell_h_out)
+{
+    struct font *font;
+    int cell_w;
+    int cell_h;
+
+    font = 0;
+    if(vts)
+        font = vts->font;
+    if(!font)
+        font = font_builtin_default();
+
+    cell_w = font_char_width(font, 'M');
+    cell_h = font_text_height(font);
+
+    if(cell_w <= 0)
+        cell_w = 8;
+    if(cell_h <= 0)
+        cell_h = 16;
+
+    if(cell_w_out)
+        *cell_w_out = cell_w;
+    if(cell_h_out)
+        *cell_h_out = cell_h;
+}
+
+static void
 render_cell_glyph(struct vt_surface *vts, int x, int y, struct text_cell *tc)
 {
     int px;
     int py;
+    int cell_w;
+    int cell_h;
     uint bg;
     uint fg;
     const struct glyph *g;
@@ -52,12 +81,13 @@ render_cell_glyph(struct vt_surface *vts, int x, int y, struct text_cell *tc)
     if(!vts || !vts->fb || !tc)
         return;
 
-    px = vts->fb_x + x * 8;
-    py = vts->fb_y + y * 16;
+    render_cell_metrics(vts, &cell_w, &cell_h);
+    px = vts->fb_x + x * cell_w;
+    py = vts->fb_y + y * cell_h;
     bg = ansi_index_to_pixel(vts, tc->bg_color & 0x0F);
     fg = ansi_index_to_pixel(vts, tc->fg_color & 0x0F);
 
-    fb_fill_rect(vts->fb, px, py, 8, 16, bg);
+    fb_fill_rect(vts->fb, px, py, cell_w, cell_h, bg);
 
     if(tc->codepoint == ' ' || tc->codepoint == 0)
         return;
@@ -70,8 +100,8 @@ render_cell_glyph(struct vt_surface *vts, int x, int y, struct text_cell *tc)
     if(!g || !g->bitmap)
         return;
 
-    max_rows = g->height < 16 ? g->height : 16;
-    max_cols = g->width < 8 ? g->width : 8;
+    max_rows = g->height < cell_h ? g->height : cell_h;
+    max_cols = g->width < cell_w ? g->width : cell_w;
 
     for(row = 0; row < max_rows; row++) {
         uchar bits = g->bitmap[row];
@@ -82,7 +112,7 @@ render_cell_glyph(struct vt_surface *vts, int x, int y, struct text_cell *tc)
     }
 
     if(tc->attr & TEXT_ATTR_UNDERLINE)
-        fb_fill_rect(vts->fb, px, py + 15, 8, 1, fg);
+        fb_fill_rect(vts->fb, px, py + cell_h - 1, cell_w, 1, fg);
 }
 
 static int
@@ -500,15 +530,20 @@ vt_render_cursor(struct vt_surface *vts)
 {
     int x;
     int y;
+    int cell_w;
+    int cell_h;
+    int cursor_h;
 
     if(!vts || !vts->fb)
         return -1;
     if(!vts->cursor_visible)
         return 0;
 
-    x = vts->fb_x + vts->cursor_x * 8;
-    y = vts->fb_y + vts->cursor_y * 16;
-    fb_fill_rect(vts->fb, x, y + 14, 8, 2,
+    render_cell_metrics(vts, &cell_w, &cell_h);
+    cursor_h = cell_h >= 2 ? 2 : 1;
+    x = vts->fb_x + vts->cursor_x * cell_w;
+    y = vts->fb_y + vts->cursor_y * cell_h;
+    fb_fill_rect(vts->fb, x, y + cell_h - cursor_h, cell_w, cursor_h,
                  ansi_index_to_pixel(vts, vts->fg_color & 0x0F));
     return 0;
 }

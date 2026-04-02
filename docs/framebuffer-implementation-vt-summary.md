@@ -12,7 +12,7 @@ The key architectural rule is: **treat this as a terminal architecture migration
 - Runtime tty count is still clamped to single-tty (`CONSOLE_NTTY = 1`) for stability.
 - The tree now has a dedicated graphics path: `framebuffer.c`, `display.c`, `font.c`, `render.c`, and `virtio_gpu.c` are built into the kernel.
 - Boot initializes the display registry and virtio-gpu before `consoleinit()`.
-- `console.c` can create a framebuffer on the primary display device, mirror the active tty into a VT surface, and flush it through virtio-gpu.
+- `console.c` can create a framebuffer sized from the primary display mode when discovered, mirror the active tty into a VT surface, and flush it through virtio-gpu.
 - `/proc/gfxstats` provides visibility into the current framebuffer mirror path.
 - The important limitation is still architectural: the normal console source of truth remains the legacy text-mode or shadow-screen state, and the framebuffer remains a mirror of that state.
 
@@ -32,7 +32,7 @@ The normal console path still flows through the legacy text renderer and then mi
 
 ### 2. Real Display Geometry
 
-The current graphics console path uses a fixed `640x400` framebuffer. A real framebuffer terminal needs its geometry to come from the active display device rather than a console-local constant.
+The virtio-gpu path now has initial display discovery, and the current graphics console now allocates its framebuffer from that geometry. The remaining issue is that the tty grid itself is still the legacy fixed 80x25 model.
 
 ### 3. Rendering Correctness
 
@@ -69,8 +69,8 @@ The system still benefits from the legacy path as a safety net. That fallback sh
 
 ### 2) Drive Geometry From The Active Display
 
-- Use virtio-gpu display information to choose framebuffer dimensions.
-- Size the console VT grid from the real display mode instead of a fixed `640x400` surface.
+- Use the discovered virtio-gpu display information to choose framebuffer dimensions.
+- Size the console VT grid from the real display mode instead of the current fixed 80x25 surface.
 - Keep a deterministic fallback mode if display discovery fails.
 
 ### 3) Strengthen Terminal Rendering Correctness
@@ -108,7 +108,7 @@ The system still benefits from the legacy path as a safety net. That fallback sh
 ## Immediate Definition Of Done For “True FB”
 
 - Normal console output is no longer visually dependent on CGA writes.
-- Console framebuffer size comes from the active display path rather than a local constant.
+- Console framebuffer size and visible terminal grid both come from the active display path rather than local constants.
 - Shell and editor workloads render correctly through the framebuffer renderer.
 - Existing tty, termios, and job-control semantics remain stable.
 - Panic or emergency output still has a deterministic fallback.

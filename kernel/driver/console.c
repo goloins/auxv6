@@ -242,6 +242,103 @@ static uint console_gfx_stat_cells_rendered;
 static uint console_gfx_stat_flush_calls;
 static uint console_gfx_stat_flush_pixels;
 
+#define CONSOLE_GFX_FALLBACK_WIDTH 640
+#define CONSOLE_GFX_FALLBACK_HEIGHT 400
+#define CONSOLE_GFX_COLS 80
+#define CONSOLE_GFX_ROWS 25
+
+static void
+console_gfx_note(const char *msg)
+{
+  const char *p;
+
+  if(!msg)
+    return;
+  for(p = msg; *p; p++)
+    uartputc(*p);
+}
+
+static int
+console_gfx_cell_width(void)
+{
+  struct font *font;
+  int w;
+
+  font = font_builtin_default();
+  w = font_char_width(font, 'M');
+  if(w <= 0)
+    w = 8;
+  return w;
+}
+
+static int
+console_gfx_cell_height(void)
+{
+  struct font *font;
+  int h;
+
+  font = font_builtin_default();
+  h = font_text_height(font);
+  if(h <= 0)
+    h = 16;
+  return h;
+}
+
+static void
+console_gfx_pick_framebuffer_size(uint *width_out, uint *height_out)
+{
+  struct display_mode *mode;
+  uint width;
+  uint height;
+
+  width = CONSOLE_GFX_FALLBACK_WIDTH;
+  height = CONSOLE_GFX_FALLBACK_HEIGHT;
+  mode = 0;
+
+  if(console_gfx_dev) {
+    if(console_gfx_dev->current_mode)
+      mode = console_gfx_dev->current_mode;
+    else if(console_gfx_dev->crtcs && console_gfx_dev->num_crtcs > 0)
+      mode = console_gfx_dev->crtcs[0].mode;
+  }
+
+  if(mode && mode->width > 0 && mode->height > 0) {
+    width = mode->width;
+    height = mode->height;
+  }
+
+  if(width_out)
+    *width_out = width;
+  if(height_out)
+    *height_out = height;
+}
+
+static void
+console_gfx_pick_origin(int *x_out, int *y_out)
+{
+  int x;
+  int y;
+  int text_width;
+  int text_height;
+
+  x = 0;
+  y = 0;
+  text_width = CONSOLE_GFX_COLS * console_gfx_cell_width();
+  text_height = CONSOLE_GFX_ROWS * console_gfx_cell_height();
+
+  if(console_gfx_fb) {
+    if((int)console_gfx_fb->width > text_width)
+      x = ((int)console_gfx_fb->width - text_width) / 2;
+    if((int)console_gfx_fb->height > text_height)
+      y = ((int)console_gfx_fb->height - text_height) / 2;
+  }
+
+  if(x_out)
+    *x_out = x;
+  if(y_out)
+    *y_out = y;
+}
+
 int
 console_logo_get_enabled(void)
 {
@@ -413,6 +510,10 @@ console_gfx_ensure_locked(void)
   struct render_context tmp;
   const char *msg;
   const char *p;
+  uint fb_width;
+  uint fb_height;
+  int origin_x;
+  int origin_y;
 
   if(console_gfx_vts)
     return 1;
@@ -439,27 +540,44 @@ console_gfx_ensure_locked(void)
   }
 
   if(!console_gfx_fb) {
-    console_gfx_fb = display_create_framebuffer(console_gfx_dev, 640, 400, PIXFMT_XRGB8888);
-    if(!console_gfx_fb)
+    console_gfx_pick_framebuffer_size(&fb_width, &fb_height);
+    console_gfx_fb = display_create_framebuffer(console_gfx_dev, fb_width, fb_height,
+                                                PIXFMT_XRGB8888);
+    if(!console_gfx_fb) {
+      console_gfx_note("console: gfx framebuffer create failed\n");
       return 0;
+    }
   }
 
-  if(console_gfx_dev->num_crtcs > 0)
-    display_set_scanout(console_gfx_dev, &console_gfx_dev->crtcs[0], console_gfx_fb);
+  if(console_gfx_dev->num_crtcs > 0) {
+    if(display_set_scanout(console_gfx_dev, &console_gfx_dev->crtcs[0], console_gfx_fb) < 0) {
+      console_gfx_note("console: gfx scanout set failed\n");
+      return 0;
+    }
+  }
+
+  fb_fill_rect(console_gfx_fb, 0, 0, console_gfx_fb->width, console_gfx_fb->height,
+               0x00000000);
+  display_flush(console_gfx_dev, console_gfx_fb);
 
   if(!console_gfx_ctx)
     console_gfx_ctx = render_context_create(console_gfx_fb, font_builtin_default());
-  if(!console_gfx_ctx)
+  if(!console_gfx_ctx) {
+    console_gfx_note("console: gfx render context failed\n");
     return 0;
+  }
 
   memset(&tmp, 0, sizeof(tmp));
   tmp = *console_gfx_ctx;
-  console_gfx_vts = vt_surface_create(80, 25, &tmp);
-  if(!console_gfx_vts)
+  console_gfx_vts = vt_surface_create(CONSOLE_GFX_COLS, CONSOLE_GFX_ROWS, &tmp);
+  if(!console_gfx_vts) {
+    console_gfx_note("console: gfx vt surface failed\n");
     return 0;
+  }
 
-  console_gfx_vts->fb_x = 0;
-  console_gfx_vts->fb_y = 0;
+  console_gfx_pick_origin(&origin_x, &origin_y);
+  console_gfx_vts->fb_x = origin_x;
+  console_gfx_vts->fb_y = origin_y;
 
   if(!console_gfx_announced) {
     const char *msg = "console: gfx mirror enabled\n";
