@@ -16,6 +16,6 @@ main(int argc, char **argv)
     fd = 2;
 
   write(fd, "\033[0m\033[2J\033[H", 12);
-  exit();
+  exit(0);
   return 0;
 }

@@ -15,10 +15,10 @@ static void
 fail(char *msg, char *path)
 {
   if(path)
-    printf(1, "fatregress: FAIL %s %s\n", msg, path);
+    dprintf(1, "fatregress: FAIL %s %s\n", msg, path);
   else
-    printf(1, "fatregress: FAIL %s\n", msg);
-  exit();
+    dprintf(1, "fatregress: FAIL %s\n", msg);
+  exit(1);
 }
 
 static void
@@ -98,7 +98,7 @@ check_small_write(void)
   if(unlink(path) < 0)
     fail("unlink", path);
   expect_absent(path);
-  printf(1, "fatregress: ok small write\n");
+  dprintf(1, "fatregress: ok small write\n");
 }
 
 static void
@@ -172,7 +172,7 @@ check_growth_and_truncate(void)
   if(unlink(path) < 0)
     fail("cleanup unlink", path);
   expect_absent(path);
-  printf(1, "fatregress: ok growth/truncate\n");
+  dprintf(1, "fatregress: ok growth/truncate\n");
 }
 
 int
@@ -187,7 +187,7 @@ main(void)
 
   read_expect("/fat/hello.txt", "hello from auxv6 fat image\n");
   read_expect("/fat/subdir/note.txt", "subdirectory note from fat image\n");
-  printf(1, "fatregress: ok seeded reads\n");
+  dprintf(1, "fatregress: ok seeded reads\n");
 
   check_small_write();
   check_growth_and_truncate();
@@ -195,6 +195,6 @@ main(void)
   if(umount(FAT_MOUNT_PATH) < 0)
     fail("umount", FAT_MOUNT_PATH);
 
-  printf(1, "fatregress: all checks passed\n");
-  exit();
+  dprintf(1, "fatregress: all checks passed\n");
+  exit(0);
 }

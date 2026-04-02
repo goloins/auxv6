@@ -23,7 +23,7 @@ OUT      := $(ROOT)/ports/dash-0.5.12/_dash
 # ---------------------------------------------------------------------------
 # Toolchain — mirrors the root Makefile
 # ---------------------------------------------------------------------------
-CROSS_ROOT   ?= /usr/local
+CROSS_ROOT   ?= /opt/cross
 CROSS_BINDIR ?= $(CROSS_ROOT)/bin
 
 ifndef TOOLPREFIX
@@ -79,7 +79,7 @@ CFLAGS  += -Wno-implicit-function-declaration \
 # ---------------------------------------------------------------------------
 # Linker flags
 # ---------------------------------------------------------------------------
-LDFLAGS := -N -e main -Ttext 0 -m $(shell $(LD) -V 2>/dev/null | grep elf_i386 | head -1)
+LDFLAGS := -N -e _start -Ttext 0 -m $(shell $(LD) -V 2>/dev/null | grep elf_i386 | head -1)
 
 # ---------------------------------------------------------------------------
 # Source files
@@ -98,14 +98,27 @@ DASH_SRCS := \
   builtins.c init.c nodes.c syntax.c signames.c
 
 # auxv6 runtime (from user/)
-ULIB_OBJS := \
-  $(UBLIBDIR)/ulib.o \
-  $(UBLIBDIR)/usys.o \
-  $(UBLIBDIR)/printf.o \
-  $(UBLIBDIR)/umalloc.o \
-  $(UBLIBDIR)/resolve.o \
-  $(UBLIBDIR)/posix.o \
-  $(UBLIBDIR)/setjmp.o
+RUNTIME_OBJS := \
+  $(ROOT)/user/ulib.o \
+  $(ROOT)/user/string.o \
+  $(ROOT)/user/errstr.o \
+  $(ROOT)/user/umalloc.o \
+  $(ROOT)/user/tty.o \
+  $(ROOT)/user/inet.o \
+  $(ROOT)/user/fmt.o \
+  $(ROOT)/user/dirent.o \
+  $(ROOT)/user/env.o \
+  $(ROOT)/user/stdlib.o \
+  $(ROOT)/user/posix_fs.o \
+  $(ROOT)/user/posix.o \
+  $(ROOT)/user/stdio.o \
+  $(ROOT)/user/regex.o \
+  $(ROOT)/user/calloc.o \
+  $(ROOT)/user/crt0.o \
+  $(ROOT)/user/usys.o \
+  $(ROOT)/user/printf.o \
+  $(ROOT)/user/resolve.o \
+  $(ROOT)/user/setjmp.o
 
 DASH_OBJS := $(patsubst %.c,$(ROOT)/ports/dash-0.5.12/obj/%.o,$(DASH_SRCS))
 
@@ -131,7 +144,7 @@ GENERATED := \
 
 all: $(GENERATED) $(OUT)
 
-$(OUT): $(DASH_OBJS) $(ULIB_OBJS)
+$(OUT): $(DASH_OBJS) $(RUNTIME_OBJS)
 	$(LD) $(LDFLAGS) -o $@ $^ $(LIBGCC)
 	$(OBJDUMP) -S $@ > $(ROOT)/ports/dash-0.5.12/dash.asm || true
 
@@ -145,13 +158,10 @@ $(ROOT)/ports/dash-0.5.12/obj/bltin/%.o: $(SRCDIR)/bltin/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# Build auxv6 ulib objects from C if they don't exist
-$(UBLIBDIR)/%.o: $(UBLIBDIR)/%.c
-	$(MAKE) -C $(ROOT) $@
-
-# Build auxv6 ulib objects from assembly (.S)
-$(UBLIBDIR)/setjmp.o: $(UBLIBDIR)/setjmp.S
-	$(CC) -m32 -c -o $@ $<
+# Build auxv6 runtime objects through the root Makefile so the port tracks
+# current compiler flags, startup objects, and ABI splits.
+$(RUNTIME_OBJS):
+	$(MAKE) -C $(ROOT) $(patsubst $(ROOT)/%,%,$@)
 
 # ---------------------------------------------------------------------------
 # Code generation (run on host with native cc, once)

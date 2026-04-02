@@ -43,8 +43,8 @@ parse_ipv4(const char *s, uint *out)
 static void
 usage(void)
 {
-  printf(2, "usage: nslookup host [server]\n");
-  exit();
+  dprintf(2, "usage: nslookup host [server]\n");
+  exit(1);
 }
 
 int
@@ -60,32 +60,32 @@ main(int argc, char *argv[])
 
   if(argc == 3) {
     if(parse_ipv4(argv[2], &server) < 0) {
-      printf(2, "nslookup: invalid server %s\n", argv[2]);
-      exit();
+      dprintf(2, "nslookup: invalid server %s\n", argv[2]);
+      exit(1);
     }
   } else {
     nservers = dns_nameservers(servers, 3);
     if(nservers <= 0) {
-      printf(2, "nslookup: no nameserver configured\n");
-      exit();
+      dprintf(2, "nslookup: no nameserver configured\n");
+      exit(1);
     }
     server = servers[0];
   }
 
   if(dns_lookup_ipv4(argv[1], server, &answer) < 0) {
-    printf(2, "Server: ");
+    dprintf(2, "Server: ");
     net_print_ipv4(server);
-    printf(2, "\n");
-    printf(2, "nslookup: lookup failed for %s\n", argv[1]);
-    exit();
+    dprintf(2, "\n");
+    dprintf(2, "nslookup: lookup failed for %s\n", argv[1]);
+    exit(1);
   }
 
-  printf(1, "Server: ");
+  dprintf(1, "Server: ");
   net_print_ipv4(server);
-  printf(1, "\n");
-  printf(1, "Name: %s\n", argv[1]);
-  printf(1, "Address: ");
+  dprintf(1, "\n");
+  dprintf(1, "Name: %s\n", argv[1]);
+  dprintf(1, "Address: ");
   net_print_ipv4(answer);
-  printf(1, "\n");
-  exit();
+  dprintf(1, "\n");
+  exit(0);
 }

@@ -115,10 +115,10 @@ main(void)
   if(lookup_user_by_uid(uid, user, sizeof(user), &passwd_gid) < 0)
     strcpy(user, "unknown");
 
-  printf(1, "uid=%d(%s) gid=%d", uid, user, gid);
+  dprintf(1, "uid=%d(%s) gid=%d", uid, user, gid);
   if(passwd_gid >= 0 && passwd_gid != gid)
-    printf(1, " passwd_gid=%d", passwd_gid);
-  printf(1, " pgrp=%d\n", pgid);
+    dprintf(1, " passwd_gid=%d", passwd_gid);
+  dprintf(1, " pgrp=%d\n", pgid);
 
-  exit();
+  exit(0);
 }

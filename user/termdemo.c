@@ -96,5 +96,5 @@ main(void)
   put("\033[?1049l");
 
   put("\nDone.\n");
-  exit();
+  exit(0);
 }

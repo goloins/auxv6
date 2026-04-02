@@ -82,67 +82,67 @@ main(void)
 {
   int mpid, pid, wpid;
 
-  printf(1, "init: starting up\n");
+  dprintf(1, "init: starting up\n");
 
-  printf(1, "init: attempting to open /dev/console\n");
+  dprintf(1, "init: attempting to open /dev/console\n");
   if(open("/dev/console", O_RDWR) < 0){
-    printf(1, "init: /dev/console open failed, creating it\n");
+    dprintf(1, "init: /dev/console open failed, creating it\n");
     mknod("/dev/console", M_IFCHR, 1, 1);
     if(open("/dev/console", O_RDWR) < 0){
-      printf(2, "init: cannot open /dev/console even after mknod\n");
+      dprintf(2, "init: cannot open /dev/console even after mknod\n");
     } else {
-      printf(1, "init: /dev/console created and opened\n");
+      dprintf(1, "init: /dev/console created and opened\n");
     }
   } else {
-    printf(1, "init: /dev/console already exists\n");
+    dprintf(1, "init: /dev/console already exists\n");
   }
 
-  printf(1, "init: creating /dev directory\n");
+  dprintf(1, "init: creating /dev directory\n");
   mkdir("/dev");
-  printf(1, "init: calling make_disk_nodes\n");
+  dprintf(1, "init: calling make_disk_nodes\n");
   make_disk_nodes();
-  printf(1, "init: make_disk_nodes done\n");
+  dprintf(1, "init: make_disk_nodes done\n");
 
-  printf(1, "init: duping stdin to stdout and stderr\n");
+  dprintf(1, "init: duping stdin to stdout and stderr\n");
   dup(0);  // stdout
   dup(0);  // stderr
 
   // Best-effort boot mounts from /etc/fstab.
-  printf(1, "init: creating /proc directory\n");
+  dprintf(1, "init: creating /proc directory\n");
   mkdir("/proc");
-  printf(1, "init: creating /mnt directory\n");
+  dprintf(1, "init: creating /mnt directory\n");
   mkdir("/mnt");
 
-  printf(1, "init: forking mount process\n");
+  dprintf(1, "init: forking mount process\n");
   mpid = fork();
   if(mpid == 0){
-    printf(1, "init: child executing mount\n");
+    dprintf(1, "init: child executing mount\n");
     exec("/bin/mount", mount_argv);
-    printf(1, "init: exec mount failed\n");
-    exit();
+    dprintf(1, "init: exec mount failed\n");
+    exit(1);
   }
   if(mpid > 0){
-    printf(1, "init: waiting for mount (pid %d)\n", mpid);
+    dprintf(1, "init: waiting for mount (pid %d)\n", mpid);
     wait();
-    printf(1, "init: mount process exited\n");
+    dprintf(1, "init: mount process exited\n");
   }
 
-  printf(1, "init: entering main login loop\n");
+  dprintf(1, "init: entering main login loop\n");
   for(;;){
-    printf(1, "init: starting login\n");
+    dprintf(1, "init: starting login\n");
     pid = fork();
     if(pid < 0){
-      printf(1, "init: fork failed\n");
-      exit();
+      dprintf(1, "init: fork failed\n");
+      exit(1);
     }
     if(pid == 0){
-      printf(1, "init: child executing login\n");
+      dprintf(1, "init: child executing login\n");
       exec("/bin/login", argv);
-      printf(1, "init: exec login failed\n");
-      exit();
+      dprintf(1, "init: exec login failed\n");
+      exit(1);
     }
     while((wpid=wait()) >= 0 && wpid != pid){
-      printf(1, "zombie! wpid=%d pid=%d\n", wpid, pid);
+      dprintf(1, "zombie! wpid=%d pid=%d\n", wpid, pid);
     }
   }
 }

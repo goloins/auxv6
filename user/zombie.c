@@ -8,7 +8,12 @@
 int
 main(void)
 {
-  if(fork() > 0)
+  int pid;
+
+  pid = fork();
+  if(pid < 0)
+    exit(1);
+  if(pid > 0)
     sleep(5);  // Let child exit before parent.
-  exit();
+  exit(0);
 }

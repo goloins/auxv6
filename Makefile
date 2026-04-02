@@ -459,7 +459,7 @@ _time: user/time
 _dmesg: user/dmesg
 	cp user/dmesg _dmesg
 
-_dash: ports/dash-0.5.12/Makefile.auxv6 user/ulib.o user/usys.o user/printf.o user/umalloc.o user/resolve.o user/posix.o user/setjmp.o
+_dash: ports/dash-0.5.12/Makefile.auxv6 $(ULIB) user/setjmp.o
 	$(MAKE) -f ports/dash-0.5.12/Makefile.auxv6
 	cp ports/dash-0.5.12/_dash _dash
 

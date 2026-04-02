@@ -28,7 +28,7 @@ spawn_login_on_tty(int tty)
     tty = 9;
   tty_path[8] = '0' + tty;
   if(open(tty_path, O_RDWR) < 0)
-    exit();
+    exit(1);
   dup(0);
   dup(0);
 
@@ -40,8 +40,8 @@ spawn_login_on_tty(int tty)
   ioctl(0, TIOCSPGRP, &pgrp);
 
   exec("/bin/login", login_argv);
-  printf(2, "getty: exec /bin/login failed on tty %d\n", tty);
-  exit();
+  dprintf(2, "getty: exec /bin/login failed on tty %d\n", tty);
+  exit(1);
   return -1;
 }
 
@@ -60,8 +60,8 @@ main(int argc, char **argv)
 
   fd = open("/dev/console", O_RDWR);
   if(fd < 0) {
-    printf(2, "getty: cannot open /dev/console\n");
-    exit();
+    dprintf(2, "getty: cannot open /dev/console\n");
+    exit(1);
   }
 
   ntty = 4;
@@ -85,7 +85,7 @@ main(int argc, char **argv)
   for(i = 0; i < ntty; i++) {
     pids[i] = spawn_login_on_tty(i);
     if(pids[i] < 0)
-      printf(2, "getty: fork failed for tty %d\n", i);
+      dprintf(2, "getty: fork failed for tty %d\n", i);
   }
 
   for(;;) {
@@ -104,7 +104,7 @@ main(int argc, char **argv)
         continue;
       pids[i] = spawn_login_on_tty(i);
       if(pids[i] < 0)
-        printf(2, "getty: respawn failed for tty %d\n", i);
+        dprintf(2, "getty: respawn failed for tty %d\n", i);
       break;
     }
   }

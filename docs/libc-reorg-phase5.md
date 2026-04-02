@@ -69,6 +69,13 @@ int main(void){ char buf[32]; return getcwd(buf, sizeof(buf)) ? 0 : 1; }
   helper to prefer `mkisofs` on this host, `sudo make qemu-oldinit` completed
   successfully and confirmed that the old-init path still boots under the new
   ABI.
+- The normal dash-backed boot path now passes again as well. The break was in
+  the out-of-tree port steering, not a newly missing libc primitive: the dash
+  port makefile was still linking at `main`, still using the pre-phase-5 user
+  runtime object subset, and still trying to build auxv6 runtime objects
+  through stale local rules. After aligning `ports/dash-0.5.12/Makefile.auxv6`
+  with the current `_start` entry and runtime split, `sudo make qemu-nox`
+  successfully booted through `/bin/dash /etc/rc.d/rc.S` and reached login.
 - Representative user objects compiled successfully across the updated runtime
   and compatibility-heavy programs, including `sh`, `init`, `termcheck`, and
   `usertests`.
@@ -98,11 +105,65 @@ int main(void){ char buf[32]; return getcwd(buf, sizeof(buf)) ? 0 : 1; }
   - `user/init.c`
 - That cluster recompiles cleanly against the new ABI layer.
 
+## Source Sweep Expanded
+
+- Additional command/admin utilities have now been migrated off the native
+  compatibility macros and onto explicit `dprintf` plus explicit exit status
+  handling:
+  - `user/arp.c`
+  - `user/cat.c`
+  - `user/kill.c`
+  - `user/ln.c`
+  - `user/mkdir.c`
+  - `user/ps.c`
+  - `user/mounts.c`
+  - `user/telinit.c`
+  - `user/which.c`
+  - `user/tail.c`
+  - `user/lsblk.c`
+  - `user/runlevel.c`
+  - `user/umount.c`
+  - `user/clear.c`
+  - `user/chmod.c`
+  - `user/id.c`
+  - `user/getty.c`
+  - `user/free.c`
+  - `user/time.c`
+  - `user/netstat.c`
+  - `user/man.c`
+  - `user/wc.c`
+  - `user/rarp.c`
+  - `user/halt.c`
+  - `user/chvt.c`
+  - `user/termdemo.c`
+  - `user/zombie.c`
+  - `user/reset.c`
+  - `user/fatregress.c`
+- Network utilities, bootstrap paths, and socket self-tests were also moved to
+  the explicit ABI surface:
+  - `user/v6init.c`
+  - `user/nslookup.c`
+  - `user/route.c`
+  - `user/tcptest.c`
+  - `user/sockettest.c`
+  - `user/ping.c`
+- These follow-on sweep clusters all rebuilt cleanly under the real userland
+  link path. Representative validation passed with grouped builds for:
+  - command/admin utilities
+  - identity/login-adjacent tools
+  - legacy old-init and small leaf tools
+  - network utilities and socket self-tests
+
 ## Remaining Cleanup Boundary
 
-- The real ABI shift is in place, but most in-tree auxv6 programs still rely on
-  the native-source compatibility macros from `include/auxv6/user.h` instead of
-  calling `dprintf` and `exit(status)` directly.
+- The real ABI shift is in place, but a smaller set of larger interactive,
+  network, and test programs still rely on the native-source compatibility
+  macros from `include/auxv6/user.h` instead of calling `dprintf` and
+  `exit(status)` directly.
+- The highest-signal remaining holdouts are now concentrated in files such as
+  `user/termcheck.c`, `user/sh.c`, `user/login.c`, `user/losetup.c`,
+  `user/netcat.c`, `user/ip.c`, `user/su.c`, `user/v6dhcpd.c`, and some larger
+  regression/self-test sources.
 - No `envp` startup handoff was added yet; `_start` now standardizes the
   `main(argc, argv)` entry path, but `environ` still comes from the existing
   userspace bootstrap in `user/posix.c`.

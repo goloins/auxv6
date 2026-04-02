@@ -63,20 +63,20 @@ main(int argc, char *argv[])
   if(argc == 2 && strcmp(argv[1], "-h") == 0)
     human = 1;
   else if(argc != 1){
-    printf(2, "usage: free [-h]\n");
-    exit();
+    dprintf(2, "usage: free [-h]\n");
+    exit(1);
   }
 
   if(read_text("/proc/meminfo", buf, sizeof(buf)) < 0){
-    printf(2, "free: cannot read /proc/meminfo\n");
-    exit();
+    dprintf(2, "free: cannot read /proc/meminfo\n");
+    exit(1);
   }
 
   total_kb = find_kb_value(buf, "MemTotal:");
   free_kb = find_kb_value(buf, "MemFree:");
   if(total_kb < 0 || free_kb < 0){
-    printf(2, "free: malformed /proc/meminfo\n");
-    exit();
+    dprintf(2, "free: malformed /proc/meminfo\n");
+    exit(1);
   }
 
     used_kb = total_kb - free_kb;
@@ -84,15 +84,15 @@ main(int argc, char *argv[])
     used_kb = 0;
 
   if(!human){
-    printf(1, "              total        used        free\n");
-    printf(1, "Mem:    %11d %11d %11d\n", total_kb, used_kb, free_kb);
+    dprintf(1, "              total        used        free\n");
+    dprintf(1, "Mem:    %11d %11d %11d\n", total_kb, used_kb, free_kb);
   } else {
-    printf(1, "              total        used        free\n");
-    printf(1, "Mem:    %11s %11s %11s\n",
-      human_kb(total_kb), human_kb(used_kb), human_kb(free_kb));
+    dprintf(1, "              total        used        free\n");
+    dprintf(1, "Mem:    %11s %11s %11s\n",
+            human_kb(total_kb), human_kb(used_kb), human_kb(free_kb));
   }
 
-  exit();
+  exit(0);
 }
 
 static char hbuf[3][16];

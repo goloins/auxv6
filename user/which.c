@@ -62,7 +62,7 @@ search_path(const char *name, const char *path)
     full[j] = 0;
 
     if(name[k] == 0 && is_executable_file(full)){
-      printf(1, "%s\n", full);
+      dprintf(1, "%s\n", full);
       return 1;
     }
 
@@ -83,8 +83,8 @@ main(int argc, char *argv[])
   char *path;
 
   if(argc < 2){
-    printf(2, "usage: which name...\n");
-    exit();
+    dprintf(2, "usage: which name...\n");
+    exit(1);
   }
 
   path = getenv("PATH");
@@ -95,21 +95,21 @@ main(int argc, char *argv[])
   for(i = 1; i < argc; i++){
     if(has_slash(argv[i])){
       if(is_executable_file(argv[i]))
-        printf(1, "%s\n", argv[i]);
+        dprintf(1, "%s\n", argv[i]);
       else {
-        printf(2, "which: %s not found\n", argv[i]);
+        dprintf(2, "which: %s not found\n", argv[i]);
         found_all = 0;
       }
       continue;
     }
 
     if(!search_path(argv[i], path)){
-      printf(2, "which: %s not found\n", argv[i]);
+      dprintf(2, "which: %s not found\n", argv[i]);
       found_all = 0;
     }
   }
 
   if(!found_all)
-    exit();
-  exit();
+    exit(1);
+  exit(0);
 }

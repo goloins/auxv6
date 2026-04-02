@@ -20,11 +20,11 @@ main(int argc, char *argv[])
 
   nif = net_load_ifs(ifs, NETIFINFO_MAX);
   if(nif < 0)
-    exit();
+    exit(1);
   nent = arpinfo(entries, ARPINFO_MAX);
   if(nent < 0) {
-    printf(2, "arp: arpinfo failed\n");
-    exit();
+    dprintf(2, "arp: arpinfo failed\n");
+    exit(1);
   }
 
   for(i = 0; i < nent; i++) {
@@ -35,21 +35,21 @@ main(int argc, char *argv[])
         break;
       }
     }
-    printf(1, "?");
-    printf(1, " (");
+    dprintf(1, "?");
+    dprintf(1, " (");
     net_print_ipv4(entries[i].ai_ip);
-    printf(1, ") at ");
+    dprintf(1, ") at ");
     net_print_mac(entries[i].ai_mac);
-    printf(1, " on %s", ifname);
+    dprintf(1, " on %s", ifname);
     if(entries[i].ai_flags & ARP_FLAG_PENDING)
-      printf(1, " [pending]");
+      dprintf(1, " [pending]");
     if(entries[i].ai_flags & ARP_FLAG_RESOLVED)
-      printf(1, " [resolved]");
-    printf(1, "\n");
+      dprintf(1, " [resolved]");
+    dprintf(1, "\n");
   }
-  exit();
+  exit(0);
 
 usage:
-  printf(2, "usage: arp [-a]\n");
-  exit();
+  dprintf(2, "usage: arp [-a]\n");
+  exit(1);
 }

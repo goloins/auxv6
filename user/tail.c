@@ -93,7 +93,7 @@ follow_file(const char *path, int interval_ticks)
   for(;;) {
     cur_len = read_all(path, cur, sizeof(cur));
     if(cur_len < 0) {
-      printf(2, "tail: cannot read %s\n", path);
+      dprintf(2, "tail: cannot read %s\n", path);
       return -1;
     }
 
@@ -126,8 +126,8 @@ main(int argc, char *argv[])
   path_i = 1;
 
   if(argc < 2) {
-    printf(2, "usage: tail [-f] file [interval_ticks]\n");
-    exit();
+    dprintf(2, "usage: tail [-f] file [interval_ticks]\n");
+    exit(1);
   }
 
   if(strcmp(argv[path_i], "-f") == 0) {
@@ -136,8 +136,8 @@ main(int argc, char *argv[])
   }
 
   if(path_i >= argc) {
-    printf(2, "usage: tail [-f] file [interval_ticks]\n");
-    exit();
+    dprintf(2, "usage: tail [-f] file [interval_ticks]\n");
+    exit(1);
   }
 
   if(follow && path_i + 1 < argc) {
@@ -148,8 +148,8 @@ main(int argc, char *argv[])
 
   len = read_all(argv[path_i], buf, sizeof(buf));
   if(len < 0) {
-    printf(2, "tail: cannot open %s\n", argv[path_i]);
-    exit();
+    dprintf(2, "tail: cannot open %s\n", argv[path_i]);
+    exit(1);
   }
 
   if(follow) {
@@ -158,10 +158,10 @@ main(int argc, char *argv[])
     if(len == 0 || buf[len - 1] != '\n')
       write(1, "\n", 1);
     if(follow_file(argv[path_i], interval_ticks) < 0)
-      exit();
-    exit();
+      exit(1);
+    exit(0);
   }
 
   print_tail_lines(buf, len, lines);
-  exit();
+  exit(0);
 }

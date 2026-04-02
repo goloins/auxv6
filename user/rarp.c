@@ -15,11 +15,11 @@ main(void)
 
   nif = net_load_ifs(ifs, NETIFINFO_MAX);
   if(nif < 0)
-    exit();
+    exit(1);
   nent = arpinfo(entries, ARPINFO_MAX);
   if(nent < 0) {
-    printf(2, "rarp: arpinfo failed\n");
-    exit();
+    dprintf(2, "rarp: arpinfo failed\n");
+    exit(1);
   }
 
   for(i = 0; i < nent; i++) {
@@ -31,10 +31,10 @@ main(void)
       }
     }
     net_print_mac(entries[i].ai_mac);
-    printf(1, " -> ");
+    dprintf(1, " -> ");
     net_print_ipv4(entries[i].ai_ip);
-    printf(1, " on %s\n", ifname);
+    dprintf(1, " on %s\n", ifname);
   }
 
-  exit();
+  exit(0);
 }

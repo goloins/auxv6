@@ -127,8 +127,8 @@ render_line(char *line, int *in_code)
 static void
 usage(void)
 {
-  printf(2, "usage: man [-l] topic\n");
-  printf(2, "       pager keys: Enter=next page, q=quit\n");
+  dprintf(2, "usage: man [-l] topic\n");
+  dprintf(2, "       pager keys: Enter=next page, q=quit\n");
 }
 
 static int
@@ -187,7 +187,7 @@ render_markdown_file(const char *path)
 
   close(fd);
   if(n < 0) {
-    printf(2, "man: read error: %s\n", path);
+    dprintf(2, "man: read error: %s\n", path);
     return -1;
   }
   return 0;
@@ -227,7 +227,7 @@ build_topic_path(char *out, int outsz, const char *topic, int with_md)
   return 0;
 }
 
-static void
+static int
 list_topics(void)
 {
   int fd;
@@ -237,8 +237,8 @@ list_topics(void)
 
   fd = open(MAN_DIR, O_RDONLY);
   if(fd < 0) {
-    printf(2, "man: cannot open %s\n", MAN_DIR);
-    return;
+    dprintf(2, "man: cannot open %s\n", MAN_DIR);
+    return -1;
   }
 
   while((nent = getdents(fd, des, 16)) > 0) {
@@ -261,11 +261,12 @@ list_topics(void)
       if(has_suffix(name, ".md"))
         name[strlen(name) - 3] = 0;
 
-      printf(1, "%s\n", name);
+      dprintf(1, "%s\n", name);
     }
   }
 
   close(fd);
+  return 0;
 }
 
 int
@@ -275,27 +276,29 @@ main(int argc, char *argv[])
 
   if(argc != 2) {
     usage();
-    exit();
+    exit(1);
   }
 
   if(strcmp(argv[1], "-l") == 0) {
-    list_topics();
-    exit();
+    exit(list_topics() < 0 ? 1 : 0);
   }
 
   if(strchr(argv[1], '/')) {
-    if(render_markdown_file(argv[1]) < 0)
-      printf(2, "man: no entry for %s\n", argv[1]);
-    exit();
+    int rc;
+
+    rc = render_markdown_file(argv[1]);
+    if(rc < 0)
+      dprintf(2, "man: no entry for %s\n", argv[1]);
+    exit(rc < 0 ? 1 : 0);
   }
 
   if(build_topic_path(path, sizeof(path), argv[1], 1) == 0 && render_markdown_file(path) == 0)
-    exit();
+    exit(0);
 
   if(build_topic_path(path, sizeof(path), argv[1], 0) == 0 && render_markdown_file(path) == 0)
-    exit();
+    exit(0);
 
-  printf(2, "man: no entry for %s\n", argv[1]);
-  printf(2, "man: run 'man -l' to list topics\n");
-  exit();
+  dprintf(2, "man: no entry for %s\n", argv[1]);
+  dprintf(2, "man: run 'man -l' to list topics\n");
+  exit(1);
 }

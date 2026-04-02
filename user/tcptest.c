@@ -17,8 +17,8 @@ main(int argc, char *argv[])
 
   sfd = socket(AF_INET, SOCK_STREAM, 0);
   if(sfd < 0){
-    printf(1, "tcptest: server socket failed\n");
-    exit();
+    dprintf(1, "tcptest: server socket failed\n");
+    exit(1);
   }
 
   memset(&saddr, 0, sizeof(saddr));
@@ -27,63 +27,63 @@ main(int argc, char *argv[])
   saddr.sin_addr = INADDR_LOOPBACK;
 
   if(bind(sfd, &saddr, sizeof(saddr)) < 0){
-    printf(1, "tcptest: server bind failed\n");
+    dprintf(1, "tcptest: server bind failed\n");
     close(sfd);
-    exit();
+    exit(1);
   }
 
   if(listen(sfd, 4) < 0){
-    printf(1, "tcptest: server listen failed\n");
+    dprintf(1, "tcptest: server listen failed\n");
     close(sfd);
-    exit();
+    exit(1);
   }
 
   pid = fork();
   if(pid < 0){
-    printf(1, "tcptest: fork failed\n");
+    dprintf(1, "tcptest: fork failed\n");
     close(sfd);
-    exit();
+    exit(1);
   }
 
   if(pid == 0){
     cfd = socket(AF_INET, SOCK_STREAM, 0);
     if(cfd < 0){
-      printf(1, "tcptest: client socket failed\n");
-      exit();
+      dprintf(1, "tcptest: client socket failed\n");
+      exit(1);
     }
 
     if(connect(cfd, &saddr, sizeof(saddr)) < 0){
-      printf(1, "tcptest: client connect failed\n");
+      dprintf(1, "tcptest: client connect failed\n");
       close(cfd);
-      exit();
+      exit(1);
     }
 
     n = send(cfd, msg, strlen(msg));
     if(n < 0){
-      printf(1, "tcptest: client send failed\n");
+      dprintf(1, "tcptest: client send failed\n");
       close(cfd);
-      exit();
+      exit(1);
     }
 
     close(cfd);
-    exit();
+    exit(0);
   }
 
   afd = accept(sfd);
   if(afd < 0){
-    printf(1, "tcptest: accept failed\n");
+    dprintf(1, "tcptest: accept failed\n");
     close(sfd);
     wait();
-    exit();
+    exit(1);
   }
 
   n = recv(afd, buf, sizeof(buf)-1);
   if(n < 0){
-    printf(1, "tcptest: server recv failed\n");
+    dprintf(1, "tcptest: server recv failed\n");
     close(afd);
     close(sfd);
     wait();
-    exit();
+    exit(1);
   }
   buf[n] = '\0';
 
@@ -91,6 +91,6 @@ main(int argc, char *argv[])
   close(afd);
   close(sfd);
 
-  printf(1, "tcptest: PASS n=%d msg=%s\n", n, buf);
-  exit();
+  dprintf(1, "tcptest: PASS n=%d msg=%s\n", n, buf);
+  exit(0);
 }

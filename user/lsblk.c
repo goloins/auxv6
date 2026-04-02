@@ -29,11 +29,11 @@ print_one(char *name, int dev, char *kind)
 
   mi = find_mount_for_dev(dev);
   if(mi)
-    printf(1, "%-8s dev=%2d %-5s blocks=%6d mounted=%s type=%s\n",
-           name, dev, kind, blocks, mi->path, mi->fstype);
+    dprintf(1, "%-8s dev=%2d %-5s blocks=%6d mounted=%s type=%s\n",
+            name, dev, kind, blocks, mi->path, mi->fstype);
   else
-    printf(1, "%-8s dev=%2d %-5s blocks=%6d mounted=-\n",
-           name, dev, kind, blocks);
+    dprintf(1, "%-8s dev=%2d %-5s blocks=%6d mounted=-\n",
+            name, dev, kind, blocks);
 }
 
 static void
@@ -78,18 +78,18 @@ int
 main(int argc, char *argv[])
 {
   if(argc != 1){
-    printf(2, "usage: lsblk\n");
-    exit();
+    dprintf(2, "usage: lsblk\n");
+    exit(1);
   }
 
   g_nmounts = mountinfo(g_mounts, MOUNTINFO_MAX);
   if(g_nmounts < 0)
     g_nmounts = 0;
 
-  printf(1, "NAME     DEV TYPE  BLOCKS  MOUNT\n");
+  dprintf(1, "NAME     DEV TYPE  BLOCKS  MOUNT\n");
   print_family('h', HD_DISK_UNITS, HD_PARTS_PER_DISK);
   print_family('v', VD_DISK_UNITS, VD_PARTS_PER_DISK);
   print_family('n', ND_DISK_UNITS, 0);
 
-  exit();
+  exit(0);
 }

@@ -12,30 +12,30 @@ main(int argc, char **argv)
 
   fd = open("/dev/console", O_RDWR);
   if(fd < 0) {
-    printf(2, "chvt: cannot open /dev/console\n");
-    exit();
+    dprintf(2, "chvt: cannot open /dev/console\n");
+    exit(1);
   }
 
   if(argc == 1) {
     tty = -1;
     if(ioctl(fd, TIOCGACTTTY, &tty) < 0) {
-      printf(2, "chvt: failed to query active tty\n");
+      dprintf(2, "chvt: failed to query active tty\n");
       close(fd);
-      exit();
+      exit(1);
     }
-    printf(1, "%d\n", tty);
+    dprintf(1, "%d\n", tty);
     close(fd);
-    exit();
+    exit(0);
   }
 
   tty = atoi(argv[1]);
   if(ioctl(fd, TIOCSACTTTY, tty) < 0) {
-    printf(2, "chvt: failed to switch to tty %d\n", tty);
+    dprintf(2, "chvt: failed to switch to tty %d\n", tty);
     close(fd);
-    exit();
+    exit(1);
   }
 
   close(fd);
-  exit();
+  exit(0);
   return 0;
 }

@@ -10,8 +10,8 @@ main(int argc, char **argv)
   int firstpid;
 
   if(argc < 2){
-    printf(2, "usage: kill [-signo] pid...\n");
-    exit();
+    dprintf(2, "usage: kill [-signo] pid...\n");
+    exit(1);
   }
 
   sig = SIGTERM;
@@ -21,11 +21,11 @@ main(int argc, char **argv)
     firstpid = 2;
   }
   if(firstpid >= argc) {
-    printf(2, "usage: kill [-signo] pid...\n");
-    exit();
+    dprintf(2, "usage: kill [-signo] pid...\n");
+    exit(1);
   }
 
   for(i = firstpid; i < argc; i++)
     sigsend(atoi(argv[i]), sig);
-  exit();
+  exit(0);
 }

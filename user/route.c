@@ -15,14 +15,14 @@ show_routes(void)
 
   nif = net_load_ifs(ifs, NETIFINFO_MAX);
   if(nif < 0)
-    exit();
+    exit(1);
   nrt = routeinfo(routes, ROUTEINFO_MAX);
   if(nrt < 0) {
-    printf(2, "route: routeinfo failed\n");
-    exit();
+    dprintf(2, "route: routeinfo failed\n");
+    exit(1);
   }
 
-  printf(1, "Destination     Gateway         Genmask         Flags Iface\n");
+  dprintf(1, "Destination     Gateway         Genmask         Flags Iface\n");
   for(i = 0; i < nrt; i++) {
     ifname = "?";
     for(j = 0; j < nif; j++) {
@@ -32,25 +32,25 @@ show_routes(void)
       }
     }
     net_print_ipv4(routes[i].rt_dst);
-    printf(1, " ");
+    dprintf(1, " ");
     net_print_ipv4(routes[i].rt_gateway);
-    printf(1, " ");
+    dprintf(1, " ");
     net_print_ipv4(routes[i].rt_mask);
-    printf(1, " 0x%x %s\n", routes[i].rt_flags, ifname);
+    dprintf(1, " 0x%x %s\n", routes[i].rt_flags, ifname);
   }
 }
 
 static void
 usage(void)
 {
-  printf(2, "usage: route\n");
-  printf(2, "       route add default <gateway> <ifname>\n");
-  printf(2, "       route add <dst> <mask> <gateway|-> <ifname> [src]\n");
-  printf(2, "       route del default <ifname>\n");
-  printf(2, "       route del <dst> <mask> <ifname>\n");
-  printf(2, "       route delete default <ifname>\n");
-  printf(2, "       route delete <dst> <mask> <ifname>\n");
-  exit();
+  dprintf(2, "usage: route\n");
+  dprintf(2, "       route add default <gateway> <ifname>\n");
+  dprintf(2, "       route add <dst> <mask> <gateway|-> <ifname> [src]\n");
+  dprintf(2, "       route del default <ifname>\n");
+  dprintf(2, "       route del <dst> <mask> <ifname>\n");
+  dprintf(2, "       route delete default <ifname>\n");
+  dprintf(2, "       route delete <dst> <mask> <ifname>\n");
+  exit(1);
 }
 
 int
@@ -67,7 +67,7 @@ main(int argc, char *argv[])
 
   if(argc == 1) {
     show_routes();
-    exit();
+    exit(0);
   }
   cmd = argv[1];
   if(strcmp(cmd, "add") != 0 && strcmp(cmd, "del") != 0 && strcmp(cmd, "delete") != 0)
@@ -75,7 +75,7 @@ main(int argc, char *argv[])
 
   nif = net_load_ifs(ifs, NETIFINFO_MAX);
   if(nif < 0)
-    exit();
+    exit(1);
 
   if(strcmp(cmd, "add") == 0) {
     if(strcmp(argv[2], "default") == 0) {
@@ -85,16 +85,16 @@ main(int argc, char *argv[])
         usage();
       ifp = net_find_if(ifs, nif, argv[4]);
       if(ifp == 0) {
-        printf(2, "route: unknown interface %s\n", argv[4]);
-        exit();
+        dprintf(2, "route: unknown interface %s\n", argv[4]);
+        exit(1);
       }
       src = ifp->if_addr;
       if(routeadd(0, 0, gw, src, ifp->if_index) < 0) {
-        printf(2, "route: routeadd failed\n");
-        exit();
+        dprintf(2, "route: routeadd failed\n");
+        exit(1);
       }
       show_routes();
-      exit();
+      exit(0);
     }
 
     if(argc != 6 && argc != 7)
@@ -105,18 +105,18 @@ main(int argc, char *argv[])
       usage();
     ifp = net_find_if(ifs, nif, argv[5]);
     if(ifp == 0) {
-      printf(2, "route: unknown interface %s\n", argv[5]);
-      exit();
+      dprintf(2, "route: unknown interface %s\n", argv[5]);
+      exit(1);
     }
     src = ifp->if_addr;
     if(argc == 7 && net_parse_ipv4(argv[6], &src) < 0)
       usage();
     if(routeadd(dst, mask, gw, src, ifp->if_index) < 0) {
-      printf(2, "route: routeadd failed\n");
-      exit();
+      dprintf(2, "route: routeadd failed\n");
+      exit(1);
     }
     show_routes();
-    exit();
+    exit(0);
   }
 
   if(strcmp(argv[2], "default") == 0) {
@@ -124,15 +124,15 @@ main(int argc, char *argv[])
       usage();
     ifp = net_find_if(ifs, nif, argv[3]);
     if(ifp == 0) {
-      printf(2, "route: unknown interface %s\n", argv[3]);
-      exit();
+      dprintf(2, "route: unknown interface %s\n", argv[3]);
+      exit(1);
     }
     if(routedel(0, 0, ifp->if_index) < 0) {
-      printf(2, "route: routedel failed\n");
-      exit();
+      dprintf(2, "route: routedel failed\n");
+      exit(1);
     }
     show_routes();
-    exit();
+    exit(0);
   }
 
   if(argc != 5)
@@ -141,13 +141,13 @@ main(int argc, char *argv[])
     usage();
   ifp = net_find_if(ifs, nif, argv[4]);
   if(ifp == 0) {
-    printf(2, "route: unknown interface %s\n", argv[4]);
-    exit();
+    dprintf(2, "route: unknown interface %s\n", argv[4]);
+    exit(1);
   }
   if(routedel(dst & mask, mask, ifp->if_index) < 0) {
-    printf(2, "route: routedel failed\n");
-    exit();
+    dprintf(2, "route: routedel failed\n");
+    exit(1);
   }
   show_routes();
-  exit();
+  exit(0);
 }

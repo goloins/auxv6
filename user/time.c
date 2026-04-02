@@ -9,7 +9,7 @@ print_elapsed(uint ticks)
 
   seconds = ticks / 100;
   hundredths = ticks % 100;
-  printf(2, "real %d.%02ds\n", seconds, hundredths);
+  dprintf(2, "real %d.%02ds\n", seconds, hundredths);
 }
 
 int
@@ -21,32 +21,32 @@ main(int argc, char *argv[])
   uint end;
 
   if(argc < 2){
-    printf(2, "usage: time command [args...]\n");
-    exit();
+    dprintf(2, "usage: time command [args...]\n");
+    exit(1);
   }
 
   start = (uint)uptime();
   pid = fork();
   if(pid < 0){
-    printf(2, "time: fork failed\n");
-    exit();
+    dprintf(2, "time: fork failed\n");
+    exit(1);
   }
 
   if(pid == 0){
     exec(argv[1], &argv[1]);
-    printf(2, "time: exec %s failed\n", argv[1]);
-    exit();
+    dprintf(2, "time: exec %s failed\n", argv[1]);
+    exit(1);
   }
 
   status = 0;
   if(waitpid(pid, &status, 0) < 0){
-    printf(2, "time: waitpid failed\n");
-    exit();
+    dprintf(2, "time: waitpid failed\n");
+    exit(1);
   }
 
   end = (uint)uptime();
   if(end < start)
     end = start;
   print_elapsed(end - start);
-  exit();
+  exit(0);
 }

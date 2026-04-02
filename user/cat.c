@@ -18,19 +18,19 @@ cat(int fd, int ensure_newline)
     saw_data = 1;
     last = buf[n - 1];
     if (write(1, buf, n) != n) {
-      printf(1, "cat: write error\n");
-      exit();
+      dprintf(1, "cat: write error\n");
+      exit(1);
     }
   }
   if(n < 0){
-    printf(1, "cat: read error\n");
-    exit();
+    dprintf(1, "cat: read error\n");
+    exit(1);
   }
 
   if(ensure_newline && saw_data && last != '\n') {
     if(write(1, "\n", 1) != 1) {
-      printf(1, "cat: write error\n");
-      exit();
+      dprintf(1, "cat: write error\n");
+      exit(1);
     }
   }
 }
@@ -42,16 +42,16 @@ main(int argc, char *argv[])
 
   if(argc <= 1){
     cat(0, 0);
-    exit();
+    exit(0);
   }
 
   for(i = 1; i < argc; i++){
     if((fd = open(argv[i], 0)) < 0){
-      printf(1, "cat: cannot open %s\n", argv[i]);
-      exit();
+      dprintf(1, "cat: cannot open %s\n", argv[i]);
+      exit(1);
     }
     cat(fd, 1);
     close(fd);
   }
-  exit();
+  exit(0);
 }

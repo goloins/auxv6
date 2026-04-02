@@ -111,32 +111,32 @@ main(int argc, char *argv[])
   dst_addr = INADDR_LOOPBACK;
   used_resolver = 0;
   if(argc > 2) {
-    printf(2, "usage: ping [ipv4-or-hostname]\n");
-    exit();
+    dprintf(2, "usage: ping [ipv4-or-hostname]\n");
+    exit(1);
   }
   if(argc == 2) {
     if(parse_ipv4(argv[1], &dst_addr) < 0) {
       if(resolve_ipv4(argv[1], &dst_addr) < 0) {
-        printf(2, "ping: cannot resolve %s\n", argv[1]);
-        exit();
+        dprintf(2, "ping: cannot resolve %s\n", argv[1]);
+        exit(1);
       }
       used_resolver = 1;
     }
   }
 
   if(used_resolver) {
-    printf(1, "%s resolves to ", argv[1]);
-    printf(1, "%d.%d.%d.%d\n",
-           (dst_addr >> 24) & 0xff,
-           (dst_addr >> 16) & 0xff,
-           (dst_addr >> 8) & 0xff,
-           dst_addr & 0xff);
+    dprintf(1, "%s resolves to %d.%d.%d.%d\n",
+            argv[1],
+            (dst_addr >> 24) & 0xff,
+            (dst_addr >> 16) & 0xff,
+            (dst_addr >> 8) & 0xff,
+            dst_addr & 0xff);
   }
 
   fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
   if(fd < 0) {
-    printf(1, "ping: socket failed\n");
-    exit();
+    dprintf(1, "ping: socket failed\n");
+    exit(1);
   }
 
   memset(&dst, 0, sizeof(dst));
@@ -144,9 +144,9 @@ main(int argc, char *argv[])
   dst.sin_addr = dst_addr;
 
   if(connect(fd, &dst, sizeof(dst)) < 0) {
-    printf(1, "ping: connect failed\n");
+    dprintf(1, "ping: connect failed\n");
     close(fd);
-    exit();
+    exit(1);
   }
 
   pid = getpid();
@@ -172,9 +172,9 @@ main(int argc, char *argv[])
     t0 = uptime();
     c0 = rdtsc32();
     if(send(fd, &pkt, sizeof(pkt)) < 0) {
-      printf(1, "ping: send failed seq=%d\n", i);
+      dprintf(1, "ping: send failed seq=%d\n", i);
       close(fd);
-      exit();
+      exit(1);
     }
 
     matched = 0;
@@ -208,9 +208,9 @@ main(int argc, char *argv[])
           received++;
 
           if(rtt == 0)
-            printf(1, "ping: PASS bytes=%d seq=%d time=<1 tick cycles=%u\n", n, rh->seq, cyc);
+            dprintf(1, "ping: PASS bytes=%d seq=%d time=<1 tick cycles=%u\n", n, rh->seq, cyc);
           else
-            printf(1, "ping: PASS bytes=%d seq=%d time=%d ticks cycles=%u\n", n, rh->seq, rtt, cyc);
+            dprintf(1, "ping: PASS bytes=%d seq=%d time=%d ticks cycles=%u\n", n, rh->seq, rtt, cyc);
           matched = 1;
           break;
         }
@@ -220,7 +220,7 @@ main(int argc, char *argv[])
     }
 
     if(!matched) {
-      printf(1, "ping: timeout seq=%d\n", i);
+      dprintf(1, "ping: timeout seq=%d\n", i);
       continue;
     }
 
@@ -229,17 +229,17 @@ main(int argc, char *argv[])
   }
 
   lost = npings - received;
-  printf(1, "ping: sent=%d received=%d lost=%d loss=%d%%\n",
-         npings, received, lost, (lost * 100) / npings);
+  dprintf(1, "ping: sent=%d received=%d lost=%d loss=%d%%\n",
+          npings, received, lost, (lost * 100) / npings);
   if(received > 0) {
     avg_rtt = (sum_rtt + received / 2) / received;
-      avg_cyc = (sum_cyc + (uint)received / 2) / (uint)received;
-    printf(1, "ping: rtt min/avg/max = %d/%d/%d ticks\n",
-           min_rtt, avg_rtt, max_rtt);
-      printf(1, "ping: cycles min/avg/max = %u/%u/%u\n",
-        min_cyc, avg_cyc, max_cyc);
+    avg_cyc = (sum_cyc + (uint)received / 2) / (uint)received;
+    dprintf(1, "ping: rtt min/avg/max = %d/%d/%d ticks\n",
+            min_rtt, avg_rtt, max_rtt);
+    dprintf(1, "ping: cycles min/avg/max = %u/%u/%u\n",
+            min_cyc, avg_cyc, max_cyc);
   }
 
   close(fd);
-  exit();
+  exit(0);
 }

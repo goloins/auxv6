@@ -22,6 +22,6 @@ main(void)
     }
   }
 
-  printf(1, "%c %c\n", prev, cur);
-  exit();
+  dprintf(1, "%c %c\n", prev, cur);
+  exit(0);
 }

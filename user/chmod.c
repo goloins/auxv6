@@ -25,24 +25,28 @@ main(int argc, char *argv[])
 {
   int i;
   int mode;
+  int status;
+
+  status = 0;
 
   if(argc < 3){
-    printf(2, "usage: chmod mode file...\n");
-    exit();
+    dprintf(2, "usage: chmod mode file...\n");
+    exit(1);
   }
 
   mode = parse_mode(argv[1]);
   if(mode < 0){
-    printf(2, "chmod: invalid mode %s\n", argv[1]);
-    exit();
+    dprintf(2, "chmod: invalid mode %s\n", argv[1]);
+    exit(1);
   }
 
   for(i = 2; i < argc; i++){
     if(chmod(argv[i], mode) < 0){
-      printf(2, "chmod: %s failed\n", argv[i]);
+      dprintf(2, "chmod: %s failed\n", argv[i]);
+      status = 1;
       break;
     }
   }
 
-  exit();
+  exit(status);
 }
