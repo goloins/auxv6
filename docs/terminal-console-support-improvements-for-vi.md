@@ -34,6 +34,7 @@ Already landed:
 16. Terminal mode-query tranche: console now supports mode query replies for `CSI Ps $ p` and `CSI ? Ps $ p` (RMQ/DECRQM), returning `CSI Ps ; Pm $ y` / `CSI ? Ps ; Pm $ y`; termcheck full mode now validates insert mode (`Ps=4`) and cursor-visibility private mode (`Ps=25`) set/reset query responses.
 17. Terminal DEC/private matrix follow-up: termcheck full mode now validates additional mode query transitions (private `?1`, `?7`, `?6`, `?5`, `?12`, `?1049` and standard `20`), unknown-mode query fallback (`Pm=0`), origin/scroll-region cursor invariants (`DECSTBM` + DECOM interaction for `CUP`/`CPR`), and alt-screen cursor save/restore invariants across `?1049h/l`.
 18. Terminal DSR/private-report follow-up: console now synthesizes DEC private status replies for `CSI ? 15 n` (printer status -> `CSI ? 13 n`) and `CSI ? 25 n` (UDK status -> `CSI ? 21 n`), and termcheck full mode validates both roundtrips.
+19. Termcheck observability follow-up: `termcheck` now mirrors PASS/FAIL/SKIP summary lines to `/tmp/termcheck.log` by default (override with `--log <path>`), making full-run failures inspectable even when interactive ANSI output is noisy.
 
 Still missing or incomplete for nano/curses-class reliability:
 1. Session/controlling-tty integration for PTYs is still partial; job control still needs deeper session semantics beyond basic per-PTY foreground checks.

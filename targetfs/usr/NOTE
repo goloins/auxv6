@@ -1,0 +1,5 @@
+usr/ - user programs
+usr/bin - binaries
+usr/sbin - binaries (but spooky)
+usr/share - shared resources
+usr/ports - ports tree

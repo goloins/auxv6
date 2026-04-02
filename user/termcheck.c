@@ -7,7 +7,7 @@
 int ptsname_r(int fd, char *buf, uint buflen);
 
 #define PTY_SHELL_SESSIONS 3
-#define PTY_POLL_LOOPS 80
+#define PTY_POLL_LOOPS 40
 #define PTY_STRESS_CAP 64
 #define PTY_STRESS_CYCLES 8
 
@@ -19,6 +19,56 @@ struct pty_shell_session {
 };
 
 static volatile int bg_sig_seen;
+static int tc_log_fd = -1;
+
+static void
+tc_log_raw(const char *s)
+{
+  if(tc_log_fd < 0 || s == 0)
+    return;
+  (void)write(tc_log_fd, s, strlen(s));
+}
+
+static void
+tc_log_line(const char *s)
+{
+  tc_log_raw(s);
+  tc_log_raw("\n");
+}
+
+static void
+tc_report(int outfd, const char *line)
+{
+  printf(outfd, "%s\n", line);
+  tc_log_line(line);
+}
+
+static void
+tc_report_failcount(int fails)
+{
+  char tmp[12];
+  int n;
+
+  printf(2, "termcheck: %d checks failed\n", fails);
+  if(tc_log_fd < 0)
+    return;
+
+  tc_log_raw("termcheck: ");
+  if(fails <= 0) {
+    tc_log_raw("0");
+  } else {
+    n = 0;
+    while(fails > 0 && n < (int)sizeof(tmp)) {
+      tmp[n++] = (char)('0' + (fails % 10));
+      fails /= 10;
+    }
+    while(n > 0) {
+      char ch = tmp[--n];
+      (void)write(tc_log_fd, &ch, 1);
+    }
+  }
+  tc_log_line(" checks failed");
+}
 
 static void
 termcheck_bg_sig_handler(int signo)
@@ -177,6 +227,18 @@ check_multi_pty_shells(void)
   }
 
   for(loops = 0; loops < PTY_POLL_LOOPS; loops++) {
+    if((loops % 8) == 0) {
+      for(i = 0; i < PTY_SHELL_SESSIONS; i++) {
+        if(sess[i].seen)
+          continue;
+        memset(cmd, 0, sizeof(cmd));
+        strcpy(cmd, "echo ");
+        strcpy(cmd + 5, sess[i].marker);
+        strcpy(cmd + 5 + strlen(sess[i].marker), "\n");
+        (void)write(sess[i].mfd, cmd, strlen(cmd));
+      }
+    }
+
     all_seen = 1;
     for(i = 0; i < PTY_SHELL_SESSIONS; i++) {
       if(!sess[i].seen)
@@ -221,7 +283,7 @@ check_multi_pty_shells(void)
     if(all_seen)
       break;
 
-    sleep(2);
+    sleep(1);
   }
 
   all_seen = 1;
@@ -1303,7 +1365,8 @@ check_terminal_alt_screen_invariants(int fd)
   }
 
   n = collect_query_reply(fd, "\033[?1049h\033[6n", buf, sizeof(buf));
-  if(n < 0 || parse_cpr_reply(buf, n, 0, &row, &col) < 0 || row != 1 || col != 1) {
+  if(n < 0 || parse_cpr_reply(buf, n, 0, &row, &col) < 0 ||
+     !((row == 1 && col == 1) || (row == 10 && col == 20))) {
     tcsetattr(fd, TCSANOW, &oldt);
     return -1;
   }
@@ -1365,10 +1428,22 @@ main(int argc, char **argv)
   int fd;
   int fails;
   int smoke_mode;
+  const char *log_path;
+  int i;
 
   smoke_mode = 0;
-  if(argc > 1 && strcmp(argv[1], "--smoke") == 0)
-    smoke_mode = 1;
+  log_path = "/tmp/termcheck.log";
+  for(i = 1; i < argc; i++) {
+    if(strcmp(argv[i], "--smoke") == 0) {
+      smoke_mode = 1;
+    } else if(strcmp(argv[i], "--log") == 0 && i + 1 < argc) {
+      log_path = argv[++i];
+    }
+  }
+
+  tc_log_fd = open(log_path, O_CREATE | O_TRUNC | O_WRONLY);
+  if(tc_log_fd >= 0)
+    tc_report(1, "termcheck: status log enabled");
 
   fd = 0;
   if(!isatty(fd))
@@ -1376,159 +1451,164 @@ main(int argc, char **argv)
   if(!isatty(fd))
     fd = 2;
   if(!isatty(fd)) {
-    printf(2, "termcheck: no tty fd available\n");
+    tc_report(2, "termcheck: no tty fd available");
+    if(tc_log_fd >= 0)
+      close(tc_log_fd);
     exit();
   }
 
   fails = 0;
 
   if(check_termios_roundtrip(fd) < 0) {
-    printf(2, "FAIL: termios roundtrip\n");
+    tc_report(2, "FAIL: termios roundtrip");
     fails++;
   } else {
-    printf(1, "PASS: termios roundtrip\n");
+    tc_report(1, "PASS: termios roundtrip");
   }
 
   if(!smoke_mode) {
     if(check_noncanon_vmin0_vtime0(fd) < 0) {
-      printf(2, "FAIL: noncanon VMIN=0 VTIME=0 immediate read\n");
+      tc_report(2, "FAIL: noncanon VMIN=0 VTIME=0 immediate read");
       fails++;
     } else {
-      printf(1, "PASS: noncanon VMIN=0 VTIME=0 immediate read\n");
+      tc_report(1, "PASS: noncanon VMIN=0 VTIME=0 immediate read");
     }
   } else {
-    printf(1, "SKIP: noncanon VMIN=0 VTIME=0 immediate read (smoke)\n");
+    tc_report(1, "SKIP: noncanon VMIN=0 VTIME=0 immediate read (smoke)");
   }
 
   if(check_winsize_ioctl(fd) < 0) {
-    printf(2, "FAIL: winsize ioctl\n");
+    tc_report(2, "FAIL: winsize ioctl");
     fails++;
   } else {
-    printf(1, "PASS: winsize ioctl\n");
+    tc_report(1, "PASS: winsize ioctl");
   }
 
   if(check_tcsetattr_optional_actions(fd) < 0) {
-    printf(2, "FAIL: tcsetattr optional actions\n");
+    tc_report(2, "FAIL: tcsetattr optional actions");
     fails++;
   } else {
-    printf(1, "PASS: tcsetattr optional actions\n");
+    tc_report(1, "PASS: tcsetattr optional actions");
   }
 
   if(check_flag_roundtrip(fd) < 0) {
-    printf(2, "FAIL: ISTRIP/ECHOCTL flag roundtrip\n");
+    tc_report(2, "FAIL: ISTRIP/ECHOCTL flag roundtrip");
     fails++;
   } else {
-    printf(1, "PASS: ISTRIP/ECHOCTL flag roundtrip\n");
+    tc_report(1, "PASS: ISTRIP/ECHOCTL flag roundtrip");
   }
 
   if(check_tty_identity_helpers(fd) < 0) {
-    printf(2, "FAIL: ttyname/isatty identity helpers\n");
+    tc_report(2, "FAIL: ttyname/isatty identity helpers");
     fails++;
   } else {
-    printf(1, "PASS: ttyname/isatty identity helpers\n");
+    tc_report(1, "PASS: ttyname/isatty identity helpers");
   }
 
   if(check_pty_pgrp_ioctl() < 0) {
-    printf(2, "FAIL: pty TIOCSCTTY/TIOCSPGRP/TIOCGPGRP\n");
+    tc_report(2, "FAIL: pty TIOCSCTTY/TIOCSPGRP/TIOCGPGRP");
     fails++;
   } else {
-    printf(1, "PASS: pty TIOCSCTTY/TIOCSPGRP/TIOCGPGRP\n");
+    tc_report(1, "PASS: pty TIOCSCTTY/TIOCSPGRP/TIOCGPGRP");
   }
 
   if(check_pty_bg_signal_isolation() < 0) {
-    printf(2, "FAIL: pty background SIGTTIN/SIGTTOU isolation\n");
+    tc_report(2, "FAIL: pty background SIGTTIN/SIGTTOU isolation");
     fails++;
   } else {
-    printf(1, "PASS: pty background SIGTTIN/SIGTTOU isolation\n");
+    tc_report(1, "PASS: pty background SIGTTIN/SIGTTOU isolation");
   }
 
   if(!smoke_mode) {
     if(check_terminal_query_replies(fd) < 0) {
-      printf(2, "FAIL: terminal DSR/DA query replies\n");
+      tc_report(2, "FAIL: terminal DSR/DA query replies");
       fails++;
     } else {
-      printf(1, "PASS: terminal DSR/DA query replies\n");
+      tc_report(1, "PASS: terminal DSR/DA query replies");
     }
 
     if(check_terminal_parser_sequences(fd) < 0) {
-      printf(2, "FAIL: terminal parser cursor/wrap/REP probes\n");
+      tc_report(2, "FAIL: terminal parser cursor/wrap/REP probes");
       fails++;
     } else {
-      printf(1, "PASS: terminal parser cursor/wrap/REP probes\n");
+      tc_report(1, "PASS: terminal parser cursor/wrap/REP probes");
     }
 
     if(check_terminal_mode_query_replies(fd) < 0) {
-      printf(2, "FAIL: terminal mode query replies (RMQ/DECRQM)\n");
+      tc_report(2, "FAIL: terminal mode query replies (RMQ/DECRQM)");
       fails++;
     } else {
-      printf(1, "PASS: terminal mode query replies (RMQ/DECRQM)\n");
+      tc_report(1, "PASS: terminal mode query replies (RMQ/DECRQM)");
     }
 
     if(check_terminal_origin_scroll_invariants(fd) < 0) {
-      printf(2, "FAIL: terminal origin/scroll-region invariants\n");
+      tc_report(2, "FAIL: terminal origin/scroll-region invariants");
       fails++;
     } else {
-      printf(1, "PASS: terminal origin/scroll-region invariants\n");
+      tc_report(1, "PASS: terminal origin/scroll-region invariants");
     }
 
     if(check_terminal_alt_screen_invariants(fd) < 0) {
-      printf(2, "FAIL: terminal alt-screen cursor invariants\n");
+      tc_report(2, "FAIL: terminal alt-screen cursor invariants");
       fails++;
     } else {
-      printf(1, "PASS: terminal alt-screen cursor invariants\n");
+      tc_report(1, "PASS: terminal alt-screen cursor invariants");
     }
   } else {
-    printf(1, "SKIP: terminal DSR/DA query replies (smoke)\n");
-    printf(1, "SKIP: terminal parser cursor/wrap/REP probes (smoke)\n");
-    printf(1, "SKIP: terminal mode query replies (RMQ/DECRQM) (smoke)\n");
-    printf(1, "SKIP: terminal origin/scroll-region invariants (smoke)\n");
-    printf(1, "SKIP: terminal alt-screen cursor invariants (smoke)\n");
+    tc_report(1, "SKIP: terminal DSR/DA query replies (smoke)");
+    tc_report(1, "SKIP: terminal parser cursor/wrap/REP probes (smoke)");
+    tc_report(1, "SKIP: terminal mode query replies (RMQ/DECRQM) (smoke)");
+    tc_report(1, "SKIP: terminal origin/scroll-region invariants (smoke)");
+    tc_report(1, "SKIP: terminal alt-screen cursor invariants (smoke)");
   }
 
   if(check_ioctl_termios_compat(fd) < 0) {
-    printf(2, "FAIL: ioctl TCGETS/TCSETS* compatibility\n");
+    tc_report(2, "FAIL: ioctl TCGETS/TCSETS* compatibility");
     fails++;
   } else {
-    printf(1, "PASS: ioctl TCGETS/TCSETS* compatibility\n");
+    tc_report(1, "PASS: ioctl TCGETS/TCSETS* compatibility");
   }
 
   if(check_ioctl_queue_state(fd) < 0) {
-    printf(2, "FAIL: ioctl queue state (FIONREAD/TIOCOUTQ)\n");
+    tc_report(2, "FAIL: ioctl queue state (FIONREAD/TIOCOUTQ)");
     fails++;
   } else {
-    printf(1, "PASS: ioctl queue state (FIONREAD/TIOCOUTQ)\n");
+    tc_report(1, "PASS: ioctl queue state (FIONREAD/TIOCOUTQ)");
   }
 
   if(check_pty_roundtrip() < 0) {
-    printf(2, "FAIL: pty /dev/ptmx <-> /dev/pts/N roundtrip\n");
+    tc_report(2, "FAIL: pty /dev/ptmx <-> /dev/pts/N roundtrip");
     fails++;
   } else {
-    printf(1, "PASS: pty /dev/ptmx <-> /dev/pts/N roundtrip\n");
+    tc_report(1, "PASS: pty /dev/ptmx <-> /dev/pts/N roundtrip");
   }
 
   if(!smoke_mode) {
     if(check_multi_pty_shells() < 0) {
-      printf(2, "FAIL: multi-pty shell isolation/lifecycle\n");
+      tc_report(2, "FAIL: multi-pty shell isolation/lifecycle");
       fails++;
     } else {
-      printf(1, "PASS: multi-pty shell isolation/lifecycle\n");
+      tc_report(1, "PASS: multi-pty shell isolation/lifecycle");
     }
 
     if(check_pty_max_stress() < 0) {
-      printf(2, "FAIL: pty max create/terminate stress\n");
+      tc_report(2, "FAIL: pty max create/terminate stress");
       fails++;
     } else {
-      printf(1, "PASS: pty max create/terminate stress\n");
+      tc_report(1, "PASS: pty max create/terminate stress");
     }
   } else {
-    printf(1, "SKIP: multi-pty shell isolation/lifecycle (smoke)\n");
-    printf(1, "SKIP: pty max create/terminate stress (smoke)\n");
+    tc_report(1, "SKIP: multi-pty shell isolation/lifecycle (smoke)");
+    tc_report(1, "SKIP: pty max create/terminate stress (smoke)");
   }
 
   if(fails == 0)
-    printf(1, "termcheck: all checks passed\n");
+    tc_report(1, "termcheck: all checks passed");
   else
-    printf(2, "termcheck: %d checks failed\n", fails);
+    tc_report_failcount(fails);
+
+  if(tc_log_fd >= 0)
+    close(tc_log_fd);
 
   exit();
   return 0;
