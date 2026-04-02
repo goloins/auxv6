@@ -5,6 +5,7 @@
 #include "../include/posix/sys/ioctl.h"
 
 int ptsname_r(int fd, char *buf, uint buflen);
+static int collect_query_reply(int fd, const char *query, char *buf, int buflen);
 
 #define PTY_SHELL_SESSIONS 3
 #define PTY_POLL_LOOPS 40
@@ -145,12 +146,14 @@ tc_debug_query_fail(const char *label, const char *query, const char *expected, 
   tc_log_line(label);
   tc_log_raw("  expected token: ");
   tc_log_line(expected);
-  tc_log_raw("  query bytes: ");
-  tc_debug_emit_escaped(tc_log_fd, query, strlen(query));
-  tc_log_raw("\n");
-  tc_log_raw("  reply bytes: ");
-  tc_debug_emit_escaped(tc_log_fd, buf, n > 0 ? n : 0);
-  tc_log_raw("\n");
+  if(tc_log_fd >= 0) {
+    tc_log_raw("  query bytes: ");
+    tc_debug_emit_escaped(tc_log_fd, query, strlen(query));
+    tc_log_raw("\n");
+    tc_log_raw("  reply bytes: ");
+    tc_debug_emit_escaped(tc_log_fd, buf, n > 0 ? n : 0);
+    tc_log_raw("\n");
+  }
 }
 
 static int
@@ -1203,10 +1206,12 @@ check_terminal_query_replies(int fd)
 {
   struct termios oldt;
   struct termios t;
+  struct winsize ws;
   char buf[128];
-  int n;
   int row;
   int col;
+  int exp_row;
+  int exp_col;
 
   if(tcgetattr(fd, &oldt) < 0)
     return -1;
@@ -1218,50 +1223,113 @@ check_terminal_query_replies(int fd)
   if(tcsetattr(fd, TCSANOW, &t) < 0)
     return -1;
 
-  n = collect_query_reply(fd, "\033[5n", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[0n")) {
+  exp_row = 24;
+  exp_col = 80;
+  if(ioctl(fd, TIOCGWINSZ, &ws) == 0) {
+    if(ws.ws_row > 0)
+      exp_row = ws.ws_row;
+    if(ws.ws_col > 0)
+      exp_col = ws.ws_col;
+  }
+
+  if(expect_token_reply(fd, "DSR 5n", "\033[5n", "\033[0n", buf, sizeof(buf)) < 0) {
     tcsetattr(fd, TCSANOW, &oldt);
     return -1;
   }
 
-  n = collect_query_reply(fd, "\033[6n", buf, sizeof(buf));
-  if(n < 0 || parse_cpr_reply(buf, n, 0, &row, &col) < 0) {
+  if(collect_query_reply(fd, "\033[6n", buf, sizeof(buf)) < 0 || parse_cpr_reply(buf, strlen(buf), 0, &row, &col) < 0) {
+    tc_debug_query_fail("DSR 6n", "\033[6n", "CPR", buf, strlen(buf));
     tcsetattr(fd, TCSANOW, &oldt);
     return -1;
   }
 
-  n = collect_query_reply(fd, "\033[?6n", buf, sizeof(buf));
-  if(n < 0 || parse_cpr_reply(buf, n, 1, &row, &col) < 0) {
+  if(collect_query_reply(fd, "\033[?6n", buf, sizeof(buf)) < 0 || parse_cpr_reply(buf, strlen(buf), 1, &row, &col) < 0) {
+    tc_debug_query_fail("DEC-CPR ?6n", "\033[?6n", "DEC CPR", buf, strlen(buf));
     tcsetattr(fd, TCSANOW, &oldt);
     return -1;
   }
 
-  n = collect_query_reply(fd, "\033[?15n", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[?13n")) {
+  if(expect_token_reply(fd, "DEC DSR ?15n", "\033[?15n", "\033[?13n", buf, sizeof(buf)) < 0) {
     tcsetattr(fd, TCSANOW, &oldt);
     return -1;
   }
 
-  n = collect_query_reply(fd, "\033[?25n", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[?21n")) {
+  if(expect_token_reply(fd, "DEC DSR ?25n", "\033[?25n", "\033[?21n", buf, sizeof(buf)) < 0) {
     tcsetattr(fd, TCSANOW, &oldt);
     return -1;
   }
 
-  n = collect_query_reply(fd, "\033Z", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[?1;0c")) {
+  if(expect_token_reply(fd, "DA ESC Z", "\033Z", "\033[?1;0c", buf, sizeof(buf)) < 0) {
     tcsetattr(fd, TCSANOW, &oldt);
     return -1;
   }
 
-  n = collect_query_reply(fd, "\033[c", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[?1;0c")) {
+  if(expect_token_reply(fd, "DA primary", "\033[c", "\033[?1;0c", buf, sizeof(buf)) < 0) {
     tcsetattr(fd, TCSANOW, &oldt);
     return -1;
   }
 
-  n = collect_query_reply(fd, "\033[>c", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[>0;0;0c")) {
+  if(expect_token_reply(fd, "DA secondary", "\033[>c", "\033[>0;0;0c", buf, sizeof(buf)) < 0) {
+    tcsetattr(fd, TCSANOW, &oldt);
+    return -1;
+  }
+
+  if(expect_token_reply(fd, "XTWINOPS 11t", "\033[11t", "\033[1t", buf, sizeof(buf)) < 0) {
+    tcsetattr(fd, TCSANOW, &oldt);
+    return -1;
+  }
+
+  if(expect_token_reply(fd, "XTWINOPS 13t", "\033[13t", "\033[3;1;1t", buf, sizeof(buf)) < 0) {
+    tcsetattr(fd, TCSANOW, &oldt);
+    return -1;
+  }
+
+  if(collect_query_reply(fd, "\033[14t", buf, sizeof(buf)) < 0 ||
+     parse_window_report(buf, strlen(buf), 4, &row, &col) < 0 ||
+     row != exp_row * 16 || col != exp_col * 8) {
+    tc_debug_query_fail("XTWINOPS 14t", "\033[14t", "CSI 4;rows*16;cols*8 t", buf, strlen(buf));
+    tcsetattr(fd, TCSANOW, &oldt);
+    return -1;
+  }
+
+  if(collect_query_reply(fd, "\033[15t", buf, sizeof(buf)) < 0 ||
+     parse_window_report(buf, strlen(buf), 5, &row, &col) < 0 ||
+     row != exp_row * 16 || col != exp_col * 8) {
+    tc_debug_query_fail("XTWINOPS 15t", "\033[15t", "CSI 5;rows*16;cols*8 t", buf, strlen(buf));
+    tcsetattr(fd, TCSANOW, &oldt);
+    return -1;
+  }
+
+  if(collect_query_reply(fd, "\033[16t", buf, sizeof(buf)) < 0 ||
+     parse_window_report(buf, strlen(buf), 6, &row, &col) < 0 ||
+     row != 16 || col != 8) {
+    tc_debug_query_fail("XTWINOPS 16t", "\033[16t", "CSI 6;16;8 t", buf, strlen(buf));
+    tcsetattr(fd, TCSANOW, &oldt);
+    return -1;
+  }
+
+  if(collect_query_reply(fd, "\033[18t", buf, sizeof(buf)) < 0 ||
+     parse_window_report(buf, strlen(buf), 8, &row, &col) < 0 ||
+     row != exp_row || col != exp_col) {
+    tc_debug_query_fail("XTWINOPS 18t", "\033[18t", "CSI 8;rows;cols t", buf, strlen(buf));
+    tcsetattr(fd, TCSANOW, &oldt);
+    return -1;
+  }
+
+  if(collect_query_reply(fd, "\033[19t", buf, sizeof(buf)) < 0 ||
+     parse_window_report(buf, strlen(buf), 9, &row, &col) < 0 ||
+     row != exp_row || col != exp_col) {
+    tc_debug_query_fail("XTWINOPS 19t", "\033[19t", "CSI 9;rows;cols t", buf, strlen(buf));
+    tcsetattr(fd, TCSANOW, &oldt);
+    return -1;
+  }
+
+  if(expect_token_reply(fd, "XTWINOPS 20t", "\033[20t", "auxv6", buf, sizeof(buf)) < 0) {
+    tcsetattr(fd, TCSANOW, &oldt);
+    return -1;
+  }
+
+  if(expect_token_reply(fd, "XTWINOPS 21t", "\033[21t", "auxv6", buf, sizeof(buf)) < 0) {
     tcsetattr(fd, TCSANOW, &oldt);
     return -1;
   }
@@ -1330,7 +1398,6 @@ check_terminal_mode_query_replies(int fd)
   struct termios oldt;
   struct termios t;
   char buf[128];
-  int n;
 
   if(tcgetattr(fd, &oldt) < 0)
     return -1;
@@ -1342,122 +1409,64 @@ check_terminal_mode_query_replies(int fd)
   if(tcsetattr(fd, TCSANOW, &t) < 0)
     return -1;
 
-  n = collect_query_reply(fd, "\033[4h\033[4$p", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[4;1$y")) {
-    tcsetattr(fd, TCSANOW, &oldt);
-    return -1;
-  }
-
-  n = collect_query_reply(fd, "\033[4l\033[4$p", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[4;2$y")) {
-    tcsetattr(fd, TCSANOW, &oldt);
-    return -1;
-  }
-
-  n = collect_query_reply(fd, "\033[?25l\033[?25$p", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[?25;2$y")) {
-    tcsetattr(fd, TCSANOW, &oldt);
-    return -1;
-  }
-
-  n = collect_query_reply(fd, "\033[?25h\033[?25$p", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[?25;1$y")) {
-    tcsetattr(fd, TCSANOW, &oldt);
-    return -1;
-  }
-
-  n = collect_query_reply(fd, "\033[?7h\033[?7$p", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[?7;1$y")) {
-    tcsetattr(fd, TCSANOW, &oldt);
-    return -1;
-  }
-
-  n = collect_query_reply(fd, "\033[?7l\033[?7$p", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[?7;2$y")) {
-    tcsetattr(fd, TCSANOW, &oldt);
-    return -1;
-  }
-
-  n = collect_query_reply(fd, "\033[?6h\033[?6$p", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[?6;1$y")) {
-    tcsetattr(fd, TCSANOW, &oldt);
-    return -1;
-  }
-
-  n = collect_query_reply(fd, "\033[?6l\033[?6$p", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[?6;2$y")) {
-    tcsetattr(fd, TCSANOW, &oldt);
-    return -1;
-  }
-
-  n = collect_query_reply(fd, "\033[?1h\033[?1$p", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[?1;1$y")) {
-    tcsetattr(fd, TCSANOW, &oldt);
-    return -1;
-  }
-
-  n = collect_query_reply(fd, "\033[?1l\033[?1$p", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[?1;2$y")) {
-    tcsetattr(fd, TCSANOW, &oldt);
-    return -1;
-  }
-
-  n = collect_query_reply(fd, "\033[?5h\033[?5$p", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[?5;1$y")) {
-    tcsetattr(fd, TCSANOW, &oldt);
-    return -1;
-  }
-
-  n = collect_query_reply(fd, "\033[?5l\033[?5$p", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[?5;2$y")) {
-    tcsetattr(fd, TCSANOW, &oldt);
-    return -1;
-  }
-
-  n = collect_query_reply(fd, "\033[?12l\033[?12$p", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[?12;2$y")) {
-    tcsetattr(fd, TCSANOW, &oldt);
-    return -1;
-  }
-
-  n = collect_query_reply(fd, "\033[?12h\033[?12$p", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[?12;1$y")) {
-    tcsetattr(fd, TCSANOW, &oldt);
-    return -1;
-  }
-
-  n = collect_query_reply(fd, "\033[?1049h\033[?1049$p", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[?1049;1$y")) {
-    tcsetattr(fd, TCSANOW, &oldt);
-    return -1;
-  }
-
-  n = collect_query_reply(fd, "\033[?1049l\033[?1049$p", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[?1049;2$y")) {
-    tcsetattr(fd, TCSANOW, &oldt);
-    return -1;
-  }
-
-  n = collect_query_reply(fd, "\033[20h\033[20$p", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[20;1$y")) {
-    tcsetattr(fd, TCSANOW, &oldt);
-    return -1;
-  }
-
-  n = collect_query_reply(fd, "\033[20l\033[20$p", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[20;2$y")) {
-    tcsetattr(fd, TCSANOW, &oldt);
-    return -1;
-  }
-
-  n = collect_query_reply(fd, "\033[999$p", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[999;0$y")) {
-    tcsetattr(fd, TCSANOW, &oldt);
-    return -1;
-  }
-
-  n = collect_query_reply(fd, "\033[?999$p", buf, sizeof(buf));
-  if(n < 0 || !contains_token(buf, n, "\033[?999;0$y")) {
+  if(expect_token_reply(fd, "RMQ 4 set", "\033[4h\033[4$p", "\033[4;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "RMQ 4 reset", "\033[4l\033[4$p", "\033[4;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?25 reset", "\033[?25l\033[?25$p", "\033[?25;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?25 set", "\033[?25h\033[?25$p", "\033[?25;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?7 set", "\033[?7h\033[?7$p", "\033[?7;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?7 reset", "\033[?7l\033[?7$p", "\033[?7;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?6 set", "\033[?6h\033[?6$p", "\033[?6;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?6 reset", "\033[?6l\033[?6$p", "\033[?6;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1 set", "\033[?1h\033[?1$p", "\033[?1;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1 reset", "\033[?1l\033[?1$p", "\033[?1;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?5 set", "\033[?5h\033[?5$p", "\033[?5;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?5 reset", "\033[?5l\033[?5$p", "\033[?5;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?12 reset", "\033[?12l\033[?12$p", "\033[?12;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?12 set", "\033[?12h\033[?12$p", "\033[?12;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1049 set", "\033[?1049h\033[?1049$p", "\033[?1049;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1049 reset", "\033[?1049l\033[?1049$p", "\033[?1049;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "RMQ 20 set", "\033[20h\033[20$p", "\033[20;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "RMQ 20 reset", "\033[20l\033[20$p", "\033[20;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1048 set", "\033[?1048h\033[?1048$p", "\033[?1048;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1048 reset", "\033[?1048l\033[?1048$p", "\033[?1048;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1000 set", "\033[?1000h\033[?1000$p", "\033[?1000;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1000 reset", "\033[?1000l\033[?1000$p", "\033[?1000;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1002 set", "\033[?1002h\033[?1002$p", "\033[?1002;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1002 reset", "\033[?1002l\033[?1002$p", "\033[?1002;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1003 set", "\033[?1003h\033[?1003$p", "\033[?1003;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1003 reset", "\033[?1003l\033[?1003$p", "\033[?1003;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1004 set", "\033[?1004h\033[?1004$p", "\033[?1004;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1004 reset", "\033[?1004l\033[?1004$p", "\033[?1004;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1005 set", "\033[?1005h\033[?1005$p", "\033[?1005;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1005 reset", "\033[?1005l\033[?1005$p", "\033[?1005;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1006 set", "\033[?1006h\033[?1006$p", "\033[?1006;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1006 reset", "\033[?1006l\033[?1006$p", "\033[?1006;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1015 set", "\033[?1015h\033[?1015$p", "\033[?1015;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1015 reset", "\033[?1015l\033[?1015$p", "\033[?1015;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1007 set", "\033[?1007h\033[?1007$p", "\033[?1007;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1007 reset", "\033[?1007l\033[?1007$p", "\033[?1007;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1034 set", "\033[?1034h\033[?1034$p", "\033[?1034;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1034 reset", "\033[?1034l\033[?1034$p", "\033[?1034;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1035 set", "\033[?1035h\033[?1035$p", "\033[?1035;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1035 reset", "\033[?1035l\033[?1035$p", "\033[?1035;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1036 set", "\033[?1036h\033[?1036$p", "\033[?1036;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1036 reset", "\033[?1036l\033[?1036$p", "\033[?1036;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1039 set", "\033[?1039h\033[?1039$p", "\033[?1039;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1039 reset", "\033[?1039l\033[?1039$p", "\033[?1039;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?2004 set", "\033[?2004h\033[?2004$p", "\033[?2004;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?2004 reset", "\033[?2004l\033[?2004$p", "\033[?2004;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?9 set", "\033[?9h\033[?9$p", "\033[?9;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?9 reset", "\033[?9l\033[?9$p", "\033[?9;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?67 set", "\033[?67h\033[?67$p", "\033[?67;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?67 reset", "\033[?67l\033[?67$p", "\033[?67;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?69 set", "\033[?69h\033[?69$p", "\033[?69;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?69 reset", "\033[?69l\033[?69$p", "\033[?69;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?95 set", "\033[?95h\033[?95$p", "\033[?95;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?95 reset", "\033[?95l\033[?95$p", "\033[?95;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1001 set", "\033[?1001h\033[?1001$p", "\033[?1001;1$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM ?1001 reset", "\033[?1001l\033[?1001$p", "\033[?1001;2$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "RMQ unknown 999", "\033[999$p", "\033[999;0$y", buf, sizeof(buf)) < 0 ||
+     expect_token_reply(fd, "DECRQM unknown ?999", "\033[?999$p", "\033[?999;0$y", buf, sizeof(buf)) < 0) {
     tcsetattr(fd, TCSANOW, &oldt);
     return -1;
   }
@@ -1559,22 +1568,30 @@ main(int argc, char **argv)
   int fd;
   int fails;
   int smoke_mode;
+  int debug_query;
   const char *log_path;
   int i;
 
   smoke_mode = 0;
+  debug_query = 0;
   log_path = "/tmp/termcheck.log";
   for(i = 1; i < argc; i++) {
     if(strcmp(argv[i], "--smoke") == 0) {
       smoke_mode = 1;
+    } else if(strcmp(argv[i], "--debug-query") == 0) {
+      debug_query = 1;
     } else if(strcmp(argv[i], "--log") == 0 && i + 1 < argc) {
       log_path = argv[++i];
     }
   }
 
+  tc_debug_query = debug_query;
+
   tc_log_fd = open(log_path, O_CREATE | O_TRUNC | O_WRONLY);
   if(tc_log_fd >= 0)
     tc_report(1, "termcheck: status log enabled");
+  if(tc_debug_query)
+    tc_report(1, "termcheck: query debug enabled");
 
   fd = 0;
   if(!isatty(fd))
