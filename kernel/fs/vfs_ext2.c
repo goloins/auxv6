@@ -1687,6 +1687,7 @@ ext2_read(struct inode *ip, char *dst, uint off, uint n)
 {
   struct ext2_mount_data *data;
   struct ext2_inode dip;
+  int rc;
 
   if(ip == 0 || dst == 0)
     return -1;
@@ -1712,7 +1713,10 @@ ext2_read(struct inode *ip, char *dst, uint off, uint n)
   if((dip.i_mode & EXT2_S_IFMT) == EXT2_S_IFDIR)
     return ext2_read_dirents(data, &dip, dst, off, n);
 
-  return ext2_read_data(data, &dip, dst, off, n);
+  EXT2DBG("ext2: read ino=%d off=%d n=%d\n", ip->inum, off, n);
+  rc = ext2_read_data(data, &dip, dst, off, n);
+  EXT2DBG("ext2: read ino=%d rc=%d\n", ip->inum, rc);
+  return rc;
 }
 
 static int
@@ -1737,6 +1741,8 @@ ext2_write(struct inode *ip, char *src, uint off, uint n)
     return -1;
   if(n == 0)
     return 0;
+
+  EXT2DBG("ext2: write ino=%d off=%d n=%d\n", ip->inum, off, n);
 
   data = ext2_data_for_dev(ip->dev);
   if(data == 0)
@@ -1913,6 +1919,7 @@ ext2_write(struct inode *ip, char *src, uint off, uint n)
   if(ind_tbl)
     kfree((char*)ind_tbl);
 
+  EXT2DBG("ext2: write ino=%d rc=%d size=%d\n", ip->inum, (int)n, (int)dip.i_size);
   return n;
 
 fail:
@@ -1944,6 +1951,7 @@ fail:
     kfree(zbuf);
   if(ind_tbl)
     kfree((char*)ind_tbl);
+  EXT2DBG("ext2: write ino=%d rc=%d\n", ip->inum, -1);
   return -1;
 }
 

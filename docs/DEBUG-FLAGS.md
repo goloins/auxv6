@@ -202,22 +202,27 @@ echo test_fail_count=2 > /proc/ahci_tune
 
 ### Enable Verbose Boot Diagnostics
 ```bash
-make CFLAGS="-DAUXV6_DEBUG=1" clean aux.kern
+make EXTRA_CFLAGS="-DAUXV6_DEBUG=1" clean aux.kern
 ```
 
 ### Enable Network Socket Logging
 ```bash
-make CFLAGS="-DAUXV6_NET_DEBUG=1" clean aux.kern
+make EXTRA_CFLAGS="-DAUXV6_NET_DEBUG=1" clean aux.kern
 ```
 
 ### Enable Both Boot and Network Debugging
 ```bash
-make CFLAGS="-DAUXV6_DEBUG=1 -DAUXV6_NET_DEBUG=1" clean aux.kern
+make EXTRA_CFLAGS="-DAUXV6_DEBUG=1 -DAUXV6_NET_DEBUG=1" clean aux.kern
 ```
 
 ### Disable One Subsystem While Keeping Others Enabled
 ```bash
-make CFLAGS="-DAUXV6_DEBUG=1 -DDBG_VFS=0" clean aux.kern
+make EXTRA_CFLAGS="-DAUXV6_DEBUG=1 -DDBG_VFS=0" clean aux.kern
+```
+
+### Add Extra Flags Without Replacing Base CFLAGS
+```bash
+make EXTRA_CFLAGS="-DAUXV6_DEBUG=0 -DDBG_VFS=1 -DDBG_EXT2=1" qemu
 ```
 
 ### In Code (for header edits)

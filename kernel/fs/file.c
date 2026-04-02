@@ -125,10 +125,14 @@ fileread(struct file *f, char *addr, int n)
   if(f->type == FD_PIPE)
     return piperead(f->pipe, addr, n);
   if(f->type == FD_INODE){
+    VFSDBG("vfs: fileread dev=%d ino=%d off=%d n=%d\n",
+           f->ip->dev, f->ip->inum, (int)f->off, n);
     ilock(f->ip);
 
     if(f->ip->type == T_DEV && f->ip->major == PTYDEV){
       iunlock(f->ip);
+      VFSDBG("vfs: fileread dev=%d ino=%d r=%d off=%d\n",
+             f->ip->dev, f->ip->inum, n, (int)f->off);
       return pty_fileread(f, addr, n);
     }
 
@@ -137,6 +141,8 @@ fileread(struct file *f, char *addr, int n)
       if(r > 0)
         f->off += r;
       iunlock(f->ip);
+      VFSDBG("vfs: fileread dev=%d ino=%d r=%d off=%d\n",
+             f->ip->dev, f->ip->inum, r, (int)f->off);
       return r;
     }
 
@@ -157,6 +163,8 @@ fileread(struct file *f, char *addr, int n)
           f->off += sizeof(de);
           iput(mountpoint);
           iunlock(f->ip);
+             VFSDBG("vfs: fileread dev=%d ino=%d r=%d off=%d\n",
+               f->ip->dev, f->ip->inum, (int)sizeof(de), (int)f->off);
           return sizeof(de);
         }
         if(f->off == sizeof(struct dirent)){
@@ -172,6 +180,8 @@ fileread(struct file *f, char *addr, int n)
           f->off += sizeof(de);
           iput(mountpoint);
           iunlock(f->ip);
+             VFSDBG("vfs: fileread dev=%d ino=%d r=%d off=%d\n",
+               f->ip->dev, f->ip->inum, (int)sizeof(de), (int)f->off);
           return sizeof(de);
         }
         iput(mountpoint);
@@ -184,6 +194,8 @@ fileread(struct file *f, char *addr, int n)
           if(r > 0)
             f->off += r;
           iunlock(f->ip);
+          VFSDBG("vfs: fileread dev=%d ino=%d r=%d off=%d\n",
+                 f->ip->dev, f->ip->inum, r, (int)f->off);
           return r;
         }
       }
@@ -206,6 +218,8 @@ fileread(struct file *f, char *addr, int n)
     if(r > 0)
       f->off += r;
     iunlock(f->ip);
+    VFSDBG("vfs: fileread dev=%d ino=%d r=%d off=%d\n",
+           f->ip->dev, f->ip->inum, r, (int)f->off);
     return r;
   }
   panic("fileread");
@@ -224,6 +238,8 @@ filewrite(struct file *f, char *addr, int n)
   if(f->type == FD_PIPE)
     return pipewrite(f->pipe, addr, n);
   if(f->type == FD_INODE){
+    VFSDBG("vfs: filewrite dev=%d ino=%d off=%d n=%d\n",
+           f->ip->dev, f->ip->inum, (int)f->off, n);
     if(f->ip->type == T_DEV && f->ip->major == PTYDEV)
       return pty_filewrite(f, addr, n);
 
@@ -233,6 +249,8 @@ filewrite(struct file *f, char *addr, int n)
       if(r > 0)
         f->off += r;
       iunlock(f->ip);
+      VFSDBG("vfs: filewrite dev=%d ino=%d r=%d off=%d\n",
+             f->ip->dev, f->ip->inum, r, (int)f->off);
       return r;
     }
 
@@ -277,6 +295,8 @@ filewrite(struct file *f, char *addr, int n)
         panic("short filewrite");
       i += r;
     }
+    VFSDBG("vfs: filewrite dev=%d ino=%d r=%d off=%d\n",
+           f->ip->dev, f->ip->inum, (i == n) ? n : -1, (int)f->off);
     return i == n ? n : -1;
   }
   panic("filewrite");
