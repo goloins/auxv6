@@ -35,6 +35,11 @@
 #define INADDR_LOOPBACK  0x7f000001    // 127.0.0.1
 #define INADDR_ANY       0x00000000
 
+// Internet address
+struct in_addr {
+  uint s_addr;
+};
+
 // sockaddr_in structure
 struct sockaddr_in {
   uchar  sin_family;

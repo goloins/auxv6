@@ -67,6 +67,10 @@ OBJS = \
 	kernel/net/icmp.o\
 	kernel/net/udp.o\
 	kernel/net/tcp.o\
+	kernel/net/xdr.o\
+	kernel/net/rpc.o\
+	kernel/net/mount.o\
+	kernel/net/nfs.o\
 
 # Cross-compiling (e.g., on Mac OS X)
 # TOOLPREFIX = i386-jos-elf
