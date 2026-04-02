@@ -33,6 +33,9 @@ response body to a local file.
 - If the URL path ends in `/`, `index.html` is used.
 - Prints connectivity progress and HTTP status by default.
 - Follows up to 4 HTTP redirects when `Location` points to another HTTP URL.
+- Stops reading when `Content-Length` bytes are received (when present).
+- Also applies an idle receive timeout after headers to avoid hanging on keep-alive connections.
+- Shows a progress bar when `Content-Length` is present.
 
 ## Examples
 ```sh

@@ -12,8 +12,8 @@
 #define REDIRECT_MAX 4
 #define LOCATION_MAX 511
 #define SIXGET_VERSION "6get 0.3"
-#define TRACE_FILE "/tmp/6get.trace"
-#define PROBE_FILE "/tmp/6get.probe"
+#define RECV_TIMEOUT_TICKS 100
+#define POST_HEADER_IDLE_LIMIT 5
 
 static int g_debug = 0;
 static int g_quiet = 0;
@@ -23,65 +23,17 @@ static char g_resp_buf[RESP_BUF_MAX];
 #define PROGRESS(...) do { if(!g_quiet) printf(__VA_ARGS__); } while(0)
 #define ERROR(...) do { printf(__VA_ARGS__); } while(0)
 #define DEBUG(...) do { if(g_debug) printf(__VA_ARGS__); } while(0)
-#define TRACE_ENTER(fn) do { if(g_debug) { char _m[80]; snprintf(_m, sizeof(_m), "6get[trace]: enter %s\n", fn); printf("%s", _m); trace_file_append(_m); } } while(0)
-#define TRACE_LEAVE(fn, rc) do { if(g_debug) { char _m[96]; snprintf(_m, sizeof(_m), "6get[trace]: leave %s rc=%d\n", fn, rc); printf("%s", _m); trace_file_append(_m); } } while(0)
 
-static void raw_trace(const char *msg);
-static void trace_file_append(const char *msg);
-static void write_probe(int argc);
+struct http_url;
+static int is_lws(char c);
+static int starts_with_nocase(const char *s, const char *pfx, int n);
+static int parse_url(const char *url, struct http_url *out);
 
 struct http_url {
   char host[URL_HOST_MAX + 1];
   char path[URL_PATH_MAX + 1];
   int port;
 };
-
-static int parse_url(const char *url, struct http_url *out);
-
-static void
-raw_trace(const char *msg)
-{
-  write(1, msg, strlen(msg));
-  trace_file_append(msg);
-}
-
-static void
-trace_file_append(const char *msg)
-{
-  int fd;
-  int n;
-
-  if(!g_debug || msg == 0)
-    return;
-
-  fd = open(TRACE_FILE, O_CREAT | O_WRONLY | O_APPEND);
-  if(fd < 0)
-    return;
-  n = (int)strlen(msg);
-  if(n > 0)
-    write(fd, msg, n);
-  close(fd);
-}
-
-static void
-write_probe(int argc)
-{
-  int fd;
-  char line[96];
-  int n;
-
-  fd = open(PROBE_FILE, O_CREAT | O_WRONLY | O_TRUNC);
-  if(fd < 0)
-    return;
-
-  n = snprintf(line, sizeof(line), "%s pid=%d argc=%d\n", SIXGET_VERSION, getpid(), argc);
-  if(n > 0) {
-    if(n > (int)sizeof(line))
-      n = (int)sizeof(line);
-    write(fd, line, n);
-  }
-  close(fd);
-}
 
 static void
 usage(void)
@@ -102,33 +54,20 @@ parse_port(const char *s)
   int p;
   int i;
 
-  TRACE_ENTER("parse_port");
-
-  if(s == 0 || s[0] == 0) {
-    TRACE_LEAVE("parse_port", -1);
+  if(s == 0 || s[0] == 0)
     return -1;
-  }
 
   p = 0;
   for(i = 0; s[i]; i++) {
     if(!is_digit(s[i]))
-      {
-        TRACE_LEAVE("parse_port", -1);
-        return -1;
-      }
+      return -1;
     p = p * 10 + (s[i] - '0');
     if(p > 65535)
-      {
-        TRACE_LEAVE("parse_port", -1);
-        return -1;
-      }
+      return -1;
   }
 
-  if(p < 1) {
-    TRACE_LEAVE("parse_port", -1);
+  if(p < 1)
     return -1;
-  }
-  TRACE_LEAVE("parse_port", p);
   return p;
 }
 
@@ -143,29 +82,20 @@ parse_url(const char *url, struct http_url *out)
   int path_len;
   int i;
 
-  TRACE_ENTER("parse_url");
-
-  if(url == 0 || out == 0) {
-    TRACE_LEAVE("parse_url", -1);
+  if(url == 0 || out == 0)
     return -1;
-  }
 
   if(strncmp(url, "https://", 8) == 0) {
     ERROR("6get: https is not supported yet (TLS not implemented)\n");
-    TRACE_LEAVE("parse_url", -1);
     return -1;
   }
 
-  if(strncmp(url, "http://", 7) != 0) {
-    TRACE_LEAVE("parse_url", -1);
+  if(strncmp(url, "http://", 7) != 0)
     return -1;
-  }
 
   p = url + 7;
-  if(*p == 0) {
-    TRACE_LEAVE("parse_url", -1);
+  if(*p == 0)
     return -1;
-  }
 
   slash = strchr(p, '/');
   if(slash)
@@ -173,10 +103,8 @@ parse_url(const char *url, struct http_url *out)
   else
     host_end = p + strlen(p);
 
-  if(host_end <= p) {
-    TRACE_LEAVE("parse_url", -1);
+  if(host_end <= p)
     return -1;
-  }
 
   colon = 0;
   for(i = 0; p + i < host_end; i++) {
@@ -188,26 +116,18 @@ parse_url(const char *url, struct http_url *out)
   if(colon) {
     host_len = (int)(colon - p);
     if(host_len < 1 || host_len > URL_HOST_MAX)
-      {
-        TRACE_LEAVE("parse_url", -1);
-        return -1;
-      }
+      return -1;
     for(i = 0; i < host_len; i++)
       out->host[i] = p[i];
     out->host[host_len] = 0;
 
     out->port = parse_port(colon + 1);
     if(out->port < 0)
-      {
-        TRACE_LEAVE("parse_url", -1);
-        return -1;
-      }
+      return -1;
   } else {
     host_len = (int)(host_end - p);
-    if(host_len < 1 || host_len > URL_HOST_MAX) {
-      TRACE_LEAVE("parse_url", -1);
+    if(host_len < 1 || host_len > URL_HOST_MAX)
       return -1;
-    }
     for(i = 0; i < host_len; i++)
       out->host[i] = p[i];
     out->host[host_len] = 0;
@@ -216,22 +136,61 @@ parse_url(const char *url, struct http_url *out)
   if(slash == 0) {
     out->path[0] = '/';
     out->path[1] = 0;
-    TRACE_LEAVE("parse_url", 0);
     return 0;
   }
 
   path_len = (int)strlen(slash);
-  if(path_len < 1 || path_len > URL_PATH_MAX) {
-    TRACE_LEAVE("parse_url", -1);
+  if(path_len < 1 || path_len > URL_PATH_MAX)
     return -1;
-  }
 
   for(i = 0; i < path_len; i++)
     out->path[i] = slash[i];
   out->path[path_len] = 0;
 
-  TRACE_LEAVE("parse_url", 0);
   return 0;
+}
+
+static int
+parse_content_length(const char *hdr, int len)
+{
+  int i;
+
+  i = 0;
+  while(i < len) {
+    int line_start;
+    int line_end;
+    int j;
+    int v;
+
+    line_start = i;
+    while(i < len && hdr[i] != '\n' && hdr[i] != '\r')
+      i++;
+    line_end = i;
+    while(i < len && (hdr[i] == '\n' || hdr[i] == '\r'))
+      i++;
+
+    if(line_end <= line_start)
+      continue;
+    if(!starts_with_nocase(hdr + line_start, "content-length:", line_end - line_start))
+      continue;
+
+    j = line_start + 15;
+    while(j < line_end && is_lws(hdr[j]))
+      j++;
+    if(j >= line_end)
+      return -1;
+
+    v = 0;
+    while(j < line_end && hdr[j] >= '0' && hdr[j] <= '9') {
+      if(v > 214748364)
+        return -1;
+      v = v * 10 + (hdr[j] - '0');
+      j++;
+    }
+    return v;
+  }
+
+  return -1;
 }
 
 static int
@@ -426,38 +385,25 @@ send_request(int fd, const struct http_url *u)
 {
   char hostline[URL_HOST_MAX + 32];
 
-  TRACE_ENTER("send_request");
-
-  if(send_all(fd, "GET ", 4) < 0) {
-    TRACE_LEAVE("send_request", -1);
+  if(send_all(fd, "GET ", 4) < 0)
     return -1;
-  }
-  if(send_all(fd, u->path, (int)strlen(u->path)) < 0) {
-    TRACE_LEAVE("send_request", -1);
+  if(send_all(fd, u->path, (int)strlen(u->path)) < 0)
     return -1;
-  }
-  if(send_all(fd, " HTTP/1.0\r\n", 11) < 0) {
-    TRACE_LEAVE("send_request", -1);
+  if(send_all(fd, " HTTP/1.0\r\n", 11) < 0)
     return -1;
-  }
 
   if(u->port == 80)
     snprintf(hostline, sizeof(hostline), "Host: %s\r\n", u->host);
   else
     snprintf(hostline, sizeof(hostline), "Host: %s:%d\r\n", u->host, u->port);
 
-  if(send_all(fd, hostline, (int)strlen(hostline)) < 0) {
-    TRACE_LEAVE("send_request", -1);
+  if(send_all(fd, hostline, (int)strlen(hostline)) < 0)
     return -1;
-  }
   if(send_all(fd, "User-Agent: 6get/1.0\r\nConnection: close\r\n\r\n",
-              (int)strlen("User-Agent: 6get/1.0\r\nConnection: close\r\n\r\n")) < 0) {
-    TRACE_LEAVE("send_request", -1);
+              (int)strlen("User-Agent: 6get/1.0\r\nConnection: close\r\n\r\n")) < 0)
     return -1;
-  }
 
   DEBUG("6get[debug]: request sent for %s:%d%s\n", u->host, u->port, u->path);
-  TRACE_LEAVE("send_request", 0);
   return 0;
 }
 
@@ -527,6 +473,35 @@ write_all(int fd, const char *buf, int len)
   return 0;
 }
 
+static void
+progress_update(int total, int content_len, int *last_pct, int done)
+{
+  int pct;
+  int filled;
+  int i;
+  char bar[21];
+
+  if(g_quiet || content_len <= 0 || last_pct == 0)
+    return;
+
+  pct = (total * 100) / content_len;
+  if(pct > 100)
+    pct = 100;
+
+  if(!done && pct == *last_pct)
+    return;
+  *last_pct = pct;
+
+  filled = (pct * 20) / 100;
+  for(i = 0; i < 20; i++)
+    bar[i] = (i < filled) ? '=' : ' ';
+  bar[20] = 0;
+
+  printf("\r6get: [%s] %3d%% (%d/%d)", bar, pct, total, content_len);
+  if(done)
+    printf("\n");
+}
+
 static int __attribute__((noinline))
 fetch_to_file(const struct http_url *u, const char *outfile, char *redirect, int redirsz)
 {
@@ -540,8 +515,9 @@ fetch_to_file(const struct http_url *u, const char *outfile, char *redirect, int
   int n;
   int hdrlen;
   int body_off;
-
-  TRACE_ENTER("fetch_to_file");
+  int content_len;
+  int idle_count;
+  int last_pct;
 
   if(redirect && redirsz > 0)
     redirect[0] = 0;
@@ -549,7 +525,6 @@ fetch_to_file(const struct http_url *u, const char *outfile, char *redirect, int
   PROGRESS("6get: resolving %s\n", u->host);
   if(resolve_ipv4(u->host, &ip) < 0) {
     ERROR("6get: cannot resolve host %s\n", u->host);
-    TRACE_LEAVE("fetch_to_file", -1);
     return -1;
   }
   DEBUG("6get[debug]: resolved host %s to 0x%x\n", u->host, ip);
@@ -557,7 +532,6 @@ fetch_to_file(const struct http_url *u, const char *outfile, char *redirect, int
   fd = socket(AF_INET, SOCK_STREAM, 0);
   if(fd < 0) {
     ERROR("6get: socket failed\n");
-    TRACE_LEAVE("fetch_to_file", -1);
     return -1;
   }
 
@@ -570,7 +544,6 @@ fetch_to_file(const struct http_url *u, const char *outfile, char *redirect, int
   if(connect(fd, &dst, sizeof(dst)) < 0) {
     ERROR("6get: connect failed\n");
     close(fd);
-    TRACE_LEAVE("fetch_to_file", -1);
     return -1;
   }
   PROGRESS("6get: connected\n");
@@ -578,7 +551,6 @@ fetch_to_file(const struct http_url *u, const char *outfile, char *redirect, int
   if(send_request(fd, u) < 0) {
     ERROR("6get: send request failed\n");
     close(fd);
-    TRACE_LEAVE("fetch_to_file", -1);
     return -1;
   }
 
@@ -586,9 +558,30 @@ fetch_to_file(const struct http_url *u, const char *outfile, char *redirect, int
   status = -1;
   total = 0;
   hdrlen = 0;
+  content_len = -1;
+  idle_count = 0;
+  last_pct = -1;
   outfd = -1;
 
-  while((n = (int)recv(fd, g_resp_buf, sizeof(g_resp_buf))) > 0) {
+  while(1) {
+    n = (int)recvtimeout(fd, g_resp_buf, sizeof(g_resp_buf), RECV_TIMEOUT_TICKS);
+    if(n == 0) {
+      if(!got_headers)
+        continue;
+      idle_count++;
+      if(content_len >= 0 && total >= content_len)
+        break;
+      if(idle_count >= POST_HEADER_IDLE_LIMIT) {
+        DEBUG("6get[debug]: idle timeout after headers, ending transfer\n");
+        break;
+      }
+      continue;
+    }
+
+    if(n < 0)
+      break;
+    idle_count = 0;
+
     if(!got_headers) {
       int i;
       int end;
@@ -596,7 +589,6 @@ fetch_to_file(const struct http_url *u, const char *outfile, char *redirect, int
       if(hdrlen + n > HDR_BUF_MAX) {
         ERROR("6get: response headers too large\n");
         close(fd);
-        TRACE_LEAVE("fetch_to_file", -1);
         return -1;
       }
 
@@ -616,21 +608,24 @@ fetch_to_file(const struct http_url *u, const char *outfile, char *redirect, int
           if(find_location_header(g_hdr_buf, end, redirect, redirsz) == 0) {
             PROGRESS("6get: redirect location: %s\n", redirect);
             close(fd);
-            TRACE_LEAVE("fetch_to_file", 1);
             return 1;
           }
           ERROR("6get: redirect response without Location header\n");
         }
         close(fd);
-        TRACE_LEAVE("fetch_to_file", -1);
         return -1;
+      }
+
+      content_len = parse_content_length(g_hdr_buf, end);
+      if(content_len >= 0) {
+        DEBUG("6get[debug]: content-length=%d\n", content_len);
+        progress_update(total, content_len, &last_pct, 0);
       }
 
       outfd = open(outfile, O_CREAT | O_WRONLY | O_TRUNC);
       if(outfd < 0) {
         ERROR("6get: cannot open output %s\n", outfile);
         close(fd);
-        TRACE_LEAVE("fetch_to_file", -1);
         return -1;
       }
 
@@ -646,10 +641,12 @@ fetch_to_file(const struct http_url *u, const char *outfile, char *redirect, int
           close(outfd);
           close(fd);
           unlink(outfile);
-          TRACE_LEAVE("fetch_to_file", -1);
           return -1;
         }
         total += hdrlen - body_off;
+        progress_update(total, content_len, &last_pct, 0);
+        if(content_len >= 0 && total >= content_len)
+          break;
       }
       continue;
     }
@@ -659,10 +656,13 @@ fetch_to_file(const struct http_url *u, const char *outfile, char *redirect, int
       close(outfd);
       close(fd);
       unlink(outfile);
-      TRACE_LEAVE("fetch_to_file", -1);
       return -1;
     }
     total += n;
+    progress_update(total, content_len, &last_pct, 0);
+
+    if(content_len >= 0 && total >= content_len)
+      break;
   }
 
   if(n < 0) {
@@ -672,21 +672,20 @@ fetch_to_file(const struct http_url *u, const char *outfile, char *redirect, int
       unlink(outfile);
     }
     close(fd);
-    TRACE_LEAVE("fetch_to_file", -1);
     return -1;
   }
 
   if(!got_headers) {
     ERROR("6get: invalid HTTP response\n");
     close(fd);
-    TRACE_LEAVE("fetch_to_file", -1);
     return -1;
   }
+
+  progress_update(total, content_len, &last_pct, 1);
 
   close(fd);
   close(outfd);
   PROGRESS("6get: saved %s (%d bytes)\n", outfile, total);
-  TRACE_LEAVE("fetch_to_file", 0);
   return 0;
 }
 
@@ -704,9 +703,6 @@ main(int argc, char **argv)
   struct http_url cur;
   struct http_url next;
 
-  write_probe(argc);
-  raw_trace("6get[trace]: main entry\n");
-
   url = 0;
   outfile_opt = 0;
 
@@ -722,7 +718,6 @@ main(int argc, char **argv)
 
     if(strcmp(argv[i], "-d") == 0) {
       g_debug = 1;
-      trace_file_append("6get[trace]: option -d set\n");
       i++;
       continue;
     }
@@ -751,9 +746,6 @@ main(int argc, char **argv)
     usage();
 
   if(g_debug)
-    raw_trace("6get[trace]: debug enabled\n");
-
-  if(g_debug)
     PROGRESS("6get: debug logging enabled\n");
 
   if(parse_url(url, &u) < 0) {
@@ -777,7 +769,7 @@ main(int argc, char **argv)
   cur = u;
   redirects = 0;
   while(1) {
-    DEBUG("6get[trace]: redirect iteration %d\n", redirects);
+    DEBUG("6get[debug]: redirect iteration %d\n", redirects);
     rc = fetch_to_file(&cur, outname, redirect, sizeof(redirect));
     if(rc == 0)
       break;
