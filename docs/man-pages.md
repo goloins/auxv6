@@ -10,6 +10,7 @@ Generated: 2026-04-02
 ## Tracking
 | Utility | Man Page | Last Updated | Source Audited | Notes |
 |---|---|---|---|---|
+| 6get | targetfs/usr/share/man/6get.md | 2026-04-02 | user/6get.c | source-derived usage/options |
 | ahcitest | targetfs/usr/share/man/ahcitest.md | 2026-04-02 | user/ahcitest.c | AHCI regression binary |
 | arp | targetfs/usr/share/man/arp.md | 2026-04-01 | user/arp.c | source-derived usage/options |
 | cat | targetfs/usr/share/man/cat.md | 2026-04-01 | user/cat.c | source-derived usage/options |

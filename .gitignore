@@ -29,6 +29,7 @@ user/fsregress
 user/grep
 user/init
 user/netcat
+user/6get
 user/telnet
 user/runlevel
 user/telinit

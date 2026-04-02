@@ -338,6 +338,9 @@ _mkdir: user/mkdir
 _netcat: $(USER_STAGE_DIR)/netcat
 	cp $(USER_STAGE_DIR)/netcat _netcat
 
+_6get: user/6get
+	cp user/6get _6get
+
 _telnet: $(USER_STAGE_DIR)/telnet
 	cp $(USER_STAGE_DIR)/telnet _telnet
 
@@ -560,6 +563,7 @@ UPROGS=\
 	_ifconfig\
 	_netstat\
 	_netcat\
+	_6get\
 	_telnet\
 	_runlevel\
 	_telinit\
@@ -661,6 +665,7 @@ clean:
 	_dhcp \
 	user/ifconfig user/netstat user/route user/arp user/rarp user/ip \
 	user/dhcp user/v6dhcpd user/nslookup \
+	user/6get \
 	user/lsof user/which user/file \
 	user/date user/time user/killall user/halt \
 	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/dmesg user/tail user/lspci user/v6init
