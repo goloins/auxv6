@@ -10,7 +10,7 @@ Generated: 2026-04-02
 ## Tracking
 | Utility | Man Page | Last Updated | Source Audited | Notes |
 |---|---|---|---|---|
-| 6get | targetfs/usr/share/man/6get.md | 2026-04-02 | user/6get.c | source-derived usage/options |
+| 6get | targetfs/usr/share/man/6get.md | 2026-04-02 | user/6get.c | source-derived usage/options; see docs/6get-http-transfer-notes.md |
 | ahcitest | targetfs/usr/share/man/ahcitest.md | 2026-04-02 | user/ahcitest.c | AHCI regression binary |
 | arp | targetfs/usr/share/man/arp.md | 2026-04-01 | user/arp.c | source-derived usage/options |
 | cat | targetfs/usr/share/man/cat.md | 2026-04-01 | user/cat.c | source-derived usage/options |
@@ -92,3 +92,4 @@ Generated: 2026-04-02
 - Option lists include explicit '-x'/'--long' tokens detected in source strings and usage checks.
 - Re-run tools/gen-man-pages.sh after userland changes to keep pages and dates current.
 - man now paginates terminal output (22 lines/page): Enter for next page, q to quit.
+- 6get transfer semantics and progress behavior are documented in docs/6get-http-transfer-notes.md.
