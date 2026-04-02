@@ -20,7 +20,7 @@ we should find those and adjust accordingly.
 When implementing a new feature, we should try to implement it in a way that is as modular as possible,
 so that it can be easily tested and maintained. We should also try to follow the existing code style and conventions, and ensure that the changes are in line with a unix or unix like system. Use NetBSD, OpenBSD, FreeBSD, Darwin, SerernityOS, etc as examples.
 
-Build tests and stressors whenever possible. Also keep performance in mind. 
+Build binaries for tests and stressors whenever possible. Also keep performance in mind. 
 
 If you decided to iterate yourself, you can login to the system with root, password: root. Don't use "wait"/"sleep" etc for the login because they can fail. Use expect if you need to look for "login:" and "password" prompts. Qemu will not exit on its own, you'll need to killall it.
 
