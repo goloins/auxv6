@@ -10,10 +10,7 @@
 #include "../socket.h"   /* sockaddr_in, AF_INET, INADDR_*, IPPROTO_* */
 #include "../net.h"      /* net_htons / net_htonl helpers */
 
-/* Opaque address type used by inet_*() helpers. */
-struct in_addr {
-  uint s_addr;
-};
+/* struct in_addr is re-exported from include/socket.h. */
 
 /* Byte-order conversion macros. */
 #ifndef htons
