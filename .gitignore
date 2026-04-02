@@ -54,6 +54,7 @@ user/mounttest
 user/losetup
 user/isotest
 user/looptest
+user/ahcitest
 targetfs/tmp/test.iso
 user/mv
 user/umount
