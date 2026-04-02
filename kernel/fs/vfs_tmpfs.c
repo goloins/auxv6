@@ -73,6 +73,31 @@ tmpfs_data_for_dev(uint dev)
   return (struct tmpfs_mount_data*)vfs_dev_fs_data(dev);
 }
 
+int
+tmpfs_block_usage(uint dev, uint *total_blocks, uint *free_blocks, uint *block_size)
+{
+  struct tmpfs_mount_data *md;
+  uint total;
+  uint used;
+
+  if(total_blocks == 0 || free_blocks == 0 || block_size == 0)
+    return -1;
+
+  md = tmpfs_data_for_dev(dev);
+  if(md == 0)
+    return -1;
+
+  total = md->max_bytes;
+  used = md->used_bytes;
+  if(used > total)
+    used = total;
+
+  *total_blocks = total;
+  *free_blocks = total - used;
+  *block_size = 1;
+  return 0;
+}
+
 static struct tmpfs_node*
 tmpfs_inode_node(struct inode *ip)
 {

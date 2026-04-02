@@ -226,8 +226,9 @@ copy_file(const char *src, const char *dst, const struct stat *st,
               src, fail_off, fail_errno);
     return -1;
   }
-  if(copied == 0 && st->st_size > 0) {
-    dprintf(2, "cp: read returned no data for %s\n", src);
+  if(st->st_size > 0 && copied != (int)st->st_size) {
+    dprintf(2, "cp: short copy %s -> %s (expected %d bytes, got %d)\n",
+            src, dst, (int)st->st_size, copied);
     return -1;
   }
 

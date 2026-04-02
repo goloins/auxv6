@@ -93,6 +93,8 @@ void trim_trailing_ws(char *s);
 void update_cwd_after_cd(const char *path);
 void sync_cwd_from_kernel(void);
 void exec_with_path(char *cmd, char **argv);
+void set_interactive_signal_handlers(void);
+void reset_child_signal_handlers(void);
 
 static char sh_path[PATH_MAX] = "/:/bin:/sbin";
 static char sh_prompt[PROMPT_MAX] = "\\u:\\w";
@@ -233,6 +235,7 @@ main(void)
   load_passwd_defaults();
   load_profile();
   sync_cwd_from_kernel();
+  set_interactive_signal_handlers();
 
   // Put the shell in its own process group and claim console foreground.
   setpgid(0, 0);
@@ -270,6 +273,7 @@ main(void)
 
     pid = fork1();
     if(pid == 0){
+      reset_child_signal_handlers();
       setpgid(0, 0);
       runcmd(parsecmd(buf));
     }
@@ -303,6 +307,28 @@ main(void)
     tcsetpgrp(shell_pgid);
   }
   exit(0);
+}
+
+void
+set_interactive_signal_handlers(void)
+{
+  struct sigaction sa;
+
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = SIG_IGN;
+  sigemptyset(&sa.sa_mask);
+  sigaction(SIGINT, &sa, 0);
+}
+
+void
+reset_child_signal_handlers(void)
+{
+  struct sigaction sa;
+
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = SIG_DFL;
+  sigemptyset(&sa.sa_mask);
+  sigaction(SIGINT, &sa, 0);
 }
 
 void

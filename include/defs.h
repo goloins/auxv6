@@ -183,6 +183,8 @@ void*           vfs_dev_fs_data(uint);
 int             vfs_dev_faultctl(uint, int, int);
 int             ext2_block_usage(uint dev, uint *total_blocks, uint *free_blocks,
 								 uint *block_size);
+int             tmpfs_block_usage(uint dev, uint *total_blocks, uint *free_blocks,
+								  uint *block_size);
 void            vfs_xv6fs_init(struct vfs*);
 void            vfs_ext2_init(struct vfs*);
 void            vfs_msdosfs_init(struct vfs*);

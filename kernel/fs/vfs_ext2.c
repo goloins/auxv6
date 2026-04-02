@@ -1419,8 +1419,12 @@ ext2_read_data(struct ext2_mount_data *data, struct ext2_inode *dip,
 
     if(ext2_inode_blockno(data, dip, lbn, &blockno) < 0)
       return (done == 0) ? -1 : (int)done;
-    if(blockno == 0)
-      break;
+    if(blockno == 0){
+      // Sparse hole: ext2 semantics are zero-filled reads, not early EOF.
+      memset(dst + done, 0, chunk);
+      done += chunk;
+      continue;
+    }
 
     byte_off = blockno * data->block_size + boff;
     if(ext2_dev_read(data->dev, byte_off, dst + done, chunk) < 0)
@@ -1931,6 +1935,7 @@ ext2_write(struct inode *ip, char *src, uint off, uint n)
           goto fail;
         alloc_list[alloc_n++] = new_block;
         dip.i_block[lbn] = new_block;
+        blockno = new_block;
       } else if(lbn < 12 + ptrs) {
         uint ind_index;
 

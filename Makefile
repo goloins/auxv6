@@ -209,6 +209,8 @@ aux.kern: toolchain-check $(OBJS) kernel/core/entry.o entryother config/kernel.l
 	$(LD) $(LDFLAGS) -T config/kernel.ld -o aux.kern kernel/core/entry.o $(OBJS) -b binary entryother
 	$(OBJDUMP) -S aux.kern > kernel.asm
 	$(OBJDUMP) -t aux.kern | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > kernel.sym
+	install -d $(TARGETFS_DIR)
+	install -m 0644 aux.kern $(TARGETFS_DIR)/aux.kern
 
 # kernelmemfs is a copy of kernel that maintains the
 # disk image in memory instead of writing to a disk.

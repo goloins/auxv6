@@ -571,8 +571,13 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
       total_blocks = bdev_nblocks((uint)mins[i].dev);
       free_blocks = 0;
       block_size = BSIZE;
-      if(ext2_block_usage((uint)mins[i].dev, &total_blocks, &free_blocks, &block_size) < 0)
-        free_blocks = 0;
+      if(strncmp(mins[i].fstype, "ext2", sizeof(mins[i].fstype)) == 0){
+        if(ext2_block_usage((uint)mins[i].dev, &total_blocks, &free_blocks, &block_size) < 0)
+          free_blocks = 0;
+      } else if(strncmp(mins[i].fstype, "tmpfs", sizeof(mins[i].fstype)) == 0){
+        if(tmpfs_block_usage((uint)mins[i].dev, &total_blocks, &free_blocks, &block_size) < 0)
+          free_blocks = 0;
+      }
 
       if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)mins[i].dev) < 0)
         break;
