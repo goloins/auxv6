@@ -42,6 +42,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | Networking interfaces | 60% | BSD ifnet abstraction, loopback, virtio-net, routing, DHCP tooling, outbound packet path |
 | POSIX compatibility layer | 70% | Broader tty/ioctl compatibility, dynamic `openpty`/`ptsname_r` path, dash portability fixes; many APIs still stubbed or partial |
 | Userland docs/manpages | 72% | `man` utility plus baseline pages are available; coverage and completeness still growing |
+| Graphics / framebuffer console | 55% | Framebuffer core, display registry, builtin font/render path, `/proc/gfxstats`, and a virtio-gpu-backed console mirror are landed; the normal console path is still CGA-authoritative, mode discovery is still minimal, and no `/dev/fb0` or `/dev/dri/card0` userspace ABI exists yet |
 | procfs | 75% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`, `/proc/meminfo`, `/proc/ps`, `/proc/mountstats`, `/proc/gfxstats`, `/proc/lsof`; breadth improved but still sparse overall |
 | Real NICs | 65% | E1000, PCNET, RTL8111 have full ifnet integration; VMXnet3 has a basic polling datapath; Hyper-V netvsc, Intel I219-V, Intel I226-V, and ASIX AX88179 PCI remain stubs |
 | Device node management | 70% | `devman -s` creates `/dev` nodes at early runlevel from kernel-visible inventory; hotplug/event mode and richer policy rules still pending |

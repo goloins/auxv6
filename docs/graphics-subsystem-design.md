@@ -4,6 +4,8 @@
 
 This document outlines a Unix-like graphics subsystem for auxv6 inspired by Linux and BSD architectures but designed from first principles for a terminal-first OS moving toward GUI support. The subsystem supports VirtIO-GPU as the primary driver but provides a generic hardware abstraction enabling future display device support.
 
+**Status note (2026-04-02):** this document is the target architecture, not a precise implementation status log. The current tree is already past the original scaffolding stage: `framebuffer.c`, `display.c`, `font.c`, `render.c`, and `virtio_gpu.c` are built into the kernel, `main()` wires `display_init()` plus `virtio_gpu_init()`, and `console.c` can mirror the active tty into a virtio-gpu-backed framebuffer. For live status and the current closure plan toward a true framebuffer console, see `docs/graphics-integration-guide.md` and `docs/framebuffer-implementation-vt-summary.md`.
+
 **Design Philosophy:**
 - Kernel provides primitives, userspace provides policy
 - Minimize coupling between terminal/console and graphics
@@ -106,7 +108,7 @@ This document outlines a Unix-like graphics subsystem for auxv6 inspired by Linu
 **Files:**
 - `include/graphics/font.h`
 - `include/graphics/render.h`
-- `include/graphics/vt_surface.h`
+- VT surface declarations currently live in `include/graphics/render.h`
 
 ### Layer 4: Display Core (Kernel)
 
@@ -202,46 +204,45 @@ DRMIOC_PRIME_FD_TO_HANDLE   // Import buffer from FD
 - `user/libu6gfx.c` - library implementation
 - `include/u6gfx.h` - public header
 
-## Implementation Phases
+## Implementation Phases (Status Updated 2026-04-02)
 
-### Phase 1: Foundation (Weeks 1-2)
-- [x] Define abstraction layers (this document)
-- [ ] Implement framebuffer core (`framebuffer.h/c`)
-- [ ] Implement display device abstraction (`display.h/c`)
-- [ ] Implement basic font rasterizer (`font.h/c`)
-- [ ] Implement text rendering pipeline (`render.h/c`)
+### Phase 1: Foundation [mostly landed]
+- [x] Abstraction layers defined
+- [x] Framebuffer core compiled and usable in the kernel
+- [x] Display device abstraction compiled and used by the current path
+- [x] Builtin font and text rendering pipeline landed
+- [ ] Remaining work is depth and correctness, not initial existence
 
-### Phase 2: VirtIO-GPU Driver (Weeks 3-5)
-- [ ] Implement VirtIO-GPU detection and initialization
-- [ ] Implement resource/buffer management
-- [ ] Implement scanout and mode setting
-- [ ] Implement flush/transfer operations
-- [ ] Test with QEMU virtio-gpu device
+### Phase 2: VirtIO-GPU Driver [partially landed]
+- [x] PCI detection and initialization
+- [x] Resource creation, attach-backing, scanout, transfer, and flush path
+- [x] Boot integration with the current framebuffer mirror path
+- [ ] Real mode or connector state driven from `GET_DISPLAY_INFO`
+- [ ] Asynchronous completion, fence, or richer present semantics if needed later
 
-### Phase 3: Kernel Display Core (Weeks 6-7)
-- [ ] Integrate display device layer
-- [ ] Implement character device interface
-- [ ] Implement basic drm-like ioctls
-- [ ] Wire up framebuffer to console rendering
+### Phase 3: Kernel Display Core [partially landed]
+- [x] Display registry and boot wiring
+- [x] Current kernel-owned framebuffer mirror path
+- [ ] Truthful mode management and master control
+- [ ] Character-device implementation for userspace access
 
-### Phase 4: VT Integration (Weeks 8-9)
-- [ ] Create VT surface structures
-- [ ] Redirect console output to framebuffer
-- [ ] Implement dirty rectangle updating
-- [ ] Test with existing terminal applications (vi, dash, etc.)
+### Phase 4: True Framebuffer VT [not complete]
+- [ ] Make the VT or logical cell buffer authoritative
+- [ ] Remove the normal-path dependency on CGA writes
+- [ ] Preserve an explicit panic or recovery fallback
+- [ ] Validate shell, editor, and curses-style behavior on the framebuffer path
 
-### Phase 5: Userspace API (Weeks 10-11)
-- [ ] Implement libu6gfx library
-- [ ] Create test graphics programs
-- [ ] Implement basic window manager (optional)
-- [ ] Add input event processing
+### Phase 5: Userspace API [not started]
+- [ ] Implement a minimal `/dev/fb0` or `/dev/dri/card0` surface
+- [ ] Implement `libu6gfx` only after the kernel console path is stable
+- [ ] Add small graphics test programs once the kernel ABI is real
 
-### Phase 6: Advanced Features (Weeks 12+)
+### Phase 6: Advanced Features [future]
 - [ ] Multi-monitor support
-- [ ] Cursor/pointer handling
-- [ ] Damage tracking optimization
+- [ ] Cursor or pointer handling
+- [ ] Damage-tracking optimization beyond the current minimal path
 - [ ] Virgl rendering contexts
-- [ ] Display server bring-up
+- [ ] Display-server bring-up
 
 ## Key Design Decisions
 
