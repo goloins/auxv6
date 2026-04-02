@@ -108,3 +108,4 @@ ports/dash-0.5.12/src/mknodes
 ports/dash-0.5.12/src/mkinit
 .vscode/
 user/vblktest
+user/netcat

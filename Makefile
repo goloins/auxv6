@@ -206,7 +206,7 @@ tags: $(OBJS) kernel/boot/entryother.S user/_init
 kernel/core/vectors.S: tools/vectors.pl
 	./tools/vectors.pl > kernel/core/vectors.S
 
-LIBC_OBJS = user/ulib.o user/umalloc.o user/tty.o user/inet.o user/fmt.o user/dirent.o user/env.o user/stdlib.o user/posix_fs.o user/posix.o user/stdio.o user/regex.o user/calloc.o
+LIBC_OBJS = user/ulib.o user/string.o user/errstr.o user/umalloc.o user/tty.o user/inet.o user/fmt.o user/dirent.o user/env.o user/stdlib.o user/posix_fs.o user/posix.o user/stdio.o user/regex.o user/calloc.o
 LIBAUXV6_OBJS = user/usys.o user/printf.o user/resolve.o
 ULIB = $(LIBC_OBJS) $(LIBAUXV6_OBJS)
 

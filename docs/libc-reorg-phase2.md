@@ -3,6 +3,8 @@
 This tranche continues the libc cleanup by finishing the userland include-path
 sweep and carving more coherent modules out of the remaining monoliths.
 
+Phase 3 continuation is documented in `docs/libc-reorg-phase3.md`.
+
 ## Goals
 
 - Eliminate the remaining legacy `../include/...`, `user.h`, and `posix/...`
