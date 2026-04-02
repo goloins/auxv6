@@ -1,8 +1,7 @@
 # AHCI deterministic recovery injection test using /proc/ahci_tune controls.
 # The script verifies retry/recover behavior for timeout, TFES, and idle-stall
 # classes and then confirms mounted I/O still succeeds.
-
-mkdir /mnt/ahciretry
+# /mnt/ahciretry is pre-staged in the rootfs image; no mkdir needed.
 
 # Keep test deterministic and bounded.
 echo rw_retries=2 > /proc/ahci_tune

@@ -101,7 +101,7 @@ void            pty_poll_events(struct file *f, int *rd, int *wr, int *err);
 #endif
 
 #ifndef DBG_AHCI
-#define DBG_AHCI 0
+#define DBG_AHCI 1
 #endif
 
 // Boot-time verbosity flag - gates PCI discovery, device enumeration details, etc.

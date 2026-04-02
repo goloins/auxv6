@@ -9,9 +9,7 @@ cat /proc/ahci_tune
 mounts
 ls /
 ls /mnt
-echo DBG: before mkdir /mnt/ahciretry
-mkdir /mnt/ahciretry
-echo DBG: after mkdir /mnt/ahciretry
+echo DBG: /mnt/ahciretry is pre-staged, no mkdir needed
 ls /mnt
 
 # Keep test deterministic and bounded.

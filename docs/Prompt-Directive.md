@@ -4,14 +4,13 @@ If its missing in kernel, implement it. If it's missing in the user library, imp
 
 NEVER USE THE xv6 MKFS. USE ONE OF THE HOST TOOLS. MK2FS WORKS GREAT AND IS FOR A FS WE ACTUALLY SUPPORT. 
 
-We should avoid adding anything that should be core c library function to posix.c unless absolutely necessary, and instead add it to ulib.
+We should avoid adding anything that should be core c library function to posix.c unless absolutely necessary, and instead add it to the actual c library/headers.
 
 Our native shell DOES NOT SUPPORT MOST COMMON THINGS. Use dash or get creative if you need custom scripts.
 
 Whenever a document in docs/ is relevant to a change, update it. If there isn't a relevant document, add one. If there is a relevant document but it doesn't cover the change, update it to cover the change.
 
-IF YOU INSIST ON USING A HARNESS (AND IT ACTUALLY WORKS), THAT IS IDEAL. IF IT FAILS, FREEZES, OR I KILL
-IT BECAUSE ITS FROZEN, KILL THE QEMU PROCESS SINCE IT WILL JUST HANG. IF YOU CANT GET THE HARNESS GOING, JUST THROW ME THE COMMANDS AND EXPECTED OUTPUT AND I'LL RUN IT FOR YOU. NOT IDEAL, BUT I DONT WANT YOU TO GET STUCK ON SOMETHING LIKE THAT FOR A LONG TIME. We're building a unix, but I don't have DEC/AT&T money lol.
+TESTS WILL BE BINARIES RAN BY ME, THE USER. NO HARNESSES, NO AUTOMATED TESTING FRAMEWORKS, NO CI. JUST BINARIES THAT I CAN RUN AND SEE THE OUTPUT OF. MAKE SURE TO DOCUMENT HOW TO RUN THE TESTS AND WHAT OUTPUT TO EXPECT. ADD DEBUG FLAGS, IF NEEDED, ENABLE EXISTING ONES. NO MORE HARENESSES. 
 
 When creating userland tools, make sure there is an entry in .gitignore for the binary and that it will
 be cleaned up by make clean. Ensure you build a manpage for the tool and add it to the documentation. I don't want any binaries ending up in staged or in the repo or in the build output that aren't tracked by git or documented.

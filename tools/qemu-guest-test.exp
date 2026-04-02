@@ -62,8 +62,20 @@ proc startup_fail {msg detail} {
         puts stderr "startup output:"
         puts stderr $detail
     }
+    # Try a graceful halt in case the guest is still alive at startup failure
+    # (e.g. login prompt appeared but something broke). Best-effort only.
+    terminate_guest "1"
     exit 1
 }
+
+# SIGINT handler: try to halt the guest cleanly if it is still responsive,
+# then exit. The Makefile EXIT trap will killall -9 as a hard fallback for
+# frozen/hung sessions.
+trap {
+    puts stderr "\nharness: caught SIGINT — attempting guest halt before exit"
+    terminate_guest "1"
+    exit 1
+} SIGINT
 
 proc normalize_output {s} {
     set out $s

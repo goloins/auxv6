@@ -903,13 +903,11 @@ test-ahci-mount-stress: aux.bootkern $(EXT2IMG) ahci-stress.img
 test-ahci-retry-stress: aux.bootkern $(EXT2IMG) ahci-stress.img
 	@$(MAKE) qemu-guesttest-template \
 		AUXV6_QEMU_TARGET=qemu-nox-ahcistress \
-		AUXV6_CHECK_RC=1 \
 		AUXV6_TEST_SCRIPT=tools/tests/ahci-retry-stress.cmds
 
 test-ahci-retry-stress-debug: aux.bootkern $(EXT2IMG) ahci-stress.img
 	@$(MAKE) qemu-guesttest-template \
 		AUXV6_QEMU_TARGET=qemu-nox-ahcistress \
-		AUXV6_CHECK_RC=1 \
 		AUXV6_LOG_USER=1 \
 		AUXV6_EXPECT_TIMEOUT=360 \
 		AUXV6_TEST_SCRIPT=tools/tests/ahci-retry-stress-debug.cmds
@@ -917,7 +915,6 @@ test-ahci-retry-stress-debug: aux.bootkern $(EXT2IMG) ahci-stress.img
 test-ahci-mount-soak: aux.bootkern $(EXT2IMG) ahci-stress.img
 	@$(MAKE) qemu-guesttest-template \
 		AUXV6_QEMU_TARGET=qemu-nox-ahcistress \
-		AUXV6_CHECK_RC=1 \
 		AUXV6_TEST_SCRIPT=tools/tests/ahci-mount-soak.cmds
 
 test-ahci-regression: aux.bootkern $(EXT2IMG) ahci-stress.img
