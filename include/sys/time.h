@@ -22,13 +22,6 @@ struct timespec {
     long   tv_nsec;
 };
 
-static inline int gettimeofday(struct timeval *tv, struct timezone *tz) {
-    (void)tz;
-    if (tv) {
-        tv->tv_sec = 0;
-        tv->tv_usec = 0;
-    }
-    return 0;
-}
+int gettimeofday(struct timeval *tv, struct timezone *tz);
 
 #endif /* AUXV6_SYS_TIME_H */

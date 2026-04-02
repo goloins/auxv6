@@ -159,17 +159,72 @@ Truthful Surface And Low-Kernel-Dependency Portability
 
 Time And Stream Correctness
 
-- Add canonical `time.h`.
-- Replace the zero-valued time stubs with real time APIs:
-  - `time`
+### Initial Landing Status (2026-04-02)
+
+- Tranche 2 is now basically in-tree.
+- `include/stdio.h` now exposes `fpos_t`, `fseek`, `fseeko`, `ftell`,
+  `ftello`, `rewind`, `fgetpos`, `fsetpos`, `vsscanf`, and `sscanf`.
+- `user/stdio.c` now owns the seek/tell/fpos family and a real first-pass
+  `vsscanf` parser covering integer, `%c`, `%s`, `%[...]`, `%n`, and literal
+  `%` handling.
+- The existing `FILE` model was tightened while landing that work:
+  - `fread` now correctly respects `ungetc` state.
+  - `fread` now works correctly on `fmemopen` streams instead of always going
+    through the fd path.
+- `include/stdio.h` and `user/stdio.c` now also provide `setvbuf`, `setbuf`,
+  and `setlinebuf`, along with real `fflush`-backed output buffering for
+  fd-backed writable streams.
+- The buffering scope is intentional and truthful rather than aspirational:
+  auxv6 now supports unbuffered, fully buffered, and line-buffered output on
+  normal write streams, without claiming a broader stdio input-buffering model
+  that has not been implemented.
+- The old placeholder `sscanf` stub was removed from `user/fmt.c` so the
+  scanning surface has a single owner.
+- Canonical `time.h` is now in-tree, and `include/sys/time.h` now declares a
+  real `gettimeofday` entry point instead of carrying a zero-valued inline
+  stub.
+- `user/timecore.c` now provides the tranche-2 time/calendar core:
   - `gettimeofday`
   - `clock_gettime`
-  - `nanosleep` or `usleep`
-  - `gmtime_r`, `localtime_r`, `mktime`, `strftime`
-- Finish the high-value stdio positioning and scanning surfaces:
-  - `fseek`, `ftell`, `fseeko`, `ftello`
-  - `rewind`, `fgetpos`, `fsetpos`, `setvbuf`
-  - `sscanf`, `vsscanf`
+  - `time`
+  - `difftime`
+  - `gmtime`, `gmtime_r`
+  - `localtime`, `localtime_r`
+  - `mktime`
+  - `asctime`, `asctime_r`
+  - `ctime`, `ctime_r`
+  - `strftime`
+- The time landing intentionally reuses the existing auxv6 primitives instead
+  of adding new syscall ABI:
+  - wall clock comes from `date()` / CMOS RTC conversion
+  - monotonic time comes from `uptime()` / ticks
+  - `usleep` from tranche 1 remains the sleep side of the tranche-2 target
+- Tranche 2 is now basically closed from the original portability-target
+  perspective; any later stdio work should be treated as follow-on polish,
+  not as a missing core tranche-2 surface.
+
+### Initial Validation Status (2026-04-02)
+
+- A canonical `stdio.h` compile probe covering `fmemopen`, `fseek`, `fseeko`,
+  `ftell`, `ftello`, `fgetpos`, `fsetpos`, `rewind`, `sscanf`, and `vsscanf`
+  passed under the cross compiler with `-Werror`.
+- A canonical `time.h` / `sys/time.h` compile probe covering `time`,
+  `gettimeofday`, `clock_gettime`, `gmtime_r`, `localtime_r`, `mktime`,
+  `strftime`, `asctime_r`, and `ctime_r` passed under the cross compiler with
+  `-Werror`.
+- `sudo make user/stdio.o user/fmt.o aux.kern` passed in the shared sudo
+  session used for the rest of the tranche validation.
+- `sudo make user/timecore.o user/date user/time aux.kern` also passed in that
+  same shared sudo-authenticated shell, confirming both the new libc object and
+  representative user links.
+- A follow-up canonical `stdio.h` probe covering `setvbuf`, `setbuf`,
+  `setlinebuf`, `fflush`, and buffered `fprintf` usage also passed under the
+  cross compiler with `-Werror`.
+- `sudo make user/stdio.o aux.kern` still passed after the buffering change,
+  and `sudo make -f ports/dash-0.5.12/Makefile.auxv6 clean all` continued to
+  pass in the shared sudo-authenticated shell. The dash rebuild still emitted
+  only the pre-existing `signames.c` excess-initializer warnings and the
+  existing RWX LOAD-segment linker warning.
 
 ### Tranche 3
 

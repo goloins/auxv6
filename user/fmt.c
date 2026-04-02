@@ -372,11 +372,3 @@ sprintf(char *buf, const char *fmt, ...)
   va_end(ap);
   return n;
 }
-
-int
-sscanf(const char *str, const char *fmt, ...)
-{
-  (void)str;
-  (void)fmt;
-  return 0;
-}

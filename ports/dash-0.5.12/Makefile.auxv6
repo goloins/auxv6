@@ -111,6 +111,7 @@ RUNTIME_OBJS := \
   $(ROOT)/user/conf.o \
   $(ROOT)/user/path.o \
   $(ROOT)/user/tempfile.o \
+  $(ROOT)/user/timecore.o \
   $(ROOT)/user/stdlib.o \
   $(ROOT)/user/posix_fs.o \
   $(ROOT)/user/posix.o \

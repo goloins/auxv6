@@ -17,7 +17,12 @@
 #define BUFSIZ 512
 #endif /* AUXV6_STDIO_H */
 
+#define _IOFBF 0
+#define _IOLBF 1
+#define _IONBF 2
+
 typedef struct __auxv6_FILE FILE;
+typedef off_t fpos_t;
 
 extern FILE *stdin;
 extern FILE *stdout;
@@ -28,6 +33,16 @@ FILE *fdopen(int fd, const char *mode);
 FILE *fmemopen(void *buf, size_t size, const char *mode);
 int fclose(FILE *fp);
 int fflush(FILE *fp);
+int setvbuf(FILE *fp, char *buf, int mode, size_t size);
+void setbuf(FILE *fp, char *buf);
+void setlinebuf(FILE *fp);
+int fseek(FILE *fp, long offset, int whence);
+int fseeko(FILE *fp, off_t offset, int whence);
+long ftell(FILE *fp);
+off_t ftello(FILE *fp);
+void rewind(FILE *fp);
+int fgetpos(FILE *fp, fpos_t *pos);
+int fsetpos(FILE *fp, const fpos_t *pos);
 
 int ferror(FILE *fp);
 int feof(FILE *fp);
@@ -56,6 +71,8 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
 int snprintf(char *buf, size_t size, const char *fmt, ...);
 int sprintf(char *buf, const char *fmt, ...);
 int vsprintf(char *buf, const char *fmt, va_list ap);
+int vsscanf(const char *s, const char *fmt, va_list ap);
+int sscanf(const char *s, const char *fmt, ...);
 
 void perror(const char *s);
 
@@ -76,6 +93,11 @@ struct __auxv6_FILE {
   const char *mem;
   size_t mem_size;
   size_t mem_pos;
+  char *buf;
+  size_t buf_size;
+  size_t buf_len;
+  int buf_mode;
+  int buf_owned;
 };
 
 #endif
