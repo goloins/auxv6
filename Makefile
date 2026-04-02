@@ -132,6 +132,9 @@ ASFLAGS = -m32 -gdwarf-2 -Wa,-divide -Iinclude
 LDFLAGS += -m $(shell $(LD) -V | grep elf_i386 2>/dev/null | head -n 1)
 LIBGCC := $(shell $(CC) -m32 -print-libgcc-file-name)
 
+# Never use host system headers for auxv6 guest code.
+CFLAGS += -nostdinc
+
 # Disable PIE when possible (for Ubuntu 16.10 toolchain)
 ifneq ($(shell $(CC) -dumpspecs 2>/dev/null | grep -e '[^f]no-pie'),)
 CFLAGS += -fno-pie -no-pie
@@ -139,6 +142,21 @@ endif
 ifneq ($(shell $(CC) -dumpspecs 2>/dev/null | grep -e '[^f]nopie'),)
 CFLAGS += -fno-pie -nopie
 endif
+
+.PHONY: toolchain-check
+toolchain-check:
+	@$(CC) -m32 -dM -E -x c /dev/null | grep -q '__i386__' || \
+		(echo "***" 1>&2; \
+		echo "*** Error: $(CC) is not producing 32-bit i386 code for -m32." 1>&2; \
+		echo "*** Set TOOLPREFIX to an i386-*-elf toolchain or install host multilib support." 1>&2; \
+		echo "***" 1>&2; exit 1)
+	@nm "$(LIBGCC)" 2>/dev/null | grep -Eq '__divmoddi4|__udivdi3|__divdi3' || \
+		(echo "***" 1>&2; \
+		echo "*** Error: selected libgcc is missing i386 64-bit division helpers." 1>&2; \
+		echo "*** LIBGCC=$(LIBGCC)" 1>&2; \
+		echo "*** This usually means a host 64-bit runtime archive was selected." 1>&2; \
+		echo "*** Install multilib or use an i386-*-elf TOOLPREFIX." 1>&2; \
+		echo "***" 1>&2; exit 1)
 
 # Default: ext2 root filesystem for easier dynamic modifications
 ROOTFS_TYPE_VALUE ?= 2
@@ -183,7 +201,7 @@ entryother: kernel/boot/entryother.S
 	$(OBJCOPY) -S -O binary -j .text bootblockother.o entryother
 	$(OBJDUMP) -S bootblockother.o > entryother.asm
 
-aux.kern: $(OBJS) kernel/core/entry.o entryother config/kernel.ld
+aux.kern: toolchain-check $(OBJS) kernel/core/entry.o entryother config/kernel.ld
 	$(LD) $(LDFLAGS) -T config/kernel.ld -o aux.kern kernel/core/entry.o $(OBJS) -b binary entryother
 	$(OBJDUMP) -S aux.kern > kernel.asm
 	$(OBJDUMP) -t aux.kern | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > kernel.sym
@@ -220,7 +238,7 @@ user/sh.o: user/sh.c
 user/usertests.o: user/usertests.c
 	$(CC) $(CFLAGS) -Os -c -o $@ $<
 
-user/%: user/%.o $(ULIB)
+user/%: user/%.o $(ULIB) | toolchain-check
 	$(LD) $(LDFLAGS) -N -e _start -Ttext 0 -o $@ $^ $(LIBGCC)
 	$(OBJDUMP) -S $@ > $(basename $@).asm
 	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(basename $@).sym
@@ -228,7 +246,7 @@ user/%: user/%.o $(ULIB)
 $(USER_STAGE_DIR):
 	mkdir -p $(USER_STAGE_DIR)
 
-$(USER_STAGE_DIR)/%: user/%.o $(ULIB) | $(USER_STAGE_DIR)
+$(USER_STAGE_DIR)/%: user/%.o $(ULIB) | $(USER_STAGE_DIR) toolchain-check
 	$(LD) $(LDFLAGS) -N -e _start -Ttext 0 -o $@ $^ $(LIBGCC)
 
 _cat: user/cat

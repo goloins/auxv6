@@ -56,6 +56,7 @@ LIBGCC  := $(shell $(CC) -m32 -print-libgcc-file-name 2>/dev/null)
 # ---------------------------------------------------------------------------
 CFLAGS  := -fno-pic -static -fno-builtin -fno-strict-aliasing \
            -O2 -Wall -MD -ggdb -m32 -fno-omit-frame-pointer \
+           -nostdinc \
            -fno-stack-protector \
            -DBSD=1 -DSHELL -DSMALL=1 -DJOBS=1 -D_POSIX_COMPAT_TC \
            -include $(ROOT)/ports/dash-0.5.12/config.h \
@@ -144,11 +145,17 @@ GENERATED := \
 # ---------------------------------------------------------------------------
 # Targets
 # ---------------------------------------------------------------------------
-.PHONY: all generated clean
+.PHONY: all generated clean toolchain-check
 
-all: $(GENERATED) $(OUT)
+toolchain-check:
+	@$(CC) -m32 -dM -E -x c /dev/null | grep -q '__i386__' || \
+		(echo "ERROR: $(CC) is not producing i386 output with -m32" >&2; exit 1)
+	@nm "$(LIBGCC)" 2>/dev/null | grep -Eq '__divmoddi4|__udivdi3|__divdi3' || \
+		(echo "ERROR: libgcc is missing i386 64-bit division helpers: $(LIBGCC)" >&2; exit 1)
 
-$(OUT): $(DASH_OBJS) $(RUNTIME_OBJS)
+all: toolchain-check $(GENERATED) $(OUT)
+
+$(OUT): $(DASH_OBJS) $(RUNTIME_OBJS) | toolchain-check
 	$(LD) $(LDFLAGS) -o $@ $^ $(LIBGCC)
 	$(OBJDUMP) -S $@ > $(ROOT)/ports/dash-0.5.12/dash.asm || true
 
