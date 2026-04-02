@@ -1057,6 +1057,34 @@ ansi_private_mode_state(struct console_tty_state *t, int mode)
     return t->ansi.wraparound ? 1 : 2;
   if(mode == 25)
     return t->ansi.cursor_visible ? 1 : 2;
+  if(mode == 1000)
+    return t->ansi.mouse_x10 ? 1 : 2;
+  if(mode == 1001)
+    return t->ansi.mouse_x11 ? 1 : 2;
+  if(mode == 1002)
+    return t->ansi.mouse_x11 ? 1 : 2;
+  if(mode == 1003)
+    return t->ansi.mouse_x11 ? 1 : 2;
+  if(mode == 1004)
+    return t->ansi.focus_event ? 1 : 2;
+  if(mode == 1005)
+    return t->ansi.mouse_sgr ? 1 : 2;
+  if(mode == 1006)
+    return t->ansi.mouse_sgr ? 1 : 2;
+  if(mode == 1007)
+    return t->ansi.alt_scroll ? 1 : 2;
+  if(mode == 1015)
+    return t->ansi.mouse_urxvt ? 1 : 2;
+  if(mode == 1034)
+    return t->ansi.meta_eightbit ? 2 : 1;
+  if(mode == 1036)
+    return t->ansi.meta_eightbit ? 1 : 2;
+  if(mode == 1039)
+    return t->ansi.meta_eightbit ? 1 : 2;
+  if(mode == 9)
+    return t->ansi.mouse_x10 ? 1 : 2;
+  if(mode == 67)
+    return t->ansi.backarrow_key ? 1 : 2;
   if(mode == 47 || mode == 1047 || mode == 1049)
     return t->ansi.alt_active ? 1 : 2;
   return 0;
@@ -1077,8 +1105,20 @@ ansi_soft_reset(struct console_tty_state *t)
   t->ansi.newline_mode = 0;
   t->ansi.wraparound = 1;
   t->ansi.reverse_video = 0;
+  t->ansi.underline = 0;
+  t->ansi.italic = 0;
+  t->ansi.strikethrough = 0;
+  t->ansi.dim = 0;
   t->ansi.cursor_blink = 1;
   t->ansi.cursor_visible = 1;
+  t->ansi.mouse_x10 = 0;
+  t->ansi.mouse_x11 = 0;
+  t->ansi.mouse_sgr = 0;
+  t->ansi.mouse_urxvt = 0;
+  t->ansi.focus_event = 0;
+  t->ansi.alt_scroll = 0;
+  t->ansi.meta_eightbit = 0;
+  t->ansi.backarrow_key = 0;
   t->ansi.utf8_need = 0;
   t->ansi.question = 0;
   t->ansi.greater = 0;
@@ -1534,14 +1574,33 @@ cgaputc_ansi(struct console_tty_state *t, int c)
     case 'm': {
       static const uchar cga_fg[] = {0,4,2,6,1,5,3,7};
       int i2;
-      if(t->ansi.nparams == 0) { t->ansi.attr=0x07; break; }
+      if(t->ansi.nparams == 0) { 
+        t->ansi.attr=0x07; 
+        t->ansi.underline=0; 
+        t->ansi.italic=0; 
+        t->ansi.strikethrough=0; 
+        t->ansi.dim=0; 
+        break; 
+      }
       for(i2=0; i2<t->ansi.nparams; i2++) {
         int sg=t->ansi.params[i2];
-        if(sg==0)               t->ansi.attr=0x07;
+        if(sg==0) {
+          t->ansi.attr=0x07;
+          t->ansi.underline=0;
+          t->ansi.italic=0;
+          t->ansi.strikethrough=0;
+          t->ansi.dim=0;
+        }
         else if(sg==1)          t->ansi.attr|=0x08;
-        else if(sg==2||sg==22)  t->ansi.attr&=~0x08;
+        else if(sg==2||sg==22)  { t->ansi.attr&=~0x08; t->ansi.dim=(sg==2)?1:0; }
+        else if(sg==3)          t->ansi.italic=1;
+        else if(sg==4)          t->ansi.underline=1;
         else if(sg==5)          t->ansi.attr|=0x80;
+        else if(sg==9)          t->ansi.strikethrough=1;
+        else if(sg==23)         t->ansi.italic=0;
+        else if(sg==24)         t->ansi.underline=0;
         else if(sg==25)         t->ansi.attr&=~0x80;
+        else if(sg==29)         t->ansi.strikethrough=0;
         else if(sg==7)          { uchar fg=t->ansi.attr&0x0F,bg=(t->ansi.attr>>4)&0x0F; t->ansi.attr=(uchar)((fg<<4)|bg); }
         else if(sg==27)         t->ansi.attr=0x07;
         else if(sg>=30&&sg<=37) t->ansi.attr=(t->ansi.attr&0xF0)|cga_fg[sg-30];
@@ -1668,6 +1727,14 @@ consputc_ansi(struct console_tty_state *t, int c)
 #define KEY_F2    0xEB
 #define KEY_F3    0xEC
 #define KEY_F4    0xED
+#define KEY_F5    0xEE
+#define KEY_F6    0xEF
+#define KEY_F7    0xF0
+#define KEY_F8    0xF1
+#define KEY_F9    0xF2
+#define KEY_F10   0xF3
+#define KEY_F11   0xF4
+#define KEY_F12   0xF5
 
 static int
 console_utf8_erase_len(struct console_tty_state *t)
@@ -2026,6 +2093,18 @@ consoleintr(int (*getc)(void))
     case KEY_PGDN: esc_seq = "\033[6~"; break;
     case KEY_INS:  esc_seq = "\033[2~"; break;
     case KEY_DEL:  esc_seq = "\033[3~"; break;
+    case KEY_F1:   esc_seq = "\033[11~"; break;
+    case KEY_F2:   esc_seq = "\033[12~"; break;
+    case KEY_F3:   esc_seq = "\033[13~"; break;
+    case KEY_F4:   esc_seq = "\033[14~"; break;
+    case KEY_F5:   esc_seq = "\033[15~"; break;
+    case KEY_F6:   esc_seq = "\033[17~"; break;
+    case KEY_F7:   esc_seq = "\033[18~"; break;
+    case KEY_F8:   esc_seq = "\033[19~"; break;
+    case KEY_F9:   esc_seq = "\033[20~"; break;
+    case KEY_F10:  esc_seq = "\033[21~"; break;
+    case KEY_F11:  esc_seq = "\033[23~"; break;
+    case KEY_F12:  esc_seq = "\033[24~"; break;
     default: break;
     }
     if(esc_seq) {
