@@ -1,0 +1,25 @@
+# AHCI long-run mount stress with explicit rc checking.
+# This script executes 24 mount/write/umount cycles, then verifies persisted
+# sentinels and captures telemetry to ensure no recover failures occurred.
+
+mkdir /mnt/ahcisoak
+echo rw_retries=2 > /proc/ahci_tune
+echo test_fail_mode=none > /proc/ahci_tune
+echo test_fail_count=0 > /proc/ahci_tune
+echo reset_stats=1 > /proc/ahci_tune
+
+RAW dash -c 'i=1; while [ "$i" -le 24 ]; do mount /dev/hdd ext2 /mnt/ahcisoak || exit 1; echo cycle"$i" > /mnt/ahcisoak/f"$i" || exit 1; cat /mnt/ahcisoak/f"$i" || exit 1; umount /mnt/ahcisoak || exit 1; i=$((i+1)); done'
+EXPECT cycle1
+EXPECT cycle24
+
+mount /dev/hdd ext2 /mnt/ahcisoak
+cat /mnt/ahcisoak/f1
+EXPECT cycle1
+cat /mnt/ahcisoak/f12
+EXPECT cycle12
+cat /mnt/ahcisoak/f24
+EXPECT cycle24
+umount /mnt/ahcisoak
+
+cat /proc/ahci_tune
+EXPECT recover_fail=0

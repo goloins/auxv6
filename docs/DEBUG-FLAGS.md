@@ -91,6 +91,32 @@ Control filesystem and driver diagnostic output:
 | `DBG_IDE` | IDE driver diagnostics | `AUXV6_DEBUG` |
 | `DBG_AHCI` | AHCI controller diagnostics | 0 (always off) |
 
+### AHCI Runtime Tuning (`/proc/ahci_tune`)
+
+AHCI also exposes runtime tuning and deterministic fault-injection controls via
+`/proc/ahci_tune` for guest automation and recovery-path validation.
+
+**Readable fields include:**
+- `cmd_timeout_us`, `idle_timeout_us`, `rw_retries`
+- `test_fail_mode`, `test_fail_remaining`, `last_fail_class`
+- Per-port counters (`ok`, `err`, `timeout`, `tfes`, `retry`, `recover_fail`, ...)
+
+**Writable controls:**
+- `cmd_timeout_us=<N>`
+- `idle_timeout_us=<N>`
+- `rw_retries=<N>`
+- `reset_stats=1`
+- `test_fail_mode=none|timeout|tfes|idle`
+- `test_fail_count=<N>`
+
+**Examples:**
+```bash
+cat /proc/ahci_tune
+echo rw_retries=2 > /proc/ahci_tune
+echo test_fail_mode=timeout > /proc/ahci_tune
+echo test_fail_count=2 > /proc/ahci_tune
+```
+
 ---
 
 ## Gated Messages by Category

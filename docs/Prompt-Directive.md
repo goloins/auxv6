@@ -10,6 +10,9 @@ Our native shell DOES NOT SUPPORT MOST COMMON THINGS. Use dash or get creative i
 
 Whenever a document in docs/ is relevant to a change, update it. If there isn't a relevant document, add one. If there is a relevant document but it doesn't cover the change, update it to cover the change.
 
+IF YOU INSIST ON USING A HARNESS (AND IT ACTUALLY WORKS), THAT IS IDEAL. IF IT FAILS, FREEZES, OR I KILL
+IT BECAUSE ITS FROZEN, KILL THE QEMU PROCESS SINCE IT WILL JUST HANG. IF YOU CANT GET THE HARNESS GOING, JUST THROW ME THE COMMANDS AND EXPECTED OUTPUT AND I'LL RUN IT FOR YOU. NOT IDEAL, BUT I DONT WANT YOU TO GET STUCK ON SOMETHING LIKE THAT FOR A LONG TIME. We're building a unix, but I don't have DEC/AT&T money lol.
+
 When creating userland tools, make sure there is an entry in .gitignore for the binary and that it will
 be cleaned up by make clean. Ensure you build a manpage for the tool and add it to the documentation. I don't want any binaries ending up in staged or in the repo or in the build output that aren't tracked by git or documented.
 

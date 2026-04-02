@@ -1,0 +1,91 @@
+# AHCI retry stress debug variant.
+#
+# This script mirrors ahci-retry-stress.cmds but adds explicit breadcrumbs and
+# state snapshots so host logs show where a run stalls (for example around the
+# initial mkdir/mount preparation).
+
+echo DBG: retry-debug begin
+cat /proc/ahci_tune
+mounts
+ls /
+ls /mnt
+echo DBG: before mkdir /mnt/ahciretry
+mkdir /mnt/ahciretry
+echo DBG: after mkdir /mnt/ahciretry
+ls /mnt
+
+# Keep test deterministic and bounded.
+echo rw_retries=2 > /proc/ahci_tune
+echo reset_stats=1 > /proc/ahci_tune
+echo DBG: baseline ahci_tune configured
+cat /proc/ahci_tune
+EXPECT rw_retries=2
+EXPECT test_fail_mode=0
+EXPECT test_fail_remaining=0
+EXPECT last_fail_class=0
+
+# Inject timeout failures for first two write attempts; third should succeed.
+echo DBG: timeout injection start
+echo test_fail_mode=timeout > /proc/ahci_tune
+echo test_fail_count=2 > /proc/ahci_tune
+echo DBG: before mount timeout phase
+mounts
+mount /dev/hdd ext2 /mnt/ahciretry
+echo DBG: mounted timeout phase
+echo timeoutok > /mnt/ahciretry/t1
+cat /proc/ahci_tune
+EXPECT test_fail_mode=1
+EXPECT test_fail_remaining=0
+EXPECT last_fail_class=1
+EXPECT timeout=2
+EXPECT retry=2
+EXPECT recover_fail=0
+umount /mnt/ahciretry
+echo DBG: timeout phase complete
+
+# Inject one TFES failure and verify retry/recovery.
+echo DBG: tfes injection start
+echo test_fail_mode=tfes > /proc/ahci_tune
+echo test_fail_count=1 > /proc/ahci_tune
+mount /dev/hdd ext2 /mnt/ahciretry
+echo tfesok > /mnt/ahciretry/t2
+cat /proc/ahci_tune
+EXPECT test_fail_mode=2
+EXPECT test_fail_remaining=0
+EXPECT last_fail_class=2
+EXPECT tfes=1
+EXPECT retry=3
+EXPECT recover_fail=0
+umount /mnt/ahciretry
+echo DBG: tfes phase complete
+
+# Inject one pre-command idle stall and verify recovery path.
+echo DBG: idle injection start
+echo test_fail_mode=idle > /proc/ahci_tune
+echo test_fail_count=1 > /proc/ahci_tune
+mount /dev/hdd ext2 /mnt/ahciretry
+echo idleok > /mnt/ahciretry/t3
+cat /proc/ahci_tune
+EXPECT test_fail_mode=3
+EXPECT test_fail_remaining=0
+EXPECT last_fail_class=3
+EXPECT timeout=3
+EXPECT retry=4
+EXPECT recover_fail=0
+
+# Return injector to neutral mode and verify persisted data remains readable.
+echo test_fail_mode=none > /proc/ahci_tune
+echo test_fail_count=0 > /proc/ahci_tune
+echo DBG: verify persisted data
+cat /proc/ahci_tune
+EXPECT test_fail_mode=0
+EXPECT test_fail_remaining=0
+
+cat /mnt/ahciretry/t1
+EXPECT timeoutok
+cat /mnt/ahciretry/t2
+EXPECT tfesok
+cat /mnt/ahciretry/t3
+EXPECT idleok
+umount /mnt/ahciretry
+echo DBG: retry-debug end

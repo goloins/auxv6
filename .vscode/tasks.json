@@ -58,6 +58,15 @@
 				"_file"
 			],
 			"isBackground": false
+		},
+		{
+			"label": "run-ahci-retry-stress-debug",
+			"type": "shell",
+			"command": "make",
+			"args": [
+				"test-ahci-retry-stress-debug"
+			],
+			"isBackground": false
 		}
 	]
 }

@@ -834,6 +834,7 @@ AUXV6_MAKE_CMD ?=
 AUXV6_TEST_SCRIPT ?=
 AUXV6_EXPECT_TIMEOUT ?= 240
 AUXV6_HALT ?= 1
+AUXV6_CHECK_RC ?= 0
 
 qemu-guesttest-template:
 	@if ! command -v expect >/dev/null 2>&1; then \
@@ -853,22 +854,26 @@ qemu-guesttest-template:
 			mkcmd="make"; \
 		fi; \
 	fi; \
+	_kill_qemu() { \
+		if [ "$$(uname -s)" = "Darwin" ]; then \
+			sudo -n killall -9 qemu-system-i386 qemu-system-x86_64 >/dev/null 2>&1 || true; \
+		else \
+			killall -9 qemu-system-i386 qemu-system-x86_64 >/dev/null 2>&1 || true; \
+		fi; \
+	}; \
+	trap '_kill_qemu' EXIT INT TERM HUP; \
 	AUXV6_MAKE_CMD="$$mkcmd" \
 	 AUXV6_QEMU_TARGET="$(AUXV6_QEMU_TARGET)" \
 	 AUXV6_TEST_SCRIPT="$(AUXV6_TEST_SCRIPT)" \
 	 AUXV6_EXPECT_TIMEOUT="$(AUXV6_EXPECT_TIMEOUT)" \
+	 AUXV6_CHECK_RC="$(AUXV6_CHECK_RC)" \
 	 AUXV6_HALT="$(AUXV6_HALT)" \
 	 expect tools/qemu-guest-test.exp; \
 	rc=$$?; \
 	if [ $$rc -ne 0 ]; then \
-		echo "guesttest: harness failed; force-killing stale qemu-system-i386" >&2; \
-		if [ "$$(uname -s)" = "Darwin" ]; then \
-			sudo -n killall -9 qemu-system-i386 >/dev/null 2>&1 || true; \
-		else \
-			killall -9 qemu-system-i386 >/dev/null 2>&1 || true; \
-		fi; \
-		exit $$rc; \
-	fi
+		echo "guesttest: harness failed (rc=$$rc); qemu will be killed by exit trap" >&2; \
+	fi; \
+	exit $$rc
 
 test-virtioblk-smoke: aux.bootkern $(EXT2IMG) vblk0.img vblk1.img
 	@$(MAKE) qemu-guesttest-template \
@@ -898,7 +903,27 @@ test-ahci-mount-stress: aux.bootkern $(EXT2IMG) ahci-stress.img
 test-ahci-retry-stress: aux.bootkern $(EXT2IMG) ahci-stress.img
 	@$(MAKE) qemu-guesttest-template \
 		AUXV6_QEMU_TARGET=qemu-nox-ahcistress \
+		AUXV6_CHECK_RC=1 \
 		AUXV6_TEST_SCRIPT=tools/tests/ahci-retry-stress.cmds
+
+test-ahci-retry-stress-debug: aux.bootkern $(EXT2IMG) ahci-stress.img
+	@$(MAKE) qemu-guesttest-template \
+		AUXV6_QEMU_TARGET=qemu-nox-ahcistress \
+		AUXV6_CHECK_RC=1 \
+		AUXV6_LOG_USER=1 \
+		AUXV6_EXPECT_TIMEOUT=360 \
+		AUXV6_TEST_SCRIPT=tools/tests/ahci-retry-stress-debug.cmds
+
+test-ahci-mount-soak: aux.bootkern $(EXT2IMG) ahci-stress.img
+	@$(MAKE) qemu-guesttest-template \
+		AUXV6_QEMU_TARGET=qemu-nox-ahcistress \
+		AUXV6_CHECK_RC=1 \
+		AUXV6_TEST_SCRIPT=tools/tests/ahci-mount-soak.cmds
+
+test-ahci-regression: aux.bootkern $(EXT2IMG) ahci-stress.img
+	@$(MAKE) test-ahci-mount-stress
+	@$(MAKE) test-ahci-retry-stress
+	@$(MAKE) test-ahci-mount-soak
 
 test-termcheck-smoke: aux.bootkern $(EXT2IMG)
 	@$(MAKE) qemu-guesttest-template \
