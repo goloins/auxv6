@@ -112,12 +112,19 @@ confirm_overwrite(const char *path)
 }
 
 static int
-copy_file_data(int src_fd, int dst_fd, int *bytes_out)
+copy_file_data(int src_fd, int dst_fd, int *bytes_out,
+               int *fail_is_write, int *fail_off, int *fail_errno)
 {
   int n;
   int total;
 
   total = 0;
+  if(fail_is_write)
+    *fail_is_write = 0;
+  if(fail_off)
+    *fail_off = 0;
+  if(fail_errno)
+    *fail_errno = 0;
 
   while((n = read(src_fd, copy_buf, sizeof(copy_buf))) > 0) {
     int off;
@@ -125,15 +132,29 @@ copy_file_data(int src_fd, int dst_fd, int *bytes_out)
     off = 0;
     while(off < n) {
       int w = write(dst_fd, copy_buf + off, n - off);
-      if(w <= 0)
+      if(w <= 0) {
+        if(fail_is_write)
+          *fail_is_write = 1;
+        if(fail_off)
+          *fail_off = total + off;
+        if(fail_errno)
+          *fail_errno = errno;
         return -1;
+      }
       off += w;
     }
     total += n;
   }
 
-  if(n < 0)
+  if(n < 0) {
+    if(fail_is_write)
+      *fail_is_write = 0;
+    if(fail_off)
+      *fail_off = total;
+    if(fail_errno)
+      *fail_errno = errno;
     return -1;
+  }
   if(bytes_out)
     *bytes_out = total;
   return 0;
@@ -149,6 +170,9 @@ copy_file(const char *src, const char *dst, const struct stat *st,
   int dst_fd;
   int rc;
   int copied;
+  int fail_is_write;
+  int fail_off;
+  int fail_errno;
 
   dst_exists = (stat(dst, &dstst) == 0);
   if(dst_exists && dstst.st_type == T_DIR) {
@@ -181,15 +205,25 @@ copy_file(const char *src, const char *dst, const struct stat *st,
   }
 
   copied = 0;
-  rc = copy_file_data(src_fd, dst_fd, &copied);
+  fail_is_write = 0;
+  fail_off = 0;
+  fail_errno = 0;
+  rc = copy_file_data(src_fd, dst_fd, &copied,
+                      &fail_is_write, &fail_off, &fail_errno);
   if(rc == 0 && copied == 0 && st->st_size > 0) {
     if(lseek(src_fd, 0, SEEK_SET) >= 0 && lseek(dst_fd, 0, SEEK_SET) >= 0)
-      rc = copy_file_data(src_fd, dst_fd, &copied);
+      rc = copy_file_data(src_fd, dst_fd, &copied,
+                          &fail_is_write, &fail_off, &fail_errno);
   }
   close(src_fd);
   close(dst_fd);
   if(rc < 0) {
-    dprintf(2, "cp: failed to copy %s\n", src);
+    if(fail_is_write)
+      dprintf(2, "cp: write error %s -> %s at offset %d (errno=%d)\n",
+              src, dst, fail_off, fail_errno);
+    else
+      dprintf(2, "cp: read error %s at offset %d (errno=%d)\n",
+              src, fail_off, fail_errno);
     return -1;
   }
   if(copied == 0 && st->st_size > 0) {
