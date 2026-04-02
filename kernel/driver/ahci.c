@@ -313,6 +313,14 @@ static int ahci_count = 0;
 static int ahci_cmd_timeout_us = AHCI_TIMEOUT_CMD_US;
 static int ahci_idle_timeout_us = AHCI_TIMEOUT_PORT_IDLE_US;
 static int ahci_rw_retries = 1;
+static int ahci_test_fail_mode = 0;
+static int ahci_test_fail_remaining = 0;
+static int ahci_last_fail_class = 0;
+
+#define AHCI_TEST_FAIL_NONE    0
+#define AHCI_TEST_FAIL_TIMEOUT 1
+#define AHCI_TEST_FAIL_TFES    2
+#define AHCI_TEST_FAIL_IDLE    3
 
 static uint32_t ahci_port_read(struct ahci_softc *sc, int port, int reg);
 static void ahci_port_write(struct ahci_softc *sc, int port, int reg, uint32_t val);
@@ -357,6 +365,18 @@ ahci_get_tune(char *buf, int max)
 
     pos = ahci_append_str(buf, max, pos, "dbg_build=");
     pos = ahci_append_uint(buf, max, pos, (uint)DBG_AHCI);
+    pos = ahci_append_str(buf, max, pos, "\n");
+
+    pos = ahci_append_str(buf, max, pos, "test_fail_mode=");
+    pos = ahci_append_uint(buf, max, pos, (uint)ahci_test_fail_mode);
+    pos = ahci_append_str(buf, max, pos, "\n");
+
+    pos = ahci_append_str(buf, max, pos, "test_fail_remaining=");
+    pos = ahci_append_uint(buf, max, pos, (uint)ahci_test_fail_remaining);
+    pos = ahci_append_str(buf, max, pos, "\n");
+
+    pos = ahci_append_str(buf, max, pos, "last_fail_class=");
+    pos = ahci_append_uint(buf, max, pos, (uint)ahci_last_fail_class);
     pos = ahci_append_str(buf, max, pos, "\n");
 
     for (i = 0; i < ahci_count; i++) {
@@ -409,6 +429,13 @@ ahci_set_tune(const char *buf, int n)
     if (n >= 32)
         n = 31;
 
+    while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r' ||
+                     buf[n - 1] == ' ' || buf[n - 1] == '\t'))
+        n--;
+
+    if (n <= 0)
+        return -1;
+
     if (n >= 15 && memcmp(buf, "cmd_timeout_us=", 15) == 0) {
         v = 0;
         for (i = 15; i < n; i++) {
@@ -448,8 +475,49 @@ ahci_set_tune(const char *buf, int n)
         return 0;
     }
 
+    if (n >= 15 && memcmp(buf, "test_fail_mode=", 15) == 0) {
+        const char *mode = buf + 15;
+        int mode_len = n - 15;
+
+        if (mode_len == 1 && mode[0] >= '0' && mode[0] <= '3') {
+            ahci_test_fail_mode = mode[0] - '0';
+            return 0;
+        }
+        if (mode_len == 4 && memcmp(mode, "none", 4) == 0) {
+            ahci_test_fail_mode = AHCI_TEST_FAIL_NONE;
+            return 0;
+        }
+        if (mode_len == 7 && memcmp(mode, "timeout", 7) == 0) {
+            ahci_test_fail_mode = AHCI_TEST_FAIL_TIMEOUT;
+            return 0;
+        }
+        if (mode_len == 4 && memcmp(mode, "tfes", 4) == 0) {
+            ahci_test_fail_mode = AHCI_TEST_FAIL_TFES;
+            return 0;
+        }
+        if (mode_len == 4 && memcmp(mode, "idle", 4) == 0) {
+            ahci_test_fail_mode = AHCI_TEST_FAIL_IDLE;
+            return 0;
+        }
+        return -1;
+    }
+
+    if (n >= 16 && memcmp(buf, "test_fail_count=", 16) == 0) {
+        v = 0;
+        for (i = 16; i < n; i++) {
+            if (buf[i] < '0' || buf[i] > '9')
+                break;
+            v = v * 10 + (uint)(buf[i] - '0');
+        }
+        if (v > 32)
+            return -1;
+        ahci_test_fail_remaining = (int)v;
+        return 0;
+    }
+
     if (n >= 13 && memcmp(buf, "reset_stats=1", 13) == 0) {
         ahci_reset_all_stats();
+        ahci_last_fail_class = 0;
         return 0;
     }
 
@@ -827,7 +895,27 @@ ahci_submit_rw(struct ahci_port *p, uint64_t lba, void *data,
         max_attempts = 1;
 
     for (attempt = 0; attempt < max_attempts; attempt++) {
+        if (ahci_test_fail_mode == AHCI_TEST_FAIL_IDLE && ahci_test_fail_remaining > 0) {
+            ahci_test_fail_remaining--;
+            ahci_last_fail_class = AHCI_TEST_FAIL_IDLE;
+            p->io_err++;
+            p->io_timeout++;
+            cprintf("ahci: port %d injected idle timeout write=%d lba=%d\n",
+                    p->port_num, is_write, (uint32_t)lba);
+            if (ahci_port_recover(p, "inject-idle") < 0) {
+                p->recover_fail++;
+                return -1;
+            }
+            if (attempt + 1 < max_attempts) {
+                p->io_retry++;
+                microdelay(50 * (attempt + 1));
+                continue;
+            }
+            return -1;
+        }
+
         if (ahci_wait_port_idle(sc, p->port_num, ahci_idle_timeout_us) < 0) {
+            ahci_last_fail_class = AHCI_TEST_FAIL_IDLE;
             p->io_err++;
             p->io_timeout++;
             cprintf("ahci: port %d idle timeout before cmd write=%d lba=%d\n",
@@ -878,6 +966,39 @@ ahci_submit_rw(struct ahci_port *p, uint64_t lba, void *data,
         fis->countl = (uint8_t)(nsectors & 0xFF);
         fis->counth = (uint8_t)((nsectors >> 8) & 0xFF);
 
+        if (ahci_test_fail_remaining > 0 &&
+            (ahci_test_fail_mode == AHCI_TEST_FAIL_TIMEOUT ||
+             ahci_test_fail_mode == AHCI_TEST_FAIL_TFES)) {
+            ahci_test_fail_remaining--;
+            p->io_err++;
+            if (ahci_test_fail_mode == AHCI_TEST_FAIL_TIMEOUT) {
+                ahci_last_fail_class = AHCI_TEST_FAIL_TIMEOUT;
+                p->io_timeout++;
+                cprintf("ahci: port %d injected command timeout write=%d lba=%d\n",
+                        p->port_num, is_write, (uint32_t)lba);
+                if (ahci_port_recover(p, "inject-timeout") < 0) {
+                    p->recover_fail++;
+                    return -1;
+                }
+            } else {
+                ahci_last_fail_class = AHCI_TEST_FAIL_TFES;
+                p->io_tfes++;
+                cprintf("ahci: port %d injected taskfile error write=%d lba=%d\n",
+                        p->port_num, is_write, (uint32_t)lba);
+                if (ahci_port_recover(p, "inject-tfes") < 0) {
+                    p->recover_fail++;
+                    return -1;
+                }
+            }
+
+            if (attempt + 1 < max_attempts) {
+                p->io_retry++;
+                microdelay(50 * (attempt + 1));
+                continue;
+            }
+            return -1;
+        }
+
         ahci_port_write(sc, p->port_num, AHCI_PxIS, 0xFFFFFFFF);
         ahci_port_write(sc, p->port_num, AHCI_PxSERR, 0xFFFFFFFF);
 
@@ -890,6 +1011,7 @@ ahci_submit_rw(struct ahci_port *p, uint64_t lba, void *data,
 
         p->io_err++;
         if (timed_out) {
+            ahci_last_fail_class = AHCI_TEST_FAIL_TIMEOUT;
             p->io_timeout++;
             cprintf("ahci: port %d command timeout write=%d lba=%d\n",
                     p->port_num, is_write, (uint32_t)lba);
@@ -899,6 +1021,7 @@ ahci_submit_rw(struct ahci_port *p, uint64_t lba, void *data,
                 return -1;
             }
         } else {
+            ahci_last_fail_class = AHCI_TEST_FAIL_TFES;
             p->io_tfes++;
             cprintf("ahci: port %d taskfile error is=0x%x write=%d lba=%d\n",
                     p->port_num, is, is_write, (uint32_t)lba);

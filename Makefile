@@ -615,6 +615,7 @@ clean:
 	vblk0.img \
 	vblk1.img \
 	vblk-stress.img \
+	ahci-stress.img \
 	$(UPROGS) \
 	$(UPROGS_OLDINIT) \
 	.ext2root \
@@ -893,6 +894,11 @@ test-ahci-mount-stress: aux.bootkern $(EXT2IMG) ahci-stress.img
 	@$(MAKE) qemu-guesttest-template \
 		AUXV6_QEMU_TARGET=qemu-nox-ahcistress \
 		AUXV6_TEST_SCRIPT=tools/tests/ahci-mount-stress.cmds
+
+test-ahci-retry-stress: aux.bootkern $(EXT2IMG) ahci-stress.img
+	@$(MAKE) qemu-guesttest-template \
+		AUXV6_QEMU_TARGET=qemu-nox-ahcistress \
+		AUXV6_TEST_SCRIPT=tools/tests/ahci-retry-stress.cmds
 
 test-termcheck-smoke: aux.bootkern $(EXT2IMG)
 	@$(MAKE) qemu-guesttest-template \
