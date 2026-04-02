@@ -91,7 +91,7 @@ set log_user_enabled [getenv_or_default "AUXV6_LOG_USER" "0"]
 set timeout [expr {[getenv_or_default "AUXV6_EXPECT_TIMEOUT" "240"] + 0}]
 set rc_marker "__AUXV6_RC__"
 set cmd_marker "__AUXV6_CMD_DONE__"
-set cmd_marker_re {(^|[\r\n])__AUXV6_CMD_DONE__([\r\n]|$)}
+set cmd_marker_re {((^|[\r\n])__AUXV6_CMD_DONE__([\r\n]|$))|([#\$] +__AUXV6_CMD_DONE__([\r\n]|$))}
 set last_output ""
 set last_output_norm ""
 

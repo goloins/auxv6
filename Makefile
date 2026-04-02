@@ -206,7 +206,7 @@ tags: $(OBJS) kernel/boot/entryother.S user/_init
 kernel/core/vectors.S: tools/vectors.pl
 	./tools/vectors.pl > kernel/core/vectors.S
 
-ULIB = user/ulib.o user/usys.o user/printf.o user/umalloc.o user/resolve.o user/posix.o
+ULIB = user/ulib.o user/usys.o user/printf.o user/umalloc.o user/resolve.o user/posix.o user/stdio.o user/regex.o user/calloc.o
 
 USER_STAGE_DIR = user/.stage
 
@@ -244,8 +244,13 @@ _fatregress: user/fatregress
 _fsregress: user/fsregress
 	cp user/fsregress _fsregress
 
-_grep: user/grep
-	cp user/grep _grep
+_grep: ports/sbase/Makefile.auxv6 user/ulib.o user/usys.o user/printf.o user/umalloc.o user/resolve.o user/posix.o user/setjmp.o user/stdio.o user/regex.o user/calloc.o
+	$(MAKE) -f ports/sbase/Makefile.auxv6
+	cp ports/sbase/_grep _grep
+
+_sgrep: ports/sbase/Makefile.auxv6 user/ulib.o user/usys.o user/printf.o user/umalloc.o user/resolve.o user/posix.o user/setjmp.o user/stdio.o user/regex.o user/calloc.o
+	$(MAKE) -f ports/sbase/Makefile.auxv6
+	cp ports/sbase/_grep _sgrep
 
 _init: user/init
 	cp user/init _init
@@ -477,7 +482,7 @@ UPROGS=\
 	_echo\
 	_fatregress\
 	_fsregress\
-	_grep\
+	_sgrep\
 	_init\
 	_id\
 	_kill\
@@ -612,6 +617,7 @@ clean:
 	user/ifconfig user/netstat user/route user/arp user/rarp user/ip \
 	user/dhcp user/v6dhcpd user/nslookup \
 	user/lsof user/which user/file \
+	ports/sbase/_grep ports/sbase/grep.auxv6.asm ports/sbase/obj-auxv6 \
 	user/date user/time user/killall user/halt \
 	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/dmesg user/tail user/lspci user/v6init
 
@@ -870,6 +876,7 @@ test-termcap-smoke: aux.bootkern $(EXT2IMG)
 
 EXTRA=\
 	tools/mkfs.c tools/stage-fat-root.sh user/ulib.c include/user.h user/cat.c user/echo.c user/fatregress.c user/grep.c user/kill.c\
+	ports/sbase/grep.c ports/sbase/Makefile.auxv6 user/stdio.c user/regex.c user/calloc.c\
 	user/date.c user/time.c user/killall.c user/halt.c\
 	user/lsof.c user/which.c user/file.c\
 	user/id.c user/login.c user/ln.c user/ls.c user/free.c user/df.c user/ps.c user/fsregress.c user/mkdir.c user/mount.c user/mounts.c user/mounttest.c user/umount.c user/passwd.c user/pwd.c user/chmod.c user/chown.c user/chgrp.c user/rm.c user/netinfo.c user/stressfs.c user/su.c user/usertests.c user/vblktest.c user/wc.c user/whoami.c user/zombie.c\

@@ -1,2 +1,2 @@
 # terminal/tty/pty smoke
-RAW termcheck --smoke
+termcheck --smoke

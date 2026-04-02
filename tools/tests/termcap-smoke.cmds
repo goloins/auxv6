@@ -1,5 +1,5 @@
 # termcap capability presence smoke
-RAW cat /etc/termcap
+cat /etc/termcap
 EXPECT :ti=
 EXPECT :te=
 EXPECT :ks=

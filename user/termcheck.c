@@ -1043,6 +1043,18 @@ check_terminal_query_replies(int fd)
     return -1;
   }
 
+  n = collect_query_reply(fd, "\033[?15n", buf, sizeof(buf));
+  if(n < 0 || !contains_token(buf, n, "\033[?13n")) {
+    tcsetattr(fd, TCSANOW, &oldt);
+    return -1;
+  }
+
+  n = collect_query_reply(fd, "\033[?25n", buf, sizeof(buf));
+  if(n < 0 || !contains_token(buf, n, "\033[?21n")) {
+    tcsetattr(fd, TCSANOW, &oldt);
+    return -1;
+  }
+
   n = collect_query_reply(fd, "\033Z", buf, sizeof(buf));
   if(n < 0 || !contains_token(buf, n, "\033[?1;0c")) {
     tcsetattr(fd, TCSANOW, &oldt);

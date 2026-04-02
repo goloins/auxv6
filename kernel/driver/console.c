@@ -1077,6 +1077,14 @@ console_queue_dsr_reply_locked(struct console_tty_state *t, int dec_private, int
     console_queue_input_byte_locked(t, ';');
     console_queue_input_uint_locked(t, col);
     console_queue_input_byte_locked(t, 'R');
+  } else if(dec_private && mode == 15) {
+    /* DEC printer status report: no printer attached. */
+    console_queue_input_byte_locked(t, '\033');
+    console_queue_input_cstr_locked(t, "[?13n");
+  } else if(dec_private && mode == 25) {
+    /* DEC user-defined key status: unlocked. */
+    console_queue_input_byte_locked(t, '\033');
+    console_queue_input_cstr_locked(t, "[?21n");
   } else {
     return;
   }

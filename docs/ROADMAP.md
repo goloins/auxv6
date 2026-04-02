@@ -16,6 +16,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 
 ## Recent Progress (2026-03-30 to 2026-04-01)
 
+- **libc compatibility tranche landed 2026-04-01:** userspace regex support (`regcomp/regexec/regerror/regfree`) and a baseline `FILE *` stdio layer (`fopen/fclose/ferror/fflush`, `fdopen`, `fmemopen`, `getline/getdelim`, `fprintf/vfprintf`, `puts/fputs/fgetc/fputc`) are now available for third-party ports. A dedicated aux build path for upstream `sbase` grep (`ports/sbase/Makefile.auxv6`) now builds a minimally patched port and stages it as `sgrep` (`/bin/sgrep`) while keeping upstream source changes minimal.
 - **Userland diagnostics tranche landed 2026-04-01:** new `which`, `lsof`, and baseline `file` utilities are now part of the system image, with manpages staged under `/usr/share/man` for all three commands.
 - **procfs gained open-file visibility for userspace tooling 2026-04-01:** `/proc/lsof` now exposes per-process open fd snapshots (pid, fd, type, rw, dev, ino, off, name), backed by a new kernel `proc_fd_snapshot()` path used by `lsof`.
 - **Loop device hardening tranche landed 2026-04-01:** `loop_setup()` now validates offset alignment, EOF bounds, nblocks range, and backing inode type. `loop_teardown()` is guarded by a new `vfs_dev_is_mounted()` helper that blocks detach while a filesystem is mounted on the device. `loopstatus()` API extended to return `offset` and a `flags` word with `LOOP_STATUS_MOUNTED`. `losetup` list output updated to show offset and mounted columns. Dedicated regression suite landed as `user/looptest.c` with three test groups: setup validation, status metadata, and busy-teardown guard. Test ISO image (`targetfs/tmp/test.iso`, containing README, HELLO, and DATA files) added to the rootfs staging path and used by the busy-teardown group. Rootfs image expanded to 256 MB for headroom.
@@ -794,7 +795,7 @@ Phase 6 - Write Support (Optional):
 - `netinet/in.h` - Internet addresses
 - `arpa/inet.h` - Address conversion
 - A more complete user-visible socket API surface around the existing `socket.h`
-- Fuller `FILE`-style stdio / buffered stream support
+- Broader stdio completeness and buffering behavior parity for large ports
 
 ### 6.3 Library Functions [LOW]
 Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
@@ -802,8 +803,39 @@ Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
 - Basic stdlib coverage (`strtol`, `strtoul`, `qsort`, `bsearch`, `rand`, environment helpers)
 - Formatting wrappers (`vsnprintf`, `snprintf`, `sprintf`, `vsprintf`) and POSIX `dirent` translation
 
+**Current libc compatibility limitations (stdio/regex):**
+- stdio buffering is currently minimal (effectively unbuffered behavior for most paths), so throughput and flush semantics do not yet match mature libc implementations.
+- `fmemopen()` is currently read-focused for porting use-cases and does not yet provide full writable seek/resize semantics expected by some software.
+- stdio state/position APIs (`fseek`/`ftell`/`fgetpos`/`fsetpos`), formatted scanning (`fscanf` family), and advanced error/reporting controls are still incomplete.
+- regex engine currently targets practical POSIX BRE/ERE coverage for userland ports (including `REG_EXTENDED`, `REG_ICASE`, basic classes, alternation, and repetition) but does not yet provide full POSIX match-subexpression reporting parity.
+- regex performance is currently oriented toward correctness and portability over advanced optimization; large-pattern or pathological cases may require future tuning.
+
+**Portability checklist (stdio/regex API status):**
+
+| API / Capability | Status | Notes |
+|---|---|---|
+| `fopen` / `fdopen` / `fclose` | Implemented | Baseline stream open/close over auxv6 fds. |
+| `ferror` / `feof` / `clearerr` / `fflush` | Implemented | Basic status reporting; `fflush` is currently a no-op in minimal stream model. |
+| `fgetc` / `getc` / `ungetc` / `fputc` / `putc` | Implemented | Single-byte stream I/O available. |
+| `fgets` / `fputs` / `puts` | Implemented | Line/string primitives available for common ports. |
+| `fread` / `fwrite` | Implemented | Basic block I/O over stream wrapper. |
+| `getline` / `getdelim` | Implemented | Dynamic line growth supported. |
+| `fmemopen` | Partial | Read-focused implementation; writable/seek-rich semantics pending. |
+| `fprintf` / `vfprintf` / `printf` macro path | Implemented | Provided via stream layer with auxv6-compatible mapping. |
+| `vprintf` macro path | Implemented | Mapped to `vfprintf(stdout, ...)`. |
+| `perror` | Partial | Available with errno-based output; formatting parity can be improved. |
+| `fseek` / `ftell` / `rewind` | Missing | Needed by some larger third-party ports. |
+| `fscanf` / `vfscanf` family | Missing | Scanning APIs not yet part of compatibility layer. |
+| `setvbuf` / `setbuf` / `tmpfile` | Missing | Full buffering/temp-stream utilities pending. |
+| `regcomp` / `regexec` / `regerror` / `regfree` | Implemented | Userspace regex engine integrated into libc layer. |
+| `REG_EXTENDED` / `REG_ICASE` / `REG_NOSUB` | Implemented | Supported flags for current port set. |
+| Character classes and bracket ranges | Implemented | Basic bracket/range handling present. |
+| BRE escaped word boundaries (`\\<`, `\\>`) | Implemented | Added for grep-style word matching paths. |
+| Subexpression captures and full POSIX `pmatch` parity | Partial | Core matching works; full capture parity remains future work. |
+| Regex optimization (DFA/NFA tuning) | Partial | Correctness-first implementation; optimization backlog tracked. |
+
 **Still Needed:**
-- Full stdio/`FILE *` model
+- Wider `FILE *` conformance surface (additional stdio routines and edge-case compatibility)
 - More complete socket-family and networking headers
 - Additional portability wrappers for larger third-party ports
 
@@ -823,6 +855,7 @@ Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
 - Targetfs terminal defaults (`/etc/termcap`, `TERM=vt100`, `TERMCAP=/etc/termcap`) for better interactive app behavior
 - New core diagnostic utilities in base userland: `which`, `lsof` (via `/proc/lsof`), and baseline magic/signature-based `file`
 - Matching manpage additions for `which`, `lsof`, and `file`
+- Upstream-style grep porting path: `ports/sbase/Makefile.auxv6` builds `ports/sbase/grep.c` against auxv6 libc compatibility shims and stages it as `/bin/sgrep`
 
 ---
 
@@ -858,6 +891,9 @@ Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
 | `include/stdint.h` | Integer types |
 | `include/stdlib.h` | Standard library |
 | `include/string.h` | String operations |
+| `include/strings.h` | BSD strings compatibility shim |
+| `include/stdio.h` | Baseline `FILE *` stdio abstraction for ports |
+| `include/regex.h` | POSIX-style regex API for userspace |
 | `include/unistd.h` | POSIX constants |
 | `include/sys/types.h` | POSIX types |
 | `include/posix/*` | Portability headers for userland ports |
@@ -882,6 +918,9 @@ Substantial userspace support now exists in `user/ulib.c` and `user/posix.c`:
 | `user/which.c` | PATH-aware executable lookup utility |
 | `user/lsof.c` | Open-file inspection utility backed by `/proc/lsof` |
 | `user/file.c` | Baseline file-type detector using signatures + lightweight heuristics |
+| `user/stdio.c` | Baseline userspace `FILE *` stdio implementation for ports |
+| `user/regex.c` | Userspace regular-expression engine (`regcomp`/`regexec` family) |
+| `user/calloc.c` | `calloc()` libc helper used by ported software |
 | `user/posix.c` | POSIX compatibility wrappers |
 | `user/termcheck.c` | Terminal/PTY/ioctl compatibility regression checks, multi-PTY shell isolation/lifecycle, and PTY allocation stress tests |
 | `user/runlevel.c` | Current/previous runlevel reporting |

@@ -107,3 +107,6 @@ ports/dash-0.5.12/src/mknodes
 ports/dash-0.5.12/src/mkinit
 .vscode/
 user/vblktest
+ports/sbase/_grep
+ports/sbase/grep.auxv6.asm
+ports/sbase/obj-auxv6/
