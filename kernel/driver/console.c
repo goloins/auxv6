@@ -122,10 +122,15 @@ struct console_ansi_state {
   int mouse_x11;
   int mouse_sgr;
   int mouse_urxvt;
+  int mouse_highlight;
   int focus_event;
   int alt_scroll;
   int meta_eightbit;
   int backarrow_key;
+  int keypad_app;
+  int alt_keypad;
+  int keyboard_select;
+  int bracketed_paste;
   int last_glyph;
   uint utf8_accum;
   int utf8_need;
@@ -201,10 +206,15 @@ static struct console_tty_state console_tty_default = {
     .mouse_x11 = 0,
     .mouse_sgr = 0,
     .mouse_urxvt = 0,
+    .mouse_highlight = 0,
     .focus_event = 0,
     .alt_scroll = 0,
     .meta_eightbit = 0,
     .backarrow_key = 0,
+    .keypad_app = 0,
+    .alt_keypad = 0,
+    .keyboard_select = 0,
+    .bracketed_paste = 0,
     .last_glyph = -1,
     .alt_saved_attr = 0x07,
   },
@@ -961,7 +971,7 @@ ansi_apply_private_mode(struct console_tty_state *t, int mode, int set)
     t->ansi.mouse_x10 = set ? 1 : 0;
   } else if(mode == 1001) {
     /* highlight mode - treat same as x10 */
-    t->ansi.mouse_x11 = set ? 1 : 0;
+    t->ansi.mouse_highlight = set ? 1 : 0;
   } else if(mode == 1002) {
     /* button event tracking */
     t->ansi.mouse_x11 = set ? 1 : 0;
@@ -988,6 +998,7 @@ ansi_apply_private_mode(struct console_tty_state *t, int mode, int set)
     t->ansi.meta_eightbit = set ? 0 : 1;
   } else if(mode == 1035) {
     /* numeric keypad mode */
+    t->ansi.keypad_app = set ? 1 : 0;
   } else if(mode == 1036) {
     /* alt sends escape */
     t->ansi.meta_eightbit = set ? 1 : 0;
@@ -996,6 +1007,7 @@ ansi_apply_private_mode(struct console_tty_state *t, int mode, int set)
     t->ansi.meta_eightbit = set ? 1 : 0;
   } else if(mode == 2004) {
     /* bracketed paste mode */
+    t->ansi.bracketed_paste = set ? 1 : 0;
   } else if(mode == 9) {
     /* X11 mouse - treat as x10 */
     t->ansi.mouse_x10 = set ? 1 : 0;
@@ -1004,8 +1016,10 @@ ansi_apply_private_mode(struct console_tty_state *t, int mode, int set)
     t->ansi.backarrow_key = set ? 1 : 0;
   } else if(mode == 69) {
     /* alt keypad */
+    t->ansi.alt_keypad = set ? 1 : 0;
   } else if(mode == 95) {
     /* shift + F3 ... */
+    t->ansi.keyboard_select = set ? 1 : 0;
   } else if(mode == 1048) {
     if(set)
       ansi_save_cursor(t);
@@ -1060,7 +1074,7 @@ ansi_private_mode_state(struct console_tty_state *t, int mode)
   if(mode == 1000)
     return t->ansi.mouse_x10 ? 1 : 2;
   if(mode == 1001)
-    return t->ansi.mouse_x11 ? 1 : 2;
+    return t->ansi.mouse_highlight ? 1 : 2;
   if(mode == 1002)
     return t->ansi.mouse_x11 ? 1 : 2;
   if(mode == 1003)
@@ -1077,14 +1091,22 @@ ansi_private_mode_state(struct console_tty_state *t, int mode)
     return t->ansi.mouse_urxvt ? 1 : 2;
   if(mode == 1034)
     return t->ansi.meta_eightbit ? 2 : 1;
+  if(mode == 1035)
+    return t->ansi.keypad_app ? 1 : 2;
   if(mode == 1036)
     return t->ansi.meta_eightbit ? 1 : 2;
   if(mode == 1039)
     return t->ansi.meta_eightbit ? 1 : 2;
+  if(mode == 2004)
+    return t->ansi.bracketed_paste ? 1 : 2;
   if(mode == 9)
     return t->ansi.mouse_x10 ? 1 : 2;
   if(mode == 67)
     return t->ansi.backarrow_key ? 1 : 2;
+  if(mode == 69)
+    return t->ansi.alt_keypad ? 1 : 2;
+  if(mode == 95)
+    return t->ansi.keyboard_select ? 1 : 2;
   if(mode == 47 || mode == 1047 || mode == 1049)
     return t->ansi.alt_active ? 1 : 2;
   return 0;
@@ -1115,10 +1137,15 @@ ansi_soft_reset(struct console_tty_state *t)
   t->ansi.mouse_x11 = 0;
   t->ansi.mouse_sgr = 0;
   t->ansi.mouse_urxvt = 0;
+  t->ansi.mouse_highlight = 0;
   t->ansi.focus_event = 0;
   t->ansi.alt_scroll = 0;
   t->ansi.meta_eightbit = 0;
   t->ansi.backarrow_key = 0;
+  t->ansi.keypad_app = 0;
+  t->ansi.alt_keypad = 0;
+  t->ansi.keyboard_select = 0;
+  t->ansi.bracketed_paste = 0;
   t->ansi.utf8_need = 0;
   t->ansi.question = 0;
   t->ansi.greater = 0;
@@ -1244,6 +1271,46 @@ console_queue_mode_reply_locked(struct console_tty_state *t, int dec_private, in
   console_queue_input_uint_locked(t, state);
   console_queue_input_cstr_locked(t, "$y");
 
+  t->input.w = t->input.e;
+  wakeup(&t->input.r);
+}
+
+static void
+console_queue_simple_t_reply_locked(struct console_tty_state *t, int code)
+{
+  console_queue_input_byte_locked(t, '\033');
+  console_queue_input_byte_locked(t, '[');
+  console_queue_input_uint_locked(t, code);
+  console_queue_input_byte_locked(t, 't');
+  t->input.w = t->input.e;
+  wakeup(&t->input.r);
+}
+
+static void
+console_queue_pair_t_reply_locked(struct console_tty_state *t, int code, int a, int b)
+{
+  console_queue_input_byte_locked(t, '\033');
+  console_queue_input_byte_locked(t, '[');
+  console_queue_input_uint_locked(t, code);
+  console_queue_input_byte_locked(t, ';');
+  console_queue_input_uint_locked(t, a);
+  console_queue_input_byte_locked(t, ';');
+  console_queue_input_uint_locked(t, b);
+  console_queue_input_byte_locked(t, 't');
+  t->input.w = t->input.e;
+  wakeup(&t->input.r);
+}
+
+static void
+console_queue_osc_reply_locked(struct console_tty_state *t, char sel, const char *text)
+{
+  console_queue_input_byte_locked(t, '\033');
+  console_queue_input_byte_locked(t, ']');
+  console_queue_input_byte_locked(t, sel);
+  if(text)
+    console_queue_input_cstr_locked(t, text);
+  console_queue_input_byte_locked(t, '\033');
+  console_queue_input_byte_locked(t, '\\');
   t->input.w = t->input.e;
   wakeup(&t->input.r);
 }
@@ -1639,6 +1706,43 @@ cgaputc_ansi(struct console_tty_state *t, int c)
     case 'c':
       if(!t->ansi.bang)
         console_queue_da_reply_locked(t, t->ansi.question, t->ansi.greater);
+      break;
+    case 't':
+      if(!t->ansi.question && !t->ansi.greater && !t->ansi.dollar && !t->ansi.bang) {
+        int rows = t->winsize.ws_row > 0 ? t->winsize.ws_row : 24;
+        int cols = t->winsize.ws_col > 0 ? t->winsize.ws_col : 80;
+        switch(p1) {
+        case 11:
+          console_queue_simple_t_reply_locked(t, 1);
+          break;
+        case 13:
+          console_queue_pair_t_reply_locked(t, 3, 1, 1);
+          break;
+        case 14:
+          console_queue_pair_t_reply_locked(t, 4, rows * 16, cols * 8);
+          break;
+        case 15:
+          console_queue_pair_t_reply_locked(t, 5, rows * 16, cols * 8);
+          break;
+        case 16:
+          console_queue_pair_t_reply_locked(t, 6, 16, 8);
+          break;
+        case 18:
+          console_queue_pair_t_reply_locked(t, 8, rows, cols);
+          break;
+        case 19:
+          console_queue_pair_t_reply_locked(t, 9, rows, cols);
+          break;
+        case 20:
+          console_queue_osc_reply_locked(t, 'L', "auxv6");
+          break;
+        case 21:
+          console_queue_osc_reply_locked(t, 'l', "auxv6");
+          break;
+        default:
+          break;
+        }
+      }
       break;
     case 'h':
       if(t->ansi.nparams == 0) {

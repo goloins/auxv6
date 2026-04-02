@@ -20,6 +20,7 @@ struct pty_shell_session {
 
 static volatile int bg_sig_seen;
 static int tc_log_fd = -1;
+static int tc_debug_query = 0;
 
 static void
 tc_log_raw(const char *s)
@@ -97,6 +98,72 @@ contains_token(const char *buf, int n, const char *tok)
       return 1;
   }
   return 0;
+}
+
+static void
+tc_debug_emit_escaped(int fd, const char *buf, int n)
+{
+  static const char hex[] = "0123456789abcdef";
+  int i;
+
+  if(buf == 0 || n <= 0)
+    return;
+
+  for(i = 0; i < n; i++) {
+    unsigned char ch;
+    ch = (unsigned char)buf[i];
+    if(ch >= 32 && ch <= 126 && ch != '\\') {
+      (void)write(fd, &buf[i], 1);
+    } else {
+      char esc[4];
+      esc[0] = '\\';
+      esc[1] = 'x';
+      esc[2] = hex[(ch >> 4) & 0x0F];
+      esc[3] = hex[ch & 0x0F];
+      (void)write(fd, esc, 4);
+    }
+  }
+}
+
+static void
+tc_debug_query_fail(const char *label, const char *query, const char *expected, const char *buf, int n)
+{
+  if(!tc_debug_query)
+    return;
+
+  printf(2, "DEBUG query fail: %s\n", label);
+  printf(2, "  expected token: %s\n", expected);
+  printf(2, "  query bytes: ");
+  tc_debug_emit_escaped(2, query, strlen(query));
+  printf(2, "\n");
+  printf(2, "  reply bytes: ");
+  tc_debug_emit_escaped(2, buf, n > 0 ? n : 0);
+  printf(2, "\n");
+
+  tc_log_line("DEBUG query fail");
+  tc_log_raw("  label: ");
+  tc_log_line(label);
+  tc_log_raw("  expected token: ");
+  tc_log_line(expected);
+  tc_log_raw("  query bytes: ");
+  tc_debug_emit_escaped(tc_log_fd, query, strlen(query));
+  tc_log_raw("\n");
+  tc_log_raw("  reply bytes: ");
+  tc_debug_emit_escaped(tc_log_fd, buf, n > 0 ? n : 0);
+  tc_log_raw("\n");
+}
+
+static int
+expect_token_reply(int fd, const char *label, const char *query, const char *expected, char *buf, int buflen)
+{
+  int n;
+
+  n = collect_query_reply(fd, query, buf, buflen);
+  if(n < 0 || !contains_token(buf, n, expected)) {
+    tc_debug_query_fail(label, query, expected, buf, n);
+    return -1;
+  }
+  return n;
 }
 
 static void
@@ -1065,6 +1132,70 @@ parse_cpr_reply(const char *buf, int n, int dec_private, int *row_out, int *col_
   if(col_out)
     *col_out = found_col;
   return 0;
+}
+
+static int
+parse_window_report(const char *buf, int n, int code, int *a_out, int *b_out)
+{
+  int i;
+
+  for(i = 0; i + 6 < n; i++) {
+    int j;
+    int got_code;
+    int a;
+    int b;
+    int saw;
+
+    if(buf[i] != '\033' || buf[i + 1] != '[')
+      continue;
+    j = i + 2;
+
+    got_code = 0;
+    saw = 0;
+    while(j < n && buf[j] >= '0' && buf[j] <= '9') {
+      got_code = got_code * 10 + (buf[j] - '0');
+      saw = 1;
+      j++;
+    }
+    if(!saw || got_code != code || j >= n || buf[j] != ';')
+      continue;
+    j++;
+
+    a = 0;
+    saw = 0;
+    while(j < n && buf[j] >= '0' && buf[j] <= '9') {
+      a = a * 10 + (buf[j] - '0');
+      saw = 1;
+      j++;
+    }
+    if(!saw)
+      continue;
+
+    b = -1;
+    if(j < n && buf[j] == ';') {
+      j++;
+      b = 0;
+      saw = 0;
+      while(j < n && buf[j] >= '0' && buf[j] <= '9') {
+        b = b * 10 + (buf[j] - '0');
+        saw = 1;
+        j++;
+      }
+      if(!saw)
+        continue;
+    }
+
+    if(j >= n || buf[j] != 't')
+      continue;
+
+    if(a_out)
+      *a_out = a;
+    if(b_out)
+      *b_out = b;
+    return 0;
+  }
+
+  return -1;
 }
 
 static int
