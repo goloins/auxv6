@@ -127,6 +127,7 @@ struct console_ansi_state {
   int alt_scroll;
   int meta_eightbit;
   int backarrow_key;
+  int cursor_save_mode;
   int keypad_app;
   int alt_keypad;
   int keyboard_select;
@@ -211,6 +212,7 @@ static struct console_tty_state console_tty_default = {
     .alt_scroll = 0,
     .meta_eightbit = 0,
     .backarrow_key = 0,
+    .cursor_save_mode = 0,
     .keypad_app = 0,
     .alt_keypad = 0,
     .keyboard_select = 0,
@@ -1021,6 +1023,7 @@ ansi_apply_private_mode(struct console_tty_state *t, int mode, int set)
     /* shift + F3 ... */
     t->ansi.keyboard_select = set ? 1 : 0;
   } else if(mode == 1048) {
+    t->ansi.cursor_save_mode = set ? 1 : 0;
     if(set)
       ansi_save_cursor(t);
     else
@@ -1103,6 +1106,8 @@ ansi_private_mode_state(struct console_tty_state *t, int mode)
     return t->ansi.mouse_x10 ? 1 : 2;
   if(mode == 67)
     return t->ansi.backarrow_key ? 1 : 2;
+  if(mode == 1048)
+    return t->ansi.cursor_save_mode ? 1 : 2;
   if(mode == 69)
     return t->ansi.alt_keypad ? 1 : 2;
   if(mode == 95)
@@ -1142,6 +1147,7 @@ ansi_soft_reset(struct console_tty_state *t)
   t->ansi.alt_scroll = 0;
   t->ansi.meta_eightbit = 0;
   t->ansi.backarrow_key = 0;
+  t->ansi.cursor_save_mode = 0;
   t->ansi.keypad_app = 0;
   t->ansi.alt_keypad = 0;
   t->ansi.keyboard_select = 0;
