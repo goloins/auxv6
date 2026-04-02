@@ -22,6 +22,9 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - **AHCI retry debug follow-up landed 2026-04-02:** added a freeze-focused debug path for intermittent stalls near early retry setup (`RUN: mkdir /mnt/ahciretry`). New `tools/tests/ahci-retry-stress-debug.cmds` emits explicit breadcrumbs and pre/post state snapshots (`/proc/ahci_tune`, `mounts`, `/mnt` listing), and `make test-ahci-retry-stress-debug` now runs that script through the expect harness with `AUXV6_LOG_USER=1` plus a wider timeout for high-fidelity capture when reproducing hangs.
 - **AHCI interrupt + multi-slot follow-up landed 2026-04-02:** AHCI now registers an IRQ handler and uses interrupt-driven completion waits with a polling fallback, plus per-port slot allocation across the full HBA command-slot depth (no more slot-0-only path). `/proc/ahci_tune` telemetry now includes `recover_ok`, `intr`, and last-error snapshots (`last_is`, `last_tfd`, `last_serr`, `last_ci`, `last_sact`) per port.
 - **AHCI queue-depth enablement landed 2026-04-02:** AHCI now allows multiple in-flight commands per port with slot-availability blocking and recovery-sequence abort handling, unblocking real queue depth under concurrent I/O.
+- **AHCI ATAPI read-only support landed 2026-04-02:** AHCI now issues ATAPI `READ CAPACITY(10)` and `READ(10)` packet commands, exposing CD-ROM-class devices as read-only blockdevs with 2048-byte sector translation to the 1KB buffer cache.
+- **ATAPI cdrom nodes landed 2026-04-02:** `devman` now mirrors AHCI ATAPI devices as `/dev/cdrom`, `/dev/cdrom1`, ... for friendlier media mounts.
+- **Mounting device nodes landed 2026-04-02:** `mount` now accepts `/dev/*` device nodes (for example `/dev/cdrom`) and resolves their backing device numbers directly.
 - **toolchain hardening follow-up landed 2026-04-02:** auxv6 guest builds are now explicitly hardened against accidental host-surface bleed-through. The root `Makefile` and `ports/dash-0.5.12/Makefile.auxv6` now compile guest code with `-nostdinc` so auxv6 headers are authoritative, and both build paths now run explicit `toolchain-check` probes to verify `-m32` actually produces `__i386__` and that the selected `libgcc` exports required 32-bit 64-bit-division helper symbols (for example `__divmoddi4`/`__udivdi3`/`__divdi3`). This converts late link failures into early actionable toolchain errors and prevents silent fallback to incompatible host runtime archives.
 - **libc portability phase 6 tranche-2 stream-buffering closeout completed 2026-04-02:** the last obvious stdio gap in tranche 2 is now in-tree. `include/stdio.h` gained `_IOFBF`, `_IOLBF`, `_IONBF`, plus `setvbuf`, `setbuf`, and `setlinebuf`; `user/stdio.c` now tracks per-stream output-buffer state, flushes buffered output through `fflush`, and supports truthful unbuffered, fully buffered, and line-buffered behavior for fd-backed writable streams. Validation passed with a canonical buffering probe under `-Werror`, a sudo rebuild of `user/stdio.o` and `aux.kern`, and the usual sudo dash-port rebuild with no new downstream failures beyond the long-standing `signames.c` warnings and RWX linker warning.
 - **libc portability phase 6 tranche-2 time landing completed 2026-04-02:** the time/civil-calendar half of tranche 2 is now in-tree. auxv6 gained canonical `time.h`; `include/sys/time.h` no longer carries a zero-valued `gettimeofday` stub; and `user/timecore.c` now provides `gettimeofday`, `clock_gettime`, `time`, `difftime`, `gmtime[_r]`, `localtime[_r]`, `mktime`, `asctime[_r]`, `ctime[_r]`, and `strftime`. The implementation deliberately reuses the existing `date()` and `uptime()` primitives instead of adding new syscall ABI in this patch. Validation passed with a canonical `time.h` / `sys/time.h` compile probe under `-Werror`, a sudo rebuild of `user/timecore.o` plus representative `user/date` and `user/time` links, and the usual sudo dash-port rebuild with no new downstream failures.
@@ -339,7 +342,7 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 **Estimate:** 1-2 weeks
 
 ### 3.2 AHCI/SATA Driver [ADVANCED PARTIAL]
-**Status:** SATA identify + blockdev registration + DMA read/write now use interrupt-driven completion with multi-slot in-flight queue depth.  
+**Status:** SATA identify + blockdev registration + DMA read/write now use interrupt-driven completion with multi-slot in-flight queue depth. ATAPI read-only packet support is now in-tree.  
 **Files:** `kernel/driver/ahci.c`, `include/pci.h`, `include/blockdev.h`  
 **Value:** Real hardware support  
 
@@ -353,7 +356,8 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 **Follow-up hardening (after basic works):**
 - [x] Move from polling to interrupt-assisted completion
 - [x] Support additional command slots and batched I/O (slot allocator + per-slot tables; still serialized)
-- [ ] Add ATAPI path split (kept out of MVP)
+- [x] Add ATAPI read-only path (READ CAPACITY/READ10 packet commands)
+- [ ] Broaden ATAPI command coverage (errors, inquiry, and media-change handling)
 - [x] Add runtime AHCI timeout/counter tuning and observability (`/proc/ahci_tune`)
 - [x] Add dedicated AHCI guest endurance harness (`make test-ahci-mount-stress`)
 - [x] Add deterministic AHCI fault-injection harness (`make test-ahci-retry-stress`)

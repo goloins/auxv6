@@ -100,6 +100,7 @@ AHCI also exposes runtime tuning and deterministic fault-injection controls via
 - `cmd_timeout_us`, `idle_timeout_us`, `rw_retries`
 - `test_fail_mode`, `test_fail_remaining`, `last_fail_class`
 - Per-port counters (`ok`, `err`, `timeout`, `tfes`, `retry`, `recover_fail`, `recover_ok`, `intr`, ...)
+- Per-port type: `type=sata|atapi|other`
 - Per-port last error snapshot (`last_is`, `last_tfd`, `last_serr`, `last_ci`, `last_sact`)
 
 `last_fail_class` values:

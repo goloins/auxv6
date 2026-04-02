@@ -166,9 +166,14 @@ extern int ncpu;
 #define SATA_SIG_PM     0x96690101  /* Port multiplier */
 
 /* ATA Commands */
-#define ATA_CMD_IDENTIFY    0xEC
-#define ATA_CMD_READ_DMA_EX 0x25
-#define ATA_CMD_WRITE_DMA_EX 0x35
+#define ATA_CMD_IDENTIFY       0xEC
+#define ATA_CMD_READ_DMA_EX    0x25
+#define ATA_CMD_WRITE_DMA_EX   0x35
+#define ATA_CMD_PACKET         0xA0
+
+/* ATAPI Packet Commands */
+#define ATAPI_PKT_READ_CAPACITY 0x25
+#define ATAPI_PKT_READ_10        0x28
 
 /* FIS Types */
 #define FIS_TYPE_REG_H2D    0x27  /* Host to Device Register */
@@ -349,6 +354,11 @@ static struct ahci_port *ahci_find_port_by_dev(uint dev);
 static int ahci_identify_port(struct ahci_softc *sc, struct ahci_port *p);
 static int ahci_submit_rw(struct ahci_port *p, uint64_t lba, void *data,
                           uint32_t data_len, int is_write);
+static int ahci_atapi_read_capacity(struct ahci_port *p);
+static int ahci_submit_atapi(struct ahci_port *p, uint8_t *packet,
+                             void *data, uint32_t data_len, int is_write);
+static int ahci_atapi_rw(struct buf *b);
+static uint ahci_atapi_nblocks(uint dev);
 static int ahci_wait_cmd_done(struct ahci_port *p, uint32_t slot_mask,
                               int timeout_us, int *timed_out, uint32_t *is_out);
 static int ahci_port_stop(struct ahci_softc *sc, int port);
@@ -419,6 +429,13 @@ ahci_get_tune(char *buf, int max)
             pos = ahci_append_uint(buf, max, pos, (uint)p->port_num);
             pos = ahci_append_str(buf, max, pos, " dev=");
             pos = ahci_append_uint(buf, max, pos, (uint)p->dev_id);
+            pos = ahci_append_str(buf, max, pos, " type=");
+            if (p->type == AHCI_PORT_TYPE_SATAPI)
+                pos = ahci_append_str(buf, max, pos, "atapi");
+            else if (p->type == AHCI_PORT_TYPE_SATA)
+                pos = ahci_append_str(buf, max, pos, "sata");
+            else
+                pos = ahci_append_str(buf, max, pos, "other");
             pos = ahci_append_str(buf, max, pos, " ok=");
             pos = ahci_append_uint(buf, max, pos, p->io_ok);
             pos = ahci_append_str(buf, max, pos, " err=");
@@ -572,6 +589,12 @@ static const struct bdevsw ahci_bdevsw = {
     .name = "ahci"
 };
 
+static const struct bdevsw ahci_atapi_bdevsw = {
+    .rw = ahci_atapi_rw,
+    .nblocks = ahci_atapi_nblocks,
+    .name = "ahci-atapi"
+};
+
 static struct ahci_port *
 ahci_find_port_by_dev(uint dev)
 {
@@ -638,6 +661,89 @@ ahci_nblocks(uint dev)
         return 0;
 
     return (uint)p->sectors;
+}
+
+static uint
+ahci_atapi_nblocks(uint dev)
+{
+    struct ahci_port *p = ahci_find_port_by_dev(dev);
+    uint blocks_per_sector;
+    uint64_t total_blocks;
+
+    if (!p || !p->online)
+        return 0;
+    if (p->sector_size == 0)
+        return 0;
+    if ((p->sector_size % BSIZE) != 0)
+        return 0;
+
+    blocks_per_sector = p->sector_size / BSIZE;
+    total_blocks = (uint64_t)p->sectors * (uint64_t)blocks_per_sector;
+    if (total_blocks > 0xFFFFFFFFULL)
+        return 0xFFFFFFFFU;
+    return (uint)total_blocks;
+}
+
+static int
+ahci_atapi_rw(struct buf *b)
+{
+    struct ahci_port *p;
+    uint blocks_per_sector;
+    uint64_t lba;
+    uint offset;
+    uint8_t packet[12];
+    char *tmp;
+
+    if (!b)
+        return -1;
+    if (b->flags & B_DIRTY)
+        return -1;
+
+    p = ahci_find_port_by_dev(b->dev);
+    if (!p || !p->online)
+        return -1;
+    if (p->sector_size == 0)
+        return -1;
+    if ((p->sector_size % BSIZE) != 0)
+        return -1;
+    if (p->sector_size > PGSIZE)
+        return -1;
+
+    blocks_per_sector = p->sector_size / BSIZE;
+    lba = b->blockno / blocks_per_sector;
+    offset = (b->blockno % blocks_per_sector) * BSIZE;
+    if (lba >= p->sectors)
+        return -1;
+
+    tmp = kalloc();
+    if (!tmp)
+        return -1;
+    memset(tmp, 0, PGSIZE);
+
+    memset(packet, 0, sizeof(packet));
+    packet[0] = ATAPI_PKT_READ_10;
+    packet[2] = (uint8_t)((lba >> 24) & 0xFF);
+    packet[3] = (uint8_t)((lba >> 16) & 0xFF);
+    packet[4] = (uint8_t)((lba >> 8) & 0xFF);
+    packet[5] = (uint8_t)(lba & 0xFF);
+    packet[7] = 0;
+    packet[8] = 1;
+
+    if (ahci_submit_atapi(p, packet, tmp, p->sector_size, 0) < 0) {
+        kfree(tmp);
+        return -1;
+    }
+
+    acquire(&p->irq_lock);
+    p->io_ok++;
+    release(&p->irq_lock);
+
+    memmove(b->data, tmp + offset, BSIZE);
+    kfree(tmp);
+
+    b->flags |= B_VALID;
+    b->flags &= ~B_DIRTY;
+    return 0;
 }
 
 static int
@@ -1081,6 +1187,45 @@ ahci_identify_port(struct ahci_softc *sc, struct ahci_port *p)
 }
 
 static int
+ahci_atapi_read_capacity(struct ahci_port *p)
+{
+    uint8_t packet[12];
+    char *buf;
+    uint32_t last_lba;
+    uint32_t block_size;
+
+    if (!p || !p->sc)
+        return -1;
+
+    buf = kalloc();
+    if (!buf)
+        return -1;
+    memset(buf, 0, PGSIZE);
+
+    memset(packet, 0, sizeof(packet));
+    packet[0] = ATAPI_PKT_READ_CAPACITY;
+
+    if (ahci_submit_atapi(p, packet, buf, 8, 0) < 0) {
+        kfree(buf);
+        return -1;
+    }
+
+    last_lba = ((uint8_t)buf[0] << 24) | ((uint8_t)buf[1] << 16) |
+               ((uint8_t)buf[2] << 8) | (uint8_t)buf[3];
+    block_size = ((uint8_t)buf[4] << 24) | ((uint8_t)buf[5] << 16) |
+                 ((uint8_t)buf[6] << 8) | (uint8_t)buf[7];
+
+    kfree(buf);
+
+    if (block_size == 0)
+        return -1;
+
+    p->sector_size = block_size;
+    p->sectors = (uint64_t)last_lba + 1;
+    return 0;
+}
+
+static int
 ahci_submit_rw(struct ahci_port *p, uint64_t lba, void *data,
                uint32_t data_len, int is_write)
 {
@@ -1301,6 +1446,167 @@ ahci_submit_rw(struct ahci_port *p, uint64_t lba, void *data,
             ahci_diag_port(sc, p->port_num, "cmd-tfes");
             ahci_snapshot_error(p, is);
             if (ahci_port_recover(p, "cmd-tfes") < 0) {
+                p->recover_fail++;
+                ahci_free_slot(p, slot);
+                return -1;
+            }
+        }
+
+        if (attempt + 1 < max_attempts) {
+            p->io_retry++;
+            ahci_free_slot(p, slot);
+            microdelay(50 * (attempt + 1));
+        }
+        ahci_free_slot(p, slot);
+    }
+
+    return -1;
+}
+
+static int
+ahci_submit_atapi(struct ahci_port *p, uint8_t *packet,
+                  void *data, uint32_t data_len, int is_write)
+{
+    struct ahci_softc *sc;
+    struct fis_reg_h2d *fis;
+    uint32_t ci;
+    int timed_out;
+    uint32_t is;
+    int attempt;
+    int max_attempts;
+    int slot;
+    uint32_t seq;
+    int seq_changed;
+
+    if (!p || !p->sc || !p->cmd_list || !p->cmd_tbl[0] || !packet)
+        return -1;
+    if (!data || data_len == 0)
+        return -1;
+    if (data_len > PGSIZE)
+        return -1;
+
+    sc = p->sc;
+    max_attempts = 1 + ahci_rw_retries;
+    if (max_attempts < 1)
+        max_attempts = 1;
+
+    for (attempt = 0; attempt < max_attempts; attempt++) {
+        slot = ahci_alloc_slot(p);
+        if (slot < 0)
+            return -1;
+
+        acquire(&p->irq_lock);
+        seq = p->recover_seq;
+        release(&p->irq_lock);
+
+        if (ahci_wait_port_idle(sc, p->port_num, ahci_idle_timeout_us) < 0) {
+            ahci_last_fail_class = AHCI_TEST_FAIL_IDLE;
+            p->io_err++;
+            p->io_timeout++;
+            cprintf("ahci: port %d idle timeout before atapi cmd\n", p->port_num);
+            ahci_diag_port(sc, p->port_num, "atapi-port-idle");
+            ahci_snapshot_error(p, ahci_port_read(sc, p->port_num, AHCI_PxIS));
+            if (ahci_port_recover(p, "atapi-port-idle") < 0) {
+                p->recover_fail++;
+                ahci_free_slot(p, slot);
+                return -1;
+            }
+            if (attempt + 1 < max_attempts) {
+                p->io_retry++;
+                ahci_free_slot(p, slot);
+                microdelay(50 * (attempt + 1));
+                continue;
+            }
+            ahci_free_slot(p, slot);
+            return -1;
+        }
+
+        memset(&p->cmd_list[slot], 0, sizeof(p->cmd_list[slot]));
+        memset(p->cmd_tbl[slot], 0, sizeof(*p->cmd_tbl[slot]));
+
+        p->cmd_list[slot].flags = AHCI_CMD_FIS_LEN(sizeof(struct fis_reg_h2d) / 4) |
+                                  AHCI_CMD_ATAPI;
+        if (is_write)
+            p->cmd_list[slot].flags |= AHCI_CMD_WRITE;
+        p->cmd_list[slot].prdtl = 1;
+        p->cmd_list[slot].ctba = V2P(p->cmd_tbl[slot]);
+        p->cmd_list[slot].ctbau = 0;
+
+        p->cmd_tbl[slot]->prdt[0].dba = V2P(data);
+        p->cmd_tbl[slot]->prdt[0].dbau = 0;
+        p->cmd_tbl[slot]->prdt[0].dbc = (data_len - 1) | AHCI_PRDT_IOC;
+        memmove(p->cmd_tbl[slot]->acmd, packet, 12);
+
+        fis = (struct fis_reg_h2d *)p->cmd_tbl[slot]->cfis;
+        memset(fis, 0, sizeof(*fis));
+        fis->type = FIS_TYPE_REG_H2D;
+        fis->flags = 1 << 7;  /* Command */
+        fis->command = ATA_CMD_PACKET;
+        fis->featurel = 1;    /* DMA */
+
+        ahci_port_write(sc, p->port_num, AHCI_PxIS, 0xFFFFFFFF);
+        ahci_port_write(sc, p->port_num, AHCI_PxSERR, 0xFFFFFFFF);
+
+        ci = ahci_port_read(sc, p->port_num, AHCI_PxCI);
+        ahci_port_write(sc, p->port_num, AHCI_PxCI, ci | (1U << slot));
+
+        if (ahci_wait_cmd_done(p, (1U << slot), ahci_cmd_timeout_us,
+                               &timed_out, &is) == 0) {
+            acquire(&p->irq_lock);
+            seq_changed = (p->recover_seq != seq);
+            release(&p->irq_lock);
+            if (seq_changed) {
+                ahci_last_fail_class = AHCI_TEST_FAIL_RECOVER;
+                p->io_err++;
+                if (attempt + 1 < max_attempts) {
+                    p->io_retry++;
+                    ahci_free_slot(p, slot);
+                    microdelay(50 * (attempt + 1));
+                    continue;
+                }
+                ahci_free_slot(p, slot);
+                return -1;
+            }
+            ahci_free_slot(p, slot);
+            return 0;
+        }
+
+        acquire(&p->irq_lock);
+        seq_changed = (p->recover_seq != seq);
+        release(&p->irq_lock);
+        if (seq_changed) {
+            ahci_last_fail_class = AHCI_TEST_FAIL_RECOVER;
+            p->io_err++;
+            if (attempt + 1 < max_attempts) {
+                p->io_retry++;
+                ahci_free_slot(p, slot);
+                microdelay(50 * (attempt + 1));
+                continue;
+            }
+            ahci_free_slot(p, slot);
+            return -1;
+        }
+
+        p->io_err++;
+        if (timed_out) {
+            ahci_last_fail_class = AHCI_TEST_FAIL_TIMEOUT;
+            p->io_timeout++;
+            cprintf("ahci: port %d atapi timeout\n", p->port_num);
+            ahci_diag_port(sc, p->port_num, "atapi-timeout");
+            ahci_snapshot_error(p, is);
+            if (ahci_port_recover(p, "atapi-timeout") < 0) {
+                p->recover_fail++;
+                ahci_free_slot(p, slot);
+                return -1;
+            }
+        } else {
+            ahci_last_fail_class = AHCI_TEST_FAIL_TFES;
+            p->io_tfes++;
+            cprintf("ahci: port %d atapi taskfile error is=0x%x\n",
+                    p->port_num, is);
+            ahci_diag_port(sc, p->port_num, "atapi-tfes");
+            ahci_snapshot_error(p, is);
+            if (ahci_port_recover(p, "atapi-tfes") < 0) {
                 p->recover_fail++;
                 ahci_free_slot(p, slot);
                 return -1;
@@ -1539,6 +1845,42 @@ ahci_port_init(struct ahci_softc *sc, int port)
             }
         } else {
             cprintf("ahci: port %d has no valid dev slot\n", port);
+        }
+    } else if (p->type == AHCI_PORT_TYPE_SATAPI) {
+        int dev_id = HD_DISK_DEV(port);
+        if (dev_id >= 0 && dev_id < NDEV) {
+            if (ahci_atapi_read_capacity(p) == 0) {
+                uint blocks_per_sector;
+                uint64_t total_blocks;
+                uint nblocks;
+
+                if ((p->sector_size % BSIZE) != 0) {
+                    cprintf("ahci: port %d ATAPI sector size %d unsupported\n",
+                            port, p->sector_size);
+                    return -1;
+                }
+
+                blocks_per_sector = p->sector_size / BSIZE;
+                total_blocks = (uint64_t)p->sectors * (uint64_t)blocks_per_sector;
+                if (total_blocks > 0xFFFFFFFFULL)
+                    total_blocks = 0xFFFFFFFFULL;
+                nblocks = (uint)total_blocks;
+
+                if (nblocks > 0 && bdev_register(dev_id, &ahci_atapi_bdevsw) == 0) {
+                    p->dev_id = dev_id;
+                    p->online = 1;
+                    bdev_set_nblocks(dev_id, nblocks);
+                    cprintf("ahci: port %d registered ATAPI dev=%d blocks=%d sector=%d\n",
+                            port, dev_id, nblocks, p->sector_size);
+                } else {
+                    cprintf("ahci: port %d failed ATAPI bdev_register dev=%d\n",
+                            port, dev_id);
+                }
+            } else {
+                cprintf("ahci: port %d ATAPI READ CAPACITY failed\n", port);
+            }
+        } else {
+            cprintf("ahci: port %d has no valid ATAPI dev slot\n", port);
         }
     }
     

@@ -20,7 +20,7 @@ Generated: 2026-04-01
 | clear | targetfs/usr/share/man/clear.md | 2026-04-01 | user/clear.c | source-derived usage/options |
 | dash | targetfs/usr/share/man/dash.md | 2026-04-01 | ports/ignored | manual baseline page |
 | date | targetfs/usr/share/man/date.md | 2026-04-01 | user/date.c | source-derived usage/options |
-| devman | targetfs/usr/share/man/devman.md | 2026-04-01 | user/devman.c | source-derived usage/options |
+| devman | targetfs/usr/share/man/devman.md | 2026-04-02 | user/devman.c | source-derived usage/options |
 | df | targetfs/usr/share/man/df.md | 2026-04-01 | user/df.c | source-derived usage/options |
 | dmesg | targetfs/usr/share/man/dmesg.md | 2026-04-01 | user/dmesg.c | source-derived usage/options |
 | echo | targetfs/usr/share/man/echo.md | 2026-04-01 | user/echo.c | source-derived usage/options |
@@ -46,7 +46,7 @@ Generated: 2026-04-01
 | man | targetfs/usr/share/man/man.md | 2026-04-01 | user/man.c | source-derived usage/options |
 | mkdir | targetfs/usr/share/man/mkdir.md | 2026-04-01 | user/mkdir.c | source-derived usage/options |
 | mounts | targetfs/usr/share/man/mounts.md | 2026-04-01 | user/mounts.c | source-derived usage/options |
-| mount | targetfs/usr/share/man/mount.md | 2026-04-01 | user/mount.c | source-derived usage/options |
+| mount | targetfs/usr/share/man/mount.md | 2026-04-02 | user/mount.c | source-derived usage/options |
 | mounttest | targetfs/usr/share/man/mounttest.md | 2026-04-01 | user/mounttest.c | source-derived usage/options |
 | mv | targetfs/usr/share/man/mv.md | 2026-04-01 | user/mv.c | source-derived usage/options |
 | netcat | targetfs/usr/share/man/netcat.md | 2026-04-01 | user/netcat.c | source-derived usage/options |

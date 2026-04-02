@@ -14,6 +14,12 @@ parse_dev_token(const char *tok)
   int unit;
   int part;
   int family;
+  struct stat st;
+
+  if(s[0] == '/' && stat((char*)s, &st) == 0) {
+    if(st.st_type == T_DEV)
+      return st.st_minor;
+  }
 
   if(s[0] == '/' && s[1] == 'd' && s[2] == 'e' && s[3] == 'v' && s[4] == '/')
     s += 5;
