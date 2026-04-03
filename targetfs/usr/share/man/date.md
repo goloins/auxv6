@@ -46,6 +46,10 @@ date -u
 2026-04-02 14:30:00 UTC
 ```
 
+## FIXME / TODO
+- Local offset conversion currently has a bug where `date` may still print UTC time values for non-UTC zones while only changing the label.
+- Validate lookup parsing and conversion path so timezone names like `US/Central` correctly apply `-21600` seconds to displayed local time.
+
 ## Source Audit
 - Source file: user/date.c
 - Config: targetfs/etc/timezone
