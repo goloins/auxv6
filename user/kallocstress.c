@@ -292,20 +292,63 @@ test_allocator_reclaim_sanity(void)
               25);
 }
 
+#define MAX_RUNS 32
+
 int
-main(void)
+main(int argc, char *argv[])
 {
+  int nruns = 1;
+  int r;
+
+  if(argc == 3 && argv[1][0] == '-' && argv[1][1] == 'n' && argv[1][2] == '\0'){
+    nruns = atoi(argv[2]);
+    if(nruns < 1 || nruns > MAX_RUNS){
+      dprintf(2, "usage: kallocstress [-n runs]\n");
+      exit(1);
+    }
+  } else if(argc != 1){
+    dprintf(2, "usage: kallocstress [-n runs]\n");
+    exit(1);
+  }
+
+  int run_scores[MAX_RUNS];
+  int total_passed = 0, total_failed_runs = 0;
+
   dprintf(1, "kallocstress: allocator-focused stress and regression checks\n");
   dprintf(1, "  NPROC=%d NCPU=%d NFILE=%d\n", NPROC, NCPU, NFILE);
-  dprintf(1, "  profile=%s\n\n", KALLOCSTRESS_PROFILE);
+  dprintf(1, "  profile=%s\n", KALLOCSTRESS_PROFILE);
 
-  test_fork_copyuvm_pressure();
-  test_pipe_page_churn();
-  test_allocator_reclaim_sanity();
+  for(r = 0; r < nruns; r++){
+    passed = failed = perf_score = perf_score_max = 0;
+    if(nruns > 1)
+      dprintf(1, "\n--- run %d/%d ---\n", r + 1, nruns);
+    else
+      dprintf(1, "\n");
 
-  dprintf(1, "\nkallocstress score: %d/%d (target >= 75)\n",
-          perf_score, perf_score_max);
-  dprintf(1, "\nkallocstress results: %d passed, %d failed\n", passed, failed);
+    test_fork_copyuvm_pressure();
+    test_pipe_page_churn();
+    test_allocator_reclaim_sanity();
 
-  exit(failed ? 1 : 0);
+    run_scores[r] = perf_score;
+    total_passed += passed;
+    total_failed_runs += failed;
+
+    dprintf(1, "\nkallocstress score: %d/%d (target >= 75)\n",
+            perf_score, perf_score_max);
+    dprintf(1, "kallocstress results: %d passed, %d failed\n", passed, failed);
+  }
+
+  if(nruns > 1){
+    int sum = 0, mn = 101, mx = -1;
+    for(r = 0; r < nruns; r++){
+      if(run_scores[r] < mn) mn = run_scores[r];
+      if(run_scores[r] > mx) mx = run_scores[r];
+      sum += run_scores[r];
+    }
+    dprintf(1, "\n--- %d-run summary ---\n", nruns);
+    dprintf(1, "  avg: %d/100  min: %d  max: %d\n", sum / nruns, mn, mx);
+    dprintf(1, "  total: %d passed, %d failed\n", total_passed, total_failed_runs);
+  }
+
+  exit(total_failed_runs ? 1 : 0);
 }

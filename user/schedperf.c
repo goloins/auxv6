@@ -432,27 +432,67 @@ test_proc_table_limit(void)
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
+#define MAX_RUNS 32
+
 int
 main(int argc, char *argv[])
 {
-  (void)argc; (void)argv;
+  int nruns = 1;
+  int r;
+
+  if(argc == 3 && argv[1][0] == '-' && argv[1][1] == 'n' && argv[1][2] == '\0'){
+    nruns = atoi(argv[2]);
+    if(nruns < 1 || nruns > MAX_RUNS){
+      dprintf(2, "usage: schedperf [-n runs]\n");
+      exit(1);
+    }
+  } else if(argc != 1){
+    dprintf(2, "usage: schedperf [-n runs]\n");
+    exit(1);
+  }
+
+  int run_scores[MAX_RUNS];
+  int total_passed = 0, total_failed_runs = 0;
 
   dprintf(1, "schedperf: scheduler and process-table stress\n");
   dprintf(1, "  NPROC=%d NCPU=%d\n", NPROC, NCPU);
   dprintf(1, "  profile=%s\n", SCHEDPERF_PROFILE);
-  dprintf(1, "\n");
 
-  test_fork_storm();
-  test_yield_storm();
-  test_pipe_wakeup();
-  test_alarm_counter();
-  test_signal_fast_path();
-  test_idle_responsiveness();
-  test_sched_spread();
-  test_proc_table_limit();
+  for(r = 0; r < nruns; r++){
+    passed = failed = perf_score = perf_score_max = 0;
+    if(nruns > 1)
+      dprintf(1, "\n--- run %d/%d ---\n", r + 1, nruns);
+    else
+      dprintf(1, "\n");
 
-  dprintf(1, "\nschedperf score: %d/100 (target >= 75)\n",
-          perf_score_max ? (perf_score * 100) / perf_score_max : 0);
-  dprintf(1, "\nschedperf results: %d passed, %d failed\n", passed, failed);
-  exit(failed > 0 ? 1 : 0);
+    test_fork_storm();
+    test_yield_storm();
+    test_pipe_wakeup();
+    test_alarm_counter();
+    test_signal_fast_path();
+    test_idle_responsiveness();
+    test_sched_spread();
+    test_proc_table_limit();
+
+    run_scores[r] = perf_score_max ? (perf_score * 100) / perf_score_max : 0;
+    total_passed += passed;
+    total_failed_runs += failed;
+
+    dprintf(1, "\nschedperf score: %d/100 (target >= 75)\n", run_scores[r]);
+    dprintf(1, "schedperf results: %d passed, %d failed\n", passed, failed);
+  }
+
+  if(nruns > 1){
+    int sum = 0, mn = 101, mx = -1;
+    for(r = 0; r < nruns; r++){
+      if(run_scores[r] < mn) mn = run_scores[r];
+      if(run_scores[r] > mx) mx = run_scores[r];
+      sum += run_scores[r];
+    }
+    dprintf(1, "\n--- %d-run summary ---\n", nruns);
+    dprintf(1, "  avg: %d/100  min: %d  max: %d\n", sum / nruns, mn, mx);
+    dprintf(1, "  total: %d passed, %d failed\n", total_passed, total_failed_runs);
+  }
+
+  exit(total_failed_runs > 0 ? 1 : 0);
 }

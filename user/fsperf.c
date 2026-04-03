@@ -621,31 +621,71 @@ test_poststress_create(void)
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
+#define MAX_RUNS 32
+
 int
 main(int argc, char *argv[])
 {
-  (void)argc; (void)argv;
+  int nruns = 1;
+  int r;
+
+  if(argc == 3 && argv[1][0] == '-' && argv[1][1] == 'n' && argv[1][2] == '\0'){
+    nruns = atoi(argv[2]);
+    if(nruns < 1 || nruns > MAX_RUNS){
+      dprintf(2, "usage: fsperf [-n runs]\n");
+      exit(1);
+    }
+  } else if(argc != 1){
+    dprintf(2, "usage: fsperf [-n runs]\n");
+    exit(1);
+  }
+
+  int run_scores[MAX_RUNS];
+  int total_passed = 0, total_failed_runs = 0;
 
   dprintf(1, "fsperf: inode-cache and buffer-cache stress\n");
   dprintf(1, "  NINODE=%d NFILE=%d NOFILE=%d NBUF=%d\n",
           NINODE, NFILE, NOFILE, NBUF);
-    dprintf(1, "  profile=%s\n", FSPERF_PROFILE);
-  dprintf(1, "\n");
+  dprintf(1, "  profile=%s\n", FSPERF_PROFILE);
 
   // Ensure /tmp exists (tmpfs or similar)
   mkdir("/tmp");
 
-  test_fd_ceiling();
-  test_inode_churn();
-  test_bcache_sequential();
-  test_concurrent_openers();
-  test_parallel_writers();
-  test_inode_limit();
-  test_hash_correctness();
-  test_poststress_create();
+  for(r = 0; r < nruns; r++){
+    passed = failed = perf_score = perf_score_max = 0;
+    if(nruns > 1)
+      dprintf(1, "\n--- run %d/%d ---\n", r + 1, nruns);
+    else
+      dprintf(1, "\n");
 
-  dprintf(1, "\nfsperf score: %d/100 (target >= 75)\n",
-          perf_score_max ? (perf_score * 100) / perf_score_max : 0);
-  dprintf(1, "\nfsperf results: %d passed, %d failed\n", passed, failed);
-  exit(failed > 0 ? 1 : 0);
+    test_fd_ceiling();
+    test_inode_churn();
+    test_bcache_sequential();
+    test_concurrent_openers();
+    test_parallel_writers();
+    test_inode_limit();
+    test_hash_correctness();
+    test_poststress_create();
+
+    run_scores[r] = perf_score_max ? (perf_score * 100) / perf_score_max : 0;
+    total_passed += passed;
+    total_failed_runs += failed;
+
+    dprintf(1, "\nfsperf score: %d/100 (target >= 75)\n", run_scores[r]);
+    dprintf(1, "fsperf results: %d passed, %d failed\n", passed, failed);
+  }
+
+  if(nruns > 1){
+    int sum = 0, mn = 101, mx = -1;
+    for(r = 0; r < nruns; r++){
+      if(run_scores[r] < mn) mn = run_scores[r];
+      if(run_scores[r] > mx) mx = run_scores[r];
+      sum += run_scores[r];
+    }
+    dprintf(1, "\n--- %d-run summary ---\n", nruns);
+    dprintf(1, "  avg: %d/100  min: %d  max: %d\n", sum / nruns, mn, mx);
+    dprintf(1, "  total: %d passed, %d failed\n", total_passed, total_failed_runs);
+  }
+
+  exit(total_failed_runs > 0 ? 1 : 0);
 }

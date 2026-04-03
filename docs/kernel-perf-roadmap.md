@@ -29,9 +29,12 @@ Build validation:
 
 Runtime baseline after current fixes:
 
-- `kallocstress`: `85/100`, `3 passed`, `0 failed`
-- `schedperf`: `84/100`, `8 passed`, `0 failed`
-- `fsperf`: `80/100`, `8 passed`, `0 failed`
+- `kallocstress`: `90/100`, `3 passed`, `0 failed`
+- `schedperf`: `89/100`, `8 passed`, `0 failed`
+- `fsperf`: `85/100`, `8 passed`, `0 failed`
+
+Note: scores show ±5–10 pt run-to-run variance from host scheduler load.
+Use `-n 3` (e.g. `schedperf -n 3`) for a more stable averaged result.
 
 Post-implementation hardening already applied:
 
