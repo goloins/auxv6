@@ -7,7 +7,6 @@
 #include "signal.h"
 
 char *argv[] = { "login", 0 };
-char *mount_argv[] = { "mount", "/etc/fstab", 0 };
 char *rc_argv[] = { "dash", "/etc/rc.d/rc.S", 0 };
 
 static volatile sig_atomic_t runlevel_update_pending = 0;
@@ -159,25 +158,11 @@ main(void)
   dup(0);  // stdout
   dup(0);  // stderr
 
-  // Best-effort boot mounts from /etc/fstab.
+  // Ensure standard mountpoints exist before rc.S processes /etc/fstab.
   dprintf(1, "init: creating /proc directory\n");
   mkdir("/proc");
   dprintf(1, "init: creating /mnt directory\n");
   mkdir("/mnt");
-  
-  dprintf(1, "init: forking mount process\n");
-  cpid = fork();
-  if(cpid == 0){
-    dprintf(1, "init: child executing mount\n");
-    exec("/bin/mount", mount_argv);
-    dprintf(1, "init: exec mount failed\n");
-    exit(0);
-  }
-  if(cpid > 0){
-    dprintf(1, "init: waiting for mount (pid %d)\n", cpid);
-    wait();
-    dprintf(1, "init: mount process exited\n");
-  }
 
   dprintf(1, "init: forking rc script process\n");
   cpid = fork();

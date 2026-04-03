@@ -190,6 +190,49 @@ mount_path_match_len(char *mount_path, char *path)
   return mlen;
 }
 
+static int
+mount_path_equal(char *a, char *b)
+{
+  int alen;
+  int blen;
+  int i;
+
+  if(a == 0 || b == 0)
+    return 0;
+
+  alen = path_effective_len(a);
+  blen = path_effective_len(b);
+  if(alen != blen)
+    return 0;
+
+  for(i = 0; i < alen; i++){
+    if(a[i] != b[i])
+      return 0;
+  }
+
+  return 1;
+}
+
+static struct mount*
+find_mount_exact_locked(char *path, int require_ready)
+{
+  int i;
+
+  if(path == 0)
+    return 0;
+
+  for(i = 0; i < VFS_MOUNTS_MAX; i++){
+    if(mounts[i].used == 0)
+      continue;
+    if(require_ready && mounts[i].fs == 0)
+      continue;
+    if(mount_path_equal(mounts[i].path, path))
+      return &mounts[i];
+  }
+
+  return 0;
+}
+
 static struct mount*
 select_mount_locked(char *path)
 {
@@ -264,6 +307,10 @@ vfs_mount_register_inode(struct vfs *fs, int dev, int flags, char *path,
   fs_data = 0;
 
   acquire(&vfslock);
+  if(find_mount_exact_locked(path, 0) != 0){
+    release(&vfslock);
+    return -1;
+  }
   slot = mount_allocate_locked();
   if(slot < 0){
     release(&vfslock);
@@ -372,6 +419,25 @@ vfs_register_mount(struct vfs *fs, int dev, int flags, char *path,
 
   vn.ip = 0;
   vn.mnt = 0;
+  return 0;
+}
+
+int
+vfs_remount(char *path, int flags)
+{
+  struct mount *m;
+
+  if(path == 0 || path[0] != '/')
+    return -1;
+
+  acquire(&vfslock);
+  m = find_mount_exact_locked(path, 1);
+  if(m == 0){
+    release(&vfslock);
+    return -1;
+  }
+  m->flags = flags;
+  release(&vfslock);
   return 0;
 }
 

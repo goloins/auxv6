@@ -216,6 +216,7 @@ int             vfs_lookup(char*, struct vnode*);
 int             vfs_lookup_parent(char*, char*, struct vnode*);
 void            vfs_vnode_drop(struct vnode*);
 int             vfs_register_mount(struct vfs*, int, int, char*, const void*, int);
+int             vfs_remount(char*, int);
 int             vfs_unmount(char*);
 uint            vfs_root_dev(void);
 int             vfs_is_system_root_inode(struct inode*);

@@ -100,6 +100,7 @@ int vfs_lookup_parent(char *path, char *name, struct vnode *vn);
 void vfs_vnode_drop(struct vnode *vn);
 int vfs_register_mount(struct vfs *fs, int dev, int flags, char *path,
                        const void *data, int datalen);
+int vfs_remount(char *path, int flags);
 int vfs_unmount(char *path);
 uint vfs_root_dev(void);
 int vfs_is_system_root_inode(struct inode *ip);

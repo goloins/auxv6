@@ -1368,6 +1368,9 @@ sys_mount(void)
   if(has_dev_override && (dev_override < 0 || dev_override >= NDEV))
     return -1;
 
+  if(mount_flags & MNT_REMOUNT)
+    return vfs_remount(path_buf, mount_flags & ~MNT_REMOUNT);
+
   MOUNTDBG("sys_mount: path=%s type=%s flags=%x devovr=%d\n",
            path_buf, fstype_buf, mount_flags, dev_override);
 
@@ -1418,10 +1421,14 @@ sys_mount(void)
   else if(memcmp(fstype_buf, "tmpfs", 6) == 0){
     if(has_dev_override){
       if(dev_override < TMPFSDEV_BASE ||
-         dev_override >= TMPFSDEV_BASE + TMPFSDEV_MAX)
+         dev_override >= TMPFSDEV_BASE + TMPFSDEV_MAX){
+        kfree((void*)fs);
         return -1;
-      if(vfs_dev_is_mounted(dev_override))
+      }
+      if(vfs_dev_is_mounted(dev_override)){
+        kfree((void*)fs);
         return -1;
+      }
       dev = dev_override;
     } else {
       dev = tmpfs_alloc_dev();
@@ -1429,22 +1436,29 @@ sys_mount(void)
   } else if(memcmp(fstype_buf, "nfs", 4) == 0){
     if(has_dev_override){
       if(dev_override < NFSDEV_BASE ||
-         dev_override >= NFSDEV_BASE + NFSDEV_MAX)
+         dev_override >= NFSDEV_BASE + NFSDEV_MAX){
+        kfree((void*)fs);
         return -1;
-      if(vfs_dev_is_mounted(dev_override))
+      }
+      if(vfs_dev_is_mounted(dev_override)){
+        kfree((void*)fs);
         return -1;
+      }
       dev = dev_override;
     } else {
       dev = nfs_alloc_dev();
     }
   }
 
-  if(dev < 0)
+  if(dev < 0){
+    kfree((void*)fs);
     return -1;
+  }
 
   if(vfs_register_mount(fs, dev, mount_flags, path_buf,
                         data_buf[0] ? data_buf : 0, datalen) < 0){
     MOUNTDBG("sys_mount: failed path=%s type=%s dev=%d\n", path_buf, fstype_buf, dev);
+    kfree((void*)fs);
     return -1;
   }
 
