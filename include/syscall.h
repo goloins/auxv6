@@ -85,3 +85,4 @@
 #define SYS_halt 84
 #define SYS_sendto 85
 #define SYS_recvfrom 86
+#define SYS_clock_gettime 87

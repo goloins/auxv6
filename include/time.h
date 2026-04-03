@@ -13,6 +13,8 @@ typedef int clockid_t;
 #define CLOCK_REALTIME  0
 #define CLOCK_MONOTONIC 1
 
+#define TIMER_ABSTIME   1
+
 #define CLOCKS_PER_SEC 100
 
 struct tm {
@@ -28,6 +30,15 @@ struct tm {
 };
 
 int         clock_gettime(clockid_t clock_id, struct timespec *tp);
+int         clock_getres(clockid_t clock_id, struct timespec *res);
+int         clock_settime(clockid_t clock_id, const struct timespec *tp);
+int         clock_nanosleep(clockid_t clock_id, int flags,
+                            const struct timespec *rqtp,
+                            struct timespec *rmtp);
+int         nanosleep(const struct timespec *rqtp, struct timespec *rmtp);
+unsigned long long timespec_to_msec(const struct timespec *ts);
+unsigned long long timespec_diff_msec(const struct timespec *start,
+                                      const struct timespec *end);
 time_t      time(time_t *tloc);
 double      difftime(time_t time1, time_t time0);
 

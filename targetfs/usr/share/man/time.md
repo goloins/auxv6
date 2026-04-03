@@ -26,6 +26,9 @@ real  N.MMM
 ```
 Where `N.MMM` is the elapsed time in seconds and milliseconds.
 
+Elapsed time is measured with the kernel monotonic clock. The clock is
+anchored by the periodic timer interrupt and interpolated between ticks.
+
 ## Examples
 ```
 time ls /

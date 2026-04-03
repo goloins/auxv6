@@ -9,6 +9,7 @@
 #include "termios.h"
 #include "signal.h"
 #include "spinlock.h"
+#include "sys/time.h"
 
 #ifndef CONSOLE
 #define CONSOLE 1
@@ -545,6 +546,23 @@ sys_date(void)
   if(argptr(0, (char**)&r, sizeof(*r)) < 0)
     return -1;
   cmostime(r);
+  return 0;
+}
+
+int
+sys_clock_gettime(void)
+{
+  int clock_id;
+  struct timespec *tp;
+
+  if(argint(0, &clock_id) < 0)
+    return -1;
+  if(argptr(1, (char**)&tp, sizeof(*tp)) < 0)
+    return -1;
+  if(clock_id != 1)
+    return -1;
+
+  ktime_get_monotonic(tp);
   return 0;
 }
 

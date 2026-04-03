@@ -166,6 +166,16 @@ lcr3(uint val)
   asm volatile("movl %0,%%cr3" : : "r" (val));
 }
 
+static inline unsigned long long
+rdtsc(void)
+{
+  uint lo;
+  uint hi;
+
+  asm volatile("rdtsc" : "=a" (lo), "=d" (hi));
+  return ((unsigned long long)hi << 32) | (unsigned long long)lo;
+}
+
 //PAGEBREAK: 36
 // Layout of the trap frame built on the stack by the
 // hardware and by trapasm.S, and passed to trap().

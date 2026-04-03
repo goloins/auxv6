@@ -22,6 +22,7 @@
 struct stat;
 struct dirent;
 struct rtcdate;
+struct timespec;
 struct sockaddr_in;
 struct pollfd;
 
@@ -152,6 +153,7 @@ int sigaction(int signo, const struct sigaction *act, struct sigaction *oldact);
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
 int sigreturn(void);
 unsigned int alarm(unsigned int seconds);
+int __auxv6_sys_clock_gettime(int clock_id, struct timespec *tp);
 #ifndef _UNISTD_H
 int tcsetpgrp(pid_t pgid);
 pid_t tcgetpgrp(void);

@@ -169,6 +169,7 @@ tvinit(void)
   SETGATE(idt[T_SYSCALL], 1, SEG_KCODE<<3, vectors[T_SYSCALL], DPL_USER);
 
   initlock(&tickslock, "time");
+  ktime_init();
   irq_init();  // Initialize dynamic IRQ handlers
 }
 
@@ -198,16 +199,20 @@ trap(struct trapframe *tf)
   switch(tf->trapno){
   case T_IRQ0 + IRQ_TIMER:
     if(cpuid() == 0){
+      uint current_ticks;
+
       acquire(&tickslock);
       ticks++;
+      current_ticks = ticks;
       wakeup(&ticks);
       release(&tickslock);
+      ktime_tick(current_ticks);
       // Check all processes for expired alarms
-      proc_check_alarms(ticks);
+      proc_check_alarms(current_ticks);
       // Poll network devices for RX/TX completions.
       netdev_poll();
       // TCP slow timer - every 10 ticks (100ms)
-      if((ticks % 10) == 0)
+      if((current_ticks % 10) == 0)
         tcp_slowtimo();
     }
     lapiceoi();

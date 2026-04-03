@@ -189,6 +189,10 @@ Time And Stream Correctness
 - `user/timecore.c` now provides the tranche-2 time/calendar core:
   - `gettimeofday`
   - `clock_gettime`
+  - `clock_getres`
+  - `clock_settime` (currently returns `ENOSYS`)
+  - `clock_nanosleep`
+  - `nanosleep`
   - `time`
   - `difftime`
   - `gmtime`, `gmtime_r`
@@ -197,11 +201,13 @@ Time And Stream Correctness
   - `asctime`, `asctime_r`
   - `ctime`, `ctime_r`
   - `strftime`
-- The time landing intentionally reuses the existing auxv6 primitives instead
-  of adding new syscall ABI:
+- The time landing now splits responsibilities more cleanly:
   - wall clock comes from `date()` / CMOS RTC conversion
-  - monotonic time comes from `uptime()` / ticks
-  - `usleep` from tranche 1 remains the sleep side of the tranche-2 target
+  - monotonic time comes from a kernel-backed monotonic clock source exposed
+    through a dedicated syscall and interpolated between timer ticks
+  - `nanosleep` / `clock_nanosleep` are layered in libc over the existing
+    sleep/select path, following the traditional BSD libc split
+  - `usleep` from tranche 1 remains the smaller sleep convenience wrapper
 - Tranche 2 is now basically closed from the original portability-target
   perspective; any later stdio work should be treated as follow-on polish,
   not as a missing core tranche-2 surface.

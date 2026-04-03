@@ -1,15 +1,16 @@
 #include "types.h"
+#include "time.h"
 #include "auxv6/user.h"
 
 static void
-print_elapsed(uint ticks)
+print_elapsed(unsigned long long elapsed_ms)
 {
-  uint seconds;
-  uint hundredths;
+  unsigned long long seconds;
+  unsigned long long milliseconds;
 
-  seconds = ticks / 100;
-  hundredths = ticks % 100;
-  dprintf(2, "real %d.%02ds\n", seconds, hundredths);
+  seconds = elapsed_ms / 1000ULL;
+  milliseconds = elapsed_ms % 1000ULL;
+  dprintf(2, "real %llu.%03llus\n", seconds, milliseconds);
 }
 
 int
@@ -17,15 +18,18 @@ main(int argc, char *argv[])
 {
   int pid;
   int status;
-  uint start;
-  uint end;
+  struct timespec start;
+  struct timespec end;
 
   if(argc < 2){
     dprintf(2, "usage: time command [args...]\n");
     exit(1);
   }
 
-  start = (uint)uptime();
+  if(clock_gettime(CLOCK_MONOTONIC, &start) < 0) {
+    dprintf(2, "time: clock_gettime failed\n");
+    exit(1);
+  }
   pid = fork();
   if(pid < 0){
     dprintf(2, "time: fork failed\n");
@@ -44,9 +48,10 @@ main(int argc, char *argv[])
     exit(1);
   }
 
-  end = (uint)uptime();
-  if(end < start)
-    end = start;
-  print_elapsed(end - start);
+  if(clock_gettime(CLOCK_MONOTONIC, &end) < 0) {
+    dprintf(2, "time: clock_gettime failed\n");
+    exit(1);
+  }
+  print_elapsed(timespec_diff_msec(&start, &end));
   exit(0);
 }

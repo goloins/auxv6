@@ -21,8 +21,12 @@ None.
   or a hostname (resolved via DNS). Defaults to `127.0.0.1`.
 
 ## Output
-For each reply received, prints the round-trip time in microseconds and the
+For each reply received, prints the round-trip time in milliseconds and the
 cycle count. Prints a summary of packets sent/received on completion.
+
+Round-trip times are measured with the kernel monotonic clock. The clock is
+anchored by the periodic timer interrupt and interpolated between ticks, so it
+offers finer reporting than raw 10 ms tick values.
 
 ## Notes
 - Sends exactly 5 packets and then exits.

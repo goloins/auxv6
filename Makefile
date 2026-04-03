@@ -47,6 +47,7 @@ OBJS = \
 	kernel/core/string.o\
 	kernel/core/swtch.o\
 	kernel/core/syscall.o\
+	kernel/core/ktime.o\
 	kernel/core/sysfile.o\
 	kernel/core/sysproc.o\
 	kernel/core/trap.o\

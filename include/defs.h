@@ -20,6 +20,7 @@ struct netif_info;
 struct route_info;
 struct mbuf;
 struct ip_hdr;
+struct timespec;
 struct superblock;
 struct termios;
 struct bdevsw;
@@ -303,6 +304,11 @@ void            kalloc_meminfo(uint *total_pages, uint *free_pages);
 
 // kbd.c
 void            kbdintr(void);
+
+// ktime.c
+void            ktime_init(void);
+void            ktime_tick(uint current_ticks);
+void            ktime_get_monotonic(struct timespec *ts);
 
 // lapic.c
 void            cmostime(struct rtcdate *r);

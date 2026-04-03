@@ -1,4 +1,5 @@
 #include "types.h"
+#include "time.h"
 #include "auxv6/user.h"
 #include "socket.h"
 #include "net.h"
@@ -79,20 +80,19 @@ main(int argc, char *argv[])
   int i;
   int off;
   int matched;
+  int start_ticks;
   int timeout_ticks;
-  int t0;
-  int t1;
+  int elapsed_ticks;
   uint c0;
   uint c1;
-  int rtt;
   uint cyc;
   int received;
   int lost;
-  int min_rtt;
-  int max_rtt;
-  int sum_rtt;
-  int avg_rtt;
-  int elapsed;
+  unsigned long long rtt_ms;
+  unsigned long long min_rtt_ms;
+  unsigned long long max_rtt_ms;
+  unsigned long long sum_rtt_ms;
+  unsigned long long avg_rtt_ms;
   uint min_cyc;
   uint max_cyc;
   uint sum_cyc;
@@ -107,6 +107,8 @@ main(int argc, char *argv[])
     char data[16];
   } pkt;
   struct icmp_hdr *rh;
+  struct timespec start_ts;
+  struct timespec end_ts;
 
   dst_addr = INADDR_LOOPBACK;
   used_resolver = 0;
@@ -152,9 +154,9 @@ main(int argc, char *argv[])
   pid = getpid();
   timeout_ticks = 50;
   received = 0;
-  min_rtt = 0;
-  max_rtt = 0;
-  sum_rtt = 0;
+  min_rtt_ms = 0;
+  max_rtt_ms = 0;
+  sum_rtt_ms = 0;
   min_cyc = 0;
   max_cyc = 0;
   sum_cyc = 0;
@@ -169,7 +171,12 @@ main(int argc, char *argv[])
     pkt.h.csum = 0;
     pkt.h.csum = icmp_csum(&pkt, sizeof(pkt));
 
-    t0 = uptime();
+    if(clock_gettime(CLOCK_MONOTONIC, &start_ts) < 0) {
+      dprintf(1, "ping: clock_gettime failed\n");
+      close(fd);
+      exit(1);
+    }
+    start_ticks = uptime();
     c0 = rdtsc32();
     if(send(fd, &pkt, sizeof(pkt)) < 0) {
       dprintf(1, "ping: send failed seq=%d\n", i);
@@ -179,13 +186,17 @@ main(int argc, char *argv[])
 
     matched = 0;
     for(;;) {
-      elapsed = uptime() - t0;
-      if(elapsed >= timeout_ticks)
+      elapsed_ticks = uptime() - start_ticks;
+      if(elapsed_ticks >= timeout_ticks)
         break;
 
-      n = recvtimeout(fd, buf, sizeof(buf), timeout_ticks - elapsed);
+      n = recvtimeout(fd, buf, sizeof(buf), timeout_ticks - elapsed_ticks);
       c1 = rdtsc32();
-      t1 = uptime();
+      if(clock_gettime(CLOCK_MONOTONIC, &end_ts) < 0) {
+        dprintf(1, "ping: clock_gettime failed\n");
+        close(fd);
+        exit(1);
+      }
       if(n <= 0)
         break;
 
@@ -193,13 +204,13 @@ main(int argc, char *argv[])
       for(off = 0; off + (int)sizeof(struct icmp_hdr) <= n; off++) {
         rh = (struct icmp_hdr*)(buf + off);
         if(rh->type == ICMP_ECHO_REPLY && rh->ident == (ushort)pid && rh->seq == (ushort)i) {
-          rtt = t1 - t0;
+          rtt_ms = timespec_diff_msec(&start_ts, &end_ts);
           cyc = c1 - c0;
-          if(received == 0 || rtt < min_rtt)
-            min_rtt = rtt;
-          if(received == 0 || rtt > max_rtt)
-            max_rtt = rtt;
-          sum_rtt += rtt;
+          if(received == 0 || rtt_ms < min_rtt_ms)
+            min_rtt_ms = rtt_ms;
+          if(received == 0 || rtt_ms > max_rtt_ms)
+            max_rtt_ms = rtt_ms;
+          sum_rtt_ms += rtt_ms;
           if(received == 0 || cyc < min_cyc)
             min_cyc = cyc;
           if(received == 0 || cyc > max_cyc)
@@ -207,10 +218,10 @@ main(int argc, char *argv[])
           sum_cyc += cyc;
           received++;
 
-          if(rtt == 0)
-            dprintf(1, "ping: PASS bytes=%d seq=%d time=<1 tick cycles=%u\n", n, rh->seq, cyc);
+          if(rtt_ms == 0)
+            dprintf(1, "ping: PASS bytes=%d seq=%d time<1 ms cycles=%u\n", n, rh->seq, cyc);
           else
-            dprintf(1, "ping: PASS bytes=%d seq=%d time=%d ticks cycles=%u\n", n, rh->seq, rtt, cyc);
+            dprintf(1, "ping: PASS bytes=%d seq=%d time=%llums cycles=%u\n", n, rh->seq, rtt_ms, cyc);
           matched = 1;
           break;
         }
@@ -232,10 +243,11 @@ main(int argc, char *argv[])
   dprintf(1, "ping: sent=%d received=%d lost=%d loss=%d%%\n",
           npings, received, lost, (lost * 100) / npings);
   if(received > 0) {
-    avg_rtt = (sum_rtt + received / 2) / received;
+      avg_rtt_ms = (sum_rtt_ms + (unsigned long long)received / 2ULL) /
+       (unsigned long long)received;
     avg_cyc = (sum_cyc + (uint)received / 2) / (uint)received;
-    dprintf(1, "ping: rtt min/avg/max = %d/%d/%d ticks\n",
-            min_rtt, avg_rtt, max_rtt);
+      dprintf(1, "ping: rtt min/avg/max = %llums/%llums/%llums\n",
+        min_rtt_ms, avg_rtt_ms, max_rtt_ms);
     dprintf(1, "ping: cycles min/avg/max = %u/%u/%u\n",
             min_cyc, avg_cyc, max_cyc);
   }

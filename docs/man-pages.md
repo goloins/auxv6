@@ -57,7 +57,7 @@ Generated: 2026-04-02
 | netstat | targetfs/usr/share/man/netstat.md | 2026-04-01 | user/netstat.c | source-derived usage/options |
 | nslookup | targetfs/usr/share/man/nslookup.md | 2026-04-01 | user/nslookup.c | source-derived usage/options |
 | passwd | targetfs/usr/share/man/passwd.md | 2026-04-01 | user/passwd.c | source-derived usage/options |
-| ping | targetfs/usr/share/man/ping.md | 2026-04-01 | user/ping.c | source-derived usage/options |
+| ping | targetfs/usr/share/man/ping.md | 2026-04-02 | user/ping.c | source-derived usage/options |
 | ps | targetfs/usr/share/man/ps.md | 2026-04-01 | user/ps.c | source-derived usage/options |
 | pwd | targetfs/usr/share/man/pwd.md | 2026-04-01 | user/pwd.c | source-derived usage/options |
 | rarp | targetfs/usr/share/man/rarp.md | 2026-04-01 | user/rarp.c | source-derived usage/options |
@@ -78,7 +78,7 @@ Generated: 2026-04-02
 | telnet | targetfs/usr/share/man/telnet.md | 2026-04-01 | user/telnet.c | source-derived usage/options |
 | termcheck | targetfs/usr/share/man/termcheck.md | 2026-04-01 | user/termcheck.c | source-derived usage/options |
 | termdemo | targetfs/usr/share/man/termdemo.md | 2026-04-01 | user/termdemo.c | source-derived usage/options |
-| time | targetfs/usr/share/man/time.md | 2026-04-01 | user/time.c | source-derived usage/options |
+| time | targetfs/usr/share/man/time.md | 2026-04-02 | user/time.c | source-derived usage/options |
 | umount | targetfs/usr/share/man/umount.md | 2026-04-01 | user/umount.c | source-derived usage/options |
 | uname | targetfs/usr/share/man/uname.md | 2026-04-01 | user/uname.c | source-derived usage/options |
 | usertests | targetfs/usr/share/man/usertests.md | 2026-04-01 | user/usertests.c | source-derived usage/options |

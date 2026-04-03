@@ -12,6 +12,7 @@
 
 #define AUXV6_HZ 100
 #define AUXV6_NSEC_PER_TICK 10000000L
+#define AUXV6_NSEC_PER_SEC  1000000000L
 
 static const char *const time_wday_short[] = {
   "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
@@ -225,6 +226,89 @@ time_tm_to_epoch(const struct tm *tm, time_t *out)
 
   *out = (time_t)seconds;
   return 0;
+}
+
+static int
+time_timespec_valid(const struct timespec *ts)
+{
+  if(ts == 0)
+    return 0;
+  if(ts->tv_sec < 0)
+    return 0;
+  if(ts->tv_nsec < 0 || ts->tv_nsec >= AUXV6_NSEC_PER_SEC)
+    return 0;
+  return 1;
+}
+
+static void
+time_timespec_normalize(struct timespec *ts)
+{
+  if(ts == 0)
+    return;
+
+  while(ts->tv_nsec >= AUXV6_NSEC_PER_SEC) {
+    ts->tv_nsec -= AUXV6_NSEC_PER_SEC;
+    ts->tv_sec++;
+  }
+  while(ts->tv_nsec < 0) {
+    ts->tv_nsec += AUXV6_NSEC_PER_SEC;
+    ts->tv_sec--;
+  }
+}
+
+static void
+time_timespec_add(struct timespec *dst, const struct timespec *a,
+                  const struct timespec *b)
+{
+  dst->tv_sec = a->tv_sec + b->tv_sec;
+  dst->tv_nsec = a->tv_nsec + b->tv_nsec;
+  time_timespec_normalize(dst);
+}
+
+static void
+time_timespec_sub(struct timespec *dst, const struct timespec *a,
+                  const struct timespec *b)
+{
+  dst->tv_sec = a->tv_sec - b->tv_sec;
+  dst->tv_nsec = a->tv_nsec - b->tv_nsec;
+  time_timespec_normalize(dst);
+}
+
+static int
+time_timespec_cmp(const struct timespec *a, const struct timespec *b)
+{
+  if(a->tv_sec < b->tv_sec)
+    return -1;
+  if(a->tv_sec > b->tv_sec)
+    return 1;
+  if(a->tv_nsec < b->tv_nsec)
+    return -1;
+  if(a->tv_nsec > b->tv_nsec)
+    return 1;
+  return 0;
+}
+
+static void
+time_timespec_clear(struct timespec *ts)
+{
+  if(ts == 0)
+    return;
+  ts->tv_sec = 0;
+  ts->tv_nsec = 0;
+}
+
+static void
+time_timespec_to_timeval(const struct timespec *ts, struct timeval *tv)
+{
+  long usec;
+
+  tv->tv_sec = ts->tv_sec;
+  usec = (ts->tv_nsec + 999L) / 1000L;
+  if(usec >= 1000000L) {
+    tv->tv_sec++;
+    usec -= 1000000L;
+  }
+  tv->tv_usec = (suseconds_t)usec;
 }
 
 static int
@@ -470,7 +554,6 @@ int
 clock_gettime(clockid_t clock_id, struct timespec *tp)
 {
   struct timeval tv;
-  uint ticks;
 
   if(tp == 0) {
     errno = EINVAL;
@@ -485,14 +568,156 @@ clock_gettime(clockid_t clock_id, struct timespec *tp)
     tp->tv_nsec = (long)tv.tv_usec * 1000L;
     return 0;
   case CLOCK_MONOTONIC:
-    ticks = (uint)uptime();
-    tp->tv_sec = (time_t)(ticks / AUXV6_HZ);
-    tp->tv_nsec = (long)(ticks % AUXV6_HZ) * AUXV6_NSEC_PER_TICK;
+    if(__auxv6_sys_clock_gettime(clock_id, tp) < 0) {
+      errno = EIO;
+      return -1;
+    }
     return 0;
   default:
     errno = EINVAL;
     return -1;
   }
+}
+
+int
+clock_getres(clockid_t clock_id, struct timespec *res)
+{
+  if(res == 0)
+    return 0;
+
+  switch(clock_id) {
+  case CLOCK_REALTIME:
+    res->tv_sec = 1;
+    res->tv_nsec = 0;
+    return 0;
+  case CLOCK_MONOTONIC:
+    res->tv_sec = 0;
+    res->tv_nsec = 1;
+    return 0;
+  default:
+    errno = EINVAL;
+    return -1;
+  }
+}
+
+int
+clock_settime(clockid_t clock_id, const struct timespec *tp)
+{
+  if(tp == 0 || !time_timespec_valid(tp)) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  if(clock_id != CLOCK_REALTIME) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  errno = ENOSYS;
+  return -1;
+}
+
+int
+clock_nanosleep(clockid_t clock_id, int flags,
+                const struct timespec *rqtp, struct timespec *rmtp)
+{
+  struct timespec now;
+  struct timespec target;
+  struct timespec remain;
+  struct timeval tv;
+
+  if((flags & ~TIMER_ABSTIME) != 0)
+    return EINVAL;
+  if(!time_timespec_valid(rqtp))
+    return EINVAL;
+  if(clock_id != CLOCK_REALTIME && clock_id != CLOCK_MONOTONIC)
+    return EOPNOTSUPP;
+
+  if(flags & TIMER_ABSTIME) {
+    target = *rqtp;
+  } else {
+    if(clock_gettime(clock_id, &now) < 0)
+      return errno ? errno : EIO;
+    time_timespec_add(&target, &now, rqtp);
+  }
+
+  for(;;) {
+    if(clock_gettime(clock_id, &now) < 0)
+      return errno ? errno : EIO;
+    if(time_timespec_cmp(&now, &target) >= 0) {
+      if((flags & TIMER_ABSTIME) == 0)
+        time_timespec_clear(rmtp);
+      return 0;
+    }
+
+    time_timespec_sub(&remain, &target, &now);
+    time_timespec_to_timeval(&remain, &tv);
+    if(select(0, 0, 0, 0, &tv) == 0) {
+      if((flags & TIMER_ABSTIME) == 0)
+        time_timespec_clear(rmtp);
+      return 0;
+    }
+
+    if(errno != EINTR)
+      return errno ? errno : EIO;
+
+    if((flags & TIMER_ABSTIME) == 0 && rmtp != 0) {
+      if(clock_gettime(clock_id, &now) < 0)
+        time_timespec_clear(rmtp);
+      else if(time_timespec_cmp(&now, &target) >= 0)
+        time_timespec_clear(rmtp);
+      else
+        time_timespec_sub(rmtp, &target, &now);
+    }
+    return EINTR;
+  }
+}
+
+int
+nanosleep(const struct timespec *rqtp, struct timespec *rmtp)
+{
+  int rc;
+
+  rc = clock_nanosleep(CLOCK_MONOTONIC, 0, rqtp, rmtp);
+  if(rc != 0) {
+    errno = rc;
+    return -1;
+  }
+  return 0;
+}
+
+unsigned long long
+timespec_to_msec(const struct timespec *ts)
+{
+  unsigned long long sec_ms;
+  unsigned long long nsec_ms;
+
+  if(ts == 0)
+    return 0;
+
+  sec_ms = (unsigned long long)ts->tv_sec * 1000ULL;
+  nsec_ms = (unsigned long long)ts->tv_nsec / 1000000ULL;
+  return sec_ms + nsec_ms;
+}
+
+unsigned long long
+timespec_diff_msec(const struct timespec *start, const struct timespec *end)
+{
+  struct timespec delta;
+
+  if(start == 0 || end == 0)
+    return 0;
+
+  delta.tv_sec = end->tv_sec - start->tv_sec;
+  delta.tv_nsec = end->tv_nsec - start->tv_nsec;
+  if(delta.tv_nsec < 0) {
+    delta.tv_sec--;
+    delta.tv_nsec += 1000000000L;
+  }
+  if(delta.tv_sec < 0)
+    return 0;
+
+  return timespec_to_msec(&delta);
 }
 
 time_t

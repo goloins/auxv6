@@ -354,7 +354,7 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 - `user/posix.c` adds `execl`, `execlp`, `system`; `user/tty.c` adds `posix_openpt`, `grantpt`, `unlockpt`.
 
 #### Tranche 2: time + stdio correctness [COMPLETE]
-- `time.h` + `sys/time.h` fixed; `user/timecore.c` provides `gettimeofday`, `clock_gettime`, `time`, `gmtime`/`localtime`, `mktime`, `strftime`.
+- `time.h` + `sys/time.h` fixed; `user/timecore.c` provides `gettimeofday`, `clock_gettime`, `clock_getres`, `clock_nanosleep`, `nanosleep`, `time`, `gmtime`/`localtime`, `mktime`, `strftime`, with `CLOCK_MONOTONIC` now backed by a kernel monotonic clock source.
 - `include/stdio.h` gains buffering/position/scan APIs; `user/stdio.c` implements seek/tell and line/scan support.
 - Stream buffering (`setvbuf`, `setbuf`, `setlinebuf`) now works for fd-backed output streams.
 
