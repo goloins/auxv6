@@ -1,17 +1,20 @@
 # ping(1)
 
 ## Name
-ping - Send ICMP echo requests.
+ping - Send ICMP echo requests to a host.
 
 ## Synopsis
 ```
 ping [ipv4-or-hostname]
 ```
 
-## Duty
-Send 5 ICMP echo request packets to the target host and report round-trip
-times. Resolves hostnames via DNS if needed. Defaults to the loopback
-address (`127.0.0.1`) if no argument is given.
+## Description
+Send ICMP echo request packets to the target host and report round-trip times.
+Resolves hostnames via DNS if needed. Defaults to the loopback address
+(`127.0.0.1`) if no argument is given.
+
+`ping` runs continuously until interrupted with Ctrl+C (SIGINT). When it
+receives the signal it prints a statistics summary and exits.
 
 ## Options
 None.
@@ -21,16 +24,17 @@ None.
   or a hostname (resolved via DNS). Defaults to `127.0.0.1`.
 
 ## Output
-For each reply received, prints the round-trip time in milliseconds and the
-cycle count. Prints a summary of packets sent/received on completion.
+For each reply received, prints the source address, sequence number, and
+round-trip time in milliseconds. On exit, a summary of packets
+transmitted, received, and packet loss percentage is printed, along with
+min/avg/max RTT statistics.
 
-Round-trip times are measured with the kernel monotonic clock. The clock is
-anchored by the periodic timer interrupt and interpolated between ticks, so it
-offers finer reporting than raw 10 ms tick values.
+Round-trip times are measured with the kernel monotonic clock.
 
 ## Notes
-- Sends exactly 5 packets and then exits.
+- Runs continuously until killed with Ctrl+C (SIGINT).
 - Uses raw ICMP sockets; may require appropriate privileges.
+- One packet is sent per second (10 timer ticks at 100 Hz).
 
 ## Examples
 ```
@@ -39,6 +43,9 @@ ping 192.168.1.1
 ping gateway.local
 ```
 
+## See Also
+traceroute(1), netstat(1)
+
 ## Source Audit
 - Source file: user/ping.c
-- Last updated: 2026-04-02
+- Last updated: 2026-04-03

@@ -405,6 +405,9 @@ _udptest: user/udptest
 _ping: user/ping
 	cp user/ping _ping
 
+_traceroute: user/traceroute
+	cp user/traceroute _traceroute
+
 _nslookup: user/nslookup
 	cp user/nslookup _nslookup
 
@@ -559,6 +562,7 @@ UPROGS=\
 	_tcptest\
 	_udptest\
 	_ping\
+	_traceroute\
 	_nslookup\
 	_netinfo\
 	_ifconfig\

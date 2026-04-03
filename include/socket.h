@@ -52,9 +52,17 @@ struct sockaddr_in {
 };
 
 // Internet protocol numbers
+#define IPPROTO_IP     0
 #define IPPROTO_ICMP   1
 #define IPPROTO_UDP    17
 #define IPPROTO_TCP    6
+
+// setsockopt / getsockopt levels
+#define SOL_SOCKET     1
+
+// IP-level socket options (level = IPPROTO_IP)
+#define IP_TTL         2    // Time-to-live on outgoing packets
+#define IP_HDRINCL     3    // Application provides full IP header (not implemented)
 
 struct tcpcb {
   uint state;
@@ -120,6 +128,9 @@ struct socket {
 
   // Ref count for cleanup
   uint ref;
+
+  // Per-socket IP options
+  uchar ttl;            // Outgoing TTL (default 64; set via IP_TTL setsockopt)
 };
 
 #endif

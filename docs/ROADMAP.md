@@ -432,6 +432,8 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 | `user/which.c` | PATH-aware executable lookup utility |
 | `user/lsof.c` | Open-file inspection utility backed by `/proc/lsof` |
 | `user/file.c` | Baseline file-type detector using signatures + lightweight heuristics |
+| `user/ping.c` | ICMP echo utility; runs until ^C, prints RTT statistics on exit |
+| `user/traceroute.c` | Route tracing via ICMP ECHO probes with increasing TTL |
 | `user/stdio.c` | Baseline userspace `FILE *` stdio implementation for ports |
 | `user/regex.c` | Userspace regular-expression engine (`regcomp`/`regexec` family) |
 | `user/calloc.c` | `calloc()` libc helper used by ported software |
@@ -450,8 +452,13 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 
 ---
 
-## Past Changes (2026-03-30 to 2026-04-02)
+## Past Changes (2026-03-30 to 2026-04-03)
 
+- `ping` revised to run continuously until ^C (SIGINT), printing standard statistics on exit.
+- `traceroute` added: ICMP ECHO probe with increasing TTL, `setsockopt(IP_TTL)` support, three probes per hop, 1 s timeout per probe.
+- `setsockopt`/`getsockopt` syscalls added (SYS_setsockopt=88, SYS_getsockopt=89) with `IPPROTO_IP`/`IP_TTL` support.
+- `ip_output_ttl()` added to IP layer; raw socket send paths thread per-socket TTL through to outgoing packets.
+- `ICMP_TIMXCEED`, `ICMP_UNREACH`, and related ICMP type/code constants added to `include/net.h`.
 - AHCI recovery/retry work landed (idle-stall recovery, bounded fault injection, mount-stress + soak harnesses, `test-ahci-regression`).
 - AHCI interrupt-driven completion and multi-slot queue depth enabled; ATAPI read-only path added with `/dev/cdrom*` nodes.
 - Toolchain hardening added (`-nostdinc`, toolchain checks for 32-bit libgcc helpers).

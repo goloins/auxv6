@@ -86,3 +86,5 @@
 #define SYS_sendto 85
 #define SYS_recvfrom 86
 #define SYS_clock_gettime 87
+#define SYS_setsockopt 88
+#define SYS_getsockopt 89

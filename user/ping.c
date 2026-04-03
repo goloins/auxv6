@@ -3,6 +3,16 @@
 #include "auxv6/user.h"
 #include "socket.h"
 #include "net.h"
+#include "signal.h"
+
+static volatile int ping_stop = 0;
+
+static void
+ping_sigint(int sig)
+{
+  (void)sig;
+  ping_stop = 1;
+}
 
 static int
 parse_ipv4(const char *s, uint *out)
@@ -62,19 +72,10 @@ icmp_csum(void *buf, uint len)
   return (ushort)(~sum);
 }
 
-static uint
-rdtsc32(void)
-{
-  uint lo;
-
-  asm volatile("rdtsc" : "=a" (lo) : : "edx");
-  return lo;
-}
-
 int
 main(int argc, char *argv[])
 {
-  const int npings = 5;
+  struct sigaction sa;
   int fd;
   int n;
   int i;
@@ -83,9 +84,7 @@ main(int argc, char *argv[])
   int start_ticks;
   int timeout_ticks;
   int elapsed_ticks;
-  uint c0;
-  uint c1;
-  uint cyc;
+  int sent;
   int received;
   int lost;
   unsigned long long rtt_ms;
@@ -93,10 +92,6 @@ main(int argc, char *argv[])
   unsigned long long max_rtt_ms;
   unsigned long long sum_rtt_ms;
   unsigned long long avg_rtt_ms;
-  uint min_cyc;
-  uint max_cyc;
-  uint sum_cyc;
-  uint avg_cyc;
   uint dst_addr;
   int used_resolver;
   char buf[128];
@@ -126,13 +121,17 @@ main(int argc, char *argv[])
     }
   }
 
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = ping_sigint;
+  sigaction(SIGINT, &sa, 0);
+
+  dprintf(1, "PING %d.%d.%d.%d: %d data bytes\n",
+          (dst_addr >> 24) & 0xff, (dst_addr >> 16) & 0xff,
+          (dst_addr >> 8) & 0xff, dst_addr & 0xff,
+          (int)sizeof(pkt));
+
   if(used_resolver) {
-    dprintf(1, "%s resolves to %d.%d.%d.%d\n",
-            argv[1],
-            (dst_addr >> 24) & 0xff,
-            (dst_addr >> 16) & 0xff,
-            (dst_addr >> 8) & 0xff,
-            dst_addr & 0xff);
+    dprintf(1, "(%s)\n", argv[1]);
   }
 
   fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
@@ -152,16 +151,14 @@ main(int argc, char *argv[])
   }
 
   pid = getpid();
-  timeout_ticks = 50;
+  timeout_ticks = 100;  /* 1 second at 100 Hz */
+  sent = 0;
   received = 0;
   min_rtt_ms = 0;
   max_rtt_ms = 0;
   sum_rtt_ms = 0;
-  min_cyc = 0;
-  max_cyc = 0;
-  sum_cyc = 0;
 
-  for(i = 1; i <= npings; i++) {
+  for(i = 1; !ping_stop; i++) {
     memset(&pkt, 0, sizeof(pkt));
     pkt.h.type = ICMP_ECHO;
     pkt.h.code = 0;
@@ -177,21 +174,24 @@ main(int argc, char *argv[])
       exit(1);
     }
     start_ticks = uptime();
-    c0 = rdtsc32();
     if(send(fd, &pkt, sizeof(pkt)) < 0) {
+      if(ping_stop)
+        break;
       dprintf(1, "ping: send failed seq=%d\n", i);
       close(fd);
       exit(1);
     }
+    sent++;
 
     matched = 0;
     for(;;) {
+      if(ping_stop)
+        break;
       elapsed_ticks = uptime() - start_ticks;
       if(elapsed_ticks >= timeout_ticks)
         break;
 
       n = recvtimeout(fd, buf, sizeof(buf), timeout_ticks - elapsed_ticks);
-      c1 = rdtsc32();
       if(clock_gettime(CLOCK_MONOTONIC, &end_ts) < 0) {
         dprintf(1, "ping: clock_gettime failed\n");
         close(fd);
@@ -200,28 +200,26 @@ main(int argc, char *argv[])
       if(n <= 0)
         break;
 
-      // Raw sockets are byte-stream buffers here; scan for any matching echo reply.
+      /* Raw sockets are byte-stream buffers here; scan for any matching echo reply. */
       for(off = 0; off + (int)sizeof(struct icmp_hdr) <= n; off++) {
         rh = (struct icmp_hdr*)(buf + off);
         if(rh->type == ICMP_ECHO_REPLY && rh->ident == (ushort)pid && rh->seq == (ushort)i) {
           rtt_ms = timespec_diff_msec(&start_ts, &end_ts);
-          cyc = c1 - c0;
           if(received == 0 || rtt_ms < min_rtt_ms)
             min_rtt_ms = rtt_ms;
           if(received == 0 || rtt_ms > max_rtt_ms)
             max_rtt_ms = rtt_ms;
           sum_rtt_ms += rtt_ms;
-          if(received == 0 || cyc < min_cyc)
-            min_cyc = cyc;
-          if(received == 0 || cyc > max_cyc)
-            max_cyc = cyc;
-          sum_cyc += cyc;
           received++;
 
           if(rtt_ms == 0)
-            dprintf(1, "ping: PASS bytes=%d seq=%d time<1 ms cycles=%u\n", n, rh->seq, cyc);
+            dprintf(1, "%d bytes from %d.%d.%d.%d: icmp_seq=%d time<1 ms\n",
+                    n, (dst_addr >> 24) & 0xff, (dst_addr >> 16) & 0xff,
+                    (dst_addr >> 8) & 0xff, dst_addr & 0xff, rh->seq);
           else
-            dprintf(1, "ping: PASS bytes=%d seq=%d time=%llums cycles=%u\n", n, rh->seq, rtt_ms, cyc);
+            dprintf(1, "%d bytes from %d.%d.%d.%d: icmp_seq=%d time=%llu ms\n",
+                    n, (dst_addr >> 24) & 0xff, (dst_addr >> 16) & 0xff,
+                    (dst_addr >> 8) & 0xff, dst_addr & 0xff, rh->seq, rtt_ms);
           matched = 1;
           break;
         }
@@ -230,28 +228,28 @@ main(int argc, char *argv[])
         break;
     }
 
-    if(!matched) {
-      dprintf(1, "ping: timeout seq=%d\n", i);
-      continue;
-    }
+    if(!matched && !ping_stop)
+      dprintf(1, "ping: request timeout for icmp_seq=%d\n", i);
 
-    if(i < npings)
-      sleep(10);
-  }
-
-  lost = npings - received;
-  dprintf(1, "ping: sent=%d received=%d lost=%d loss=%d%%\n",
-          npings, received, lost, (lost * 100) / npings);
-  if(received > 0) {
-      avg_rtt_ms = (sum_rtt_ms + (unsigned long long)received / 2ULL) /
-       (unsigned long long)received;
-    avg_cyc = (sum_cyc + (uint)received / 2) / (uint)received;
-      dprintf(1, "ping: rtt min/avg/max = %llums/%llums/%llums\n",
-        min_rtt_ms, avg_rtt_ms, max_rtt_ms);
-    dprintf(1, "ping: cycles min/avg/max = %u/%u/%u\n",
-            min_cyc, avg_cyc, max_cyc);
+    if(!ping_stop)
+      sleep(10);  /* ~1 second between pings */
   }
 
   close(fd);
+
+  /* Print statistics on exit (like real ping) */
+  lost = sent - received;
+  dprintf(1, "\n--- %d.%d.%d.%d ping statistics ---\n",
+          (dst_addr >> 24) & 0xff, (dst_addr >> 16) & 0xff,
+          (dst_addr >> 8) & 0xff, dst_addr & 0xff);
+  dprintf(1, "%d packets transmitted, %d received, %d%% packet loss\n",
+          sent, received, sent > 0 ? (lost * 100) / sent : 0);
+  if(received > 0) {
+    avg_rtt_ms = (sum_rtt_ms + (unsigned long long)received / 2ULL) /
+                 (unsigned long long)received;
+    dprintf(1, "rtt min/avg/max = %llu/%llu/%llu ms\n",
+            min_rtt_ms, avg_rtt_ms, max_rtt_ms);
+  }
+
   exit(0);
 }

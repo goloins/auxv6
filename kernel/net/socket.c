@@ -66,6 +66,7 @@ socket_reset_locked(struct socket *s)
   s->qlen = 0;
   for(i = 0; i < SOCKET_LISTENQ_MAX; i++)
     s->listenq[i] = 0;
+  s->ttl = 64;
 }
 
 static void
@@ -985,11 +986,15 @@ sys_send(void)
     if(tcp_output(ifp, &src, &dst, buf, (uint)len) < 0)
       return -1;
   } else if(type == SOCK_RAW){
+    uchar snd_ttl;
     if(dst.sin_addr == 0)
       return -1;
     if(src.sin_addr == 0)
       src.sin_addr = route_src;
-    if(ip_output(ifp, (uchar)proto, src.sin_addr, dst.sin_addr, buf, (uint)len) < 0)
+    acquire(&socket_lock);
+    snd_ttl = s->ttl ? s->ttl : 64;
+    release(&socket_lock);
+    if(ip_output_ttl(ifp, (uchar)proto, src.sin_addr, dst.sin_addr, buf, (uint)len, snd_ttl) < 0)
       return -1;
   } else {
     return -1;
@@ -1090,8 +1095,12 @@ sys_sendto(void)
     if(udp_output(ifp, &src, &rdst, buf, (uint)len) < 0)
       return -1;
   } else {
-    // SOCK_RAW
-    if(ip_output(ifp, (uchar)proto, src.sin_addr, rdst.sin_addr, buf, (uint)len) < 0)
+    // SOCK_RAW - use per-socket TTL
+    uchar snd_ttl;
+    acquire(&socket_lock);
+    snd_ttl = s->ttl ? s->ttl : 64;
+    release(&socket_lock);
+    if(ip_output_ttl(ifp, (uchar)proto, src.sin_addr, rdst.sin_addr, buf, (uint)len, snd_ttl) < 0)
       return -1;
   }
 
@@ -1399,6 +1408,81 @@ socket_close(struct socket *s)
 }
 
 // Helper: get socket from file descriptor
+// setsockopt(sockfd, level, optname, optval, optlen) syscall
+int
+sys_setsockopt(void)
+{
+  int sockfd, level, optname, optlen;
+  char *optval;
+  struct socket *s;
+  int v;
+
+  if(argint(0, &sockfd) < 0 || argint(1, &level) < 0 || argint(2, &optname) < 0)
+    return -1;
+  if(argint(4, &optlen) < 0 || optlen <= 0 || optlen > 64)
+    return -1;
+  if(argptr(3, &optval, optlen) < 0)
+    return -1;
+
+  s = getfd_socket(sockfd);
+  if(!s)
+    return -1;
+
+  if(level == IPPROTO_IP) {
+    if(optname == IP_TTL) {
+      if(optlen < (int)sizeof(int))
+        return -1;
+      memmove(&v, optval, sizeof(int));
+      if(v < 1 || v > 255)
+        return -1;
+      acquire(&socket_lock);
+      s->ttl = (uchar)v;
+      release(&socket_lock);
+      return 0;
+    }
+  }
+  return -1;
+}
+
+// getsockopt(sockfd, level, optname, optval, optlen) syscall
+int
+sys_getsockopt(void)
+{
+  int sockfd, level, optname, optlen_raw;
+  char *optval;
+  int *optlenp;
+  struct socket *s;
+
+  if(argint(0, &sockfd) < 0 || argint(1, &level) < 0 || argint(2, &optname) < 0)
+    return -1;
+  // arg3 = optval pointer, arg4 = optlen pointer
+  if(argint(4, &optlen_raw) < 0)
+    return -1;
+  if(argptr(4, (char**)&optlenp, sizeof(int)) < 0)
+    return -1;
+  if(*optlenp < (int)sizeof(int))
+    return -1;
+  if(argptr(3, &optval, sizeof(int)) < 0)
+    return -1;
+
+  s = getfd_socket(sockfd);
+  if(!s)
+    return -1;
+
+  if(level == IPPROTO_IP) {
+    if(optname == IP_TTL) {
+      int v;
+      acquire(&socket_lock);
+      v = (int)s->ttl;
+      release(&socket_lock);
+      memmove(optval, &v, sizeof(int));
+      *optlenp = sizeof(int);
+      return 0;
+    }
+  }
+  return -1;
+}
+
 struct socket*
 getfd_socket(int fd)
 {

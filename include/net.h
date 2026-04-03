@@ -106,8 +106,12 @@ struct icmp_hdr {
   ushort seq;
 } __attribute__((packed));
 
-#define ICMP_ECHO_REPLY 0
-#define ICMP_ECHO       8
+#define ICMP_ECHO_REPLY   0
+#define ICMP_UNREACH      3   // Destination unreachable
+#define ICMP_ECHO         8
+#define ICMP_TIMXCEED     11  // Time exceeded (TTL expired)
+#define ICMP_TIMXCEED_INTRANS 0  // TTL exceeded in transit
+#define ICMP_UNREACH_PORT 3   // Port unreachable (code for ICMP_UNREACH)
 
 // Network interface operations.
 struct ifnet_ops {
@@ -200,6 +204,8 @@ void ether_input(struct ifnet *ifp, struct mbuf *m);
 // IP layer.
 int ip_output(struct ifnet *ifp, uchar proto, uint src, uint dst,
               char *payload, uint len);
+int ip_output_ttl(struct ifnet *ifp, uchar proto, uint src, uint dst,
+                  char *payload, uint len, uchar ttl);
 void ip_input(struct ifnet *ifp, struct mbuf *m);
 
 // UDP layer.

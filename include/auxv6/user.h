@@ -175,6 +175,8 @@ ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
              struct sockaddr_in *src, int *srclen);
 int listen(int sockfd, int backlog);
 int accept(int sockfd);
+int setsockopt(int sockfd, int level, int optname, const void *optval, int optlen);
+int getsockopt(int sockfd, int level, int optname, void *optval, int *optlen);
 
 int stat(const char*, struct stat*);
 char* strcpy(char*, const char*);

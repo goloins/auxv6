@@ -27,6 +27,13 @@ int
 ip_output(struct ifnet *ifp, uchar proto, uint src, uint dst,
 					char *payload, uint len)
 {
+	return ip_output_ttl(ifp, proto, src, dst, payload, len, 64);
+}
+
+int
+ip_output_ttl(struct ifnet *ifp, uchar proto, uint src, uint dst,
+              char *payload, uint len, uchar ttl)
+{
 	struct mbuf *m;
 	struct ip_hdr *ip;
 	uint gateway;
@@ -49,7 +56,7 @@ ip_output(struct ifnet *ifp, uchar proto, uint src, uint dst,
 	ip->len = net_htons((ushort)(hlen + len));
 	ip->id = net_htons(ip_next_id++);
 	ip->off = 0;
-	ip->ttl = 64;
+	ip->ttl = ttl;
 	ip->sum = 0;
 	ip->src = net_htonl(src);
 	ip->dst = net_htonl(dst);
