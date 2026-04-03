@@ -8,6 +8,7 @@
 #include "defs.h"
 #include "spinlock.h"
 #include "graphics/display.h"
+#include "graphics/framebuffer.h"
 
 #define DISPLAY_MAX_DEVICES 4
 
@@ -336,8 +337,20 @@ display_pageflip(struct display_device *dev, struct display_crtc *crtc,
 int
 display_flush(struct display_device *dev, struct framebuffer *fb)
 {
+    struct dirty_rect rect;
+
     if(!dev || !fb)
         return -1;
+
+    if(dev->ops && dev->ops->flush_region && fb_is_dirty(fb)) {
+        fb_get_dirty_rect(fb, &rect);
+        if(rect.right >= rect.left && rect.bottom >= rect.top) {
+            if(dev->ops->flush_region(dev, fb, &rect) < 0)
+                return -1;
+            fb_clear_dirty(fb);
+            return 0;
+        }
+    }
 
     if(dev->ops && dev->ops->flush) {
         return dev->ops->flush(dev, fb);

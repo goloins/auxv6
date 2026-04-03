@@ -62,7 +62,7 @@ The existing render path is intentionally minimal. It still needs:
 - grapheme-aware editing boundaries
 - stronger cursor and scroll behavior for terminal workloads
 - better glyph fallback beyond the current ASCII-first path
-- a more efficient virtio-gpu present path than the current correctness-first whole-frame upload
+- tighter dirty-region coalescing and render-side change detection under ANSI-heavy workloads
 
 ### 4. VT And Session Layering
 

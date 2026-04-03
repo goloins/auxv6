@@ -69,6 +69,7 @@ What S1 does not solve yet:
 - Once the framebuffer path is live, the active tty flush now treats the framebuffer as the primary refresh target. VGA text updates remain the pre-graphics and fallback path rather than part of every normal interactive flush.
 - `/proc/gfxstats` now exposes framebuffer mirror counters plus mode, framebuffer, tty, VT, cursor, and viewport geometry.
 - A major mirror regression in `console_gfx_ensure_locked()` has been fixed: the framebuffer is no longer cleared on every sync, only on initial allocation or VT resize. That restored stable text and removed the worst redraw slowdown during boot and shell use.
+- The display core now prefers dirty-region presents when a backend provides `flush_region`, and the console write path batches active-tty flushes so one write call can produce one framebuffer present instead of per-character presents.
 
 ### What This Means Right Now
 
@@ -76,7 +77,7 @@ What S1 does not solve yet:
 - Manual QEMU validation now shows a stable, readable virtio-gpu-backed framebuffer console through boot, login, and interactive shell use.
 - auxv6 does not yet have a true framebuffer-native console.
 - Normal tty mutation is now authoritative at the per-tty logical screen and cursor level in `console.c` rather than in the old shared CGA offscreen shim, but the framebuffer is still a derived mirror of tty state rather than the source of truth.
-- Performance is materially better after removing the per-sync full-screen clear, but the virtio-gpu present path still uses whole-frame uploads for correctness.
+- Performance is materially better after removing the per-sync full-screen clear, and the normal console path now uses dirty-region presents for backends that support `flush_region`.
 - The graphics path is currently kernel-owned and terminal-first. There is no working `/dev/fb0`, `/dev/dri/card0`, or `libu6gfx` implementation yet.
 
 ## Gap Analysis
@@ -116,7 +117,7 @@ The VT renderer is good enough for the current mirror path, but still limited:
 
 ### 4a. Presentation Efficiency
 
-The mirror is now fast enough for normal boot and shell use after removing the accidental full-frame clear on every sync, but `virtio_gpu_display_flush()` still performs whole-frame uploads for correctness. The next performance step should be to restore bounded dirty-region transfer semantics without regressing visible correctness.
+The mirror is now fast enough for normal boot and shell use after removing the accidental full-frame clear on every sync. The display core now routes normal flushes through backend dirty-region paths when available, which removes the previous whole-frame upload behavior on the current console mirror path. Next work should focus on tighter dirty-region coalescing and render-side change detection.
 
 ### 5. Userspace ABI
 
@@ -162,7 +163,7 @@ Work items:
 - Add width accounting for non-ASCII text.
 - Add grapheme-aware cursor and erase boundaries.
 - Tighten dirty-region coalescing, cursor redraw, and scroll behavior.
-- Replace the current whole-frame virtio-gpu upload path with correct dirty-region presentation once the readable baseline is locked in.
+- Tighten dirty-region tracking so small tty updates stay bounded even under heavy ANSI workloads.
 - Keep `/proc/gfxstats` useful for measuring real redraw behavior.
 
 Definition of done:

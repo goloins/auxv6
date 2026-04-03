@@ -166,6 +166,7 @@ struct console_tty_state {
   int pending_termios_valid;
   int pending_termios_action;
   int output_busy;
+  int defer_flush;
   struct winsize winsize;
   struct console_input_state input;
   struct console_ansi_state ansi;
@@ -2787,7 +2788,7 @@ consputc_ansi(struct console_tty_state *t, int c)
   }
 
   console_ttyputc_ansi(t, c);
-  if(t == active)
+  if(t == active && t->defer_flush <= 0)
     console_flush_tty_locked(t);
 }
 
@@ -3407,6 +3408,7 @@ int
 consolewrite(struct inode *ip, char *buf, uint off, int n)
 {
   struct console_tty_state *t;
+  struct console_tty_state *active;
   int tty;
   int i, c;
 
@@ -3415,6 +3417,7 @@ consolewrite(struct inode *ip, char *buf, uint off, int n)
   acquire(&cons.lock);
   tty = console_tty_index_from_inode(ip);
   t = console_tty_by_index(tty);
+  active = console_tty_by_index(console_active_tty);
 
   /* SIGTTOU: background write with TOSTOP set */
   if(myproc()->tty >= 0 &&
@@ -3428,11 +3431,19 @@ consolewrite(struct inode *ip, char *buf, uint off, int n)
   }
 
   t->output_busy++;
+  t->defer_flush++;
 
   for(i = 0; i < n; i++) {
     c = buf[i] & 0xff;
     console_emit_tty_char_locked(t, c);
   }
+
+  t->defer_flush--;
+  if(t->defer_flush < 0)
+    t->defer_flush = 0;
+
+  if(t == active && t->defer_flush == 0)
+    console_flush_tty_locked(t);
 
   t->output_busy--;
   if(t->output_busy <= 0) {
