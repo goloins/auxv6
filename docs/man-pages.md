@@ -44,7 +44,7 @@ Generated: 2026-04-02
 | losetup | targetfs/usr/share/man/losetup.md | 2026-04-01 | user/losetup.c | source-derived usage/options |
 | lsblk | targetfs/usr/share/man/lsblk.md | 2026-04-01 | user/lsblk.c | source-derived usage/options |
 | lspci | targetfs/usr/share/man/lspci.md | 2026-04-01 | user/lspci.c | source-derived usage/options |
-| ls | targetfs/usr/share/man/ls.md | 2026-04-01 | user/ls.c | source-derived usage/options |
+| ls | targetfs/usr/share/man/ls.md | 2026-04-02 | user/ls.c | source-derived usage/options |
 | man | targetfs/usr/share/man/man.md | 2026-04-02 | user/man.c | source-derived usage/options |
 | mkdir | targetfs/usr/share/man/mkdir.md | 2026-04-01 | user/mkdir.c | source-derived usage/options |
 | mount | targetfs/usr/share/man/mount.md | 2026-04-02 | user/mount.c | source-derived usage/options |
@@ -93,3 +93,4 @@ Generated: 2026-04-02
 - Re-run tools/gen-man-pages.sh after userland changes to keep pages and dates current.
 - man now paginates terminal output using the current tty winsize instead of a fixed 80x24 assumption.
 - 6get transfer semantics and progress behavior are documented in docs/6get-http-transfer-notes.md.
+- ext2 dirent emission now guards against 32-bit inode to 16-bit dirent truncation yielding zero inum, preserving entry visibility for tools that skip inum==0.

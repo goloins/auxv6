@@ -162,6 +162,9 @@ Time And Stream Correctness
 ### Initial Landing Status (2026-04-02)
 
 - Tranche 2 is now basically in-tree.
+- libc allocator correctness fix: `user/umalloc.c:free()` now treats
+  `free(NULL)` as a no-op per C/POSIX expectations. This closed a crash class
+  in callers that legitimately free optional buffers.
 - `include/stdio.h` now exposes `fpos_t`, `fseek`, `fseeko`, `ftell`,
   `ftello`, `rewind`, `fgetpos`, `fsetpos`, `vsscanf`, and `sscanf`.
 - `user/stdio.c` now owns the seek/tell/fpos family and a real first-pass

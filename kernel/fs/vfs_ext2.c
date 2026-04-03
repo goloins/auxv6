@@ -1479,6 +1479,11 @@ ext2_read_dirents(struct ext2_mount_data *data, struct ext2_inode *dip,
 
         memset(&de, 0, sizeof(de));
         de.inum = (ushort)hdr.inode;
+        // Userspace/kernel dirent ABI still carries 16-bit inum. For ext2
+        // inode values whose low 16 bits are zero, preserve visibility by
+        // mapping to non-zero sentinel instead of dropping the entry.
+        if(de.inum == 0)
+          de.inum = 1;
         got = ext2_read_data(data, dip, nm, doff + 8, hdr.name_len);
         if(got < 0)
           return (produced == 0) ? -1 : (int)produced;

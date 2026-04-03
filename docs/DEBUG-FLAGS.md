@@ -352,6 +352,32 @@ When debug flags are 0, the preprocessor compiles out the logging statements ent
 
 ---
 
+## Userland Runtime Debug Gates
+
+### `LS_DEBUG` - `ls(1)` Internal Trace
+
+**Type:** Compile-time macro (userland)  
+**Default:** off
+
+Build `ls` with `-DLS_DEBUG=1` to emit detailed diagnostics to stderr, including:
+- option parsing
+- path classification
+- `getdents` batch/read counts
+- hidden-entry filtering decisions
+- stat failures
+- sorting decisions
+- recursion traversal
+
+Build without the macro (or with `-DLS_DEBUG=0`) for quiet mode.
+
+Example:
+
+```sh
+make EXTRA_CFLAGS="-DLS_DEBUG=1" _ls
+```
+
+---
+
 ## Adding New Debug Logging
 
 To add new gated debug output:
