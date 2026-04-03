@@ -11,10 +11,12 @@ This document tracks the current state of auxv6 graphics support as it exists in
 **Build and boot integration:**
 - `Makefile` already links `kernel/graphics/framebuffer.o`, `kernel/graphics/display.o`, `kernel/graphics/font.o`, `kernel/graphics/render.o`, and `kernel/driver/virtio_gpu.o` into `aux.kern`.
 - `kernel/core/main.c` already initializes `display_init()`, `pci_init()`, and `virtio_gpu_init()` before `consoleinit()`.
-- QEMU graphics runs should currently attach virtio-gpu in legacy-compatible mode (`disable-modern=on`) because the in-tree virtio transport still uses the legacy PCI I/O interface.
+- `Makefile` currently attaches QEMU graphics as `virtio-gpu-pci,disable-modern=on`, but recent QEMU still reports the gpu as PCI ID `1af4:1050` with MMIO capabilities rather than a legacy BAR0 I/O interface.
+- `kernel/driver/virtio.c` now has an initial modern virtio-pci capability path so auxv6 can probe that gpu transport instead of failing immediately on the missing legacy BAR0 path.
 
 **Framebuffer core:**
 - `kernel/graphics/framebuffer.c` provides DMA-backed framebuffer allocation.
+- The DMA allocator now supports contiguous multi-page allocations, which removes the earlier hard stop where framebuffer creation failed for any surface larger than one page.
 - Dirty-rectangle tracking, fill, blit, set-pixel, and sync-for-device hooks are implemented.
 - Several helper surfaces remain stubbed, especially format conversion and userspace mapping helpers.
 
@@ -32,11 +34,17 @@ This document tracks the current state of auxv6 graphics support as it exists in
 - `kernel/driver/virtio_gpu.c` probes the PCI device, negotiates features, creates control and cursor queues, registers an IRQ handler, and registers a display device.
 - Initial scanout discovery now uses `GET_DISPLAY_INFO` to populate one preferred virtio-gpu mode in the display-device state.
 - Resource creation, backing attach, scanout selection, transfer-to-host, and flush commands are implemented and used by the current console mirror path.
+- The shared virtio core now includes initial modern PCI capability discovery plus common or notify or ISR MMIO access, which removes the earlier hard blocker where QEMU gpu probing died at `virtio: no I/O base in BAR0`.
 - The command path is still synchronous polling rather than a fully asynchronous response or fence model.
+- Manual QEMU validation is still pending for the new modern transport path. The authoritative runtime signal for this work should come from the graphical framebuffer console, not from an automated guest harness.
 
 **Console integration:**
 - `kernel/driver/console.c` now allocates its framebuffer from the discovered display mode when one is present, with `640x400` kept as a fallback.
 - The active tty is mirrored into an 80x25 VT surface, centered within the framebuffer, and flushed through the generic display ops.
+- Console initialization now clears inherited BIOS VGA text and replays only buffered kernel output, which keeps early virtio-gpu bring-up noise from being mistaken for the initial tty state.
+- Kernel debug output stays on the VGA or UART path; the framebuffer mirror is driven from the tty output path instead of from `cprintf()` itself. That avoids recursive display-driver activity during early boot logging.
+- Framebuffer mirror activation is now deferred until after `kinit2()` so the first mirror allocation runs with the full post-bootstrap page pool instead of the tiny pre-`kinit2()` memory window.
+- Echoed input now uses the same tty output path as normal writes, which keeps carriage-return and newline handling aligned between login prompts, shell command entry, and command output.
 - `/proc/gfxstats` exposes framebuffer mirror counters (`sync_calls`, `cells_changed`, `cells_rendered`, `flush_calls`, `flush_pixels`).
 
 ### What This Means Right Now
@@ -59,6 +67,18 @@ The virtio-gpu driver now records preferred scanout geometry from `GET_DISPLAY_I
 ### 3. Honest Display Model
 
 The display layer is sufficient for one backend and one simple scanout path, but it is not yet a truthful minimal KMS-style core. `display_probe_all()`, master arbitration, rich connector reporting, and complete mode management are not finished.
+
+### 3a. Transport Validation
+
+The earlier transport blocker was architectural: auxv6 only implemented the legacy virtio PCI I/O register model, while QEMU's current gpu device shape exposed MMIO capabilities instead. That initial mismatch is now addressed in the shared virtio core, but the framebuffer-visible guest behavior still needs manual confirmation under `make qemu`.
+
+### 3b. DMA Backing
+
+Framebuffer backing now uses contiguous multi-page DMA allocation instead of the earlier single-page-only path. That was a real bring-up blocker once console framebuffer sizing started using the discovered display mode, because even the fallback framebuffer sizes were far larger than 4 KB.
+
+### 3c. Boot Sequencing
+
+Even after multi-page DMA allocation was fixed, lazy framebuffer mirror creation could still fail during early boot because auxv6 had not yet called `kinit2()` and therefore had only the small bootstrap allocator range available. The mirror path is now enabled only after full memory comes online.
 
 ### 4. Terminal Rendering Correctness
 

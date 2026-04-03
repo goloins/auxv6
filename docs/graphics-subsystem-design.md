@@ -6,7 +6,7 @@ This document outlines a Unix-like graphics subsystem for auxv6 inspired by Linu
 
 **Status note (2026-04-02):** this document is the target architecture, not a precise implementation status log. The current tree is already past the original scaffolding stage: `framebuffer.c`, `display.c`, `font.c`, `render.c`, and `virtio_gpu.c` are built into the kernel, `main()` wires `display_init()` plus `virtio_gpu_init()`, and `console.c` can mirror the active tty into a virtio-gpu-backed framebuffer. For live status and the current closure plan toward a true framebuffer console, see `docs/graphics-integration-guide.md` and `docs/framebuffer-implementation-vt-summary.md`.
 
-**Current transport constraint:** the virtio core currently drives the legacy PCI I/O transport, so QEMU virtio-gpu bring-up should use a legacy-compatible configuration rather than modern-only mode.
+**Current transport note:** the virtio core now has an initial modern virtio-pci capability path in addition to the older legacy PCI I/O path. This was necessary because current QEMU virtio-gpu devices were observed exposing MMIO capabilities without the expected legacy BAR0 I/O interface.
 
 **Design Philosophy:**
 - Kernel provides primitives, userspace provides policy
@@ -221,6 +221,7 @@ DRMIOC_PRIME_FD_TO_HANDLE   // Import buffer from FD
 - [x] Boot integration with the current framebuffer mirror path
 - [x] Initial mode or connector state driven from `GET_DISPLAY_INFO`
 - [x] Console framebuffer allocation consumes discovered geometry
+- [x] Initial modern virtio-pci transport support for QEMU gpu bring-up
 - [ ] Terminal grid and tty consumers use discovered geometry end-to-end
 - [ ] Asynchronous completion, fence, or richer present semantics if needed later
 

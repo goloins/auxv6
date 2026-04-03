@@ -46,6 +46,7 @@ uint            bdev_nblocks(uint dev);
 
 // console.c
 void            consoleinit(void);
+void            console_gfx_late_enable(void);
 void            cprintf(char*, ...);
 void            consoleintr(int(*)(void));
 void            console_set_foreground_pgid(int tty, int pgid);

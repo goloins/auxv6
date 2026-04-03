@@ -12,6 +12,12 @@ The key architectural rule is: **treat this as a terminal architecture migration
 - Runtime tty count is still clamped to single-tty (`CONSOLE_NTTY = 1`) for stability.
 - The tree now has a dedicated graphics path: `framebuffer.c`, `display.c`, `font.c`, `render.c`, and `virtio_gpu.c` are built into the kernel.
 - Boot initializes the display registry and virtio-gpu before `consoleinit()`.
+- The shared virtio core now has an initial modern PCI capability path in addition to the older legacy BAR0 I/O path, because QEMU's gpu device presentation did not actually provide the expected legacy interface.
+- The DMA allocator now supports contiguous multi-page framebuffer backing, which removes the earlier immediate failure on any framebuffer allocation larger than one page.
+- `consoleinit()` now clears inherited BIOS VGA text and replays buffered kernel output instead of treating the raw pre-console VGA contents as the initial tty state.
+- Kernel debug output remains on the VGA or UART side; the framebuffer mirror is driven from the tty path instead of from `cprintf()`, which keeps display-driver bring-up separate from early boot logging.
+- The framebuffer mirror is now enabled only after `kinit2()`, because pre-`kinit2()` memory was too small for reliable full-screen framebuffer allocation during lazy console mirror startup.
+- Echoed input and normal tty output now share the same OPOST-aware tty emission path, so newline handling stays consistent after separating kernel `cprintf()` from tty state updates.
 - `console.c` can create a framebuffer sized from the primary display mode when discovered, mirror the active tty into a VT surface, and flush it through virtio-gpu.
 - `/proc/gfxstats` provides visibility into the current framebuffer mirror path.
 - The important limitation is still architectural: the normal console source of truth remains the legacy text-mode or shadow-screen state, and the framebuffer remains a mirror of that state.
@@ -49,6 +55,10 @@ Re-enabling richer tty fan-out or VT switching before the framebuffer path owns 
 ### 5. Explicit Recovery Rules
 
 The system still benefits from the legacy path as a safety net. That fallback should remain explicit and narrow rather than accidentally staying on the hot path forever.
+
+### 6. Manual Bring-Up Validation
+
+For this subsystem, the relevant guest-side evidence may appear on the graphical framebuffer console rather than on serial. QEMU bring-up validation should therefore remain manual and framebuffer-observed until the new transport path is confirmed stable.
 
 ## Architectural Objectives
 

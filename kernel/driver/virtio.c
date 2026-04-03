@@ -32,6 +32,226 @@
 #include "pci.h"
 #include "virtio.h"
 
+#define PCI_STATUS_CAP_LIST            0x0010
+#define PCI_CAP_ID_VENDOR_SPECIFIC     0x09
+
+#define VIRTIO_PCI_TRANSITIONAL_MIN    0x1000
+#define VIRTIO_PCI_TRANSITIONAL_MAX    0x103F
+#define VIRTIO_PCI_MODERN_MIN          0x1040
+#define VIRTIO_PCI_MODERN_MAX          0x107F
+
+#define VIRTIO_PCI_COMMON_DFSELECT     0x00
+#define VIRTIO_PCI_COMMON_DF           0x04
+#define VIRTIO_PCI_COMMON_GFSELECT     0x08
+#define VIRTIO_PCI_COMMON_GF           0x0C
+#define VIRTIO_PCI_COMMON_MSIX_CFG     0x10
+#define VIRTIO_PCI_COMMON_NUM_QUEUES   0x12
+#define VIRTIO_PCI_COMMON_STATUS       0x14
+#define VIRTIO_PCI_COMMON_CFGGEN       0x15
+#define VIRTIO_PCI_COMMON_Q_SELECT     0x16
+#define VIRTIO_PCI_COMMON_Q_SIZE       0x18
+#define VIRTIO_PCI_COMMON_Q_MSIX       0x1A
+#define VIRTIO_PCI_COMMON_Q_ENABLE     0x1C
+#define VIRTIO_PCI_COMMON_Q_NOTIFY_OFF 0x1E
+#define VIRTIO_PCI_COMMON_Q_DESC       0x20
+#define VIRTIO_PCI_COMMON_Q_DRIVER     0x28
+#define VIRTIO_PCI_COMMON_Q_DEVICE     0x30
+
+static int
+virtio_is_modern(struct virtio_dev *vdev)
+{
+    return vdev && vdev->common_cfg != 0;
+}
+
+static uint8_t
+virtio_mmio_read8(void *base, int offset)
+{
+    volatile uint8_t *ptr;
+
+    ptr = (volatile uint8_t *)((char *)base + offset);
+    return *ptr;
+}
+
+static uint16_t
+virtio_mmio_read16(void *base, int offset)
+{
+    volatile uint16_t *ptr;
+
+    ptr = (volatile uint16_t *)((char *)base + offset);
+    return *ptr;
+}
+
+static uint32_t
+virtio_mmio_read32(void *base, int offset)
+{
+    volatile uint32_t *ptr;
+
+    ptr = (volatile uint32_t *)((char *)base + offset);
+    return *ptr;
+}
+
+static void
+virtio_mmio_write8(void *base, int offset, uint8_t val)
+{
+    volatile uint8_t *ptr;
+
+    ptr = (volatile uint8_t *)((char *)base + offset);
+    *ptr = val;
+}
+
+static void
+virtio_mmio_write16(void *base, int offset, uint16_t val)
+{
+    volatile uint16_t *ptr;
+
+    ptr = (volatile uint16_t *)((char *)base + offset);
+    *ptr = val;
+}
+
+static void
+virtio_mmio_write32(void *base, int offset, uint32_t val)
+{
+    volatile uint32_t *ptr;
+
+    ptr = (volatile uint32_t *)((char *)base + offset);
+    *ptr = val;
+}
+
+static void
+virtio_mmio_write64(void *base, int offset, uint64_t val)
+{
+    virtio_mmio_write32(base, offset, (uint32_t)val);
+    virtio_mmio_write32(base, offset + 4, (uint32_t)(val >> 32));
+}
+
+static uint8_t
+virtio_pci_find_next_vendor_cap(struct pci_dev *pci, uint8_t pos)
+{
+    int guard;
+
+    if(!pci)
+        return 0;
+    if(!(pci_read16(pci, PCI_STATUS) & PCI_STATUS_CAP_LIST))
+        return 0;
+
+    if(pos == 0)
+        pos = pci_read8(pci, PCI_CAPABILITIES) & ~0x3;
+    else
+        pos = pci_read8(pci, pos + 1) & ~0x3;
+
+    for(guard = 0; pos >= 0x40 && guard < 48; guard++) {
+        if(pci_read8(pci, pos) == PCI_CAP_ID_VENDOR_SPECIFIC)
+            return pos;
+        if((pos = (pci_read8(pci, pos + 1) & ~0x3)) == 0)
+            break;
+    }
+
+    return 0;
+}
+
+static int
+virtio_pci_map_cap(struct pci_dev *pci, uint8_t cfg_type,
+                   void **base_out, uint32_t *length_out,
+                   uint32_t *extra_out)
+{
+    uint8_t pos;
+
+    if(base_out)
+        *base_out = 0;
+    if(length_out)
+        *length_out = 0;
+    if(extra_out)
+        *extra_out = 0;
+
+    for(pos = 0; (pos = virtio_pci_find_next_vendor_cap(pci, pos)) != 0; ) {
+        uint8_t cap_len;
+        uint8_t type;
+        uint8_t bar;
+        uint32_t offset;
+        uint32_t length;
+        uint32_t bar_size;
+        void *bar_base;
+
+        cap_len = pci_read8(pci, pos + 2);
+        type = pci_read8(pci, pos + 3);
+        if(type != cfg_type)
+            continue;
+        if(cap_len < 16)
+            return -1;
+
+        bar = pci_read8(pci, pos + 4);
+        if(bar >= 6)
+            return -1;
+        if(pci_bar_type(pci, bar) & PCI_BAR_IO)
+            return -1;
+
+        bar_base = pci_map_bar(pci, bar);
+        if(!bar_base)
+            return -1;
+
+        offset = pci_read32(pci, pos + 8);
+        length = pci_read32(pci, pos + 12);
+        bar_size = pci_bar_size(pci, bar);
+        if(bar_size != 0 && (uint64_t)offset + (uint64_t)length > (uint64_t)bar_size)
+            return -1;
+
+        if(base_out)
+            *base_out = (void *)((char *)bar_base + offset);
+        if(length_out)
+            *length_out = length;
+        if(cfg_type == VIRTIO_PCI_CAP_NOTIFY_CFG && extra_out) {
+            if(cap_len < 20)
+                return -1;
+            *extra_out = pci_read32(pci, pos + 16);
+        }
+        return 0;
+    }
+
+    return -1;
+}
+
+static int
+virtio_probe_modern_pci(struct pci_dev *pci, struct virtio_dev *vdev)
+{
+    uint32_t cfg_len;
+
+    pci_enable_mem(pci);
+    pci_set_master(pci);
+
+    if(virtio_pci_map_cap(pci, VIRTIO_PCI_CAP_COMMON_CFG,
+                          &vdev->common_cfg, &cfg_len, 0) < 0 ||
+       !vdev->common_cfg || cfg_len < VIRTIO_PCI_COMMON_Q_DEVICE + 8) {
+        cprintf("virtio: missing modern common cfg\n");
+        return -1;
+    }
+    if(virtio_pci_map_cap(pci, VIRTIO_PCI_CAP_NOTIFY_CFG,
+                          &vdev->notify_base, &cfg_len,
+                          &vdev->notify_off_multiplier) < 0 ||
+       !vdev->notify_base || cfg_len < 2) {
+        cprintf("virtio: missing modern notify cfg\n");
+        return -1;
+    }
+    if(virtio_pci_map_cap(pci, VIRTIO_PCI_CAP_ISR_CFG,
+                          &vdev->isr_cfg, &cfg_len, 0) < 0 ||
+       !vdev->isr_cfg || cfg_len < 1) {
+        cprintf("virtio: missing modern ISR cfg\n");
+        return -1;
+    }
+    (void)virtio_pci_map_cap(pci, VIRTIO_PCI_CAP_DEVICE_CFG,
+                             &vdev->device_cfg, &cfg_len, 0);
+
+    vdev->irq = pci->irq_line;
+
+    virtio_reset(vdev);
+    if(vdev->status & VIRTIO_STATUS_FAILED)
+        return -1;
+
+    BOOTDBG("virtio: found modern device type %d at %d:%d.%d irq=%d\n",
+            vdev->device_id, pci->bus, pci->slot, pci->func, vdev->irq);
+
+    return 0;
+}
+
 /*
  * Read from virtio legacy I/O port configuration
  */
@@ -150,6 +370,8 @@ virtq_size_bytes(int qsize)
 int
 virtio_probe_pci(struct pci_dev *pci, struct virtio_dev *vdev)
 {
+    int is_legacy;
+
     if (!pci || !vdev)
         return -1;
     
@@ -159,15 +381,25 @@ virtio_probe_pci(struct pci_dev *pci, struct virtio_dev *vdev)
     /* Check for virtio vendor ID */
     if (pci->vendor_id != PCI_VENDOR_VIRTIO)
         return -1;
+
+    is_legacy = 0;
     
     /* Map PCI device ID to virtio device type. */
     /* Transitional devices use 0x1000 + virtio device ID - 1. */
-    if (pci->device_id >= 0x1000 && pci->device_id <= 0x103F) {
+    if (pci->device_id >= VIRTIO_PCI_TRANSITIONAL_MIN &&
+        pci->device_id <= VIRTIO_PCI_TRANSITIONAL_MAX) {
         vdev->device_id = pci->device_id - 0x0FFF;
+        is_legacy = 1;
+    } else if (pci->device_id >= VIRTIO_PCI_MODERN_MIN &&
+               pci->device_id <= VIRTIO_PCI_MODERN_MAX) {
+        vdev->device_id = pci->device_id - VIRTIO_PCI_MODERN_MIN;
+        return virtio_probe_modern_pci(pci, vdev);
     } else {
-        /* Modern devices use subsystem ID */
         vdev->device_id = pci_config_read16(pci->bus, pci->slot, pci->func, 0x2E);
     }
+
+    if(!is_legacy && (pci_bar_type(pci, 0) & PCI_BAR_IO) == 0)
+        return virtio_probe_modern_pci(pci, vdev);
     
     /* Get I/O base from BAR0 (legacy interface) */
     vdev->iobase = pci_bar_base(pci, 0) & 0xFFFF;
@@ -202,12 +434,34 @@ virtio_probe_pci(struct pci_dev *pci, struct virtio_dev *vdev)
 void
 virtio_reset(struct virtio_dev *vdev)
 {
+    int tries;
+
     /* Writing 0 to status resets the device */
-    virtio_iowrite8(vdev, VIRTIO_PCI_STATUS, 0);
+    if(virtio_is_modern(vdev))
+        virtio_mmio_write8(vdev->common_cfg, VIRTIO_PCI_COMMON_STATUS, 0);
+    else
+        virtio_iowrite8(vdev, VIRTIO_PCI_STATUS, 0);
     
     /* Wait for reset to complete by reading status (should be 0) */
-    while (virtio_ioread8(vdev, VIRTIO_PCI_STATUS) != 0)
-        ;
+    if(virtio_is_modern(vdev)) {
+        for(tries = 0; tries < 1000000; tries++) {
+            if(virtio_mmio_read8(vdev->common_cfg, VIRTIO_PCI_COMMON_STATUS) == 0)
+                break;
+        }
+        if(tries == 1000000) {
+            cprintf("virtio: modern reset timeout at %d:%d.%d status=%x\n",
+                    vdev->pci ? vdev->pci->bus : 0,
+                    vdev->pci ? vdev->pci->slot : 0,
+                    vdev->pci ? vdev->pci->func : 0,
+                    virtio_mmio_read8(vdev->common_cfg, VIRTIO_PCI_COMMON_STATUS));
+            vdev->status = VIRTIO_STATUS_FAILED;
+            vdev->features = 0;
+            return;
+        }
+    } else {
+        while (virtio_ioread8(vdev, VIRTIO_PCI_STATUS) != 0)
+            ;
+    }
     
     vdev->status = 0;
     vdev->features = 0;
@@ -220,7 +474,10 @@ void
 virtio_set_status(struct virtio_dev *vdev, uint8_t status)
 {
     vdev->status |= status;
-    virtio_iowrite8(vdev, VIRTIO_PCI_STATUS, vdev->status);
+    if(virtio_is_modern(vdev))
+        virtio_mmio_write8(vdev->common_cfg, VIRTIO_PCI_COMMON_STATUS, vdev->status);
+    else
+        virtio_iowrite8(vdev, VIRTIO_PCI_STATUS, vdev->status);
 }
 
 /*
@@ -230,14 +487,40 @@ virtio_set_status(struct virtio_dev *vdev, uint8_t status)
 int
 virtio_negotiate_features(struct virtio_dev *vdev, uint64_t requested)
 {
-    /* Read device-offered features */
-    uint64_t offered = virtio_ioread32(vdev, VIRTIO_PCI_HOST_FEATURES);
+    uint64_t offered;
+
+    if(virtio_is_modern(vdev)) {
+        requested |= VIRTIO_F_VERSION_1;
+
+        virtio_mmio_write32(vdev->common_cfg, VIRTIO_PCI_COMMON_DFSELECT, 0);
+        offered = virtio_mmio_read32(vdev->common_cfg, VIRTIO_PCI_COMMON_DF);
+        virtio_mmio_write32(vdev->common_cfg, VIRTIO_PCI_COMMON_DFSELECT, 1);
+        offered |= ((uint64_t)virtio_mmio_read32(vdev->common_cfg,
+                                                 VIRTIO_PCI_COMMON_DF)) << 32;
+    } else {
+        /* Read device-offered features */
+        offered = virtio_ioread32(vdev, VIRTIO_PCI_HOST_FEATURES);
+    }
     
     /* Intersect with what we want */
     vdev->features = offered & requested;
+
+    if(virtio_is_modern(vdev) && !(vdev->features & VIRTIO_F_VERSION_1)) {
+        cprintf("virtio: modern device missing VERSION_1\n");
+        return -1;
+    }
     
     /* Write back negotiated features */
-    virtio_iowrite32(vdev, VIRTIO_PCI_GUEST_FEATURES, (uint32_t)vdev->features);
+    if(virtio_is_modern(vdev)) {
+        virtio_mmio_write32(vdev->common_cfg, VIRTIO_PCI_COMMON_GFSELECT, 0);
+        virtio_mmio_write32(vdev->common_cfg, VIRTIO_PCI_COMMON_GF,
+                            (uint32_t)vdev->features);
+        virtio_mmio_write32(vdev->common_cfg, VIRTIO_PCI_COMMON_GFSELECT, 1);
+        virtio_mmio_write32(vdev->common_cfg, VIRTIO_PCI_COMMON_GF,
+                            (uint32_t)(vdev->features >> 32));
+    } else {
+        virtio_iowrite32(vdev, VIRTIO_PCI_GUEST_FEATURES, (uint32_t)vdev->features);
+    }
     
     return 0;
 }
@@ -248,11 +531,16 @@ virtio_negotiate_features(struct virtio_dev *vdev, uint64_t requested)
 int
 virtio_finalize_features(struct virtio_dev *vdev)
 {
+    uint8_t status;
+
     /* Set FEATURES_OK status */
     virtio_set_status(vdev, VIRTIO_STATUS_FEATURES_OK);
     
     /* Re-read status to confirm device accepted features */
-    uint8_t status = virtio_ioread8(vdev, VIRTIO_PCI_STATUS);
+    if(virtio_is_modern(vdev))
+        status = virtio_mmio_read8(vdev->common_cfg, VIRTIO_PCI_COMMON_STATUS);
+    else
+        status = virtio_ioread8(vdev, VIRTIO_PCI_STATUS);
     if (!(status & VIRTIO_STATUS_FEATURES_OK)) {
         cprintf("virtio: device rejected features\n");
         return -1;
@@ -267,11 +555,22 @@ virtio_finalize_features(struct virtio_dev *vdev)
 struct virtqueue *
 virtq_create(struct virtio_dev *vdev, int index, int size)
 {
+    int modern;
+    uint16_t max_size;
+
+    modern = virtio_is_modern(vdev);
+
     /* Select the queue */
-    virtio_iowrite16(vdev, VIRTIO_PCI_QUEUE_SEL, index);
+    if(modern)
+        virtio_mmio_write16(vdev->common_cfg, VIRTIO_PCI_COMMON_Q_SELECT, index);
+    else
+        virtio_iowrite16(vdev, VIRTIO_PCI_QUEUE_SEL, index);
     
     /* Get maximum queue size */
-    uint16_t max_size = virtio_ioread16(vdev, VIRTIO_PCI_QUEUE_SIZE);
+    if(modern)
+        max_size = virtio_mmio_read16(vdev->common_cfg, VIRTIO_PCI_COMMON_Q_SIZE);
+    else
+        max_size = virtio_ioread16(vdev, VIRTIO_PCI_QUEUE_SIZE);
     if (max_size == 0) {
         cprintf("virtio: queue %d not available\n", index);
         return 0;
@@ -343,8 +642,31 @@ virtq_create(struct virtio_dev *vdev, int index, int size)
     }
     memset(vq->desc_state, 0, PGSIZE);
     
-    /* Tell device about the queue (legacy: PFN = page frame number) */
-    virtio_iowrite32(vdev, VIRTIO_PCI_QUEUE_PFN, ring_paddr / PGSIZE);
+    if(modern) {
+        uint16_t notify_off;
+        uint32_t notify_addr_off;
+        uint64_t desc_paddr;
+        uint64_t avail_paddr;
+        uint64_t used_paddr;
+
+        desc_paddr = (uint64_t)ring_paddr;
+        avail_paddr = (uint64_t)(ring_paddr + ((char *)vq->avail - ring_mem));
+        used_paddr = (uint64_t)(ring_paddr + ((char *)vq->used - ring_mem));
+
+        virtio_mmio_write16(vdev->common_cfg, VIRTIO_PCI_COMMON_Q_SIZE, size);
+        notify_off = virtio_mmio_read16(vdev->common_cfg,
+                                        VIRTIO_PCI_COMMON_Q_NOTIFY_OFF);
+        virtio_mmio_write64(vdev->common_cfg, VIRTIO_PCI_COMMON_Q_DESC, desc_paddr);
+        virtio_mmio_write64(vdev->common_cfg, VIRTIO_PCI_COMMON_Q_DRIVER, avail_paddr);
+        virtio_mmio_write64(vdev->common_cfg, VIRTIO_PCI_COMMON_Q_DEVICE, used_paddr);
+        virtio_mmio_write16(vdev->common_cfg, VIRTIO_PCI_COMMON_Q_ENABLE, 1);
+
+        notify_addr_off = (uint32_t)notify_off * vdev->notify_off_multiplier;
+        vq->notify = (volatile uint16_t *)((char *)vdev->notify_base + notify_addr_off);
+    } else {
+        /* Tell device about the queue (legacy: PFN = page frame number) */
+        virtio_iowrite32(vdev, VIRTIO_PCI_QUEUE_PFN, ring_paddr / PGSIZE);
+    }
     
     /* Store queue in device */
     if (index < 16)
@@ -366,9 +688,14 @@ virtq_destroy(struct virtqueue *vq)
     if (!vq)
         return;
     
-    /* Tell device queue is gone */
-    virtio_iowrite16(vq->vdev, VIRTIO_PCI_QUEUE_SEL, vq->index);
-    virtio_iowrite32(vq->vdev, VIRTIO_PCI_QUEUE_PFN, 0);
+    if(virtio_is_modern(vq->vdev)) {
+        if(vq->index < 16 && vq->vdev->vqs[vq->index] == vq)
+            vq->vdev->vqs[vq->index] = 0;
+    } else {
+        /* Tell device queue is gone */
+        virtio_iowrite16(vq->vdev, VIRTIO_PCI_QUEUE_SEL, vq->index);
+        virtio_iowrite32(vq->vdev, VIRTIO_PCI_QUEUE_PFN, 0);
+    }
     
     /* Free memory */
     if (vq->ring_mem) {
@@ -496,8 +823,13 @@ virtq_kick(struct virtqueue *vq)
     
     /* Check if notification is needed */
     /* TODO: Implement event index checking for efficiency */
-    
-    virtio_iowrite16(vq->vdev, VIRTIO_PCI_QUEUE_NOTIFY, vq->index);
+
+    if(virtio_is_modern(vq->vdev)) {
+        if(vq->notify)
+            *vq->notify = vq->index;
+    } else {
+        virtio_iowrite16(vq->vdev, VIRTIO_PCI_QUEUE_NOTIFY, vq->index);
+    }
 }
 
 /*
@@ -533,8 +865,16 @@ virtq_num_free(struct virtqueue *vq)
 void
 virtio_handle_interrupt(struct virtio_dev *vdev)
 {
+    uint8_t isr;
+
     /* Read and clear ISR status */
-    uint8_t isr = virtio_ioread8(vdev, VIRTIO_PCI_ISR);
+    if(virtio_is_modern(vdev)) {
+        if(!vdev->isr_cfg)
+            return;
+        isr = virtio_mmio_read8(vdev->isr_cfg, 0);
+    } else {
+        isr = virtio_ioread8(vdev, VIRTIO_PCI_ISR);
+    }
     
     if (isr & 0x01) {
         /* Used buffer notification - process all queues */
@@ -560,36 +900,66 @@ virtio_handle_interrupt(struct virtio_dev *vdev)
 uint8_t
 virtio_config_read8(struct virtio_dev *vdev, int offset)
 {
+    if(virtio_is_modern(vdev)) {
+        if(!vdev->device_cfg)
+            return 0;
+        return virtio_mmio_read8(vdev->device_cfg, offset);
+    }
     return virtio_ioread8(vdev, VIRTIO_PCI_CONFIG + offset);
 }
 
 uint16_t
 virtio_config_read16(struct virtio_dev *vdev, int offset)
 {
+    if(virtio_is_modern(vdev)) {
+        if(!vdev->device_cfg)
+            return 0;
+        return virtio_mmio_read16(vdev->device_cfg, offset);
+    }
     return virtio_ioread16(vdev, VIRTIO_PCI_CONFIG + offset);
 }
 
 uint32_t
 virtio_config_read32(struct virtio_dev *vdev, int offset)
 {
+    if(virtio_is_modern(vdev)) {
+        if(!vdev->device_cfg)
+            return 0;
+        return virtio_mmio_read32(vdev->device_cfg, offset);
+    }
     return virtio_ioread32(vdev, VIRTIO_PCI_CONFIG + offset);
 }
 
 void
 virtio_config_write8(struct virtio_dev *vdev, int offset, uint8_t val)
 {
+    if(virtio_is_modern(vdev)) {
+        if(vdev->device_cfg)
+            virtio_mmio_write8(vdev->device_cfg, offset, val);
+        return;
+    }
     virtio_iowrite8(vdev, VIRTIO_PCI_CONFIG + offset, val);
 }
 
 void
 virtio_config_write16(struct virtio_dev *vdev, int offset, uint16_t val)
 {
+    if(virtio_is_modern(vdev)) {
+        if(vdev->device_cfg)
+            virtio_mmio_write16(vdev->device_cfg, offset, val);
+        return;
+    }
     virtio_iowrite16(vdev, VIRTIO_PCI_CONFIG + offset, val);
 }
 
 void
 virtio_config_write32(struct virtio_dev *vdev, int offset, uint32_t val)
 {
+    if(virtio_is_modern(vdev)) {
+        if(vdev->device_cfg)
+            virtio_mmio_write32(vdev->device_cfg, offset, val);
+        return;
+    }
     virtio_iowrite32(vdev, VIRTIO_PCI_CONFIG + offset, val);
 }
 
@@ -601,9 +971,14 @@ virtio_dump_device(struct virtio_dev *vdev)
 {
     cprintf("virtio device type=%d status=0x%x features=0x%x\n",
             vdev->device_id, vdev->status, (uint32_t)vdev->features);
+    if(virtio_is_modern(vdev))
+    cprintf("  PCI: %d:%d.%d modern irq=%d\n",
+        vdev->pci->bus, vdev->pci->slot, vdev->pci->func,
+        vdev->irq);
+    else
     cprintf("  PCI: %d:%d.%d iobase=0x%x irq=%d\n",
-            vdev->pci->bus, vdev->pci->slot, vdev->pci->func,
-            vdev->iobase, vdev->irq);
+        vdev->pci->bus, vdev->pci->slot, vdev->pci->func,
+        vdev->iobase, vdev->irq);
     cprintf("  queues: %d\n", vdev->nvqs);
     for (int i = 0; i < vdev->nvqs; i++) {
         if (vdev->vqs[i]) {

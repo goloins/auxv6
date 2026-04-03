@@ -7,8 +7,9 @@
  *
  * For devices that need memory below specific physical addresses
  * (e.g., ISA DMA requires < 16MB), we'd need a zone allocator.
- * For now, this simple implementation works with modern PCI devices
- * that can DMA to any 32-bit address.
+ * For now, this implementation works with modern PCI devices
+ * that can DMA to any 32-bit address and can consume contiguous
+ * multi-page allocations.
  *
  * TODO Future enhancements:
  * - [ ] Zone-based allocation (DMA32, normal, etc.)
@@ -22,6 +23,17 @@
 #include "memlayout.h"
 #include "mmu.h"
 #include "spinlock.h"
+
+static void
+dma_note(const char *msg)
+{
+    const char *p;
+
+    if(!msg)
+        return;
+    for(p = msg; *p; p++)
+        uartputc(*p);
+}
 
 /* DMA allocation tracking */
 #define MAX_DMA_ALLOCS 64
@@ -38,6 +50,73 @@ static struct {
     struct dma_region regions[MAX_DMA_ALLOCS];
     int initialized;
 } dma_state;
+
+static void
+dma_free_region_pages(char *base, uint size)
+{
+    uint pages;
+    uint i;
+
+    if(!base || size == 0)
+        return;
+
+    pages = PGROUNDUP(size) / PGSIZE;
+    for(i = 0; i < pages; i++)
+        kfree(base + i * PGSIZE);
+}
+
+static void *
+dma_alloc_contiguous_pages(uint size, uint *phys_out)
+{
+    char *first;
+    char *page;
+    char *run_low;
+    char *run_high;
+    char *base;
+    uint pages;
+    uint allocated;
+
+    pages = PGROUNDUP(size) / PGSIZE;
+    if(pages == 0)
+        return 0;
+
+    first = kalloc();
+    if(!first)
+        return 0;
+
+    run_low = first;
+    run_high = first;
+    allocated = 1;
+
+    while(allocated < pages) {
+        page = kalloc();
+        if(!page) {
+            dma_free_region_pages(run_low, allocated * PGSIZE);
+            return 0;
+        }
+
+        if(page + PGSIZE == run_low) {
+            run_low = page;
+            allocated++;
+            continue;
+        }
+        if(run_high + PGSIZE == page) {
+            run_high = page;
+            allocated++;
+            continue;
+        }
+
+        kfree(page);
+        dma_free_region_pages(run_low, allocated * PGSIZE);
+        return 0;
+    }
+
+    base = run_low;
+    memset(base, 0, pages * PGSIZE);
+    if(phys_out)
+        *phys_out = V2P(base);
+    return base;
+}
 
 void
 dma_init(void)
@@ -60,16 +139,14 @@ dma_init(void)
  *
  * Returns: kernel virtual address, or NULL on failure
  *
- * Note: For multi-page allocations, this currently allocates
- * separate pages that may not be physically contiguous.
- * Real drivers needing large contiguous regions should use
- * dma_alloc_coherent() (not yet implemented).
+ * Note: Multi-page allocations require a contiguous run of free pages.
+ * That is sufficient for the current early-boot framebuffer path,
+ * but this is still not a full general-purpose DMA arena.
  */
 void *
 dma_alloc(uint size, uint *phys_out)
 {
     void *vaddr;
-    uint paddr;
     int slot = -1;
     
     if(!dma_state.initialized)
@@ -77,23 +154,10 @@ dma_alloc(uint size, uint *phys_out)
     
     /* Round up to page size */
     size = PGROUNDUP(size);
-    
-    /* For now, only single page allocations */
-    if(size > PGSIZE){
-        cprintf("dma_alloc: size %d > PGSIZE not supported yet\n", size);
-        return 0;
-    }
-    
-    /* Allocate a page */
-    vaddr = kalloc();
+
+    vaddr = dma_alloc_contiguous_pages(size, phys_out);
     if(!vaddr)
         return 0;
-    
-    /* Get physical address using kernel mapping */
-    paddr = V2P(vaddr);
-    
-    /* Zero the memory */
-    memset(vaddr, 0, size);
     
     /* Track the allocation */
     acquire(&dma_state.lock);
@@ -105,21 +169,18 @@ dma_alloc(uint size, uint *phys_out)
     }
     if(slot >= 0){
         dma_state.regions[slot].vaddr = vaddr;
-        dma_state.regions[slot].paddr = paddr;
+        dma_state.regions[slot].paddr = V2P(vaddr);
         dma_state.regions[slot].size = size;
         dma_state.regions[slot].in_use = 1;
     }
     release(&dma_state.lock);
     
     if(slot < 0){
-        cprintf("dma_alloc: too many allocations\n");
-        kfree(vaddr);
+        dma_note("dma_alloc: too many allocations\n");
+        dma_free_region_pages((char *)vaddr, size);
         return 0;
     }
-    
-    if(phys_out)
-        *phys_out = paddr;
-    
+
     return vaddr;
 }
 
@@ -129,13 +190,18 @@ dma_alloc(uint size, uint *phys_out)
 void
 dma_free(void *vaddr, uint size)
 {
+    uint tracked_size;
+
     if(!vaddr)
         return;
+
+    tracked_size = PGROUNDUP(size);
     
     acquire(&dma_state.lock);
     for(int i = 0; i < MAX_DMA_ALLOCS; i++){
         if(dma_state.regions[i].in_use && 
            dma_state.regions[i].vaddr == vaddr){
+            tracked_size = dma_state.regions[i].size;
             dma_state.regions[i].in_use = 0;
             dma_state.regions[i].vaddr = 0;
             dma_state.regions[i].paddr = 0;
@@ -144,8 +210,8 @@ dma_free(void *vaddr, uint size)
         }
     }
     release(&dma_state.lock);
-    
-    kfree(vaddr);
+
+    dma_free_region_pages((char *)vaddr, tracked_size);
 }
 
 /*
@@ -183,7 +249,7 @@ dma_alloc_aligned(uint size, uint align, uint *phys_out)
         return dma_alloc(size, phys_out);
     
     /* Larger alignments not yet supported */
-    cprintf("dma_alloc_aligned: alignment %d > PGSIZE not supported\n", align);
+    dma_note("dma_alloc_aligned: alignment > PGSIZE not supported\n");
     return 0;
 }
 

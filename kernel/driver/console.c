@@ -25,7 +25,13 @@ struct console_tty_state;
 
 static void consputc(int);
 static void consputc_ansi(struct console_tty_state *t, int c);
+static void console_emit_tty_char_locked(struct console_tty_state *t, int c);
 static struct console_tty_state *console_tty_by_index(int tty);
+static void console_gfx_sync_from_tty_locked(struct console_tty_state *t);
+static void cga_fill(int from, int to, uchar a);
+static void cga_write_cursor(int pos);
+static int cga_read_cursor(void);
+static void cgaputc_kernel(int c);
 
 static int panicked = 0;
 
@@ -235,6 +241,7 @@ static struct render_context *console_gfx_ctx;
 static struct vt_surface *console_gfx_vts;
 static int console_gfx_announced;
 static int console_gfx_warned;
+static int console_gfx_boot_ready;
 static int console_logo_enabled = 1;
 static uint console_gfx_stat_sync_calls;
 static uint console_gfx_stat_cells_changed;
@@ -382,6 +389,18 @@ console_gfx_stats_flush_pixels(void)
   return console_gfx_stat_flush_pixels;
 }
 
+void
+console_gfx_late_enable(void)
+{
+  struct console_tty_state *t;
+
+  acquire(&cons.lock);
+  console_gfx_boot_ready = 1;
+  t = console_tty_by_index(console_active_tty);
+  console_gfx_sync_from_tty_locked(t);
+  release(&cons.lock);
+}
+
 static void
 console_stamp_logo_textmode_locked(struct console_tty_state *t)
 {
@@ -410,6 +429,29 @@ console_stamp_logo_textmode_locked(struct console_tty_state *t)
     for(i = 0; i < 6; i++)
       cga_hw[col0 + i] = t->screen[col0 + i];
   }
+}
+
+static void
+console_replay_boot_kmsg_locked(struct console_tty_state *t)
+{
+  uint start;
+  uint i;
+
+  if(!t)
+    return;
+
+  cga_fill(0, 25 * 80, 0x07);
+  cga_write_cursor(0);
+
+  if(kmsg_size > 0) {
+    start = (kmsg_head + KMSG_RING_SIZE - kmsg_size) % KMSG_RING_SIZE;
+    for(i = 0; i < kmsg_size; i++)
+      cgaputc_kernel((uchar)kmsg_ring[(start + i) % KMSG_RING_SIZE]);
+  }
+
+  memmove(t->screen, cga_hw, sizeof(t->screen));
+  t->cursor = cga_read_cursor();
+  console_stamp_logo_textmode_locked(t);
 }
 
 static void
@@ -606,6 +648,8 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
 
   if(!t)
     return;
+  if(!console_gfx_boot_ready)
+    return;
   if(!console_gfx_ensure_locked())
     return;
 
@@ -718,6 +762,37 @@ static struct console_tty_state *
 console_current_tty(void)
 {
   return console_tty_by_index(console_current_tty_index());
+}
+
+static void
+console_emit_tty_char_locked(struct console_tty_state *t, int c)
+{
+  int emit;
+  int col;
+
+  if(!t)
+    return;
+
+  emit = 1;
+  if(t->termios.c_oflag & OPOST) {
+    col = t->cursor % 80;
+
+    if(c == '\r' && (t->termios.c_oflag & ONOCR) && col == 0)
+      emit = 0;
+
+    if(c == '\r' && (t->termios.c_oflag & OCRNL))
+      c = '\n';
+
+    if(c == '\n') {
+      if(t->termios.c_oflag & ONLCR)
+        consputc_ansi(t, '\r');
+      else if(t->termios.c_oflag & ONLRET)
+        consputc_ansi(t, '\r');
+    }
+  }
+
+  if(emit)
+    consputc_ansi(t, c);
 }
 
 static int
@@ -996,8 +1071,6 @@ cgaputc_kernel(int c)
 void
 consputc(int c)
 {
-  struct console_tty_state *t;
-
   if(panicked) { cli(); for(;;); }
   if(c == BACKSPACE) {
     uartputc('\b'); uartputc(' '); uartputc('\b');
@@ -1005,15 +1078,6 @@ consputc(int c)
     uartputc(c);
   kmsg_append_char_locked(c);
   cgaputc_kernel(c);
-
-  // Kernel-path output writes directly to hardware; mirror it into the
-  // active virtual tty backing store so later tty rendering does not
-  // rewind to stale cursor/screen state.
-  t = console_tty_by_index(console_active_tty);
-  memmove(t->screen, cga_hw, sizeof(t->screen));
-  console_stamp_logo_textmode_locked(t);
-  t->cursor = cga_cursor;
-  console_gfx_sync_from_tty_locked(t);
 }
 
 /* --------------------------------------------------------------------------
@@ -2022,12 +2086,12 @@ console_echo_input_char(struct console_tty_state *t, int c, int canonical, uchar
   if((t->termios.c_lflag & ECHOCTL) &&
      c != '\n' && c != '\r' && c != '\t' &&
      ((c >= 0 && c < 0x20) || c == 0x7f)) {
-    consputc('^');
-    consputc(c == 0x7f ? '?' : (c + '@'));
+    console_emit_tty_char_locked(t, '^');
+    console_emit_tty_char_locked(t, c == 0x7f ? '?' : (c + '@'));
     return;
   }
 
-  consputc(c);
+  console_emit_tty_char_locked(t, c);
 }
 
 /* --------------------------------------------------------------------------
@@ -2576,8 +2640,6 @@ consolewrite(struct inode *ip, char *buf, uint off, int n)
   struct console_tty_state *t;
   int tty;
   int i, c;
-  int emit;
-  int col;
 
   (void)off;
   iunlock(ip);
@@ -2600,26 +2662,7 @@ consolewrite(struct inode *ip, char *buf, uint off, int n)
 
   for(i = 0; i < n; i++) {
     c = buf[i] & 0xff;
-    emit = 1;
-    if(t->termios.c_oflag & OPOST) {
-      col = t->cursor % 80;
-
-      if(c == '\r' && (t->termios.c_oflag & ONOCR) && col == 0)
-        emit = 0;
-
-      if(c == '\r' && (t->termios.c_oflag & OCRNL))
-        c = '\n';
-
-      if(c == '\n') {
-        if(t->termios.c_oflag & ONLCR)
-          consputc_ansi(t, '\r');
-        else if(t->termios.c_oflag & ONLRET)
-          consputc_ansi(t, '\r');
-      }
-    }
-
-    if(emit)
-      consputc_ansi(t, c);
+    console_emit_tty_char_locked(t, c);
   }
 
   t->output_busy--;
@@ -2647,7 +2690,6 @@ void
 consoleinit(void)
 {
   int i;
-  int j;
   ushort blank;
 
   initlock(&cons.lock, "console");
@@ -2656,12 +2698,12 @@ consoleinit(void)
   for(i = 0; i < CONSOLE_NTTY; i++) {
     cttys[i] = console_tty_default;
     cttys[i].cursor = 0;
-    for(j = 0; j < 25 * 80; j++)
+    memset(cttys[i].screen, 0, sizeof(cttys[i].screen));
+    for(int j = 0; j < 25 * 80; j++)
       cttys[i].screen[j] = blank;
   }
-  memmove(cttys[0].screen, cga_hw, sizeof(cttys[0].screen));
-  cttys[0].cursor = cga_cursor;
   console_active_tty = 0;
+  console_replay_boot_kmsg_locked(&cttys[0]);
   devsw[CONSOLE].write = consolewrite;
   devsw[CONSOLE].read  = consoleread;
   cons.locking = 1;

@@ -10,6 +10,17 @@
 #include "spinlock.h"
 #include "graphics/framebuffer.h"
 
+static void
+fb_note(const char *msg)
+{
+    const char *p;
+
+    if(!msg)
+        return;
+    for(p = msg; *p; p++)
+        uartputc(*p);
+}
+
 /* Convert pixel format to bytes per pixel */
 int
 fb_pixfmt_to_bpp(uint pixfmt)
@@ -48,7 +59,7 @@ fb_alloc(uint width, uint height, uint pixfmt)
 
     bpp = fb_pixfmt_to_bpp(pixfmt);
     if(bpp == 0) {
-        cprintf("fb_alloc: unsupported pixel format\n");
+        fb_note("fb_alloc: unsupported pixel format\n");
         return 0;
     }
 
@@ -57,7 +68,7 @@ fb_alloc(uint width, uint height, uint pixfmt)
     /* Allocate pixel memory via DMA */
     pixels = dma_alloc(size, &phys_addr);
     if(!pixels) {
-        cprintf("fb_alloc: failed to allocate %d bytes\n", size);
+        fb_note("fb_alloc: dma allocation failed\n");
         return 0;
     }
 

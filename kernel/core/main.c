@@ -44,6 +44,7 @@ main(void)
   socket_init();   // socket table
   startothers();   // start other processors
   kinit2(P2V(4*1024*1024), P2V(PHYSTOP)); // must come after startothers()
+  console_gfx_late_enable(); // framebuffer mirror can allocate after full memory is online
   userinit();      // first user process
   mpmain();        // finish this processor's setup
 }
