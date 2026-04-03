@@ -2,6 +2,8 @@
 #include "auxv6/user.h"
 #include "socket.h"
 #include "termios.h"
+#include "signal.h"
+#include "sys/ioctl.h"
 
 #define TELNET_DEFAULT_PORT 23
 #define TELNET_BUF 512
@@ -14,10 +16,17 @@
 #define SB   250
 #define SE   240
 
+/* Telnet options */
+#define OPT_NAWS 31   /* Negotiate About Window Size (RFC 1073) */
+
 #define TELNET_ESCAPE 29  /* Ctrl-] */
 #define TELNET_CTRL_C 3
 #define TELNET_CTRL_Z 26
 #define TELNET_RECV_POLL_TICKS 10
+
+/* NAWS state */
+static int naws_enabled = 0;    /* server has agreed to receive our window size */
+static volatile int naws_dirty = 0; /* SIGWINCH fired; need to resend NAWS */
 
 static void
 usage(void)
@@ -72,6 +81,13 @@ open_telnet(const char *host, int port)
 }
 
 static void
+sigwinch_handler(int sig)
+{
+  (void)sig;
+  naws_dirty = 1;
+}
+
+static void
 send_iac_reply(int fd, uchar cmd, uchar opt)
 {
   uchar rep[3];
@@ -80,6 +96,49 @@ send_iac_reply(int fd, uchar cmd, uchar opt)
   rep[1] = cmd;
   rep[2] = opt;
   send(fd, rep, 3);
+}
+
+/*
+ * Send Negotiate About Window Size subnegotiation (RFC 1073).
+ * Reads the current terminal window size via TIOCGWINSZ and sends:
+ *   IAC SB NAWS <width-high> <width-low> <height-high> <height-low> IAC SE
+ * Per RFC 1073, any data byte equal to IAC (255) is doubled.
+ */
+static void
+send_naws(int fd)
+{
+  struct winsize ws;
+  uchar data[4];
+  uchar pkt[13]; /* 3 header + up to 8 escaped data bytes + 2 trailer */
+  int n;
+  int k;
+  ushort w;
+  ushort h;
+
+  if(ioctl(0, TIOCGWINSZ, &ws) < 0) {
+    ws.ws_col = 80;
+    ws.ws_row = 24;
+  }
+  w = ws.ws_col ? ws.ws_col : 80;
+  h = ws.ws_row ? ws.ws_row : 24;
+
+  data[0] = (uchar)(w >> 8);
+  data[1] = (uchar)(w & 0xff);
+  data[2] = (uchar)(h >> 8);
+  data[3] = (uchar)(h & 0xff);
+
+  pkt[0] = IAC;
+  pkt[1] = SB;
+  pkt[2] = OPT_NAWS;
+  n = 3;
+  for(k = 0; k < 4; k++) {
+    pkt[n++] = data[k];
+    if(data[k] == IAC)
+      pkt[n++] = (uchar)IAC; /* escape IAC in SB data */
+  }
+  pkt[n++] = IAC;
+  pkt[n++] = SE;
+  send(fd, pkt, n);
 }
 
 static int
@@ -124,10 +183,17 @@ process_telnet_rx(int fd, char *in, int n, char *out)
       if(i >= n)
         break;
       opt = (uchar)in[i++];
-      if(b == DO)
+      if(b == DO && opt == OPT_NAWS) {
+        /* Server agrees to receive our window size; send SB NAWS */
+        naws_enabled = 1;
+        send_naws(fd);
+      } else if(b == DONT && opt == OPT_NAWS) {
+        naws_enabled = 0;
+      } else if(b == DO) {
         send_iac_reply(fd, WONT, opt);
-      else if(b == WILL)
+      } else if(b == WILL) {
         send_iac_reply(fd, DONT, opt);
+      }
       continue;
     }
 
@@ -190,6 +256,9 @@ main(int argc, char **argv)
   if(fd < 0)
     exit(0);
 
+  /* Proactively offer NAWS so the server can ask for our window size */
+  send_iac_reply(fd, WILL, OPT_NAWS);
+
   raw_ok = (stdin_raw_enable(&oldt) == 0);
   if(raw_ok)
     dprintf(2, "telnet: connected (Ctrl-], Ctrl-C, or Ctrl-Z to quit)\n");
@@ -234,12 +303,19 @@ main(int argc, char **argv)
     exit(0);
   }
 
+  /* Parent: install SIGWINCH handler to track window size changes */
+  signal(SIGWINCH, sigwinch_handler);
+
   for(;;) {
     if(waitpid(pid, &st, WNOHANG) > 0)
       break;
 
     n = recvtimeout(fd, buf, sizeof(buf), TELNET_RECV_POLL_TICKS);
     if(n == RECV_TIMEOUT_EXPIRED) {
+      if(naws_enabled && naws_dirty) {
+        naws_dirty = 0;
+        send_naws(fd);
+      }
       continue;
     }
 

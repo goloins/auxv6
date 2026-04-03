@@ -156,6 +156,10 @@ void            pty_poll_events(struct file *f, int *rd, int *wr, int *err);
 #define DBG_AHCI 1
 #endif
 
+#ifndef DBG_VIRTIO_NET
+#define DBG_VIRTIO_NET 0
+#endif
+
 // Boot-time verbosity flag - gates PCI discovery, device enumeration details, etc.
 #ifndef AUXV6_BOOTINFO
 #define AUXV6_BOOTINFO AUXV6_DEBUG
@@ -167,6 +171,7 @@ void            pty_poll_events(struct file *f, int *rd, int *wr, int *err);
 #define IDEDBG(...)   do { if(DBG_IDE) cprintf(__VA_ARGS__); } while(0)
 #define EXECDBG(...)  do { if(DBG_EXEC) cprintf(__VA_ARGS__); } while(0)
 #define AHCIDBG(...)  do { if(DBG_AHCI) cprintf(__VA_ARGS__); } while(0)
+#define VNETDBG(...)  do { if(DBG_VIRTIO_NET) cprintf(__VA_ARGS__); } while(0)
 
 // Boot information macro - for verbose discovery and enumeration details
 #define BOOTDBG(...)  do { if(AUXV6_BOOTINFO) cprintf(__VA_ARGS__); } while(0)

@@ -101,6 +101,8 @@ void reset_child_signal_handlers(void);
 void history_init(void);
 void history_add(const char *line);
 int history_readline(char *buf, int nbuf, const char *prompt);
+static int history_expand_bang_bang(char *buf, int *len, int nbuf,
+                                    int *nav, char *current);
 
 static char sh_path[PATH_MAX] = "/:/bin:/sbin";
 static char sh_prompt[PROMPT_MAX] = "\\u:\\w";
@@ -459,6 +461,21 @@ history_replace_line(char *line, int *len, const char *src, int max)
     write(2, line, newlen);
 }
 
+static int
+history_expand_bang_bang(char *buf, int *len, int nbuf, int *nav,
+                         char *current)
+{
+  if(sh_history_count <= 0)
+    return 0;
+  if(*len != 1 || buf[0] != '!')
+    return 0;
+
+  *nav = -1;
+  current[0] = 0;
+  history_replace_line(buf, len, sh_history[sh_history_count - 1], nbuf);
+  return 1;
+}
+
 int
 history_readline(char *buf, int nbuf, const char *prompt)
 {
@@ -559,6 +576,8 @@ history_readline(char *buf, int nbuf, const char *prompt)
 
     if(c >= 0x20 && c < 0x7f) {
       if(len < nbuf - 2) {
+        if(c == '!' && history_expand_bang_bang(buf, &len, nbuf, &nav, current))
+          continue;
         if(nav >= 0) {
           nav = -1;
           current[0] = 0;

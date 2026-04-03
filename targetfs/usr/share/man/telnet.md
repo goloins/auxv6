@@ -24,7 +24,11 @@ None.
 - IAC protocol negotiation is handled automatically.
 - Input from stdin is forwarded to the remote; remote data is written to
   stdout.
-- Press Ctrl-C to terminate the session.
+- NAWS (Negotiate About Window Size, RFC 1073) is supported. On connect,
+  the client sends `WILL NAWS` and, if the server accepts with `DO NAWS`,
+  immediately sends the current terminal dimensions. When the terminal is
+  resized (SIGWINCH), the updated size is sent to the server automatically.
+- Press Ctrl-], Ctrl-C, or Ctrl-Z to terminate the session.
 
 ## Examples
 ```
@@ -34,4 +38,4 @@ telnet 10.0.0.1 2323
 
 ## Source Audit
 - Source file: user/telnet.c
-- Last updated: 2026-04-02
+- Last updated: 2026-04-03

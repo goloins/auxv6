@@ -52,6 +52,12 @@
 #define V6DHCPD_LEASE_VERSION 1
 #define V6DHCPD_PATH_MAX      64
 
+#ifndef V6DHCPD_DEBUG
+#define V6DHCPD_DEBUG 0
+#endif
+
+#define DHCPDBG(...) do { if(V6DHCPD_DEBUG) dprintf(2, __VA_ARGS__); } while(0)
+
 struct dhcp_packet {
   uchar op;
   uchar htype;
@@ -381,19 +387,33 @@ dhcp_parse_offer(char *buf, int len, uint xid, uchar *mac, struct dhcp_offer *of
 
   if(buf == 0 || offer == 0)
     return -1;
-  if(len < DHCP_MIN_PACKET_LEN)
+  if(len < DHCP_MIN_PACKET_LEN) {
+    DHCPDBG("v6dhcpd: parse reject short len=%d\n", len);
     return -1;
+  }
 
   pkt = (struct dhcp_packet*)buf;
-  if(pkt->op != DHCP_OP_BOOTREPLY || pkt->htype != DHCP_HTYPE_ETHERNET || pkt->hlen != 6)
+  if(pkt->op != DHCP_OP_BOOTREPLY || pkt->htype != DHCP_HTYPE_ETHERNET || pkt->hlen != 6) {
+    DHCPDBG("v6dhcpd: parse reject op/htype/hlen op=%d htype=%d hlen=%d\n",
+            pkt->op, pkt->htype, pkt->hlen);
     return -1;
-  if(net_ntohl(pkt->xid) != xid)
+  }
+  if(net_ntohl(pkt->xid) != xid) {
+    DHCPDBG("v6dhcpd: parse reject xid got=0x%x want=0x%x\n", net_ntohl(pkt->xid), xid);
     return -1;
-  if(!bytes_equal(pkt->chaddr, mac, 6))
+  }
+  if(!bytes_equal(pkt->chaddr, mac, 6)) {
+    DHCPDBG("v6dhcpd: parse reject chaddr got=%x:%x:%x:%x:%x:%x want=%x:%x:%x:%x:%x:%x\n",
+            pkt->chaddr[0], pkt->chaddr[1], pkt->chaddr[2], pkt->chaddr[3], pkt->chaddr[4], pkt->chaddr[5],
+            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     return -1;
+  }
   if(pkt->options[0] != DHCP_COOKIE0 || pkt->options[1] != DHCP_COOKIE1 ||
-     pkt->options[2] != DHCP_COOKIE2 || pkt->options[3] != DHCP_COOKIE3)
+     pkt->options[2] != DHCP_COOKIE2 || pkt->options[3] != DHCP_COOKIE3) {
+    DHCPDBG("v6dhcpd: parse reject bad cookie %x %x %x %x\n",
+            pkt->options[0], pkt->options[1], pkt->options[2], pkt->options[3]);
     return -1;
+  }
 
   memset(offer, 0, sizeof(*offer));
   offer->yiaddr = net_ntohl(pkt->yiaddr);
@@ -442,7 +462,11 @@ dhcp_parse_offer(char *buf, int len, uint xid, uchar *mac, struct dhcp_offer *of
 
   if(offer->msg_type == DHCPNAK)
     return -2;
-  if(offer->yiaddr == 0)
+  if(offer->msg_type == 0)
+    return -1;
+  /* Some servers may send ACK with yiaddr unset; lease_from_offer() already
+     falls back to the original offer address in that case. */
+  if(offer->msg_type == DHCPOFFER && offer->yiaddr == 0)
     return -1;
   return 0;
 }
@@ -498,21 +522,33 @@ dhcp_exchange(int fd, struct netifinfo *ifp, struct dhcp_packet *pkt, int pktlen
   int rc;
 
   for(attempt = 0; attempt < DHCP_MAX_TRIES; attempt++) {
+    DHCPDBG("v6dhcpd: exchange attempt=%d expected=%d xid=0x%x dst=0x%x if=%s\n",
+            attempt + 1, expected, xid, dst_ip, ifp->if_name);
     if(dhcp_connect_peer(fd, ifp, dst_ip) < 0)
       return -1;
     if(send(fd, pkt, pktlen) < 0)
       return -1;
 
     n = recvtimeout(fd, buf, sizeof(buf), DHCP_TIMEOUT_TICKS);
-    if(n <= 0)
+    if(n <= 0) {
+      DHCPDBG("v6dhcpd: recv timeout/err n=%d\n", n);
       continue;
+    }
     rc = dhcp_parse_offer(buf, n, xid, mac, &offer);
-    if(rc == -2)
+    if(rc == -2) {
+      DHCPDBG("v6dhcpd: parse got NAK\n");
       return -2;
-    if(rc < 0)
+    }
+    if(rc < 0) {
+      DHCPDBG("v6dhcpd: parse rejected packet n=%d\n", n);
       continue;
-    if(offer.msg_type != expected)
+    }
+    DHCPDBG("v6dhcpd: parsed msg_type=%d yiaddr=0x%x server=0x%x\n",
+            offer.msg_type, offer.yiaddr, offer.server_id);
+    if(offer.msg_type != expected) {
+      DHCPDBG("v6dhcpd: unexpected msg_type=%d expected=%d\n", offer.msg_type, expected);
       continue;
+    }
     memmove(out, &offer, sizeof(*out));
     return 0;
   }
@@ -626,8 +662,11 @@ acquire_lease(struct netifinfo *ifp)
 
   close(fd);
   lease_from_offer(&lease, 0, &offer, &ack);
-  if(apply_lease(ifp, &lease) < 0)
+  if(apply_lease(ifp, &lease) < 0) {
+    DHCPDBG("v6dhcpd: apply_lease failed addr=0x%x mask=0x%x router=0x%x server=0x%x\n",
+            lease.addr, lease.mask, lease.router, lease.server_id);
     return -1;
+  }
   print_lease(ifp, &lease, "leased");
   return 0;
 }

@@ -91,6 +91,7 @@ Control filesystem and driver diagnostic output:
 | `DBG_IDE` | IDE driver diagnostics | `AUXV6_DEBUG` |
 | `DBG_EXEC` | exec/load diagnostics (including stack allocation policy) | `AUXV6_DEBUG` |
 | `DBG_AHCI` | AHCI controller diagnostics | 0 (always off) |
+| `DBG_VIRTIO_NET` | Verbose virtio-net queue/IRQ/poll diagnostics | 0 (always off) |
 
 ### AHCI Runtime Tuning (`/proc/ahci_tune`)
 
@@ -171,6 +172,25 @@ echo test_fail_count=2 > /proc/ahci_tune
 | `virtio: found device type X at B:S.F` | Virtio device discovered |
 | `virtio: created queue N with M entries` | Each virtqueue initialized |
 
+### Runtime: virtio-net Driver Flow
+**Flag:** `DBG_VIRTIO_NET`  
+**File:** `kernel/driver/virtio_net.c`
+
+| Message | When |
+|---------|------|
+| `virtio_net: probe bdf=...` | Per-device probe start |
+| `virtio_net: negotiated features=...` | Feature negotiation results |
+| `virtio_net: irq=... dispatch` | IRQ path entry |
+| `virtio_net: tx enq ...` | Packet queued to TX virtqueue |
+| `virtio_net: tx complete ...` | TX completion reclaim |
+| `virtio_net: refill rx ...` | RX descriptor replenishment |
+| `virtio_net: rx done ...` | RX delivery/drop summary |
+| `virtio_net: rx frame/ip/udp/dhcp ...` | Decoded receive packet metadata (including DHCP op/msg type/xid when present) |
+| `virtio_net[poll|intr|attach]: ...` | Queue state snapshots |
+
+`virtio_net` poll logging is state-change gated: repeated timer polls with
+unchanged queue indices are suppressed to reduce log noise.
+
 ### Boot: System Infrastructure
 **Flag:** `AUXV6_BOOTINFO`  
 **Files:** `kernel/core/{trap.c,main.c}` and `kernel/net/device.c`
@@ -219,6 +239,11 @@ make EXTRA_CFLAGS="-DAUXV6_DEBUG=1" clean aux.kern
 make EXTRA_CFLAGS="-DAUXV6_NET_DEBUG=1" clean aux.kern
 ```
 
+### Enable Only virtio-net Deep Driver Logs
+```bash
+make EXTRA_CFLAGS="-DDBG_VIRTIO_NET=1" clean aux.kern
+```
+
 ### Enable Both Boot and Network Debugging
 ```bash
 make EXTRA_CFLAGS="-DAUXV6_DEBUG=1 -DAUXV6_NET_DEBUG=1" clean aux.kern
@@ -233,6 +258,10 @@ make EXTRA_CFLAGS="-DAUXV6_DEBUG=1 -DDBG_VFS=0" clean aux.kern
 ```bash
 make EXTRA_CFLAGS="-DAUXV6_DEBUG=0 -DDBG_VFS=1 -DDBG_EXT2=1" qemu
 ```
+
+Note: the build now tracks `EXTRA_CFLAGS` via a generated stamp, so changing
+`EXTRA_CFLAGS` triggers recompilation of affected objects automatically without
+requiring `make clean`.
 
 ### In Code (for header edits)
 Edit `include/defs.h` directly:

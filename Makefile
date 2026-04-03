@@ -173,6 +173,7 @@ ROOTFS_TYPE_VALUE ?= 2
 ROOTFS_DEV_VALUE ?= 2
 
 ROOTFS_CONFIG = include/rootfs_config.h
+EXTRA_CFLAGS_STAMP = .extra_cflags.stamp
 
 .PHONY: FORCE
 FORCE:
@@ -183,9 +184,14 @@ $(ROOTFS_CONFIG): FORCE Makefile
 	  "$(ROOTFS_TYPE_VALUE)" "$(ROOTFS_DEV_VALUE)" > "$$tmp"; \
 	if ! cmp -s "$$tmp" "$@" 2>/dev/null; then mv "$$tmp" "$@"; else rm -f "$$tmp"; fi
 
-$(OBJS) kernel/core/entry.o: $(ROOTFS_CONFIG)
+$(EXTRA_CFLAGS_STAMP): FORCE Makefile
+	@tmp="$@.tmp"; \
+	printf '%s\n' "$(EXTRA_CFLAGS)" > "$$tmp"; \
+	if ! cmp -s "$$tmp" "$@" 2>/dev/null; then mv "$$tmp" "$@"; else rm -f "$$tmp"; fi
 
-user/%.o: $(ROOTFS_CONFIG)
+$(OBJS) kernel/core/entry.o: $(ROOTFS_CONFIG) $(EXTRA_CFLAGS_STAMP)
+
+user/%.o: $(ROOTFS_CONFIG) $(EXTRA_CFLAGS_STAMP)
 
 aux.bootkern: bootblock aux.kern
 	dd if=/dev/zero of=aux.bootkern count=10000
@@ -661,6 +667,7 @@ clean:
 	*.o *.d *.asm *.sym kernel/core/vectors.S bootblock entryother \
 	aux.kern aux.bootkern fs.img kernelmemfs \
 	xv6memfs.img mkfs .gdbinit $(ROOTFS_CONFIG) \
+	$(EXTRA_CFLAGS_STAMP) \
 	test_ext2.img \
 	test_ext2_oldinit.img \
 	test_ext2_server7.img \

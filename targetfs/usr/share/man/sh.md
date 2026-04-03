@@ -35,6 +35,7 @@ environment variables.
 - **Variable expansion**: `$VAR`, `$PATH`
 - **Profile**: Reads `/etc/profile` on startup if it exists
 - **History**: Up/Down arrow recall of recent commands
+- **Quick recall**: Typing `!!` on an empty prompt replaces the line with the previous command for editing or re-run
 - **Persistent history**: Stores recent commands in `$HOME/.6sh_history`
 
 ## Notes
@@ -42,6 +43,8 @@ environment variables.
 - Job control uses process groups (SIGSTOP/SIGCONT).
 - History stores up to 64 most-recent non-empty commands and avoids
 	consecutive duplicates.
+- `!!` only rewrites the current input line; it does not execute the command
+	automatically.
 
 ## Examples
 ```
@@ -54,4 +57,4 @@ fg %1
 
 ## Source Audit
 - Source file: user/sh.c
-- Last updated: 2026-04-02
+- Last updated: 2026-04-03

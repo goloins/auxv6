@@ -7,6 +7,19 @@ network audit pass.
 
 ## Bugs Fixed
 
+### virtio-net: No poll fallback when IRQ delivery is delayed or missed
+
+**File:** `kernel/driver/virtio_net.c`
+
+`virtio-net` only exposed `if_output` in its `ifnet_ops`. If the host/QEMU
+environment delivered virtio interrupts unreliably, completions could stall even
+though the interface attached successfully.
+
+**Fix:** Added `virtio_net_poll(struct ifnet *ifp)` and wired it into
+`ifnet_ops.if_poll`. The poll path runs the same TX/RX completion handlers used
+by the interrupt path, so timer-driven `netdev_poll()` can drain queues when
+interrupt delivery is delayed.
+
 ### ARP: `ticks` data race in `arp_resolve()` and `arp_input()`
 
 **File:** `kernel/net/arp.c`
@@ -163,6 +176,34 @@ Unreachable to be sent back.
   8-byte ICMP header + original IP header + first 8 bytes of original transport).
 - `udp_input()` now calls `icmp_send_unreach(ifp, ip, payload, len, ICMP_UNREACH_PORT)`
   when `socket_deliver()` returns -1 (no matching socket).
+
+---
+
+### UDP: Datagram delivery invoked twice in `udp_input()`
+
+**File:** `kernel/net/udp.c`
+
+`udp_input()` called `socket_deliver()` twice for each incoming datagram: once
+unconditionally, then again inside the ICMP-unreachable check. This could cause
+duplicate/truncated reads in userland and distort protocol parsers that expect a
+single datagram per `recv`.
+
+**Fix:** Call `socket_deliver()` exactly once and trigger ICMP Port Unreachable
+only when that single delivery attempt fails.
+
+---
+
+### DHCP client: ACK packets rejected when `yiaddr` is zero
+
+**File:** `user/v6dhcpd.c`
+
+`dhcp_parse_offer()` previously rejected any DHCP message with `yiaddr == 0`.
+Some DHCP servers send valid ACK responses with `yiaddr` unset. The client
+already had fallback logic in `lease_from_offer()` for this case, but parser
+validation dropped those ACKs before they could be applied.
+
+**Fix:** Require non-zero `yiaddr` only for `DHCPOFFER`. Accept `DHCPACK`
+with zero `yiaddr` and rely on existing fallback to the offer address.
 
 ---
 
