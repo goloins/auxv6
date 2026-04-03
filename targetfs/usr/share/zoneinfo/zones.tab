@@ -1,0 +1,143 @@
+# /usr/share/zoneinfo/zones.tab - auxv6 timezone offset table
+#
+# Format: name<TAB>utc_offset_seconds<TAB>abbreviation
+#
+# utc_offset_seconds: seconds east of UTC (positive = east, negative = west)
+# DST is not applied; these are standard (non-DST) offsets.
+#
+# UTC / GMT
+UTC	0	UTC
+GMT	0	GMT
+#
+# Americas (west = negative offset)
+America/New_York	-18000	EST
+America/Chicago	-21600	CST
+America/Denver	-25200	MST
+America/Los_Angeles	-28800	PST
+America/Anchorage	-32400	AKST
+America/Honolulu	-36000	HST
+America/Phoenix	-25200	MST
+America/Toronto	-18000	EST
+America/Vancouver	-28800	PST
+America/Mexico_City	-21600	CST
+America/Sao_Paulo	-10800	BRT
+America/Argentina/Buenos_Aires	-10800	ART
+America/Lima	-18000	PET
+America/Bogota	-18000	COT
+America/Caracas	-14400	VET
+America/Halifax	-14400	AST
+America/Puerto_Rico	-14400	AST
+US/Eastern	-18000	EST
+US/Central	-21600	CST
+US/Mountain	-25200	MST
+US/Pacific	-28800	PST
+US/Alaska	-32400	AKST
+US/Hawaii	-36000	HST
+#
+# Europe
+Europe/London	0	GMT
+Europe/Dublin	0	GMT
+Europe/Lisbon	0	WET
+Europe/Paris	3600	CET
+Europe/Berlin	3600	CET
+Europe/Rome	3600	CET
+Europe/Madrid	3600	CET
+Europe/Amsterdam	3600	CET
+Europe/Brussels	3600	CET
+Europe/Stockholm	3600	CET
+Europe/Zurich	3600	CET
+Europe/Vienna	3600	CET
+Europe/Warsaw	3600	CET
+Europe/Prague	3600	CET
+Europe/Budapest	3600	CET
+Europe/Copenhagen	3600	CET
+Europe/Oslo	3600	CET
+Europe/Helsinki	7200	EET
+Europe/Athens	7200	EET
+Europe/Bucharest	7200	EET
+Europe/Sofia	7200	EET
+Europe/Riga	7200	EET
+Europe/Vilnius	7200	EET
+Europe/Tallinn	7200	EET
+Europe/Kiev	7200	EET
+Europe/Minsk	10800	FET
+Europe/Moscow	10800	MSK
+Europe/Istanbul	10800	TRT
+#
+# Africa
+Africa/Casablanca	0	WET
+Africa/Abidjan	0	GMT
+Africa/Lagos	3600	WAT
+Africa/Cairo	7200	EET
+Africa/Johannesburg	7200	SAST
+Africa/Nairobi	10800	EAT
+Africa/Addis_Ababa	10800	EAT
+Africa/Khartoum	10800	EAT
+#
+# Middle East / Asia West
+Asia/Jerusalem	7200	IST
+Asia/Beirut	7200	EET
+Asia/Riyadh	10800	AST
+Asia/Kuwait	10800	AST
+Asia/Baghdad	10800	AST
+Asia/Tehran	12600	IRST
+Asia/Dubai	14400	GST
+Asia/Baku	14400	AZT
+Asia/Tbilisi	14400	GET
+Asia/Yerevan	14400	AMT
+Asia/Kabul	16200	AFT
+#
+# Asia Central / South
+Asia/Karachi	18000	PKT
+Asia/Tashkent	18000	UZT
+Asia/Yekaterinburg	18000	YEKT
+Asia/Kolkata	19800	IST
+Asia/Calcutta	19800	IST
+Asia/Kathmandu	20700	NPT
+Asia/Dhaka	21600	BST
+Asia/Almaty	21600	ALMT
+Asia/Omsk	21600	OMST
+Asia/Rangoon	23400	MMT
+#
+# Asia East / Southeast
+Asia/Bangkok	25200	ICT
+Asia/Jakarta	25200	WIB
+Asia/Ho_Chi_Minh	25200	ICT
+Asia/Krasnoyarsk	25200	KRAT
+Asia/Singapore	28800	SGT
+Asia/Kuala_Lumpur	28800	MYT
+Asia/Shanghai	28800	CST
+Asia/Hong_Kong	28800	HKT
+Asia/Taipei	28800	CST
+Asia/Manila	28800	PHT
+Asia/Perth	28800	AWST
+Asia/Irkutsk	28800	IRKT
+Asia/Tokyo	32400	JST
+Asia/Seoul	32400	KST
+Asia/Pyongyang	32400	KST
+Asia/Yakutsk	32400	YAKT
+#
+# Australia
+Australia/Perth	28800	AWST
+Australia/Darwin	34200	ACST
+Australia/Adelaide	34200	ACST
+Australia/Brisbane	36000	AEST
+Australia/Sydney	36000	AEST
+Australia/Melbourne	36000	AEST
+Australia/Hobart	36000	AEST
+Australia/Vladivostok	36000	VLAT
+#
+# Pacific
+Pacific/Guam	36000	ChST
+Pacific/Port_Moresby	36000	PGT
+Pacific/Noumea	39600	NCT
+Pacific/Auckland	43200	NZST
+Pacific/Fiji	43200	FJT
+Pacific/Chatham	45900	CHAST
+Pacific/Apia	46800	WST
+Pacific/Honolulu	-36000	HST
+Pacific/Tahiti	-36000	TAHT
+Pacific/Marquesas	-34200	MART
+Pacific/Gambier	-32400	GAMT
+Pacific/Pitcairn	-28800	PST
+Pacific/Easter	-21600	EAST
