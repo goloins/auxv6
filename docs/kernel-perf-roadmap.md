@@ -5,6 +5,30 @@
 **Priority:** High — chosen as the best benefit-to-risk deferred option from the
 [kernel-perf-hardening](kernel-perf-hardening.md) audit.
 
+## Current Status (2026-04-03)
+
+Per-CPU `kalloc` freelist caching has now been implemented in the kernel as the
+first stage of this roadmap:
+
+- Added `KALLOC_CPU_CACHE` to `include/param.h`.
+- Extended `struct cpu` with per-CPU allocator cache fields in `include/proc.h`.
+- Reworked `kalloc()` / `kfree()` fast paths in `kernel/core/kalloc.c` to use
+  CPU-local page stashes and batch refill/flush via the global freelist lock.
+- Preserved global freelist pop order during per-CPU batch refill so
+  contiguous DMA users (framebuffer allocation path) continue to work.
+- Removed shared `kmem.free_pages` counter updates from SMP fast paths to
+  avoid turning the counter cacheline into a new cross-CPU contention point.
+- Tightened `kalloc()` / `kfree()` interrupt/locking discipline so CPU-local
+  cache fast/slow path decisions cannot span a migration window.
+- Updated `kalloc_meminfo()` to count global freelist pages plus per-CPU cached
+  pages.
+
+Build validation:
+
+- `make aux.kern` passes cleanly.
+
+Runtime re-baselining (`schedperf`, `fsperf`, `usertests`) is the next step.
+
 ---
 
 ## 1  Motivation

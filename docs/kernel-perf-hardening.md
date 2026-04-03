@@ -303,7 +303,7 @@ benefit/risk analysis.
 
 | Bottleneck | Location | Complexity | Notes |
 |------------|----------|------------|-------|
-| Per-CPU `kalloc` freelists | `kalloc.c` | Medium | **Next priority** — see roadmap |
+| Per-CPU `kalloc` freelists | `kalloc.c` | Medium | **In progress** — implementation started; see roadmap |
 | Per-channel `wakeup` wait queues | `proc.c` | High | Replace O(NPROC) scan per wakeup |
 | MLFQ / priority scheduling | `proc.c` | High | Interactive vs batch fairness |
 | Per-CPU run queues | `proc.c`, `proc.h` | Very High | Full SMP scheduler restructuring |
@@ -351,6 +351,7 @@ This prevents score drift where binaries, docs, and expected outcomes diverge.
 
 - `schedperf`: `83/100`, `8 passed`, `0 failed`
 - `fsperf`: `86/100`, `7 passed`, `0 failed`
+- `kallocstress`: `88/100` (normalized from `71/80` run), `3 passed`, `0 failed`
 
 Known weak-but-passing areas to track for future tightening:
 - `parallel-writers` throughput
@@ -377,6 +378,7 @@ Two dedicated stress programs exercise the changed subsystems:
 |--------|--------|-------|
 | `_schedperf` | `user/schedperf.c` | Scheduler (fork storm, yield, pipe wakeup, alarm, signal, per-CPU spread) |
 | `_fsperf` | `user/fsperf.c` | Buffer cache + inode cache (fd table, concurrent opens, bcache churn, inode churn, parallel writers) |
+| `_kallocstress` | `user/kallocstress.c` | Allocator correctness/perf (fork+copyuvm pressure, pipe page churn, reclaim sanity) |
 
 Run on a booted system:
 ```

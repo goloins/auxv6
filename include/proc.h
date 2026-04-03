@@ -1,6 +1,8 @@
 // Shared signal constants/types used by kernel and user ABI.
 #include "signal.h"
 
+struct run;
+
 // Per-CPU state
 struct cpu {
   uchar apicid;                // Local APIC ID
@@ -12,6 +14,8 @@ struct cpu {
   int intena;                  // Were interrupts enabled before pushcli?
   struct proc *proc;           // The process running on this cpu or null
   int sched_last;              // Index hint: start next scheduler scan here
+  struct run *kfree_cache[KALLOC_CPU_CACHE]; // Per-CPU free-page stash
+  int kfree_cache_count;       // Number of pages in kfree_cache
 };
 
 extern struct cpu cpus[NCPU];

@@ -7,6 +7,7 @@
 #include "param.h"
 #include "memlayout.h"
 #include "mmu.h"
+#include "proc.h"
 #include "spinlock.h"
 
 void freerange(void *vstart, void *vend);
@@ -64,6 +65,9 @@ void
 kfree(char *v)
 {
   struct run *r;
+  struct cpu *c;
+  int flush;
+  int i;
 
   if((uint)v % PGSIZE || v < end || V2P(v) >= PHYSTOP)
     panic("kfree");
@@ -75,14 +79,36 @@ kfree(char *v)
   memset(v, 1, PGSIZE);
 #endif
 
-  if(kmem.use_lock)
-    acquire(&kmem.lock);
   r = (struct run*)v;
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  kmem.free_pages++;
-  if(kmem.use_lock)
-    release(&kmem.lock);
+
+  // Early boot: single CPU, no locking, no per-CPU caches.
+  if(!kmem.use_lock){
+    r->next = kmem.freelist;
+    kmem.freelist = r;
+    kmem.free_pages++;
+    return;
+  }
+
+  // Keep interrupts disabled from CPU selection through fast/slow path
+  // choice so we cannot migrate and touch two CPU caches in one kfree().
+  pushcli();
+  c = mycpu();
+  if(c->kfree_cache_count < KALLOC_CPU_CACHE){
+    c->kfree_cache[c->kfree_cache_count++] = r;
+    popcli();
+    return;
+  }
+
+  acquire(&kmem.lock);
+  flush = KALLOC_CPU_CACHE / 2;
+  for(i = 0; i < flush && c->kfree_cache_count > 0; i++){
+    struct run *p = c->kfree_cache[--c->kfree_cache_count];
+    p->next = kmem.freelist;
+    kmem.freelist = p;
+  }
+  c->kfree_cache[c->kfree_cache_count++] = r;
+  release(&kmem.lock);
+  popcli();
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -92,30 +118,75 @@ char*
 kalloc(void)
 {
   struct run *r;
+  struct run *batch[KALLOC_CPU_CACHE];
+  struct cpu *c;
+  int n;
+  int i;
 
-  if(kmem.use_lock)
-    acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r){
-    kmem.freelist = r->next;
-    if(kmem.free_pages > 0)
-      kmem.free_pages--;
+  // Early boot: single CPU, no locking, no per-CPU caches.
+  if(!kmem.use_lock){
+    r = kmem.freelist;
+    if(r){
+      kmem.freelist = r->next;
+      if(kmem.free_pages > 0)
+        kmem.free_pages--;
+    }
+    return (char*)r;
   }
-  if(kmem.use_lock)
-    release(&kmem.lock);
+
+  // Keep interrupts disabled from cache check through slow-path lock
+  // acquisition so we cannot migrate between CPUs mid-allocation.
+  pushcli();
+  c = mycpu();
+  if(c->kfree_cache_count > 0){
+    r = c->kfree_cache[--c->kfree_cache_count];
+    popcli();
+    return (char*)r;
+  }
+
+  acquire(&kmem.lock);
+  n = 0;
+  while(kmem.freelist && n < KALLOC_CPU_CACHE){
+    r = kmem.freelist;
+    kmem.freelist = r->next;
+    batch[n++] = r;
+  }
+
+  // Preserve global freelist pop order despite local LIFO cache.
+  for(i = n - 1; i >= 0; i--)
+    c->kfree_cache[c->kfree_cache_count++] = batch[i];
+
+  if(c->kfree_cache_count > 0)
+    r = c->kfree_cache[--c->kfree_cache_count];
+  else
+    r = 0;
+  release(&kmem.lock);
+  popcli();
+
   return (char*)r;
 }
 
 void
 kalloc_meminfo(uint *total_pages, uint *free_pages)
 {
+  uint n;
+  struct run *r;
+  int i;
+
   if(kmem.use_lock)
     acquire(&kmem.lock);
 
   if(total_pages)
     *total_pages = kmem.total_pages;
-  if(free_pages)
-    *free_pages = kmem.free_pages;
+  if(free_pages){
+    n = 0;
+    for(r = kmem.freelist; r; r = r->next)
+      n++;
+    // Approximate: per-CPU counts may change concurrently.
+    for(i = 0; i < ncpu; i++)
+      n += cpus[i].kfree_cache_count;
+    *free_pages = n;
+  }
 
   if(kmem.use_lock)
     release(&kmem.lock);

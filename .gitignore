@@ -94,6 +94,7 @@ user/stressfs
 user/usertests
 user/schedperf
 user/fsperf
+user/kallocstress
 user/wc
 user/zombie
 user/symlinktest
