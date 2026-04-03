@@ -121,20 +121,26 @@ read_free_mem(char *buf, int bufsz)
 static void
 read_root_free_disk(char *buf, int bufsz)
 {
-  static char text[512];
+  static char text[1024];
   char *p, *line;
   static char tok[6][32];
   int t;
+
+  if(bufsz > 0)
+    buf[0] = 0;
+
   if(motd_read_file("/proc/mountstats", text, sizeof(text)) < 0){ strcpy(buf, "n/a"); return; }
   p = text;
   while(*p){
     line = p;
     while(*p && *p != '\n') p++;
     if(*p == '\n') *p++ = 0;
-    if(line[0] == 0 || line[0] == 'd') continue;
+    if(line[0] == 0) continue;
     { char *nl = line;
       for(t = 0; t < 6; t++) if(!motd_next_tok(&nl, tok[t], 32)) break;
       if(t < 6) continue;
+      if(strcmp(tok[0], "dev") == 0 && strcmp(tok[1], "path") == 0)
+        continue;
     }
     if(strcmp(tok[1], "/") != 0) continue;
     {
@@ -146,6 +152,20 @@ read_root_free_disk(char *buf, int bufsz)
     }
   }
   strcpy(buf, "n/a");
+}
+
+static int
+motd_safe_len(const char *s, int max)
+{
+  int n;
+
+  if(!s || max <= 0)
+    return 0;
+
+  n = 0;
+  while(n < max && s[n] && s[n] != '\n' && s[n] != '\r')
+    n++;
+  return n;
 }
 
 static void
@@ -160,6 +180,7 @@ print_motd(void)
   const char *tok_m  = "@FREE_MEM@";
   const char *tok_d  = "@FREE_DISK@";
   int lh, lm, ld;
+  int hlen, mlen, dlen;
 
   if(motd_read_file("/etc/motd", motd, sizeof(motd)) < 0)
     return;
@@ -171,11 +192,14 @@ print_motd(void)
   lh = strlen(tok_h);
   lm = strlen(tok_m);
   ld = strlen(tok_d);
+  hlen = motd_safe_len(hostname, sizeof(hostname) - 1);
+  mlen = motd_safe_len(free_mem, sizeof(free_mem) - 1);
+  dlen = motd_safe_len(free_disk, sizeof(free_disk) - 1);
 
   for(p = motd; *p; ){
-    if(strncmp(p, tok_h, lh) == 0){ write(1, hostname,  strlen(hostname));  p += lh; }
-    else if(strncmp(p, tok_m, lm) == 0){ write(1, free_mem,  strlen(free_mem));  p += lm; }
-    else if(strncmp(p, tok_d, ld) == 0){ write(1, free_disk, strlen(free_disk)); p += ld; }
+    if(strncmp(p, tok_h, lh) == 0){ write(1, hostname,  hlen); p += lh; }
+    else if(strncmp(p, tok_m, lm) == 0){ write(1, free_mem,  mlen); p += lm; }
+    else if(strncmp(p, tok_d, ld) == 0){ write(1, free_disk, dlen); p += ld; }
     else { write(1, p, 1); p++; }
   }
 }

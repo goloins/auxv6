@@ -349,13 +349,20 @@ This prevents score drift where binaries, docs, and expected outcomes diverge.
 
 ### Current Baseline Snapshot (2026-04-03)
 
-- `schedperf`: `83/100`, `8 passed`, `0 failed`
-- `fsperf`: `86/100`, `7 passed`, `0 failed`
-- `kallocstress`: `88/100` (normalized from `71/80` run), `3 passed`, `0 failed`
+- `schedperf`: `84/100`, `8 passed`, `0 failed`
+- `fsperf`: `80/100`, `8 passed`, `0 failed`
+- `kallocstress`: `85/100`, `3 passed`, `0 failed`
 
 Known weak-but-passing areas to track for future tightening:
 - `parallel-writers` throughput
 - `inode-limit-rate` throughput
+
+Stability note from this iteration:
+- `procfs_readi` was hardened to avoid kernel-stack pressure from large local
+   metadata arrays in `/proc` read paths.
+- A follow-up regression in `/proc/mountstats` generation (incorrect buffer-size
+   accounting after refactor) was fixed; `cat /proc/mountstats` now reads
+   correctly and login MOTD token expansion reports valid free-mem/free-disk data.
 
 ---
 
@@ -384,5 +391,6 @@ Run on a booted system:
 ```
 $ schedperf
 $ fsperf
+$ kallocstress
 ```
 Both print `[PASS]` / `[FAIL]` per sub-test and a final summary.

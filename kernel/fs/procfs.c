@@ -52,6 +52,11 @@ static struct procfs_inode procfs_inodes[] = {
   { 0, 0, 0 }
 };
 
+// Large scratch buffers for procfs_readi. Keeping large metadata arrays off
+// the kernel stack avoids stack overflow in read-heavy paths.
+static struct procinfo_k procfs_read_pinfo[NPROC];
+static struct vfs_mount_info procfs_read_mounts[VFS_MOUNTS_MAX];
+
 static int procfs_writei(struct inode *ip, char *src, uint off, uint n);
 static uint procfs_write_uint(char *buf, uint value);
 
@@ -390,8 +395,8 @@ int
 procfs_readi(struct inode *ip, char *dst, uint off, uint n)
 {
   char buf[2048];
-  struct procinfo_k pinfo[NPROC];
-  struct vfs_mount_info mins[VFS_MOUNTS_MAX];
+  struct procinfo_k *pinfo;
+  struct vfs_mount_info *mins;
   uint total_pages;
   uint free_pages;
   uint total_blocks;
@@ -402,6 +407,9 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
   int i;
   uint len;
   uint now;
+
+  pinfo = procfs_read_pinfo;
+  mins = procfs_read_mounts;
 
   if(ip == 0 || dst == 0)
     return -1;

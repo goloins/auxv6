@@ -27,7 +27,20 @@ Build validation:
 
 - `make aux.kern` passes cleanly.
 
-Runtime re-baselining (`schedperf`, `fsperf`, `usertests`) is the next step.
+Runtime baseline after current fixes:
+
+- `kallocstress`: `85/100`, `3 passed`, `0 failed`
+- `schedperf`: `84/100`, `8 passed`, `0 failed`
+- `fsperf`: `80/100`, `8 passed`, `0 failed`
+
+Post-implementation hardening already applied:
+
+- Fixed a DMA-sensitive contiguous-allocation regression by preserving global
+  freelist pop order during per-CPU cache refill.
+- Fixed allocator fast/slow path migration windows by tightening interrupt and
+  lock discipline around CPU-local cache decisions.
+- Fixed `/proc` read-path robustness issues discovered during login/MOTD
+  validation (kernel-stack pressure and mountstats buffer-size regression).
 
 ---
 
