@@ -19,20 +19,21 @@ The key architectural rule is: **treat this as a terminal architecture migration
 - The framebuffer mirror is now enabled only after `kinit2()`, because pre-`kinit2()` memory was too small for reliable full-screen framebuffer allocation during lazy console mirror startup.
 - Echoed input and normal tty output now share the same OPOST-aware tty emission path, so newline handling stays consistent after separating kernel `cprintf()` from tty state updates.
 - Canonical erase echo and signal echo now also stay on the tty-aware path, which fixes framebuffer-visible backspace and control-character display drift.
+- Normal tty ANSI mutation now updates the per-tty logical screen and cursor directly instead of routing through the shared offscreen CGA surface shim. VGA hardware remains the fallback or debug projection of tty state rather than the normal interactive write path.
 - `console.c` can create a framebuffer sized from the primary display mode when discovered, choose a readable boot tty size from that geometry, mirror the active tty into a VT surface, and flush it through virtio-gpu.
 - Once the framebuffer path is live, normal active-tty refresh now prefers the framebuffer path rather than continuing to treat VGA text refresh as part of every interactive flush.
-- The framebuffer mirror now scales terminal cells for readability in higher-resolution modes, which turns a native `1280x800` scanout into a readable default console such as `80x25` at roughly `16x30` cells with the current Montecarlo default.
+- The framebuffer mirror now scales terminal cells for readability in higher-resolution modes, and boot-time winsize now follows the discovered mode closely enough that the current QEMU `1200x800` virtio-gpu scanout is largely filled by the initial console grid instead of showing a smaller centered region.
 - The terminal stack now has two builtin 8x16 bitmap fonts: the original classic asset and a new original Monaco-inspired variant named `Montecarlo`.
 - `Montecarlo` is now the default terminal and framebuffer-console font; the original `builtin-8x16` asset remains available as a classic fallback.
 - Larger on-screen text still comes from cell scaling rather than from multiple point sizes, and Chicago-style UI typography remains deferred until much later display-server work.
 - `/proc/gfxstats` now provides visibility into counters plus mode, framebuffer, tty, VT, and viewport state for the current mirror path.
 - A critical mirror regression has been fixed: the framebuffer is no longer cleared on every sync, only on initial allocation or VT resize. That restored stable text and significantly reduced redraw overhead.
-- The important limitation is still architectural: the normal console source of truth remains the legacy text-mode or shadow-screen state, and the framebuffer remains a mirror of that state.
+- The important limitation is still architectural: normal tty mutation is now owned by the per-tty logical screen and cursor rather than the old shared CGA shim, but the framebuffer still remains a mirror of tty state instead of the primary presentation model.
 
 ## Current Manually Validated Milestone
 
 - Manual QEMU bring-up now shows a readable, stable virtio-gpu framebuffer console through boot, login, and interactive shell use.
-- Display discovery, modern virtio-pci transport, multi-page DMA backing, delayed post-`kinit2()` mirror activation, display-derived geometry, readable cell scaling, and the per-sync clear regression fix now work together as one coherent path.
+- Display discovery, modern virtio-pci transport, multi-page DMA backing, delayed post-`kinit2()` mirror activation, display-derived geometry, readable cell scaling, the tty-local logical-surface refactor, and the per-sync clear regression fix now work together as one coherent path.
 - Canonical erase display and control-character echo now stay aligned with the framebuffer-visible console state, and active interactive refresh is now framebuffer-first once the graphics path is live.
 - The framebuffer console is visibly faster after the sync-clear fix because stable pixels are preserved between dirty updates instead of being erased every frame.
 
@@ -48,7 +49,7 @@ The key architectural rule is: **treat this as a terminal architecture migration
 
 ### 1. Presentation Ownership
 
-The normal console path still flows through the legacy text renderer and then mirrors into the framebuffer. The framebuffer is visible, but not authoritative.
+The normal console path no longer depends on the shared offscreen CGA shim for tty ANSI mutation, but the framebuffer is still rendered by mirroring tty logical state. The framebuffer is visible, but not yet authoritative.
 
 ### 2. Real Display Geometry
 

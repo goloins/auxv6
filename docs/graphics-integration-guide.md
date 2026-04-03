@@ -11,7 +11,7 @@ This document tracks the current state of auxv6 graphics support as it exists in
 **Build and boot integration:**
 - `Makefile` already links `kernel/graphics/framebuffer.o`, `kernel/graphics/display.o`, `kernel/graphics/font.o`, `kernel/graphics/render.o`, and `kernel/driver/virtio_gpu.o` into `aux.kern`.
 - `kernel/core/main.c` already initializes `display_init()`, `pci_init()`, and `virtio_gpu_init()` before `consoleinit()`.
-- `Makefile` now defaults QEMU graphics to `-vga none -device virtio-gpu-pci,disable-modern=on`, which suppresses the default QEMU VGA window and makes the visible graphics device the same virtio-backed framebuffer path auxv6 uses.
+- `Makefile` now defaults QEMU graphics to `-vga none -device virtio-gpu-pci,disable-modern=on,xres=1200,yres=800`, which suppresses the default QEMU VGA window, requests a modestly larger default virtio-gpu scanout from the host, and keeps the visible graphics device aligned with the same virtio-backed framebuffer path auxv6 uses.
 - Recent QEMU still exposes that gpu transport through PCI capabilities rather than a pure legacy BAR0 I/O path, so auxv6 relies on the modern virtio-pci capability support added in `kernel/driver/virtio.c`.
 - `kernel/driver/virtio.c` now has an initial modern virtio-pci capability path so auxv6 can probe that gpu transport instead of failing immediately on the missing legacy BAR0 path.
 
@@ -47,13 +47,14 @@ This document tracks the current state of auxv6 graphics support as it exists in
 **Console integration:**
 - `kernel/driver/console.c` now allocates its framebuffer from the discovered display mode when one is present, with `640x400` kept as a fallback.
 - The active tty is mirrored into a VT surface sized from the current tty winsize, centered within the framebuffer, and flushed through the generic display ops.
-- Boot winsize now derives from the discovered display mode plus scaled framebuffer cell metrics, which gives a readable default console on high-resolution modes such as `1280x800 -> 80x25` at roughly `16x30` cells with the current Montecarlo default.
+- Boot winsize now derives directly from the discovered display mode plus scaled framebuffer cell metrics, with only the historical one-row reserve left in place. On the current QEMU `1200x800` default this lets the boot console fill the framebuffer much more closely instead of being capped to the older `100x30` baseline.
 - VGA hardware remains the physical `80x25` surface, but it now tracks a viewport over the larger logical tty when the tty grid exceeds hardware text-mode dimensions.
 - Console initialization now clears inherited BIOS VGA text and replays only buffered kernel output, which keeps early virtio-gpu bring-up noise from being mistaken for the initial tty state.
 - Kernel debug output stays on the VGA or UART path; the framebuffer mirror is driven from the tty output path instead of from `cprintf()` itself. That avoids recursive display-driver activity during early boot logging.
 - Framebuffer mirror activation is now deferred until after `kinit2()` so the first mirror allocation runs with the full post-bootstrap page pool instead of the tiny pre-`kinit2()` memory window.
 - Echoed input now uses the same tty output path as normal writes, which keeps carriage-return and newline handling aligned between login prompts, shell command entry, and command output.
 - Canonical erase echo and signal echo now also stay on the tty-aware path, which keeps backspace, `^C`, and `^Z` visible state aligned with the framebuffer mirror instead of only updating the legacy VGA side.
+- Normal tty ANSI mutation now updates the per-tty logical screen and cursor directly instead of routing through the shared offscreen CGA surface shim. VGA hardware remains the fallback or debug projection of tty state rather than the hot path for normal interactive output.
 - Once the framebuffer path is live, the active tty flush now treats the framebuffer as the primary refresh target. VGA text updates remain the pre-graphics and fallback path rather than part of every normal interactive flush.
 - `/proc/gfxstats` now exposes framebuffer mirror counters plus mode, framebuffer, tty, VT, cursor, and viewport geometry.
 - A major mirror regression in `console_gfx_ensure_locked()` has been fixed: the framebuffer is no longer cleared on every sync, only on initial allocation or VT resize. That restored stable text and removed the worst redraw slowdown during boot and shell use.
@@ -63,7 +64,7 @@ This document tracks the current state of auxv6 graphics support as it exists in
 - auxv6 does have a live virtio-gpu-backed framebuffer path.
 - Manual QEMU validation now shows a stable, readable virtio-gpu-backed framebuffer console through boot, login, and interactive shell use.
 - auxv6 does not yet have a true framebuffer-native console.
-- The authoritative console state is still the existing text-mode or per-tty shadow screen state in `console.c`; the framebuffer is a derived mirror of that state.
+- Normal tty mutation is now authoritative at the per-tty logical screen and cursor level in `console.c` rather than in the old shared CGA offscreen shim, but the framebuffer is still a derived mirror of tty state rather than the source of truth.
 - Performance is materially better after removing the per-sync full-screen clear, but the virtio-gpu present path still uses whole-frame uploads for correctness.
 - The graphics path is currently kernel-owned and terminal-first. There is no working `/dev/fb0`, `/dev/dri/card0`, or `libu6gfx` implementation yet.
 
@@ -71,7 +72,7 @@ This document tracks the current state of auxv6 graphics support as it exists in
 
 ### 1. Presentation Ownership
 
-The normal console path still writes through the legacy CGA-style text path and then mirrors into the framebuffer. That means the framebuffer is not the source of truth, which blocks any claim that the system has a true framebuffer console.
+The normal console path no longer routes tty ANSI mutation through the shared CGA-style offscreen surface, but the framebuffer is still populated by syncing from tty logical state rather than by owning presentation directly. That means the framebuffer is still not the source of truth, which blocks any claim that the system has a true framebuffer console.
 
 ### 2. Real Display Geometry
 
@@ -121,7 +122,7 @@ The legacy text path still implicitly acts as the practical fallback. A true fra
 Primary target: move normal console presentation authority out of CGA memory and into the logical VT or cell buffer.
 
 Work items:
-- Change `console.c` so tty-visible state is committed to the VT or logical cell model first.
+- Finish changing `console.c` so tty-visible state is committed to the VT or logical cell model first. The per-tty logical screen and cursor now own normal ANSI mutation, but the framebuffer VT still rebuilds from that logical state rather than acting as the primary presentation model.
 - Render from that model into the framebuffer on the normal path.
 - Keep a minimal text-mode panic or emergency path isolated from the normal console flow.
 - Preserve existing termios, signal, and tty semantics while changing only the presentation backend.

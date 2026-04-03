@@ -41,8 +41,6 @@ static int panicked = 0;
 #define CONSOLE_DEFAULT_COLS 80
 #define CONSOLE_DEFAULT_ROWS 24
 #define CONSOLE_DEFAULT_SCROLL_BOT (CONSOLE_DEFAULT_ROWS - 1)
-#define CONSOLE_BOOT_MAX_COLS 100
-#define CONSOLE_BOOT_MAX_ROWS 30
 #define CONSOLE_MAX_COLS VT_SURFACE_MAX_WIDTH
 #define CONSOLE_MAX_ROWS VT_SURFACE_MAX_HEIGHT
 #define CONSOLE_MAX_CELLS (CONSOLE_MAX_COLS * CONSOLE_MAX_ROWS)
@@ -437,12 +435,6 @@ console_pick_initial_winsize(ushort *rows_out, ushort *cols_out)
                                       &cell_w, &cell_h);
     cols = console_clamp_cols((int)(width / (uint)cell_w));
     rows = console_clamp_rows(((int)(height / (uint)cell_h)) - 1);
-
-    /* Keep the boot console readable; larger grids remain available via winsize. */
-    if(cols > CONSOLE_BOOT_MAX_COLS)
-      cols = CONSOLE_BOOT_MAX_COLS;
-    if(rows > CONSOLE_BOOT_MAX_ROWS)
-      rows = CONSOLE_BOOT_MAX_ROWS;
   }
 
   if(rows_out)
@@ -1064,6 +1056,73 @@ console_gfx_draw_logo_char(struct framebuffer *fb, int x, int y, int scale,
   }
 }
 
+static int
+console_gfx_logo_overlaps_text_locked(int x, int y, int width, int height,
+                                      int cell_w, int cell_h)
+{
+  int text_left;
+  int text_top;
+  int text_right;
+  int text_bottom;
+  int col0;
+  int col1;
+  int row0;
+  int row1;
+  int row;
+  int col;
+  int busy;
+
+  if(!console_gfx_vts || !console_gfx_vts->cells)
+    return 0;
+  if(cell_w <= 0 || cell_h <= 0)
+    return 0;
+
+  text_left = console_gfx_vts->fb_x;
+  text_top = console_gfx_vts->fb_y;
+  text_right = text_left + (int)console_gfx_vts->width * cell_w;
+  text_bottom = text_top + (int)console_gfx_vts->height * cell_h;
+
+  if(x >= text_right || x + width <= text_left ||
+     y >= text_bottom || y + height <= text_top)
+    return 0;
+
+  col0 = (x - text_left) / cell_w;
+  row0 = (y - text_top) / cell_h;
+  col1 = (x + width - 1 - text_left) / cell_w;
+  row1 = (y + height - 1 - text_top) / cell_h;
+
+  if(col0 < 0)
+    col0 = 0;
+  if(row0 < 0)
+    row0 = 0;
+  if(col1 >= (int)console_gfx_vts->width)
+    col1 = (int)console_gfx_vts->width - 1;
+  if(row1 >= (int)console_gfx_vts->height)
+    row1 = (int)console_gfx_vts->height - 1;
+
+  busy = 0;
+  acquire(&console_gfx_vts->lock);
+  for(row = row0; row <= row1 && !busy; row++) {
+    for(col = col0; col <= col1; col++) {
+      struct text_cell *tc;
+
+      tc = &console_gfx_vts->cells[row * (int)console_gfx_vts->width + col];
+      if(tc->codepoint != 0 && tc->codepoint != ' ') {
+        busy = 1;
+        break;
+      }
+    }
+  }
+  if(!busy && console_gfx_vts->cursor_visible) {
+    if(console_gfx_vts->cursor_x >= col0 && console_gfx_vts->cursor_x <= col1 &&
+       console_gfx_vts->cursor_y >= row0 && console_gfx_vts->cursor_y <= row1)
+      busy = 1;
+  }
+  release(&console_gfx_vts->lock);
+
+  return busy;
+}
+
 static void
 console_gfx_draw_logo_locked(void)
 {
@@ -1086,10 +1145,7 @@ console_gfx_draw_logo_locked(void)
   int y;
   int cell_w;
   int cell_h;
-  int text_left;
-  int text_top;
-  int text_right;
-  int text_bottom;
+  int logo_h;
 
   if(!console_gfx_fb)
     return;
@@ -1101,6 +1157,7 @@ console_gfx_draw_logo_locked(void)
   char_h = 7 * scale;
   spacing = scale;
   total_w = 6 * char_w + 5 * spacing;
+  logo_h = char_h + 6;
   x = (int)console_gfx_fb->width - total_w - 8;
   y = 6;
   if(x < 0)
@@ -1110,17 +1167,12 @@ console_gfx_draw_logo_locked(void)
     console_gfx_cell_metrics_for_grid((int)console_gfx_vts->width,
                                       (int)console_gfx_vts->height,
                                       &cell_w, &cell_h);
-    text_left = console_gfx_vts->fb_x;
-    text_top = console_gfx_vts->fb_y;
-    text_right = text_left + (int)console_gfx_vts->width * cell_w;
-    text_bottom = text_top + (int)console_gfx_vts->height * cell_h;
-
-    if(x < text_right && x + total_w > text_left &&
-       y < text_bottom && y + char_h + 6 > text_top)
+    if(console_gfx_logo_overlaps_text_locked(x - 4, y - 3, total_w + 8, logo_h,
+                                             cell_w, cell_h))
       return;
   }
 
-  fb_fill_rect(console_gfx_fb, x - 4, y - 3, total_w + 8, char_h + 6, 0x00000000);
+  fb_fill_rect(console_gfx_fb, x - 4, y - 3, total_w + 8, logo_h, 0x00000000);
   for(i = 0; i < 6; i++)
     console_gfx_draw_logo_char(console_gfx_fb,
                                x + i * (char_w + spacing),
