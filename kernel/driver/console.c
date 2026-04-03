@@ -598,15 +598,6 @@ console_select_hw_surface(void)
   cga_render_offscreen = 0;
 }
 
-static void
-console_select_tty_surface(struct console_tty_state *t)
-{
-  crt = t->screen;
-  crt_cols = console_tty_cols(t);
-  crt_rows = console_tty_rows(t);
-  cga_render_offscreen = 1;
-}
-
 static int
 console_hw_cursor_from_tty(struct console_tty_state *t)
 {
@@ -632,6 +623,82 @@ console_hw_cursor_from_tty(struct console_tty_state *t)
   if(col < 0)
     col = 0;
   return row * CONSOLE_HW_COLS + col;
+}
+
+static void
+console_tty_fill_locked(struct console_tty_state *t, int from, int to, uchar a)
+{
+  ushort blank;
+  int cells;
+  int i;
+
+  if(!t)
+    return;
+
+  cells = console_tty_cells(t);
+  if(cells <= 0)
+    return;
+
+  if(from < 0)
+    from = 0;
+  if(to > cells)
+    to = cells;
+  if(from >= to)
+    return;
+
+  blank = (ushort)(' ' | ((ushort)a << 8));
+  for(i = from; i < to; i++)
+    t->screen[i] = blank;
+}
+
+static void
+console_tty_scroll_up_locked(struct console_tty_state *t, int top, int bot, int n, uchar a)
+{
+  int cols;
+  int lines;
+
+  if(!t)
+    return;
+
+  cols = console_tty_cols(t);
+  lines = bot - top + 1;
+  if(cols <= 0 || lines <= 0 || n <= 0)
+    return;
+  if(n >= lines) {
+    console_tty_fill_locked(t, top * cols, (bot + 1) * cols, a);
+    return;
+  }
+
+  memmove(t->screen + top * cols,
+          t->screen + (top + n) * cols,
+          (lines - n) * cols * sizeof(ushort));
+  console_tty_fill_locked(t, (bot + 1 - n) * cols, (bot + 1) * cols, a);
+}
+
+static void
+console_tty_scroll_down_locked(struct console_tty_state *t, int top, int bot, int n, uchar a)
+{
+  int cols;
+  int lines;
+  int i;
+
+  if(!t)
+    return;
+
+  cols = console_tty_cols(t);
+  lines = bot - top + 1;
+  if(cols <= 0 || lines <= 0 || n <= 0)
+    return;
+  if(n >= lines) {
+    console_tty_fill_locked(t, top * cols, (bot + 1) * cols, a);
+    return;
+  }
+
+  for(i = bot; i >= top + n; i--)
+    memmove(t->screen + i * cols,
+            t->screen + (i - n) * cols,
+            cols * sizeof(ushort));
+  console_tty_fill_locked(t, top * cols, (top + n) * cols, a);
 }
 
 static void
@@ -1586,34 +1653,6 @@ cga_fill(int from, int to, uchar a)
     crt[i] = blank;
 }
 
-static void
-cga_scroll_up(int top, int bot, int n, uchar a)
-{
-  int cols;
-  int lines = bot - top + 1;
-
-  cols = console_surface_cols();
-  if(n <= 0) return;
-  if(n >= lines) { cga_fill(top * cols, (bot + 1) * cols, a); return; }
-  memmove(crt + top * cols, crt + (top + n) * cols, (lines - n) * cols * sizeof(ushort));
-  cga_fill((bot + 1 - n) * cols, (bot + 1) * cols, a);
-}
-
-static void
-cga_scroll_down(int top, int bot, int n, uchar a)
-{
-  int cols;
-  int lines = bot - top + 1;
-  int i;
-
-  cols = console_surface_cols();
-  if(n <= 0) return;
-  if(n >= lines) { cga_fill(top * cols, (bot + 1) * cols, a); return; }
-  for(i = bot; i >= top + n; i--)
-    memmove(crt + i * cols, crt + (i - n) * cols, cols * sizeof(ushort));
-  cga_fill(top * cols, (top + n) * cols, a);
-}
-
 /* --------------------------------------------------------------------------
  * Legacy kernel output path (no ANSI) - for cprintf/panic
  * -------------------------------------------------------------------------- */
@@ -1623,10 +1662,11 @@ cgaputc_kernel(int c)
 {
   int cols;
   int rows;
-  int pos = cga_cursor;
+  int pos;
 
   cols = console_surface_cols();
   rows = console_surface_rows();
+  pos = console_clamp_surface_cursor(cga_cursor);
 
   if(c == '\n')
     pos += cols - pos % cols;
@@ -1677,14 +1717,14 @@ consputc(int c)
 static void
 ansi_save_cursor(struct console_tty_state *t)
 {
-  t->ansi.saved_cursor = cga_cursor;
+  t->ansi.saved_cursor = console_clamp_tty_cursor(t, t->cursor);
   t->ansi.saved_attr = t->ansi.attr;
 }
 
 static void
 ansi_restore_cursor(struct console_tty_state *t)
 {
-  cga_write_cursor(t->ansi.saved_cursor);
+  t->cursor = console_clamp_tty_cursor(t, t->ansi.saved_cursor);
   t->ansi.attr = t->ansi.saved_attr;
 }
 
@@ -1696,12 +1736,12 @@ ansi_enter_alt_screen(struct console_tty_state *t)
   if(t->ansi.alt_active)
     return;
   cells = console_tty_cells(t);
-  memmove(t->ansi.alt_buf, crt, cells * sizeof(ushort));
-  t->ansi.alt_saved_cursor = cga_cursor;
+  memmove(t->ansi.alt_buf, t->screen, cells * sizeof(ushort));
+  t->ansi.alt_saved_cursor = console_clamp_tty_cursor(t, t->cursor);
   t->ansi.alt_saved_attr = t->ansi.attr;
   t->ansi.alt_active = 1;
-  cga_fill(0, console_surface_cells(), t->ansi.attr);
-  cga_write_cursor(0);
+  console_tty_fill_locked(t, 0, cells, t->ansi.attr);
+  t->cursor = 0;
 }
 
 static void
@@ -1712,8 +1752,8 @@ ansi_leave_alt_screen(struct console_tty_state *t)
   if(!t->ansi.alt_active)
     return;
   cells = console_tty_cells(t);
-  memmove(crt, t->ansi.alt_buf, cells * sizeof(ushort));
-  cga_write_cursor(t->ansi.alt_saved_cursor);
+  memmove(t->screen, t->ansi.alt_buf, cells * sizeof(ushort));
+  t->cursor = console_clamp_tty_cursor(t, t->ansi.alt_saved_cursor);
   t->ansi.attr = t->ansi.alt_saved_attr;
   t->ansi.alt_active = 0;
 }
@@ -1726,9 +1766,9 @@ ansi_apply_private_mode(struct console_tty_state *t, int mode, int set)
   } else if(mode == 6) {
     t->ansi.origin_mode = set ? 1 : 0;
     if(set)
-      cga_write_cursor(t->ansi.scroll_top * console_surface_cols());
+      t->cursor = console_clamp_tty_cursor(t, t->ansi.scroll_top * console_tty_cols(t));
     else
-      cga_write_cursor(0);
+      t->cursor = 0;
   } else if(mode == 5) {
     t->ansi.reverse_video = set ? 1 : 0;
   } else if(mode == 12) {
@@ -1979,8 +2019,10 @@ console_queue_dsr_reply_locked(struct console_tty_state *t, int dec_private, int
   int cols;
   int row;
   int col;
+  int pos;
 
-  cols = console_surface_cols();
+  cols = console_tty_cols(t);
+  pos = console_clamp_tty_cursor(t, t->cursor);
 
   if(mode == 5) {
     console_queue_input_byte_locked(t, '\033');
@@ -1990,8 +2032,8 @@ console_queue_dsr_reply_locked(struct console_tty_state *t, int dec_private, int
     console_queue_input_byte_locked(t, '0');
     console_queue_input_byte_locked(t, 'n');
   } else if(mode == 6) {
-    row = (cga_cursor / cols) + 1;
-    col = (cga_cursor % cols) + 1;
+    row = (pos / cols) + 1;
+    col = (pos % cols) + 1;
     console_queue_input_byte_locked(t, '\033');
     console_queue_input_byte_locked(t, '[');
     if(dec_private)
@@ -2230,7 +2272,7 @@ ansi_decode_utf8_or_single(struct console_tty_state *t, int ch)
 }
 
 static void
-cgaputc_ansi(struct console_tty_state *t, int c)
+console_ttyputc_ansi(struct console_tty_state *t, int c)
 {
   int cols;
   int rows;
@@ -2238,14 +2280,18 @@ cgaputc_ansi(struct console_tty_state *t, int c)
   int last_row;
   int pos, row, col, n, r2, c2, p1, p2;
   int row_base, row_max;
+  ushort *screen;
   uchar a = t->ansi.attr;
 
-  cols = console_surface_cols();
-  rows = console_surface_rows();
+  cols = console_tty_cols(t);
+  rows = console_tty_rows(t);
+  if(cols <= 0 || rows <= 0)
+    return;
   last_col = cols - 1;
   last_row = rows - 1;
+  screen = t->screen;
 
-  pos = console_clamp_surface_cursor(cga_cursor);
+  pos = console_clamp_tty_cursor(t, t->cursor);
   row = pos / cols;
   col = pos % cols;
 
@@ -2254,22 +2300,26 @@ cgaputc_ansi(struct console_tty_state *t, int c)
     if(c == 0x1B) { t->ansi.utf8_need = 0; t->ansi.state = ANSI_ESC; return; }
     if(c == 0x0E) { t->ansi.gl_charset = 1; return; }  /* SO: shift out, use G1 */
     if(c == 0x0F) { t->ansi.gl_charset = 0; return; }  /* SI: shift in, use G0 */
-    if(c == '\r') { cga_write_cursor(row * cols); return; }
+    if(c == '\r') { t->cursor = row * cols; return; }
     if(c == '\n') {
       if(row == t->ansi.scroll_bot) {
-        cga_scroll_up(t->ansi.scroll_top, t->ansi.scroll_bot, 1, a);
-        cga_write_cursor(t->ansi.scroll_bot * cols + col);
+        console_tty_scroll_up_locked(t, t->ansi.scroll_top, t->ansi.scroll_bot, 1, a);
+        t->cursor = console_clamp_tty_cursor(t, t->ansi.scroll_bot * cols + col);
       } else if(row < last_row) {
-        cga_write_cursor((row + 1) * cols + col);
+        t->cursor = console_clamp_tty_cursor(t, (row + 1) * cols + col);
       }
       return;
     }
-    if(c == '\b' || c == 0x08) { if(col > 0) cga_write_cursor(pos-1); return; }
+    if(c == '\b' || c == 0x08) {
+      if(col > 0)
+        t->cursor = console_clamp_tty_cursor(t, pos - 1);
+      return;
+    }
     if(c == BACKSPACE) {
       if(pos > 0) {
         pos--;
-        crt[pos] = (ushort)(' ' | ((ushort)a << 8));
-        cga_write_cursor(pos);
+        screen[pos] = (ushort)(' ' | ((ushort)a << 8));
+        t->cursor = console_clamp_tty_cursor(t, pos);
       }
       return;
     }
@@ -2277,7 +2327,8 @@ cgaputc_ansi(struct console_tty_state *t, int c)
       c2 = (col + 8) & ~7;
       if(c2 > last_col)
         c2 = last_col;
-      cga_write_cursor(row * cols + c2); return;
+      t->cursor = console_clamp_tty_cursor(t, row * cols + c2);
+      return;
     }
     if(c == '\a') return;
     if(c >= 0x20 && c < 0x100) {
@@ -2286,12 +2337,12 @@ cgaputc_ansi(struct console_tty_state *t, int c)
         return;
       t->ansi.last_glyph = c;
       if(t->ansi.insert_mode && col < last_col)
-        memmove(crt + pos + 1, crt + pos, (last_col - col) * sizeof(ushort));
-      crt[pos] = (ushort)((c & 0xff) | ((ushort)a << 8));
+        memmove(screen + pos + 1, screen + pos, (last_col - col) * sizeof(ushort));
+      screen[pos] = (ushort)((c & 0xff) | ((ushort)a << 8));
       if(col == last_col) {
         if(t->ansi.wraparound) {
           if(row == t->ansi.scroll_bot) {
-            cga_scroll_up(t->ansi.scroll_top, t->ansi.scroll_bot, 1, a);
+            console_tty_scroll_up_locked(t, t->ansi.scroll_top, t->ansi.scroll_bot, 1, a);
             pos = t->ansi.scroll_bot * cols;
           } else {
             pos = (row < last_row) ? (row + 1) * cols : last_row * cols;
@@ -2302,7 +2353,7 @@ cgaputc_ansi(struct console_tty_state *t, int c)
       } else {
         pos++;
       }
-      cga_write_cursor(pos);
+      t->cursor = console_clamp_tty_cursor(t, pos);
     }
     return;
 
@@ -2322,14 +2373,15 @@ cgaputc_ansi(struct console_tty_state *t, int c)
     if(c == 'c') {
       ansi_leave_alt_screen(t);
       ansi_soft_reset(t);
-      cga_fill(0, console_surface_cells(), 0x07); cga_write_cursor(0);
+      console_tty_fill_locked(t, 0, console_tty_cells(t), 0x07);
+      t->cursor = 0;
     } else if(c == 'Z') {
       console_queue_da_reply_locked(t, 1, 0);
     } else if(c == 'M') {
       if(row == t->ansi.scroll_top)
-        cga_scroll_down(t->ansi.scroll_top, t->ansi.scroll_bot, 1, a);
+        console_tty_scroll_down_locked(t, t->ansi.scroll_top, t->ansi.scroll_bot, 1, a);
       else if(row > 0)
-        cga_write_cursor((row - 1) * cols + col);
+        t->cursor = console_clamp_tty_cursor(t, (row - 1) * cols + col);
     }
     t->ansi.state = ANSI_NORMAL;
     return;
@@ -2381,11 +2433,11 @@ cgaputc_ansi(struct console_tty_state *t, int c)
     p2 = (t->ansi.nparams>=2) ? t->ansi.params[1] : 0;
 
     switch(c) {
-    case 'a': n=p1?p1:1; c2=col+n; if(c2>last_col)c2=last_col; cga_write_cursor(row*cols+c2); break;
-    case 'A': n=p1?p1:1; r2=row-n; if(r2<t->ansi.scroll_top)r2=t->ansi.scroll_top; cga_write_cursor(r2*cols+col); break;
-    case 'B': n=p1?p1:1; r2=row+n; if(r2>t->ansi.scroll_bot)r2=t->ansi.scroll_bot; cga_write_cursor(r2*cols+col); break;
-    case 'C': n=p1?p1:1; c2=col+n; if(c2>last_col)c2=last_col; cga_write_cursor(row*cols+c2); break;
-    case 'D': n=p1?p1:1; c2=col-n; if(c2<0)c2=0; cga_write_cursor(row*cols+c2); break;
+    case 'a': n=p1?p1:1; c2=col+n; if(c2>last_col)c2=last_col; t->cursor = console_clamp_tty_cursor(t, row*cols+c2); break;
+    case 'A': n=p1?p1:1; r2=row-n; if(r2<t->ansi.scroll_top)r2=t->ansi.scroll_top; t->cursor = console_clamp_tty_cursor(t, r2*cols+col); break;
+    case 'B': n=p1?p1:1; r2=row+n; if(r2>t->ansi.scroll_bot)r2=t->ansi.scroll_bot; t->cursor = console_clamp_tty_cursor(t, r2*cols+col); break;
+    case 'C': n=p1?p1:1; c2=col+n; if(c2>last_col)c2=last_col; t->cursor = console_clamp_tty_cursor(t, row*cols+c2); break;
+    case 'D': n=p1?p1:1; c2=col-n; if(c2<0)c2=0; t->cursor = console_clamp_tty_cursor(t, row*cols+c2); break;
     case 'd':
       row_base = t->ansi.origin_mode ? t->ansi.scroll_top : 0;
       row_max = t->ansi.origin_mode ? t->ansi.scroll_bot : last_row;
@@ -2394,12 +2446,12 @@ cgaputc_ansi(struct console_tty_state *t, int c)
         r2 = row_base;
       if(r2 > row_max)
         r2 = row_max;
-      cga_write_cursor(r2*cols+col);
+      t->cursor = console_clamp_tty_cursor(t, r2*cols+col);
       break;
-    case 'e': n=p1?p1:1; r2=row+n; if(r2>t->ansi.scroll_bot)r2=t->ansi.scroll_bot; cga_write_cursor(r2*cols+col); break;
-    case 'E': n=p1?p1:1; r2=row+n; if(r2>last_row)r2=last_row; cga_write_cursor(r2*cols); break;
-    case 'F': n=p1?p1:1; r2=row-n; if(r2<0)r2=0; cga_write_cursor(r2*cols); break;
-    case 'G': c2=p1?p1-1:0; if(c2<0)c2=0; if(c2>last_col)c2=last_col; cga_write_cursor(row*cols+c2); break;
+    case 'e': n=p1?p1:1; r2=row+n; if(r2>t->ansi.scroll_bot)r2=t->ansi.scroll_bot; t->cursor = console_clamp_tty_cursor(t, r2*cols+col); break;
+    case 'E': n=p1?p1:1; r2=row+n; if(r2>last_row)r2=last_row; t->cursor = console_clamp_tty_cursor(t, r2*cols); break;
+    case 'F': n=p1?p1:1; r2=row-n; if(r2<0)r2=0; t->cursor = console_clamp_tty_cursor(t, r2*cols); break;
+    case 'G': c2=p1?p1-1:0; if(c2<0)c2=0; if(c2>last_col)c2=last_col; t->cursor = console_clamp_tty_cursor(t, row*cols+c2); break;
     case 'H': case 'f':
       row_base = t->ansi.origin_mode ? t->ansi.scroll_top : 0;
       row_max = t->ansi.origin_mode ? t->ansi.scroll_bot : last_row;
@@ -2413,40 +2465,40 @@ cgaputc_ansi(struct console_tty_state *t, int c)
         c2 = 0;
       if(c2 > last_col)
         c2 = last_col;
-      cga_write_cursor(r2*cols+c2); break;
+      t->cursor = console_clamp_tty_cursor(t, r2*cols+c2); break;
     case 'J':
-      if(p1==0) cga_fill(pos, cols * rows, a);
-      else if(p1==1) cga_fill(0, pos+1, a);
-      else cga_fill(0, cols * rows, a);
+      if(p1==0) console_tty_fill_locked(t, pos, cols * rows, a);
+      else if(p1==1) console_tty_fill_locked(t, 0, pos+1, a);
+      else console_tty_fill_locked(t, 0, cols * rows, a);
       break;
     case 'K':
-      if(p1==0) cga_fill(row*cols+col, row*cols+cols, a);
-      else if(p1==1) cga_fill(row*cols, row*cols+col+1, a);
-      else cga_fill(row*cols, row*cols+cols, a);
+      if(p1==0) console_tty_fill_locked(t, row*cols+col, row*cols+cols, a);
+      else if(p1==1) console_tty_fill_locked(t, row*cols, row*cols+col+1, a);
+      else console_tty_fill_locked(t, row*cols, row*cols+cols, a);
       break;
-    case 'L': n=p1?p1:1; cga_scroll_down(row, t->ansi.scroll_bot, n, a); break;
-    case 'M': n=p1?p1:1; cga_scroll_up(row,   t->ansi.scroll_bot, n, a); break;
+    case 'L': n=p1?p1:1; console_tty_scroll_down_locked(t, row, t->ansi.scroll_bot, n, a); break;
+    case 'M': n=p1?p1:1; console_tty_scroll_up_locked(t, row, t->ansi.scroll_bot, n, a); break;
     case 'P': {
       int av=cols-col; n=p1?p1:1; if(n>av)n=av;
-      memmove(crt+pos, crt+pos+n, (av-n)*sizeof(ushort));
-      cga_fill(pos+av-n, pos+av, a); break; }
+      memmove(screen+pos, screen+pos+n, (av-n)*sizeof(ushort));
+      console_tty_fill_locked(t, pos+av-n, pos+av, a); break; }
     case 'X': {
       int av=cols-col; n=p1?p1:1; if(n>av)n=av;
-      cga_fill(pos, pos+n, a); break; }
+      console_tty_fill_locked(t, pos, pos+n, a); break; }
     case 'b':
       n = p1 ? p1 : 1;
       if(t->ansi.last_glyph >= 0) {
         int rep;
         for(rep = 0; rep < n; rep++)
-          cgaputc_ansi(t, t->ansi.last_glyph);
+          console_ttyputc_ansi(t, t->ansi.last_glyph);
       }
       break;
     case '@': {
       int av=cols-col; int i2; n=p1?p1:1; if(n>av)n=av;
-      for(i2=av-1; i2>=n; i2--) crt[pos+i2]=crt[pos+i2-n];
-      cga_fill(pos, pos+n, a); break; }
-    case 'S': n=p1?p1:1; cga_scroll_up(t->ansi.scroll_top,  t->ansi.scroll_bot, n, a); break;
-    case 'T': n=p1?p1:1; cga_scroll_down(t->ansi.scroll_top, t->ansi.scroll_bot, n, a); break;
+      for(i2=av-1; i2>=n; i2--) screen[pos+i2]=screen[pos+i2-n];
+      console_tty_fill_locked(t, pos, pos+n, a); break; }
+    case 'S': n=p1?p1:1; console_tty_scroll_up_locked(t, t->ansi.scroll_top,  t->ansi.scroll_bot, n, a); break;
+    case 'T': n=p1?p1:1; console_tty_scroll_down_locked(t, t->ansi.scroll_top, t->ansi.scroll_bot, n, a); break;
     case 'm': {
       static const uchar cga_fg[] = {0,4,2,6,1,5,3,7};
       int i2;
@@ -2494,7 +2546,7 @@ cgaputc_ansi(struct console_tty_state *t, int c)
       if(n > last_row)
         n = last_row;
       if(r2<n) { t->ansi.scroll_top=r2; t->ansi.scroll_bot=n; }
-      cga_write_cursor(0);
+      t->cursor = 0;
       break;
     case 's':
       ansi_save_cursor(t);
@@ -2610,11 +2662,7 @@ consputc_ansi(struct console_tty_state *t, int c)
     }
   }
 
-  console_select_tty_surface(t);
-  cga_cursor = console_clamp_tty_cursor(t, t->cursor);
-  cgaputc_ansi(t, c);
-  t->cursor = console_clamp_tty_cursor(t, cga_cursor);
-  console_select_hw_surface();
+  console_ttyputc_ansi(t, c);
   if(t == active)
     console_flush_tty_locked(t);
 }
