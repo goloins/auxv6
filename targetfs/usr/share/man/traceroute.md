@@ -41,6 +41,14 @@ and RTT for each probe. `*` indicates a probe that timed out.
   currently supported.
 - Press Ctrl+C to stop early.
 
+**FIXME:** Intermediate hops are not currently visible when running under
+QEMU user-mode networking (SLIRP). SLIRP proxies all outbound packets at the
+host level and does not simulate TTL expiry from intermediate routers, so every
+destination resolves to hop 1 regardless of real path length. To see
+multi-hop output, the guest would need to run on a network with real IP
+routing (e.g. tap/bridge mode with actual routers in path) or the SLIRP
+implementation would need to synthesise TIME_EXCEEDED responses per hop.
+
 ## Examples
 ```
 traceroute 10.0.2.2

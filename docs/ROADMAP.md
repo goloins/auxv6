@@ -456,6 +456,7 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 
 - `ping` revised to run continuously until ^C (SIGINT), printing standard statistics on exit.
 - `traceroute` added: ICMP ECHO probe with increasing TTL, `setsockopt(IP_TTL)` support, three probes per hop, 1 s timeout per probe.
+  - **FIXME:** intermediate hops are invisible under QEMU SLIRP; SLIRP does not synthesise ICMP TIME_EXCEEDED per hop, so every destination shows at hop 1. Needs tap/bridge networking or a SLIRP-aware workaround to show real path depth.
 - `setsockopt`/`getsockopt` syscalls added (SYS_setsockopt=88, SYS_getsockopt=89) with `IPPROTO_IP`/`IP_TTL` support.
 - `ip_output_ttl()` added to IP layer; raw socket send paths thread per-socket TTL through to outgoing packets.
 - `ICMP_TIMXCEED`, `ICMP_UNREACH`, and related ICMP type/code constants added to `include/net.h`.
