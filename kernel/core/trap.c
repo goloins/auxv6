@@ -207,12 +207,18 @@ trap(struct trapframe *tf)
       ktime_tick(current_ticks);
       // Check all processes for expired alarms
       proc_check_alarms(current_ticks);
+      // Update load averages every 500 ticks (5 seconds at 100Hz)
+      if((current_ticks % 500) == 0)
+        proc_tick_loadavg();
       // Poll network devices for RX/TX completions.
       netdev_poll();
       // TCP slow timer - every 10 ticks (100ms)
       if((current_ticks % 10) == 0)
         tcp_slowtimo();
     }
+    // Charge one CPU tick to the process running on this CPU (all CPUs).
+    if(myproc())
+      myproc()->cticks++;
     lapiceoi();
     break;
   case T_IRQ0 + IRQ_IDE:

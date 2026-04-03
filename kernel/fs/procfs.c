@@ -27,6 +27,7 @@
 #define PROCFS_LSOF_INO     12
 #define PROCFS_NVME_TUNE_INO 13
 #define PROCFS_SERVER7_INO  14
+#define PROCFS_LOADAVG_INO  15
 #define PROCFS_VERSION_STR  "a/ux86 aux86 i686\n"
 
 struct procfs_inode {
@@ -49,6 +50,7 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_LSOF_INO, "lsof", 2048 },
   { PROCFS_NVME_TUNE_INO, "nvme_tune", 2048 },
   { PROCFS_SERVER7_INO, "server7", 256 },
+  { PROCFS_LOADAVG_INO, "loadavg", 64 },
   { 0, 0, 0 }
 };
 
@@ -233,6 +235,10 @@ procfs_fill_inode(struct inode *ip, uint inum)
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IWUSR | M_IRGRP | M_IROTH;
     ip->size = 256;
+  } else if(inum == PROCFS_LOADAVG_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
+    ip->size = 64;
   } else {
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
@@ -415,7 +421,7 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     return -1;
   if(ip->inum == PROCFS_ROOT_INO){
     // Note: . and .. are synthesized by VFS for mount roots
-    struct dirent more_entries[13];
+    struct dirent more_entries[14];
     memset(more_entries, 0, sizeof(more_entries));
     more_entries[0].inum = PROCFS_UPTIME_INO;
     safestrcpy(more_entries[0].name, "uptime", DIRSIZ);
@@ -443,6 +449,8 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     safestrcpy(more_entries[11].name, "nvme_tune", DIRSIZ);
     more_entries[12].inum = PROCFS_SERVER7_INO;
     safestrcpy(more_entries[12].name, "server7", DIRSIZ);
+    more_entries[13].inum = PROCFS_LOADAVG_INO;
+    safestrcpy(more_entries[13].name, "loadavg", DIRSIZ);
     return procfs_copy_data(dst, off, n, (char*)more_entries, sizeof(more_entries));
   }
   if(ip->inum == PROCFS_VERSION_INO)
@@ -595,7 +603,7 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
 
     len = 0;
     if(procfs_buf_puts(buf, sizeof(buf), &len,
-                       "PID PPID PGID SID TTY UID GID STAT SZ NAME\n") < 0)
+                       "PID PPID PGID SID TTY UID GID STAT SZ CTICKS NAME\n") < 0)
       return -1;
 
     for(i = 0; i < pm; i++){
@@ -632,6 +640,10 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
       if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
         break;
       if(procfs_buf_putu(buf, sizeof(buf), &len, pinfo[i].sz) < 0)
+        break;
+      if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+        break;
+      if(procfs_buf_putu(buf, sizeof(buf), &len, pinfo[i].cticks) < 0)
         break;
       if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
         break;
@@ -777,6 +789,50 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     if(procfs_buf_puts(buf, sizeof(buf), &len, "commands claim|release\n") < 0)
       return -1;
 
+    return procfs_copy_data(dst, off, n, buf, len);
+  }
+  if(ip->inum == PROCFS_LOADAVG_INO){
+    uint la1, la5, la15;
+    uint whole, frac;
+    int rn, rtot;
+
+    proc_get_loadavg(&la1, &la5, &la15);
+    proc_count_active(&rn, &rtot);
+
+    /*
+     * Format: "1.23 4.56 7.89 running/total lastpid\n"
+     * Fixed-point divisor is 2048 (LAVG_FSHIFT=11).
+     * Fraction expressed as two decimal digits.
+     */
+#define LAVG_DIV 2048
+    len = 0;
+    /* 1-min */
+    whole = la1 / LAVG_DIV; frac = (la1 % LAVG_DIV) * 100 / LAVG_DIV;
+    if(procfs_buf_putu(buf, sizeof(buf), &len, whole) < 0) return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, '.') < 0) return -1;
+    if(frac < 10 && procfs_buf_putc(buf, sizeof(buf), &len, '0') < 0) return -1;
+    if(procfs_buf_putu(buf, sizeof(buf), &len, frac) < 0) return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0) return -1;
+    /* 5-min */
+    whole = la5 / LAVG_DIV; frac = (la5 % LAVG_DIV) * 100 / LAVG_DIV;
+    if(procfs_buf_putu(buf, sizeof(buf), &len, whole) < 0) return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, '.') < 0) return -1;
+    if(frac < 10 && procfs_buf_putc(buf, sizeof(buf), &len, '0') < 0) return -1;
+    if(procfs_buf_putu(buf, sizeof(buf), &len, frac) < 0) return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0) return -1;
+    /* 15-min */
+    whole = la15 / LAVG_DIV; frac = (la15 % LAVG_DIV) * 100 / LAVG_DIV;
+    if(procfs_buf_putu(buf, sizeof(buf), &len, whole) < 0) return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, '.') < 0) return -1;
+    if(frac < 10 && procfs_buf_putc(buf, sizeof(buf), &len, '0') < 0) return -1;
+    if(procfs_buf_putu(buf, sizeof(buf), &len, frac) < 0) return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0) return -1;
+    /* running/total */
+    if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)rn) < 0) return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, '/') < 0) return -1;
+    if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)rtot) < 0) return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0) return -1;
+#undef LAVG_DIV
     return procfs_copy_data(dst, off, n, buf, len);
   }
   if(ip->inum != PROCFS_UPTIME_INO)

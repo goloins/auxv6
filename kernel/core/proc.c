@@ -53,6 +53,80 @@ extern void trapret(void);
 
 static void wakeup1(void *chan);
 
+/*
+ * Load average tracking — Linux-compatible fixed-point EMA.
+ *
+ * The load average is the number of RUNNABLE+RUNNING processes smoothed with
+ * an exponential moving average sampled every 500 ticks (5 seconds at 100Hz).
+ *
+ * Coefficients (FSHIFT = 11, factor = 2048):
+ *   1-min  exp(-5/60)   ≈ 1884/2048
+ *   5-min  exp(-5/300)  ≈ 2014/2048
+ *  15-min  exp(-5/900)  ≈ 2037/2048
+ */
+#define LAVG_FSHIFT  11
+#define LAVG_FIXED1  (1 << LAVG_FSHIFT)   /* 2048 */
+#define LAVG_EXP_1   1884
+#define LAVG_EXP_5   2014
+#define LAVG_EXP_15  2037
+
+static uint lavg[3];   /* fixed-point 1-, 5-, 15-minute load averages */
+
+/* Called from the timer ISR on CPU 0 every 500 ticks.  Scans ptable under
+ * the ptable.lock to count active processes, then updates all three EMAs.
+ * No dynamic allocation; safe to call from interrupt context. */
+void
+proc_tick_loadavg(void)
+{
+  struct proc *p;
+  uint n;
+
+  n = 0;
+  acquire(&ptable.lock);
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if(p->state == RUNNABLE || p->state == RUNNING)
+      n++;
+  }
+  release(&ptable.lock);
+
+  /* EMA: new = old * coeff/2048 + n * (2048 - coeff)/2048
+   * Written as: new = (old * coeff + n * (FIXED1-coeff)) >> FSHIFT  */
+  lavg[0] = (lavg[0] * LAVG_EXP_1  + (n << LAVG_FSHIFT) * (LAVG_FIXED1 - LAVG_EXP_1)  / LAVG_FIXED1) >> LAVG_FSHIFT;
+  lavg[1] = (lavg[1] * LAVG_EXP_5  + (n << LAVG_FSHIFT) * (LAVG_FIXED1 - LAVG_EXP_5)  / LAVG_FIXED1) >> LAVG_FSHIFT;
+  lavg[2] = (lavg[2] * LAVG_EXP_15 + (n << LAVG_FSHIFT) * (LAVG_FIXED1 - LAVG_EXP_15) / LAVG_FIXED1) >> LAVG_FSHIFT;
+}
+
+/* Return fixed-point load averages (divisor = 2048). */
+void
+proc_get_loadavg(uint *la1, uint *la5, uint *la15)
+{
+  *la1  = lavg[0];
+  *la5  = lavg[1];
+  *la15 = lavg[2];
+}
+
+/* Count active processes.  nrunning receives RUNNABLE+RUNNING count;
+ * ntotal receives all non-UNUSED+non-zombie processes. */
+void
+proc_count_active(int *nrunning, int *ntotal)
+{
+  struct proc *p;
+  int r, t;
+
+  r = 0; t = 0;
+  acquire(&ptable.lock);
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if(p->state == UNUSED || p->pid <= 0)
+      continue;
+    t++;
+    if(p->state == RUNNABLE || p->state == RUNNING)
+      r++;
+  }
+  release(&ptable.lock);
+  *nrunning = r;
+  *ntotal   = t;
+}
+
 static int
 valid_signo(int signo)
 {
@@ -1715,6 +1789,7 @@ proc_snapshot(struct procinfo_k *out, int max)
     out[n].gid = p->gid;
     out[n].state = p->state;
     out[n].sz = p->sz;
+    out[n].cticks = p->cticks;
     safestrcpy(out[n].name, p->name, sizeof(out[n].name));
     n++;
   }

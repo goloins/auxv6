@@ -242,7 +242,7 @@ tags: $(OBJS) kernel/boot/entryother.S user/_init
 kernel/core/vectors.S: tools/vectors.pl
 	./tools/vectors.pl > kernel/core/vectors.S
 
-LIBC_OBJS = user/ulib.o user/string.o user/errstr.o user/umalloc.o user/tty.o user/inet.o user/fmt.o user/dirent.o user/env.o user/conf.o user/path.o user/tempfile.o user/timecore.o user/stdlib.o user/posix_fs.o user/posix.o user/stdio.o user/regex.o user/calloc.o
+LIBC_OBJS = user/ulib.o user/string.o user/errstr.o user/umalloc.o user/tty.o user/inet.o user/fmt.o user/dirent.o user/env.o user/conf.o user/path.o user/tempfile.o user/timecore.o user/stdlib.o user/posix_fs.o user/posix.o user/stdio.o user/regex.o user/calloc.o user/libterm.o
 LIBAUXV6_OBJS = user/crt0.o user/usys.o user/printf.o user/resolve.o
 ULIB = $(LIBC_OBJS) $(LIBAUXV6_OBJS)
 
@@ -335,6 +335,9 @@ _df: user/df
 
 _ps: user/ps
 	cp user/ps _ps
+
+_top: user/top
+	cp user/top _top
 
 _lspci: user/lspci
 	cp user/lspci _lspci
@@ -563,6 +566,7 @@ UPROGS=\
 	_free\
 	_df\
 	_ps\
+	_top\
 	_lspci\
 	_mkdir\
 	_mount\
@@ -702,6 +706,7 @@ clean:
 	user/6get \
 	user/lsof user/which user/file \
 	user/server7 \
+	user/top \
 	user/date user/time user/killall user/halt \
 	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/dmesg user/tail user/lspci user/v6init
 	user/schedperf user/fsperf user/kallocstress

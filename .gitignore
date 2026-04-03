@@ -48,6 +48,7 @@ user/lsblk
 user/free
 user/df
 user/ps
+user/top
 user/lspci
 user/mkdir
 user/mount
