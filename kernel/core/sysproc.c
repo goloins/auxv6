@@ -315,9 +315,9 @@ sys_alarm(void)
   
   // Set new alarm (100 ticks per second)
   if(seconds == 0) {
-    p->alarm_ticks = 0;  // Cancel alarm
+    proc_set_alarm(p, 0);  // Cancel alarm
   } else {
-    p->alarm_ticks = ticks + (uint)seconds * 100;
+    proc_set_alarm(p, ticks + (uint)seconds * 100);
   }
   
   return remaining;

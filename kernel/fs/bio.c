@@ -27,6 +27,12 @@
 #include "buf.h"
 #include "blockdev.h"
 
+// Hash table size for the buffer cache.  A power of two roughly equal to
+// NBUF/2 keeps average chain length near 2 even after the cache fills.
+// Lookup is O(chain) instead of O(NBUF) which was the original design.
+#define BCACHE_HASH_SIZE 64
+#define BHASH(dev, blockno) (((uint)(dev) * 31u + (uint)(blockno)) & (BCACHE_HASH_SIZE - 1))
+
 struct {
   struct spinlock lock;
   struct buf buf[NBUF];
@@ -34,6 +40,11 @@ struct {
   // Linked list of all buffers, through prev/next.
   // head.next is most recently used.
   struct buf head;
+
+  // Hash chains for O(1) block lookup.  The hash is indexed by
+  // BHASH(dev, blockno).  Buffers stay in the hash until they are
+  // evicted (given a new dev/blockno assignment).
+  struct buf *hash[BCACHE_HASH_SIZE];
 } bcache;
 
 void
@@ -42,6 +53,7 @@ binit(void)
   struct buf *b;
 
   initlock(&bcache.lock, "bcache");
+  memset(bcache.hash, 0, sizeof(bcache.hash));
 
 //PAGEBREAK!
   // Create linked list of buffers
@@ -50,6 +62,7 @@ binit(void)
   for(b = bcache.buf; b < bcache.buf+NBUF; b++){
     b->next = bcache.head.next;
     b->prev = &bcache.head;
+    b->hash_next = 0;
     initsleeplock(&b->lock, "buffer");
     bcache.head.next->prev = b;
     bcache.head.next = b;
@@ -62,12 +75,14 @@ binit(void)
 static struct buf*
 bget(uint dev, uint blockno)
 {
-  struct buf *b;
+  struct buf *b, **pp;
+  uint h;
 
   acquire(&bcache.lock);
 
-  // Is the block already cached?
-  for(b = bcache.head.next; b != &bcache.head; b = b->next){
+  // Is the block already cached?  O(1) hash lookup instead of O(NBUF).
+  h = BHASH(dev, blockno);
+  for(b = bcache.hash[h]; b != 0; b = b->hash_next){
     if(b->dev == dev && b->blockno == blockno){
       b->refcnt++;
       release(&bcache.lock);
@@ -76,15 +91,27 @@ bget(uint dev, uint blockno)
     }
   }
 
-  // Not cached; recycle an unused buffer.
+  // Not cached; recycle the least-recently-used unused buffer.
   // Even if refcnt==0, B_DIRTY indicates a buffer is in use
   // because log.c has modified it but not yet committed it.
   for(b = bcache.head.prev; b != &bcache.head; b = b->prev){
     if(b->refcnt == 0 && (b->flags & B_DIRTY) == 0) {
+      // Remove buffer from its old hash chain before reassigning.
+      if(b->flags & B_INHASH){
+        uint old_h = BHASH(b->dev, b->blockno);
+        pp = &bcache.hash[old_h];
+        while(*pp && *pp != b)
+          pp = &(*pp)->hash_next;
+        if(*pp)
+          *pp = b->hash_next;
+      }
+      // Assign new identity; insert into new hash chain.
       b->dev = dev;
       b->blockno = blockno;
-      b->flags = 0;
+      b->flags = B_INHASH;   // clear B_VALID/B_DIRTY/B_ERROR, keep in-hash
       b->refcnt = 1;
+      b->hash_next = bcache.hash[h];
+      bcache.hash[h] = b;
       release(&bcache.lock);
       acquiresleep(&b->lock);
       return b;

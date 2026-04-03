@@ -68,8 +68,12 @@ kfree(char *v)
   if((uint)v % PGSIZE || v < end || V2P(v) >= PHYSTOP)
     panic("kfree");
 
-  // Fill with junk to catch dangling refs.
+#ifdef KDEBUG_KFREE_POISON
+  // Fill with junk to catch dangling refs.  Compile with
+  // -DKDEBUG_KFREE_POISON to enable at the cost of a full-page
+  // write on every free.
   memset(v, 1, PGSIZE);
+#endif
 
   if(kmem.use_lock)
     acquire(&kmem.lock);

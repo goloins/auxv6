@@ -474,6 +474,44 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 
 ---
 
+## Past Changes (2026-04-03) — kernel performance hardening
+
+Ten targeted optimisations addressing the worst xv6-heritage bottlenecks, all
+without restructuring the core proc/lock model.  Every change compiled and
+linked cleanly against the full kernel tree.
+
+### Resource limits
+- `NPROC` 64→128, `NFILE` 100→256, `NINODE` 50→200, `NOFILE` (per-process) 16→32, `NBUF` 30→128 (decoupled from `LOGSIZE`).  The 30-buffer cache was the most acute bottleneck; 15 KB of cache for an entire OS workload caused nearly-constant eviction and disk I/O.
+
+### Allocator (`kernel/core/kalloc.c`)
+- `kfree()` debug `memset(v, 1, PGSIZE)` is now gated behind `-DKDEBUG_KFREE_POISON`.  Production builds no longer write 4 KB of junk on every page free.  `exec()` frees the old address space page-by-page, making this a frequent hot path.
+
+### Spinlock (`kernel/core/spinlock.c`)
+- Added `pause` (x86 `PAUSE` hint) in the spin-wait loop.  On HT/SMT cores this reduces bus-lock traffic and avoids the memory-order violation that can stall a pipeline when the lock owner releases while the spinner holds a stale cacheline.
+- `getcallerpcs()` (10-frame `%ebp` walk) is now conditional on `-DKDEBUG_SPINLOCK_CALLSTACK`.  This call was executed on *every* `acquire()` in the kernel.
+
+### `mycpu()` (`kernel/core/proc.c`, `kernel/driver/mp.c`)
+- `mpinit()` now builds a 256-entry `apic_cpu_map[]` reverse table: `apicid → cpus[] index`.  `mycpu()` replaced its O(ncpu) LAPIC-ID linear scan + per-call LAPIC MMIO read with a single array lookup.  `mycpu()` is called from `myproc()`, `acquire()`, `release()`, `sched()`, `yield()`, and every lock-related path, so this is a hot fix.
+
+### Scheduler (`kernel/core/proc.c`)
+- **Per-CPU scan start offset** (`cpu.sched_last`): each CPU remembers the index just past the last process it ran and starts its next scan there.  Eliminates the tendency for all CPUs to race for the same low-indexed slots and spreads scheduling naturally across the full table.
+- **Idle `hlt`**: when a scheduler pass finds zero RUNNABLE processes, the CPU releases `ptable.lock` and executes `hlt`, suspending until the next interrupt.  Previously all CPUs spun in a tight loop repeatedly acquiring/releasing `ptable.lock` at the timer rate, even when the system was completely idle.  This was the dominant source of inter-CPU lock contention on a lightly-loaded system.
+
+### Timer ISR (`kernel/core/proc.c`, `kernel/core/sysproc.c`)
+- Added `active_alarm_count` (an atomic counter) that tracks the number of processes with live alarms.  `proc_check_alarms()` now returns immediately (no `ptable.lock` acquire, no O(NPROC) scan) when the counter is zero.  On a system with no `alarm()`-using processes this eliminates two `ptable.lock` acquire/release cycles per 10 ms tick on CPU 0.
+- `proc_set_alarm()` helper maintains the counter; `sys_alarm` delegates through it.
+
+### Syscall-return signal dispatch (`kernel/core/trap.c`, `kernel/core/proc.c`)
+- The three back-to-back `ptable.lock` acquire/release/acquire/release/acquire/release sequences (`proc_apply_pending_signals` + `proc_deliver_signal` + `proc_maybe_stop_current`) at every syscall and trap return are now wrapped in a single `proc_handle_signals_on_return()` call with a lockless fast-path precheck.  When `sig_pending`, `sig_caught`, and `state` are all clear, no lock is touched at all.
+
+### Buffer cache (`kernel/fs/bio.c`, `include/buf.h`)
+- Added a 64-entry hash table (`bcache.hash[BCACHE_HASH_SIZE]`) alongside the existing LRU doubly-linked list.  `bget()` cache-hit lookups are now O(1) (average 2 comparisons) instead of O(NBUF) = O(128).  Eviction still uses the LRU list; on eviction the buffer is removed from its old hash chain and inserted into the new one.  A `B_INHASH` flag tracks whether a slot is presently in a chain.
+
+### Inode cache (`kernel/fs/fs.c`, `include/file.h`)
+- Added a 64-entry hash table (`icache.hash[ICACHE_HASH_SIZE]`) with the same design.  `iget()` cache-hit lookups are now O(1) instead of the previous O(NINODE) = O(200) linear scan under `icache.lock`.  Slot recycling removes the old entry from the hash and inserts the new assignment.
+
+---
+
 ## Past Changes (2026-03-30 to 2026-04-03)
 
 - `ping` revised to run continuously until ^C (SIGINT), printing standard statistics on exit.

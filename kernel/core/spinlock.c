@@ -29,8 +29,11 @@ acquire(struct spinlock *lk)
     panic("acquire");
 
   // The xchg is atomic.
+  // The 'pause' hint tells the CPU this is a spin-wait loop, which
+  // reduces bus traffic and power consumption on HT/SMT cores and
+  // avoids a memory-order violation penalty when the lock is released.
   while(xchg(&lk->locked, 1) != 0)
-    ;
+    asm volatile("pause");
 
   // Tell the C compiler and the processor to not move loads or stores
   // past this point, to ensure that the critical section's memory
@@ -39,7 +42,9 @@ acquire(struct spinlock *lk)
 
   // Record info about lock acquisition for debugging.
   lk->cpu = mycpu();
+#ifdef KDEBUG_SPINLOCK_CALLSTACK
   getcallerpcs(&lk, lk->pcs);
+#endif
 }
 
 // Release the lock.

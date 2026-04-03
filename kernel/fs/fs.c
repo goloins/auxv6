@@ -194,9 +194,15 @@ bfree(int dev, uint b)
 // dev, and inum.  One must hold ip->lock in order to
 // read or write that inode's ip->valid, ip->size, ip->type, &c.
 
+// Hash table size for the inode cache.  Power-of-two; roughly NINODE/4
+// keeps average chain length short without wasting memory.
+#define ICACHE_HASH_SIZE 64
+#define IHASH(dev, inum) (((uint)(dev) * 31u + (uint)(inum)) & (ICACHE_HASH_SIZE - 1))
+
 struct {
   struct spinlock lock;
   struct inode inode[NINODE];
+  struct inode *hash[ICACHE_HASH_SIZE]; // O(1) iget() lookup chains
 } icache;
 
 void
@@ -205,6 +211,7 @@ iinit(int dev)
   int i = 0;
   
   initlock(&icache.lock, "icache");
+  memset(icache.hash, 0, sizeof(icache.hash));
   for(i = 0; i < NINODE; i++) {
     initsleeplock(&icache.inode[i].lock, "inode");
   }
@@ -277,33 +284,53 @@ struct inode*
 iget(uint dev, uint inum)
 {
   struct inode *ip, *empty;
+  struct inode **pp;
+  uint h;
 
   acquire(&icache.lock);
 
-  // Is the inode already cached?
-  empty = 0;
-  for(ip = &icache.inode[0]; ip < &icache.inode[NINODE]; ip++){
-    if(ip->ref > 0 && ip->dev == dev && ip->inum == inum){
+  // O(1) hash lookup: check whether the inode is already cached.
+  h = IHASH(dev, inum);
+  for(ip = icache.hash[h]; ip != 0; ip = ip->hash_next){
+    if(ip->dev == dev && ip->inum == inum){
       ip->ref++;
       release(&icache.lock);
       return ip;
     }
-    if(empty == 0 && ip->ref == 0)    // Remember empty slot.
-      empty = ip;
   }
 
-  // Recycle an inode cache entry.
+  // Not cached.  Find the first free (ref==0) slot.
+  empty = 0;
+  for(ip = &icache.inode[0]; ip < &icache.inode[NINODE]; ip++){
+    if(ip->ref == 0){
+      empty = ip;
+      break;
+    }
+  }
   if(empty == 0)
     panic("iget: no inodes");
 
-  ip = empty;
-  ip->dev = dev;
-  ip->inum = inum;
-  ip->ref = 1;
-  ip->valid = 0;
-  release(&icache.lock);
+  // If this slot held a previous inode (inum != 0), remove it from
+  // its old hash chain before reusing the slot.
+  if(empty->inum != 0){
+    uint old_h = IHASH(empty->dev, empty->inum);
+    pp = &icache.hash[old_h];
+    while(*pp && *pp != empty)
+      pp = &(*pp)->hash_next;
+    if(*pp)
+      *pp = empty->hash_next;
+  }
 
-  return ip;
+  // Assign new inode identity and insert into hash.
+  empty->dev = dev;
+  empty->inum = inum;
+  empty->ref = 1;
+  empty->valid = 0;
+  empty->hash_next = icache.hash[h];
+  icache.hash[h] = empty;
+
+  release(&icache.lock);
+  return empty;
 }
 
 // Increment reference count for ip.

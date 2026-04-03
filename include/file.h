@@ -20,6 +20,8 @@ struct inode {
   struct sleeplock lock; // protects everything below here
   int valid;          // inode has been read from disk?
 
+  struct inode *hash_next; // next in icache hash chain
+
   short type;         // copy of disk inode
   short major;
   short minor;

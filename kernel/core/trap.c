@@ -188,9 +188,7 @@ trap(struct trapframe *tf)
       exit(0);
     myproc()->tf = tf;
     syscall();
-    proc_apply_pending_signals(myproc());
-    proc_deliver_signal(myproc());
-    proc_maybe_stop_current();
+    proc_handle_signals_on_return(myproc());
     if(myproc()->killed)
       exit(0);
     return;
@@ -279,11 +277,7 @@ trap(struct trapframe *tf)
   }
 
   if(myproc() && (tf->cs&3) == DPL_USER)
-    proc_apply_pending_signals(myproc());
-  if(myproc() && (tf->cs&3) == DPL_USER)
-    proc_deliver_signal(myproc());
-  if(myproc() && (tf->cs&3) == DPL_USER)
-    proc_maybe_stop_current();
+    proc_handle_signals_on_return(myproc());
 
   // Force process exit if it has been killed and is in user space.
   // (If it is still executing in the kernel, let it keep running

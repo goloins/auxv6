@@ -36,6 +36,15 @@ struct {
   struct proc proc[NPROC];
 } ptable;
 
+// Provided by mp.c: reverse APIC-ID -> cpus[] index, built at mpinit().
+extern uchar apic_cpu_map[256];
+
+// Count of processes that have active alarms (alarm_ticks != 0).
+// Incremented when alarm_ticks is set, decremented when it fires or is
+// cleared.  Checked without the ptable.lock in the timer ISR hotpath so
+// proc_check_alarms() can skip the full table scan when no alarms exist.
+static volatile int active_alarm_count;
+
 static struct proc *initproc;
 
 int nextpid = 1;
@@ -163,12 +172,31 @@ proc_note_signal_locked(struct proc *p, int signo)
     p->state = RUNNABLE;
 }
 
+// Set (or cancel) the alarm for p.  deadline_ticks==0 cancels.
+// Keeps active_alarm_count in sync so the timer ISR hotpath can skip
+// the ptable scan when no alarms are pending.
+void
+proc_set_alarm(struct proc *p, uint deadline_ticks)
+{
+  uint old = p->alarm_ticks;
+  p->alarm_ticks = deadline_ticks;
+  if(old == 0 && deadline_ticks != 0)
+    __sync_fetch_and_add(&active_alarm_count, 1);
+  else if(old != 0 && deadline_ticks == 0)
+    __sync_fetch_and_sub(&active_alarm_count, 1);
+}
+
 // Check all processes for expired alarms and post SIGALRM.
 // Called from timer interrupt on CPU 0.
 void
 proc_check_alarms(uint current_ticks)
 {
   struct proc *p;
+
+  // Fast path: no alarms set at all.  Avoids acquiring ptable.lock
+  // (and doing an O(NPROC) scan) on every timer tick when idle.
+  if(active_alarm_count == 0)
+    return;
 
   acquire(&ptable.lock);
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
@@ -178,6 +206,7 @@ proc_check_alarms(uint current_ticks)
       continue;
     if(current_ticks >= p->alarm_ticks) {
       p->alarm_ticks = 0;  // One-shot, clear the alarm
+      __sync_fetch_and_sub(&active_alarm_count, 1);
       p->sig_pending |= SIGBIT(SIGALRM);
       // Wake process if sleeping so it can receive the signal
       if(p->state == SLEEPING)
@@ -390,6 +419,22 @@ pinit(void)
   initlock(&ptable.lock, "ptable");
 }
 
+// Combined signal dispatch called at every trap/syscall return to userspace.
+// A single lockless precheck avoids acquiring ptable.lock at all when there
+// is nothing to do -- the common case for well-behaved processes.
+void
+proc_handle_signals_on_return(struct proc *p)
+{
+  if(p == 0)
+    return;
+  // Lockless read: stale zeros just mean we process on the next return.
+  if(!(p->sig_pending || p->sig_caught || p->state == STOPPED))
+    return;
+  proc_apply_pending_signals(p);
+  proc_deliver_signal(p);
+  proc_maybe_stop_current();
+}
+
 // Must be called with interrupts disabled
 int
 cpuid() {
@@ -401,19 +446,18 @@ cpuid() {
 struct cpu*
 mycpu(void)
 {
-  int apicid, i;
-  
+  uchar apicid;
+  uchar idx;
+
   if(readeflags()&FL_IF)
     panic("mycpu called with interrupts enabled\n");
-  
-  apicid = lapicid();
-  // APIC IDs are not guaranteed to be contiguous. Maybe we should have
-  // a reverse map, or reserve a register to store &cpus[i].
-  for (i = 0; i < ncpu; ++i) {
-    if (cpus[i].apicid == apicid)
-      return &cpus[i];
-  }
-  panic("unknown apicid\n");
+
+  // O(1) reverse lookup through the table built at mpinit().
+  apicid = (uchar)lapicid();
+  idx = apic_cpu_map[apicid];
+  if(idx == 0xff)
+    panic("unknown apicid\n");
+  return &cpus[idx];
 }
 
 // Disable interrupts so that we are not rescheduled
@@ -1181,21 +1225,30 @@ scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
+  int i, start, found;
   c->proc = 0;
+  c->sched_last = 0;
   
   for(;;){
     // Enable interrupts on this processor.
     sti();
 
-    // Loop over process table looking for process to run.
+    found = 0;
+
+    // Loop over process table looking for a runnable process.
+    // Each CPU starts its scan from where it last found work, so
+    // multiple CPUs naturally spread across the table instead of
+    // all racing for the same low-indexed slots.
     acquire(&ptable.lock);
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    start = c->sched_last;
+    for(i = 0; i < NPROC; i++){
+      p = &ptable.proc[(start + i) % NPROC];
       if(p->state != RUNNABLE)
         continue;
 
-      // Switch to chosen process.  It is the process's job
-      // to release ptable.lock and then reacquire it
-      // before jumping back to us.
+      // Advance hint past this process so the next trip starts after it.
+      c->sched_last = ((start + i + 1) % NPROC);
+
       c->proc = p;
       switchuvm(p);
       p->state = RUNNING;
@@ -1206,8 +1259,22 @@ scheduler(void)
       // Process is done running for now.
       // It should have changed its p->state before coming back.
       c->proc = 0;
+      found = 1;
     }
-    release(&ptable.lock);
+
+    if(!found){
+      // Nothing runnable.  Release the lock and halt this CPU until
+      // the next interrupt fires (timer, disk completion, etc.).
+      // This avoids burning all CPUs spinning on ptable.lock when the
+      // system is idle, which was a significant source of unnecessary
+      // lock contention in the original xv6 design.
+      release(&ptable.lock);
+      // sti was called above; hlt suspends the CPU until the next
+      // interrupt, at which point the outer loop resumes.
+      asm volatile("hlt");
+    } else {
+      release(&ptable.lock);
+    }
 
   }
 }

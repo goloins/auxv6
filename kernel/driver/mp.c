@@ -15,6 +15,10 @@ struct cpu cpus[NCPU];
 int ncpu;
 uchar ioapicid;
 
+// Reverse APIC-ID lookup: apic_cpu_map[apicid] -> index into cpus[].
+// Entries are 0xff until mpinit() populates them.
+uchar apic_cpu_map[256];
+
 static uchar
 sum(uchar *addr, int len)
 {
@@ -107,12 +111,14 @@ mpinit(void)
     panic("Expect to run on an SMP");
   ismp = 1;
   lapic = (uint*)conf->lapicaddr;
+  memset(apic_cpu_map, 0xff, sizeof(apic_cpu_map));
   for(p=(uchar*)(conf+1), e=(uchar*)conf+conf->length; p<e; ){
     switch(*p){
     case MPPROC:
       proc = (struct mpproc*)p;
       if(ncpu < NCPU) {
         cpus[ncpu].apicid = proc->apicid;  // apicid may differ from ncpu
+        apic_cpu_map[proc->apicid] = ncpu; // build reverse map
         ncpu++;
       }
       p += sizeof(struct mpproc);
