@@ -712,7 +712,7 @@ FATROOT_STAGE ?= .fatroot
 EXT2QEMU = -drive file=$(EXT2IMG)$(comma)index=2$(comma)media=disk$(comma)format=raw
 FATQEMU = -drive file=$(FATIMG)$(comma)index=3$(comma)media=disk$(comma)format=raw
 QEMUNETOPTS ?= -netdev user,id=auxnet0 -device virtio-net-pci,netdev=auxnet0,mac=52:54:00:12:34:56,disable-modern=on
-QEMUGFXOPTS ?= -device virtio-gpu-pci,disable-modern=on
+QEMUGFXOPTS ?= -vga none -device virtio-gpu-pci,disable-modern=on
 QEMUOPTS = -drive file=aux.bootkern,index=0,media=disk,format=raw $(EXT2QEMU) $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 $(TARGETFS_DIR)/tmp/test.iso:

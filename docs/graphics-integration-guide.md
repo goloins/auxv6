@@ -11,7 +11,8 @@ This document tracks the current state of auxv6 graphics support as it exists in
 **Build and boot integration:**
 - `Makefile` already links `kernel/graphics/framebuffer.o`, `kernel/graphics/display.o`, `kernel/graphics/font.o`, `kernel/graphics/render.o`, and `kernel/driver/virtio_gpu.o` into `aux.kern`.
 - `kernel/core/main.c` already initializes `display_init()`, `pci_init()`, and `virtio_gpu_init()` before `consoleinit()`.
-- `Makefile` currently attaches QEMU graphics as `virtio-gpu-pci,disable-modern=on`, but recent QEMU still reports the gpu as PCI ID `1af4:1050` with MMIO capabilities rather than a legacy BAR0 I/O interface.
+- `Makefile` now defaults QEMU graphics to `-vga none -device virtio-gpu-pci,disable-modern=on`, which suppresses the default QEMU VGA window and makes the visible graphics device the same virtio-backed framebuffer path auxv6 uses.
+- Recent QEMU still exposes that gpu transport through PCI capabilities rather than a pure legacy BAR0 I/O path, so auxv6 relies on the modern virtio-pci capability support added in `kernel/driver/virtio.c`.
 - `kernel/driver/virtio.c` now has an initial modern virtio-pci capability path so auxv6 can probe that gpu transport instead of failing immediately on the missing legacy BAR0 path.
 
 **Framebuffer core:**
@@ -46,7 +47,7 @@ This document tracks the current state of auxv6 graphics support as it exists in
 **Console integration:**
 - `kernel/driver/console.c` now allocates its framebuffer from the discovered display mode when one is present, with `640x400` kept as a fallback.
 - The active tty is mirrored into a VT surface sized from the current tty winsize, centered within the framebuffer, and flushed through the generic display ops.
-- Boot winsize now derives from the discovered display mode plus scaled framebuffer cell metrics, which gives a readable default console on high-resolution modes such as `1280x800 -> 80x24` at `16x32` cells.
+- Boot winsize now derives from the discovered display mode plus scaled framebuffer cell metrics, which gives a readable default console on high-resolution modes such as `1280x800 -> 80x25` at roughly `16x30` cells with the current Montecarlo default.
 - VGA hardware remains the physical `80x25` surface, but it now tracks a viewport over the larger logical tty when the tty grid exceeds hardware text-mode dimensions.
 - Console initialization now clears inherited BIOS VGA text and replays only buffered kernel output, which keeps early virtio-gpu bring-up noise from being mistaken for the initial tty state.
 - Kernel debug output stays on the VGA or UART path; the framebuffer mirror is driven from the tty output path instead of from `cprintf()` itself. That avoids recursive display-driver activity during early boot logging.

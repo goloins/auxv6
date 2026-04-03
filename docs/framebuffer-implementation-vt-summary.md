@@ -21,7 +21,7 @@ The key architectural rule is: **treat this as a terminal architecture migration
 - Canonical erase echo and signal echo now also stay on the tty-aware path, which fixes framebuffer-visible backspace and control-character display drift.
 - `console.c` can create a framebuffer sized from the primary display mode when discovered, choose a readable boot tty size from that geometry, mirror the active tty into a VT surface, and flush it through virtio-gpu.
 - Once the framebuffer path is live, normal active-tty refresh now prefers the framebuffer path rather than continuing to treat VGA text refresh as part of every interactive flush.
-- The framebuffer mirror now scales terminal cells for readability in higher-resolution modes, which turns a native `1280x800` scanout into a readable default console such as `80x24` at `16x32` cells.
+- The framebuffer mirror now scales terminal cells for readability in higher-resolution modes, which turns a native `1280x800` scanout into a readable default console such as `80x25` at roughly `16x30` cells with the current Montecarlo default.
 - The terminal stack now has two builtin 8x16 bitmap fonts: the original classic asset and a new original Monaco-inspired variant named `Montecarlo`.
 - `Montecarlo` is now the default terminal and framebuffer-console font; the original `builtin-8x16` asset remains available as a classic fallback.
 - Larger on-screen text still comes from cell scaling rather than from multiple point sizes, and Chicago-style UI typography remains deferred until much later display-server work.
