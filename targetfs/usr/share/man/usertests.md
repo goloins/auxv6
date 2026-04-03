@@ -19,6 +19,7 @@ None.
 ## Tests Performed (selection)
 - Inode create/unlink, link counts, hard links
 - Directory creation, removal, rename
+- Root directory iteration rejects raw `.` and `..` entries from `/`
 - Concurrent file I/O from multiple processes
 - Read/write of large files
 - Symbolic link creation and following

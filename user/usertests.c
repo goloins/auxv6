@@ -292,6 +292,49 @@ void dirtest(void)
 }
 
 void
+rootdirtest(void)
+{
+  int fd;
+  int nent;
+  int i;
+  struct dirent des[16];
+
+  dprintf(stdout, "rootdir test\n");
+
+  fd = open("/", O_RDONLY);
+  if(fd < 0){
+    dprintf(stdout, "open / failed\n");
+    exit(0);
+  }
+
+  for(;;){
+    nent = getdents(fd, des, 16);
+    if(nent < 0){
+      dprintf(stdout, "getdents / failed\n");
+      close(fd);
+      exit(0);
+    }
+    if(nent == 0)
+      break;
+
+    for(i = 0; i < nent; i++){
+      if(des[i].inum == 0)
+        continue;
+      if(des[i].name[0] == '.' &&
+         (des[i].name[1] == 0 ||
+          (des[i].name[1] == '.' && des[i].name[2] == 0))){
+        dprintf(stdout, "rootdir exposed %s\n", des[i].name);
+        close(fd);
+        exit(0);
+      }
+    }
+  }
+
+  close(fd);
+  dprintf(stdout, "rootdir test ok\n");
+}
+
+void
 exectest(void)
 {
   dprintf(stdout, "exec test\n");
@@ -1767,6 +1810,7 @@ main(int argc, char *argv[])
   writetest();
   writetest1();
   createtest();
+  rootdirtest();
 
   openiputtest();
   exitiputtest();

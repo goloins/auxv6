@@ -458,6 +458,7 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 - libc portability tranches 1 and 2 landed: canonical headers, time/civil calendar, stdio seek/tell/scan, and stream buffering (`setvbuf`/`setbuf`/`setlinebuf`).
 - libc ABI cleanup phase 5 completed (`crt0.S`, clean `exit`, `dprintf` vs `printf` split).
 - procfs expanded (`/proc/ahci_tune`, `/proc/vblk_flush`, `/proc/meminfo`, `/proc/lsof`).
+- VFS/getdents system-root iteration now suppresses backend `.` and `..` entries only at `/`; other mount roots such as `/tmp` are unchanged.
 - Guest harness improved with command-completion markers and safer ANSI handling.
 - devman integrated into boot runlevel; `man` and initial manpage set added.
 - Virtio-blk stress and retry harnesses added; virtio multi-device probe fixes landed.

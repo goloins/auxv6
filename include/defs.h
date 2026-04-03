@@ -1,6 +1,7 @@
 struct buf;
 struct console_gfx_debug_info;
 struct context;
+struct dirent;
 struct file;
 struct inode;
 struct pipe;
@@ -217,7 +218,8 @@ void            vfs_vnode_drop(struct vnode*);
 int             vfs_register_mount(struct vfs*, int, int, char*, const void*, int);
 int             vfs_unmount(char*);
 uint            vfs_root_dev(void);
-int             vfs_is_root_inode(struct inode*);
+int             vfs_is_system_root_inode(struct inode*);
+int             vfs_dirent_visible(struct inode*, struct dirent*);
 struct inode*   vfs_mount_crossover(struct inode*, char*);
 int             vfs_mount_count(void);
 int             vfs_get_mounts(struct vfs_mount_info*, int);

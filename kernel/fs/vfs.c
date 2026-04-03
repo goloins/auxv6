@@ -546,7 +546,7 @@ vfs_root_dev(void)
 }
 
 int
-vfs_is_root_inode(struct inode *ip)
+vfs_is_system_root_inode(struct inode *ip)
 {
   struct mount *m;
   int is_root;
@@ -560,6 +560,30 @@ vfs_is_root_inode(struct inode *ip)
              m->mountpoint->inum == ip->inum);
   release(&vfslock);
   return is_root;
+}
+
+static int
+dirent_is_dot_or_dotdot(struct dirent *de)
+{
+  if(de == 0)
+    return 0;
+  if(de->name[0] != '.')
+    return 0;
+  if(de->name[1] == 0)
+    return 1;
+  if(de->name[1] == '.' && de->name[2] == 0)
+    return 1;
+  return 0;
+}
+
+int
+vfs_dirent_visible(struct inode *dir, struct dirent *de)
+{
+  if(dir == 0 || de == 0)
+    return 0;
+  if(vfs_is_system_root_inode(dir) && dirent_is_dot_or_dotdot(de))
+    return 0;
+  return 1;
 }
 
 // If ip is a mountpoint (underlying directory), return the root inode

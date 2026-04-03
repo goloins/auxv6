@@ -156,7 +156,7 @@ buildcwd(struct inode *cwd, char *buf, int size)
 
   for(;;){
     ilock(ip);
-    if(vfs_is_root_inode(ip)){
+    if(vfs_is_system_root_inode(ip)){
       iunlock(ip);
       break;
     }
@@ -554,6 +554,8 @@ sys_getdents(void)
     if(r != sizeof(de))
       break;
     if(de.inum == 0)
+      continue;
+    if(!vfs_dirent_visible(f->ip, &de))
       continue;
     ents[out++] = de;
   }

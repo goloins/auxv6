@@ -4,6 +4,7 @@
 #include "types.h"
 
 struct inode;
+struct dirent;
 struct stat;
 
 #define VFS_NAME_MAX 8
@@ -101,7 +102,8 @@ int vfs_register_mount(struct vfs *fs, int dev, int flags, char *path,
                        const void *data, int datalen);
 int vfs_unmount(char *path);
 uint vfs_root_dev(void);
-int vfs_is_root_inode(struct inode *ip);
+int vfs_is_system_root_inode(struct inode *ip);
+int vfs_dirent_visible(struct inode *dir, struct dirent *de);
 int vfs_mount_count(void);
 int vfs_get_mounts(struct vfs_mount_info *out, int max);
 int vfs_dev_is_mounted(uint dev);
