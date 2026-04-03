@@ -18,8 +18,11 @@ The key architectural rule is: **treat this as a terminal architecture migration
 - Kernel debug output remains on the VGA or UART side; the framebuffer mirror is driven from the tty path instead of from `cprintf()`, which keeps display-driver bring-up separate from early boot logging.
 - The framebuffer mirror is now enabled only after `kinit2()`, because pre-`kinit2()` memory was too small for reliable full-screen framebuffer allocation during lazy console mirror startup.
 - Echoed input and normal tty output now share the same OPOST-aware tty emission path, so newline handling stays consistent after separating kernel `cprintf()` from tty state updates.
+- Canonical erase echo and signal echo now also stay on the tty-aware path, which fixes framebuffer-visible backspace and control-character display drift.
 - `console.c` can create a framebuffer sized from the primary display mode when discovered, choose a readable boot tty size from that geometry, mirror the active tty into a VT surface, and flush it through virtio-gpu.
+- Once the framebuffer path is live, normal active-tty refresh now prefers the framebuffer path rather than continuing to treat VGA text refresh as part of every interactive flush.
 - The framebuffer mirror now scales terminal cells for readability in higher-resolution modes, which turns a native `1280x800` scanout into a readable default console such as `80x24` at `16x32` cells.
+- The only builtin font asset is still `8x16`; larger on-screen text currently comes from cell scaling, not alternate font bitmaps.
 - `/proc/gfxstats` now provides visibility into counters plus mode, framebuffer, tty, VT, and viewport state for the current mirror path.
 - A critical mirror regression has been fixed: the framebuffer is no longer cleared on every sync, only on initial allocation or VT resize. That restored stable text and significantly reduced redraw overhead.
 - The important limitation is still architectural: the normal console source of truth remains the legacy text-mode or shadow-screen state, and the framebuffer remains a mirror of that state.
@@ -28,6 +31,7 @@ The key architectural rule is: **treat this as a terminal architecture migration
 
 - Manual QEMU bring-up now shows a readable, stable virtio-gpu framebuffer console through boot, login, and interactive shell use.
 - Display discovery, modern virtio-pci transport, multi-page DMA backing, delayed post-`kinit2()` mirror activation, display-derived geometry, readable cell scaling, and the per-sync clear regression fix now work together as one coherent path.
+- Canonical erase display and control-character echo now stay aligned with the framebuffer-visible console state, and active interactive refresh is now framebuffer-first once the graphics path is live.
 - The framebuffer console is visibly faster after the sync-clear fix because stable pixels are preserved between dirty updates instead of being erased every frame.
 
 ## What Must Stay Stable During The Migration

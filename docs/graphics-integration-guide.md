@@ -24,6 +24,7 @@ This document tracks the current state of auxv6 graphics support as it exists in
 - `kernel/graphics/font.c` provides a builtin 8x16 monospace font and glyph lookup.
 - `kernel/graphics/render.c` provides a minimal VT surface, dirty-cell tracking, cell-to-pixel rendering, and cursor drawing.
 - Framebuffer cell metrics can now scale up to 2x for readability in higher-resolution modes while still using the existing builtin font.
+- There is still only one real builtin font today (`builtin-8x16`); size variation currently comes from framebuffer-side cell scaling rather than from multiple font assets.
 - Glyph drawing now uses row-span fills instead of a per-pixel foreground path, which reduces framebuffer write overhead.
 - The current font path is ASCII-oriented and intentionally minimal.
 
@@ -49,6 +50,8 @@ This document tracks the current state of auxv6 graphics support as it exists in
 - Kernel debug output stays on the VGA or UART path; the framebuffer mirror is driven from the tty output path instead of from `cprintf()` itself. That avoids recursive display-driver activity during early boot logging.
 - Framebuffer mirror activation is now deferred until after `kinit2()` so the first mirror allocation runs with the full post-bootstrap page pool instead of the tiny pre-`kinit2()` memory window.
 - Echoed input now uses the same tty output path as normal writes, which keeps carriage-return and newline handling aligned between login prompts, shell command entry, and command output.
+- Canonical erase echo and signal echo now also stay on the tty-aware path, which keeps backspace, `^C`, and `^Z` visible state aligned with the framebuffer mirror instead of only updating the legacy VGA side.
+- Once the framebuffer path is live, the active tty flush now treats the framebuffer as the primary refresh target. VGA text updates remain the pre-graphics and fallback path rather than part of every normal interactive flush.
 - `/proc/gfxstats` now exposes framebuffer mirror counters plus mode, framebuffer, tty, VT, cursor, and viewport geometry.
 - A major mirror regression in `console_gfx_ensure_locked()` has been fixed: the framebuffer is no longer cleared on every sync, only on initial allocation or VT resize. That restored stable text and removed the worst redraw slowdown during boot and shell use.
 
