@@ -1,7 +1,7 @@
 #define NPROC       128  // maximum number of processes
 #define KSTACKSIZE 4096  // size of per-process kernel stack
 #define NCPU          8  // maximum number of CPUs
-#define KALLOC_CPU_CACHE 16  // per-CPU cached free pages before global flush
+#define KALLOC_CPU_CACHE 32  // per-CPU cached free pages before global flush
 #define NOFILE       32  // open files per process
 #define NFILE       256  // open files per system
 #define NINODE      200  // maximum number of active i-nodes

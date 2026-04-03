@@ -10,7 +10,7 @@
 Per-CPU `kalloc` freelist caching has now been implemented in the kernel as the
 first stage of this roadmap:
 
-- Added `KALLOC_CPU_CACHE` to `include/param.h`.
+- Added `KALLOC_CPU_CACHE` to `include/param.h` (currently `32` pages per CPU).
 - Extended `struct cpu` with per-CPU allocator cache fields in `include/proc.h`.
 - Reworked `kalloc()` / `kfree()` fast paths in `kernel/core/kalloc.c` to use
   CPU-local page stashes and batch refill/flush via the global freelist lock.
