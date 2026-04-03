@@ -239,12 +239,12 @@ main(int argc, char **argv)
       break;
 
     n = recvtimeout(fd, buf, sizeof(buf), TELNET_RECV_POLL_TICKS);
-    if(n < 0)
-      break;
-
-    if(n == 0) {
+    if(n == RECV_TIMEOUT_EXPIRED) {
       continue;
     }
+
+    if(n <= 0)
+      break;
 
     n = process_telnet_rx(fd, buf, n, out);
     if(n > 0) {

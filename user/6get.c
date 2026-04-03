@@ -14,6 +14,9 @@
 #define SIXGET_VERSION "6get 0.3"
 #define RECV_TIMEOUT_TICKS 100
 #define POST_HEADER_IDLE_LIMIT 5
+#define POST_HEADER_STALL_LIMIT 60
+#define UPTIME_TICKS_PER_SEC 100
+#define PROGRESS_REFRESH_TICKS 50
 
 static int g_debug = 0;
 static int g_quiet = 0;
@@ -474,30 +477,70 @@ write_all(int fd, const char *buf, int len)
 }
 
 static void
-progress_update(int total, int content_len, int *last_pct, int done)
+format_rate(int total, int start_tick, char *out, int outsz)
 {
+  uint elapsed;
+  uint rate;
+
+  if(out == 0 || outsz < 5)
+    return;
+
+  if(total <= 0 || start_tick < 0) {
+    snprintf(out, outsz, "0 B/s");
+    return;
+  }
+
+  elapsed = (uint)(uptime() - start_tick);
+  if(elapsed == 0) {
+    snprintf(out, outsz, "0 B/s");
+    return;
+  }
+
+  if(total <= 20000000)
+    rate = (uint)(((uint)total * UPTIME_TICKS_PER_SEC + elapsed / 2) / elapsed);
+  else
+    rate = ((uint)total / elapsed) * UPTIME_TICKS_PER_SEC;
+
+  if(rate >= 1024 * 1024)
+    snprintf(out, outsz, "%d MB/s", (int)((rate + (1024 * 1024 / 2)) / (1024 * 1024)));
+  else if(rate >= 1024)
+    snprintf(out, outsz, "%d KB/s", (int)((rate + 512) / 1024));
+  else
+    snprintf(out, outsz, "%d B/s", (int)rate);
+}
+
+static void
+progress_update(int total, int content_len, int start_tick, int *last_pct,
+                int *last_draw_tick, int done)
+{
+  int now;
   int pct;
   int filled;
   int i;
   char bar[21];
+  char rate[16];
 
-  if(g_quiet || content_len <= 0 || last_pct == 0)
+  if(g_quiet || content_len <= 0 || last_pct == 0 || last_draw_tick == 0)
     return;
 
+  now = uptime();
   pct = (total * 100) / content_len;
   if(pct > 100)
     pct = 100;
 
-  if(!done && pct == *last_pct)
+  if(!done && pct == *last_pct && now - *last_draw_tick < PROGRESS_REFRESH_TICKS)
     return;
   *last_pct = pct;
+  *last_draw_tick = now;
 
   filled = (pct * 20) / 100;
   for(i = 0; i < 20; i++)
     bar[i] = (i < filled) ? '=' : ' ';
   bar[20] = 0;
 
-  printf("\r6get: [%s] %3d%% (%d/%d)", bar, pct, total, content_len);
+  format_rate(total, start_tick, rate, sizeof(rate));
+
+  printf("\r6get: [%s] %3d%% (%d/%d) %s", bar, pct, total, content_len, rate);
   if(done)
     printf("\n");
 }
@@ -517,6 +560,8 @@ fetch_to_file(const struct http_url *u, const char *outfile, char *redirect, int
   int body_off;
   int content_len;
   int idle_count;
+  int progress_start_tick;
+  int last_draw_tick;
   int last_pct;
 
   if(redirect && redirsz > 0)
@@ -560,22 +605,47 @@ fetch_to_file(const struct http_url *u, const char *outfile, char *redirect, int
   hdrlen = 0;
   content_len = -1;
   idle_count = 0;
+  progress_start_tick = -1;
+  last_draw_tick = -PROGRESS_REFRESH_TICKS;
   last_pct = -1;
   outfd = -1;
 
   while(1) {
     n = (int)recvtimeout(fd, g_resp_buf, sizeof(g_resp_buf), RECV_TIMEOUT_TICKS);
-    if(n == 0) {
+    if(n == RECV_TIMEOUT_EXPIRED) {
       if(!got_headers)
         continue;
       idle_count++;
-      if(content_len >= 0 && total >= content_len)
-        break;
+      if(content_len >= 0) {
+        if(idle_count >= POST_HEADER_STALL_LIMIT) {
+          ERROR("6get: timed out after %d/%d bytes\n", total, content_len);
+          if(outfd >= 0) {
+            close(outfd);
+            unlink(outfile);
+          }
+          close(fd);
+          return -1;
+        }
+        continue;
+      }
       if(idle_count >= POST_HEADER_IDLE_LIMIT) {
-        DEBUG("6get[debug]: idle timeout after headers, ending transfer\n");
+        DEBUG("6get[debug]: idle timeout after headers without content-length, ending transfer\n");
         break;
       }
       continue;
+    }
+
+    if(n == 0) {
+      if(content_len >= 0 && total < content_len) {
+        ERROR("6get: truncated response (%d/%d bytes)\n", total, content_len);
+        if(outfd >= 0) {
+          close(outfd);
+          unlink(outfile);
+        }
+        close(fd);
+        return -1;
+      }
+      break;
     }
 
     if(n < 0)
@@ -619,7 +689,9 @@ fetch_to_file(const struct http_url *u, const char *outfile, char *redirect, int
       content_len = parse_content_length(g_hdr_buf, end);
       if(content_len >= 0) {
         DEBUG("6get[debug]: content-length=%d\n", content_len);
-        progress_update(total, content_len, &last_pct, 0);
+        progress_start_tick = uptime();
+        progress_update(total, content_len, progress_start_tick, &last_pct,
+                        &last_draw_tick, 0);
       }
 
       outfd = open(outfile, O_CREAT | O_WRONLY | O_TRUNC);
@@ -644,7 +716,8 @@ fetch_to_file(const struct http_url *u, const char *outfile, char *redirect, int
           return -1;
         }
         total += hdrlen - body_off;
-        progress_update(total, content_len, &last_pct, 0);
+        progress_update(total, content_len, progress_start_tick, &last_pct,
+                        &last_draw_tick, 0);
         if(content_len >= 0 && total >= content_len)
           break;
       }
@@ -659,7 +732,8 @@ fetch_to_file(const struct http_url *u, const char *outfile, char *redirect, int
       return -1;
     }
     total += n;
-    progress_update(total, content_len, &last_pct, 0);
+    progress_update(total, content_len, progress_start_tick, &last_pct,
+                    &last_draw_tick, 0);
 
     if(content_len >= 0 && total >= content_len)
       break;
@@ -681,7 +755,8 @@ fetch_to_file(const struct http_url *u, const char *outfile, char *redirect, int
     return -1;
   }
 
-  progress_update(total, content_len, &last_pct, 1);
+  progress_update(total, content_len, progress_start_tick, &last_pct,
+                  &last_draw_tick, 1);
 
   close(fd);
   close(outfd);

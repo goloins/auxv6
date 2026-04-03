@@ -26,9 +26,10 @@ This note documents current `6get` transfer behavior in auxv6 userland.
 
 ## Completion and Hang Avoidance
 
-- If `Content-Length` is present, transfer completes exactly when that many body bytes are written.
-- If `Content-Length` is missing, transfer relies on connection close.
-- After headers are parsed, `recvtimeout` is used with an idle-limit cutoff to avoid hanging on servers that keep sockets open.
+- If `Content-Length` is present, transfer keeps waiting for the remaining bytes until the declared body length is written.
+- A premature EOF before the declared `Content-Length` is treated as a truncated download error.
+- A long post-header stall on a known-length transfer is treated as a timeout error rather than a successful partial save.
+- If `Content-Length` is missing, transfer relies on connection close and falls back to an idle-limit cutoff to avoid hanging on servers that keep sockets open.
 
 ## Progress Output
 
@@ -36,6 +37,7 @@ This note documents current `6get` transfer behavior in auxv6 userland.
   - percentage
   - bytes received
   - total bytes
+  - estimated transfer rate
 - Progress output is suppressed by `-q`.
 
 ## Known Limits

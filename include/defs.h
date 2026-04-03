@@ -559,6 +559,7 @@ void            udp_input(struct ifnet*, struct ip_hdr*, char*, uint);
 void            icmp_input(struct ifnet*, struct ip_hdr*, char*, uint);
 int             tcp_connect(struct ifnet*, struct socket*, struct sockaddr_in*);
 int             tcp_output(struct ifnet*, struct sockaddr_in*, struct sockaddr_in*, char*, uint);
+int             tcp_send_ack(struct socket*);
 void            tcp_input(struct ifnet*, struct ip_hdr*, char*, uint);
 int             tcp_close(struct socket*, struct ifnet*);
 int             tcp_retransmit_check(struct socket*, struct ifnet*);

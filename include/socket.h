@@ -31,6 +31,9 @@
 #define TCPS_LAST_ACK     8
 #define TCPS_TIME_WAIT    9
 
+// recvtimeout() returns this value when no data arrives before the timeout.
+#define RECV_TIMEOUT_EXPIRED (-2)
+
 // Special address
 #define INADDR_LOOPBACK  0x7f000001    // 127.0.0.1
 #define INADDR_ANY       0x00000000

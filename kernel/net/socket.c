@@ -218,6 +218,49 @@ socket_stream_mark_established_locked(struct socket *client,
   accepted->tcp.state = TCPS_ESTABLISHED;
 }
 
+static int
+socket_stream_eof_locked(struct socket *s)
+{
+  if(s == 0 || s->type != SOCK_STREAM)
+    return 0;
+  if(s->recv_len != 0)
+    return 0;
+  if(s->state == SOCK_CLOSED)
+    return 1;
+  return s->tcp.state == TCPS_CLOSE_WAIT || s->tcp.state == TCPS_CLOSED;
+}
+
+static int
+socket_recv_copy_locked(struct socket *s, char *buf, int len, struct sockaddr_in *peer)
+{
+  int n;
+
+  n = len;
+  if((uint)n > s->recv_len)
+    n = (int)s->recv_len;
+
+  if(n > 0)
+    memmove(buf, s->recv_buf, (uint)n);
+  if((uint)n < s->recv_len)
+    memmove(s->recv_buf, s->recv_buf + n, s->recv_len - (uint)n);
+  s->recv_len -= (uint)n;
+
+  if(peer)
+    memmove(peer, &s->remote_addr, sizeof(*peer));
+
+  return n;
+}
+
+static void
+socket_stream_window_update(struct socket *s, int nread)
+{
+  if(s == 0 || nread <= 0)
+    return;
+  if(s->type != SOCK_STREAM)
+    return;
+  tcp_send_ack(s);
+}
+
 int
 socket_deliver(struct sockaddr_in *src, struct sockaddr_in *dst, char *data, uint len)
 {
@@ -624,13 +667,17 @@ ksock_recvfrom_timeout(struct socket *s, char *buf, uint len, int timeout_ticks,
 
   acquire(&socket_lock);
   while(s->recv_len == 0) {
+    if(socket_stream_eof_locked(s)) {
+      release(&socket_lock);
+      return 0;
+    }
     release(&socket_lock);
 
     acquire(&tickslock);
     now = ticks;
     if(now - start >= (uint)timeout_ticks) {
       release(&tickslock);
-      return 0;
+      return RECV_TIMEOUT_EXPIRED;
     }
     sleep(&ticks, &tickslock);
     release(&tickslock);
@@ -638,21 +685,14 @@ ksock_recvfrom_timeout(struct socket *s, char *buf, uint len, int timeout_ticks,
     acquire(&socket_lock);
   }
 
-  n = (int)len;
-  if((uint)n > s->recv_len)
-    n = (int)s->recv_len;
-
-  if(n > 0)
-    memmove(buf, s->recv_buf, (uint)n);
-  if((uint)n < s->recv_len)
-    memmove(s->recv_buf, s->recv_buf + n, s->recv_len - (uint)n);
-  s->recv_len -= (uint)n;
-  memmove(&peer, &s->remote_addr, sizeof(peer));
+  n = socket_recv_copy_locked(s, buf, (int)len, &peer);
 
   release(&socket_lock);
 
   if(src)
     memmove(src, &peer, sizeof(peer));
+
+  socket_stream_window_update(s, n);
 
   return n;
 }
@@ -1078,20 +1118,19 @@ sys_recv(void)
     return -1;
 
   acquire(&socket_lock);
-  while(s->recv_len == 0)
+  while(s->recv_len == 0) {
+    if(socket_stream_eof_locked(s)) {
+      release(&socket_lock);
+      return 0;
+    }
     sleep(s, &socket_lock);
+  }
 
-  n = len;
-  if((uint)n > s->recv_len)
-    n = s->recv_len;
-
-  if(n > 0)
-    memmove(buf, s->recv_buf, (uint)n);
-  if((uint)n < s->recv_len)
-    memmove(s->recv_buf, s->recv_buf + n, s->recv_len - (uint)n);
-  s->recv_len -= (uint)n;
+  n = socket_recv_copy_locked(s, buf, len, 0);
 
   release(&socket_lock);
+
+  socket_stream_window_update(s, n);
   return n;
 }
 
@@ -1137,20 +1176,15 @@ sys_recvfrom(void)
     return -1;
 
   acquire(&socket_lock);
-  while(s->recv_len == 0)
+  while(s->recv_len == 0) {
+    if(socket_stream_eof_locked(s)) {
+      release(&socket_lock);
+      return 0;
+    }
     sleep(s, &socket_lock);
+  }
 
-  n = len;
-  if((uint)n > s->recv_len)
-    n = s->recv_len;
-  if(n > 0)
-    memmove(buf, s->recv_buf, (uint)n);
-  if((uint)n < s->recv_len)
-    memmove(s->recv_buf, s->recv_buf + n, s->recv_len - (uint)n);
-  s->recv_len -= (uint)n;
-
-  // Snapshot sender address before release; socket_deliver already wrote it
-  memmove(&peer, &s->remote_addr, sizeof(peer));
+  n = socket_recv_copy_locked(s, buf, len, &peer);
   release(&socket_lock);
 
   if(src_out)
@@ -1158,12 +1192,14 @@ sys_recvfrom(void)
   if(srclen_ptr)
     *srclen_ptr = (int)sizeof(struct sockaddr_in);
 
+  socket_stream_window_update(s, n);
+
   NETDBG("recvfrom: fd=%d n=%d sport=%d\n", sockfd, n, peer.sin_port);
   return n;
 }
 
 // recvtimeout(sockfd, buf, len, timeout_ticks) syscall
-// Returns 0 on timeout with no data.
+// Returns RECV_TIMEOUT_EXPIRED on timeout with no data.
 int
 sys_recvtimeout(void)
 {
@@ -1192,13 +1228,17 @@ sys_recvtimeout(void)
 
   acquire(&socket_lock);
   while(s->recv_len == 0) {
+    if(socket_stream_eof_locked(s)) {
+      release(&socket_lock);
+      return 0;
+    }
     release(&socket_lock);
 
     acquire(&tickslock);
     now = ticks;
     if(now - start >= (uint)timeout_ticks) {
       release(&tickslock);
-      return 0;
+      return RECV_TIMEOUT_EXPIRED;
     }
 
     sleep(&ticks, &tickslock);
@@ -1207,17 +1247,11 @@ sys_recvtimeout(void)
     acquire(&socket_lock);
   }
 
-  n = len;
-  if((uint)n > s->recv_len)
-    n = s->recv_len;
-
-  if(n > 0)
-    memmove(buf, s->recv_buf, (uint)n);
-  if((uint)n < s->recv_len)
-    memmove(s->recv_buf, s->recv_buf + n, s->recv_len - (uint)n);
-  s->recv_len -= (uint)n;
+  n = socket_recv_copy_locked(s, buf, len, 0);
 
   release(&socket_lock);
+
+  socket_stream_window_update(s, n);
   return n;
 }
 
