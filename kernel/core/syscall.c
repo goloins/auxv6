@@ -169,6 +169,7 @@ extern int sys_halt(void);
 extern int sys_sendto(void);
 extern int sys_recvfrom(void);
 extern int sys_clock_gettime(void);
+extern int sys_clock_settime(void);
 extern int sys_setsockopt(void);
 extern int sys_getsockopt(void);
 
@@ -260,6 +261,7 @@ static int (*syscalls[])(void) = {
 [SYS_sendto]   sys_sendto,
 [SYS_recvfrom] sys_recvfrom,
 [SYS_clock_gettime] sys_clock_gettime,
+[SYS_clock_settime] sys_clock_settime,
 [SYS_setsockopt] sys_setsockopt,
 [SYS_getsockopt] sys_getsockopt,
 };

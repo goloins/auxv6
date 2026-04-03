@@ -18,6 +18,9 @@
 #define PTYDEV 3
 #endif
 
+#define KTIME_CLOCK_REALTIME  0
+#define KTIME_CLOCK_MONOTONIC 1
+
 extern struct {
   struct spinlock lock;
   struct proc proc[NPROC];
@@ -559,11 +562,34 @@ sys_clock_gettime(void)
     return -1;
   if(argptr(1, (char**)&tp, sizeof(*tp)) < 0)
     return -1;
-  if(clock_id != 1)
-    return -1;
 
-  ktime_get_monotonic(tp);
-  return 0;
+  if(clock_id == KTIME_CLOCK_MONOTONIC) {
+    ktime_get_monotonic(tp);
+    return 0;
+  }
+  if(clock_id == KTIME_CLOCK_REALTIME) {
+    ktime_get_realtime(tp);
+    return 0;
+  }
+
+  return -1;
+}
+
+int
+sys_clock_settime(void)
+{
+  int clock_id;
+  struct timespec *tp;
+
+  if(argint(0, &clock_id) < 0)
+    return -1;
+  if(argptr(1, (char**)&tp, sizeof(*tp)) < 0)
+    return -1;
+  if(clock_id != KTIME_CLOCK_REALTIME)
+    return -1;
+  if(proc_getuid() != 0)
+    return -1;
+  return ktime_set_realtime(tp);
 }
 
 int

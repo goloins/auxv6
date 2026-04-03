@@ -526,6 +526,7 @@ time_append_format(char *dst, size_t max, size_t *len,
 int
 gettimeofday(struct timeval *tv, struct timezone *tz)
 {
+  struct timespec ts;
   struct rtcdate rtc;
   time_t seconds;
 
@@ -535,6 +536,12 @@ gettimeofday(struct timeval *tv, struct timezone *tz)
   }
   if(tv == 0)
     return 0;
+
+  if(__auxv6_sys_clock_gettime(CLOCK_REALTIME, &ts) == 0) {
+    tv->tv_sec = ts.tv_sec;
+    tv->tv_usec = (suseconds_t)(ts.tv_nsec / 1000L);
+    return 0;
+  }
 
   errno = 0;
   if(date(&rtc) < 0) {
@@ -562,6 +569,8 @@ clock_gettime(clockid_t clock_id, struct timespec *tp)
 
   switch(clock_id) {
   case CLOCK_REALTIME:
+    if(__auxv6_sys_clock_gettime(clock_id, tp) == 0)
+      return 0;
     if(gettimeofday(&tv, 0) < 0)
       return -1;
     tp->tv_sec = tv.tv_sec;
@@ -613,8 +622,17 @@ clock_settime(clockid_t clock_id, const struct timespec *tp)
     return -1;
   }
 
-  errno = ENOSYS;
-  return -1;
+  if(getuid() != 0) {
+    errno = EPERM;
+    return -1;
+  }
+
+  if(__auxv6_sys_clock_settime(clock_id, tp) < 0) {
+    errno = EIO;
+    return -1;
+  }
+
+  return 0;
 }
 
 int

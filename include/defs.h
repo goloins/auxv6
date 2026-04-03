@@ -309,6 +309,8 @@ void            kbdintr(void);
 void            ktime_init(void);
 void            ktime_tick(uint current_ticks);
 void            ktime_get_monotonic(struct timespec *ts);
+void            ktime_get_realtime(struct timespec *ts);
+int             ktime_set_realtime(const struct timespec *ts);
 
 // lapic.c
 void            cmostime(struct rtcdate *r);

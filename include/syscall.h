@@ -88,3 +88,4 @@
 #define SYS_clock_gettime 87
 #define SYS_setsockopt 88
 #define SYS_getsockopt 89
+#define SYS_clock_settime 90

@@ -1,6 +1,7 @@
 #include "types.h"
 #include "defs.h"
 #include "spinlock.h"
+#include "date.h"
 #include "sys/time.h"
 #include "x86.h"
 
@@ -12,6 +13,58 @@ static uint            ktime_ticks;
 static uint            ktime_tsc_per_tick;
 static uint64_t        ktime_last_tick_tsc;
 static uint64_t        ktime_last_ns;
+static int             ktime_realtime_ready;
+static long long       ktime_realtime_offset_ns;
+
+static int
+ktime_is_leap_year(uint year)
+{
+  if((year % 4U) != 0U)
+    return 0;
+  if((year % 100U) != 0U)
+    return 1;
+  return (year % 400U) == 0U;
+}
+
+static int
+ktime_rtc_to_epoch(const struct rtcdate *rtc, uint *out_sec)
+{
+  static const uint mdays[2][12] = {
+    { 31U, 28U, 31U, 30U, 31U, 30U, 31U, 31U, 30U, 31U, 30U, 31U },
+    { 31U, 29U, 31U, 30U, 31U, 30U, 31U, 31U, 30U, 31U, 30U, 31U },
+  };
+  uint64_t days;
+  uint year;
+  uint month;
+
+  if(rtc == 0 || out_sec == 0)
+    return -1;
+  if(rtc->year < 1970U)
+    return -1;
+  if(rtc->month < 1U || rtc->month > 12U)
+    return -1;
+  if(rtc->day < 1U || rtc->day > 31U)
+    return -1;
+  if(rtc->hour > 23U || rtc->minute > 59U || rtc->second > 59U)
+    return -1;
+
+  days = 0;
+  for(year = 1970U; year < rtc->year; year++)
+    days += ktime_is_leap_year(year) ? 366ULL : 365ULL;
+
+  for(month = 1U; month < rtc->month; month++)
+    days += (uint64_t)mdays[ktime_is_leap_year(rtc->year)][month - 1U];
+
+  if(rtc->day > mdays[ktime_is_leap_year(rtc->year)][rtc->month - 1U])
+    return -1;
+  days += (uint64_t)(rtc->day - 1U);
+
+  *out_sec = (uint)(days * 86400ULL +
+                   (uint64_t)rtc->hour * 3600ULL +
+                   (uint64_t)rtc->minute * 60ULL +
+                   (uint64_t)rtc->second);
+  return 0;
+}
 
 static void
 ktime_u64_divmod_u32(uint64_t n, uint d, uint64_t *q_out, uint *r_out)
@@ -44,14 +97,54 @@ ktime_u64_divmod_u32(uint64_t n, uint d, uint64_t *q_out, uint *r_out)
     *r_out = (uint)r;
 }
 
+static uint64_t
+ktime_monotonic_now_locked(uint64_t now)
+{
+  uint64_t base_ns;
+  uint64_t ns;
+  uint64_t delta_cycles;
+  uint64_t scaled_ns;
+  uint64_t delta_ns;
+
+  base_ns = (uint64_t)ktime_ticks * KTIME_NSEC_PER_TICK;
+  ns = base_ns;
+
+  if(ktime_tsc_per_tick != 0 && ktime_last_tick_tsc != 0 && now > ktime_last_tick_tsc) {
+    delta_cycles = now - ktime_last_tick_tsc;
+    scaled_ns = delta_cycles * KTIME_NSEC_PER_TICK;
+    ktime_u64_divmod_u32(scaled_ns, ktime_tsc_per_tick, &delta_ns, 0);
+    if(delta_ns >= KTIME_NSEC_PER_TICK)
+      delta_ns = KTIME_NSEC_PER_TICK - 1ULL;
+    ns += delta_ns;
+  }
+
+  if(ns < ktime_last_ns)
+    ns = ktime_last_ns;
+  else
+    ktime_last_ns = ns;
+
+  return ns;
+}
+
 void
 ktime_init(void)
 {
+  struct rtcdate rtc;
+  uint rtc_sec;
+
   initlock(&ktime_lock, "ktime");
   ktime_ticks = 0;
   ktime_tsc_per_tick = 0;
   ktime_last_tick_tsc = 0;
   ktime_last_ns = 0;
+  ktime_realtime_ready = 0;
+  ktime_realtime_offset_ns = 0;
+
+  cmostime(&rtc);
+  if(ktime_rtc_to_epoch(&rtc, &rtc_sec) == 0) {
+    ktime_realtime_ready = 1;
+    ktime_realtime_offset_ns = (long long)((uint64_t)rtc_sec * KTIME_NSEC_PER_SEC);
+  }
 }
 
 void
@@ -86,11 +179,7 @@ void
 ktime_get_monotonic(struct timespec *ts)
 {
   uint64_t now;
-  uint64_t base_ns;
   uint64_t ns;
-  uint64_t delta_cycles;
-  uint64_t scaled_ns;
-  uint64_t delta_ns;
   uint64_t seconds;
   uint nanoseconds;
 
@@ -100,26 +189,71 @@ ktime_get_monotonic(struct timespec *ts)
   now = rdtsc();
 
   acquire(&ktime_lock);
-  base_ns = (uint64_t)ktime_ticks * KTIME_NSEC_PER_TICK;
-  ns = base_ns;
-
-  if(ktime_tsc_per_tick != 0 && ktime_last_tick_tsc != 0 && now > ktime_last_tick_tsc) {
-    delta_cycles = now - ktime_last_tick_tsc;
-    scaled_ns = delta_cycles * KTIME_NSEC_PER_TICK;
-    ktime_u64_divmod_u32(scaled_ns, ktime_tsc_per_tick, &delta_ns, 0);
-    if(delta_ns >= KTIME_NSEC_PER_TICK)
-      delta_ns = KTIME_NSEC_PER_TICK - 1ULL;
-    ns += delta_ns;
-  }
-
-  if(ns < ktime_last_ns)
-    ns = ktime_last_ns;
-  else
-    ktime_last_ns = ns;
+  ns = ktime_monotonic_now_locked(now);
 
   ktime_u64_divmod_u32(ns, KTIME_NSEC_PER_SEC, &seconds, &nanoseconds);
   release(&ktime_lock);
 
   ts->tv_sec = (time_t)seconds;
   ts->tv_nsec = (long)nanoseconds;
+}
+
+void
+ktime_get_realtime(struct timespec *ts)
+{
+  uint64_t now;
+  uint64_t mono_ns;
+  long long realtime_ns;
+  uint64_t ns;
+  uint64_t seconds;
+  uint nanoseconds;
+
+  if(ts == 0)
+    return;
+
+  now = rdtsc();
+
+  acquire(&ktime_lock);
+  mono_ns = ktime_monotonic_now_locked(now);
+  if(ktime_realtime_ready) {
+    realtime_ns = (long long)mono_ns + ktime_realtime_offset_ns;
+    if(realtime_ns < 0)
+      ns = 0;
+    else
+      ns = (uint64_t)realtime_ns;
+  } else {
+    ns = mono_ns;
+  }
+
+  ktime_u64_divmod_u32(ns, KTIME_NSEC_PER_SEC, &seconds, &nanoseconds);
+  release(&ktime_lock);
+
+  ts->tv_sec = (time_t)seconds;
+  ts->tv_nsec = (long)nanoseconds;
+}
+
+int
+ktime_set_realtime(const struct timespec *ts)
+{
+  uint64_t now;
+  uint64_t mono_ns;
+  uint64_t target_ns;
+
+  if(ts == 0)
+    return -1;
+  if(ts->tv_sec < 0)
+    return -1;
+  if(ts->tv_nsec < 0 || ts->tv_nsec >= (long)KTIME_NSEC_PER_SEC)
+    return -1;
+
+  target_ns = (uint64_t)ts->tv_sec * KTIME_NSEC_PER_SEC + (uint64_t)ts->tv_nsec;
+  now = rdtsc();
+
+  acquire(&ktime_lock);
+  mono_ns = ktime_monotonic_now_locked(now);
+  ktime_realtime_offset_ns = (long long)target_ns - (long long)mono_ns;
+  ktime_realtime_ready = 1;
+  release(&ktime_lock);
+
+  return 0;
 }

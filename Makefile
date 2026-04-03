@@ -435,6 +435,9 @@ _ip: user/ip
 _v6dhcpd: user/v6dhcpd
 	cp user/v6dhcpd _v6dhcpd
 
+_ntpd: user/ntpd
+	cp user/ntpd _ntpd
+
 _passwd: user/passwd
 	cp user/passwd _passwd
 
@@ -577,6 +580,7 @@ UPROGS=\
 	_rarp\
 	_ip\
 	_v6dhcpd\
+	_ntpd\
 	_passwd\
 	_chmod\
 	_chown\
@@ -669,7 +673,7 @@ clean:
 	user/uname \
 	_dhcp \
 	user/ifconfig user/netstat user/route user/arp user/rarp user/ip \
-	user/dhcp user/v6dhcpd user/nslookup \
+	user/dhcp user/v6dhcpd user/ntpd user/nslookup \
 	user/6get \
 	user/lsof user/which user/file \
 	user/date user/time user/killall user/halt \

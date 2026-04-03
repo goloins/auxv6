@@ -154,6 +154,7 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
 int sigreturn(void);
 unsigned int alarm(unsigned int seconds);
 int __auxv6_sys_clock_gettime(int clock_id, struct timespec *tp);
+int __auxv6_sys_clock_settime(int clock_id, const struct timespec *tp);
 #ifndef _UNISTD_H
 int tcsetpgrp(pid_t pgid);
 pid_t tcgetpgrp(void);
