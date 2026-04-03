@@ -24,7 +24,9 @@ This document tracks the current state of auxv6 graphics support as it exists in
 - `kernel/graphics/font.c` provides a builtin 8x16 monospace font and glyph lookup.
 - `kernel/graphics/render.c` provides a minimal VT surface, dirty-cell tracking, cell-to-pixel rendering, and cursor drawing.
 - Framebuffer cell metrics can now scale up to 2x for readability in higher-resolution modes while still using the existing builtin font.
-- There is still only one real builtin font today (`builtin-8x16`); size variation currently comes from framebuffer-side cell scaling rather than from multiple font assets.
+- `kernel/graphics/font.c` now ships two builtin terminal bitmaps: the original `builtin-8x16` asset and a new original Monaco-inspired variant named `montecarlo-8x16`.
+- `montecarlo-8x16` is now the default terminal and framebuffer-console font, while the original `builtin-8x16` asset remains available as a classic fallback.
+- Montecarlo is intentionally terminal-only work: GUI-facing fonts such as Chicago-style UI typography remain out of scope until much later graphics or window-server work.
 - Glyph drawing now uses row-span fills instead of a per-pixel foreground path, which reduces framebuffer write overhead.
 - The current font path is ASCII-oriented and intentionally minimal.
 
