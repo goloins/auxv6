@@ -92,6 +92,8 @@ user/chgrp
 user/sigtest
 user/stressfs
 user/usertests
+user/schedperf
+user/fsperf
 user/wc
 user/zombie
 user/symlinktest

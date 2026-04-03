@@ -29,6 +29,7 @@ Generated: 2026-04-03
 | fatregress | targetfs/usr/share/man/fatregress.md | 2026-04-01 | user/fatregress.c | source-derived usage/options |
 | forktest | targetfs/usr/share/man/forktest.md | 2026-04-01 | user/forktest.c | source-derived usage/options |
 | free | targetfs/usr/share/man/free.md | 2026-04-01 | user/free.c | source-derived usage/options |
+| fsperf | targetfs/usr/share/man/fsperf.md | 2026-04-03 | user/fsperf.c | kernel fs/inode/bcache perf score utility |
 | fsregress | targetfs/usr/share/man/fsregress.md | 2026-04-01 | user/fsregress.c | source-derived usage/options |
 | getty | targetfs/usr/share/man/getty.md | 2026-04-01 | user/getty.c | source-derived usage/options |
 | grep | targetfs/usr/share/man/grep.md | 2026-04-01 | user/grep.c | source-derived usage/options |
@@ -66,6 +67,7 @@ Generated: 2026-04-03
 | rm | targetfs/usr/share/man/rm.md | 2026-04-01 | user/rm.c | source-derived usage/options |
 | route | targetfs/usr/share/man/route.md | 2026-04-01 | user/route.c | source-derived usage/options |
 | runlevel | targetfs/usr/share/man/runlevel.md | 2026-04-01 | user/runlevel.c | source-derived usage/options |
+| schedperf | targetfs/usr/share/man/schedperf.md | 2026-04-03 | user/schedperf.c | kernel scheduler/process perf score utility |
 | server7 | targetfs/usr/share/man/server7.md | 2026-04-03 | user/server7.c | bootstrap display-server daemon entrypoint |
 | sh | targetfs/usr/share/man/sh.md | 2026-04-01 | user/sh.c | source-derived usage/options |
 | sigtest | targetfs/usr/share/man/sigtest.md | 2026-04-01 | user/sigtest.c | source-derived usage/options |

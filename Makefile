@@ -453,6 +453,12 @@ _chgrp: user/chgrp
 _stressfs: user/stressfs
 	cp user/stressfs _stressfs
 
+_schedperf: user/schedperf
+	cp user/schedperf _schedperf
+
+_fsperf: user/fsperf
+	cp user/fsperf _fsperf
+
 _sigtest: user/sigtest
 	cp user/sigtest _sigtest
 
@@ -590,6 +596,8 @@ UPROGS=\
 	_chgrp\
 	_chvt\
 	_stressfs\
+	_schedperf\
+	_fsperf\
 	_sigtest\
 	_usertests\
 	_wc\
@@ -685,6 +693,7 @@ clean:
 	user/server7 \
 	user/date user/time user/killall user/halt \
 	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/dmesg user/tail user/lspci user/v6init
+	user/schedperf user/fsperf
 
 # make a printout
 FILES = $(shell grep -v '^\#' tools/runoff.list)

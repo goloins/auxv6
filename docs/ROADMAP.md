@@ -120,6 +120,12 @@ Primary goal: convert recently landed features into a more reliable baseline whi
 - New utilities are covered by scripted smoke tests in QEMU boot runs.
 - Manpages exist for each tool promoted to default userland in this tranche.
 
+**Scope note:**
+- Framebuffer/screen-draw performance work (dirty-rect updates, partial flush,
+  glyph batching, reduced full-frame mirror cost) is acknowledged as a major
+  optimization area, but intentionally tracked as a separate graphics stream
+  from the current kernel-core performance hardening work.
+
 ### Tranche D - NFS foundation
 - Implement XDR (`kernel/net/xdr.c`) and RPC client (`kernel/net/rpc.c`).
 - Implement portmapper probe and minimal MOUNT protocol path.
