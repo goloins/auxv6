@@ -178,6 +178,9 @@ int listen(int sockfd, int backlog);
 int accept(int sockfd);
 int setsockopt(int sockfd, int level, int optname, const void *optval, int optlen);
 int getsockopt(int sockfd, int level, int optname, void *optval, int *optlen);
+int shutdown(int sockfd, int how);
+int getsockname(int sockfd, struct sockaddr_in *addr, int *addrlen);
+int getpeername(int sockfd, struct sockaddr_in *addr, int *addrlen);
 
 int stat(const char*, struct stat*);
 char* strcpy(char*, const char*);

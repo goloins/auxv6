@@ -38,7 +38,6 @@ udp_input(struct ifnet *ifp, struct ip_hdr *ip, char *payload, uint len)
 	uint hlen;
 	uint dlen;
 
-	(void)ifp;
 	if(ip == 0 || payload == 0)
 		return;
 
@@ -63,4 +62,6 @@ udp_input(struct ifnet *ifp, struct ip_hdr *ip, char *payload, uint len)
 	dst.sin_addr = net_ntohl(ip->dst);
 
 	socket_deliver(&src, &dst, payload + hlen, dlen);
+	if(socket_deliver(&src, &dst, payload + hlen, dlen) < 0)
+		icmp_send_unreach(ifp, ip, payload, len, ICMP_UNREACH_PORT);
 }

@@ -53,5 +53,43 @@ icmp_input(struct ifnet *ifp, struct ip_hdr *ip, char *payload, uint len)
     ic->csum = 0;
     ic->csum = icmp_csum(payload, len);
     ip_output(ifp, NET_IP_ICMP, dst.sin_addr, src.sin_addr, payload, len);
+
   }
+}
+
+// Send ICMP Destination Unreachable (type 3) back to the original sender.
+// RFC 792: ICMP error payload = 8-byte ICMP header + original IP header
+//          + first 8 bytes of original transport header.
+void
+icmp_send_unreach(struct ifnet *ifp, struct ip_hdr *orig_ip,
+                  char *orig_transport, uint orig_tlen, uchar code)
+{
+  char buf[MBUF_SIZE];
+  struct icmp_hdr *ic;
+  uint ip_hdr_len;
+  uint copy_bytes;
+  uint total;
+
+  if(ifp == 0 || orig_ip == 0)
+    return;
+
+  ip_hdr_len = (orig_ip->vhl & 0x0f) * 4;
+  copy_bytes = ip_hdr_len + (orig_tlen < 8 ? orig_tlen : 8);
+
+  total = sizeof(struct icmp_hdr) + copy_bytes;
+  if(total > MBUF_SIZE)
+    return;
+
+  memset(buf, 0, total);
+
+  ic = (struct icmp_hdr*)buf;
+  ic->type = ICMP_UNREACH;
+  ic->code = code;
+  ic->csum = 0;
+
+  memmove(buf + sizeof(struct icmp_hdr), orig_ip, copy_bytes);
+
+  ic->csum = icmp_csum(buf, total);
+
+  ip_output(ifp, NET_IP_ICMP, ifp->if_addr, net_ntohl(orig_ip->src), buf, total);
 }

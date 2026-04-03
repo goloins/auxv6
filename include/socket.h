@@ -43,12 +43,13 @@ struct in_addr {
   uint s_addr;
 };
 
-// sockaddr_in structure
+// sockaddr_in — POSIX layout: sin_family is 2 bytes so field offsets
+// match the standard (sin_port at offset 2, sin_addr at offset 4).
 struct sockaddr_in {
-  uchar  sin_family;
-  ushort sin_port;
-  uint   sin_addr;
-  char   sin_zero[8];
+  ushort sin_family;    // Address family (AF_INET)
+  ushort sin_port;      // Port number (host byte order internally)
+  uint   sin_addr;      // IPv4 address (host byte order internally)
+  char   sin_zero[8];   // Padding to make struct 16 bytes
 };
 
 // Internet protocol numbers
@@ -60,9 +61,26 @@ struct sockaddr_in {
 // setsockopt / getsockopt levels
 #define SOL_SOCKET     1
 
+// SOL_SOCKET options
+#define SO_REUSEADDR   2    // Allow reuse of local addresses
+#define SO_KEEPALIVE   9    // Enable keep-alive on TCP connections
+#define SO_ERROR       4    // Get and clear pending socket error
+#define SO_BROADCAST   6    // Allow broadcast sends
+
 // IP-level socket options (level = IPPROTO_IP)
 #define IP_TTL         2    // Time-to-live on outgoing packets
 #define IP_HDRINCL     3    // Application provides full IP header (not implemented)
+
+// shutdown() how values
+#define SHUT_RD   0   // Shut down reading
+#define SHUT_WR   1   // Shut down writing
+#define SHUT_RDWR 2   // Shut down both
+
+// MSG flags (for future send/recv extensions)
+#define MSG_DONTWAIT  0x40   // Non-blocking I/O
+#define MSG_PEEK      0x02   // Peek at data without consuming
+#define MSG_WAITALL   0x100  // Wait for full request
+#define MSG_NOSIGNAL  0x4000 // Don't raise SIGPIPE on broken stream
 
 struct tcpcb {
   uint state;
@@ -70,23 +88,28 @@ struct tcpcb {
   uint irs;           // Initial receive sequence number
   uint snd_una;       // Oldest unacknowledged sequence number
   uint snd_nxt;       // Next sequence number to send
+  uint snd_wnd;       // Sender's view of peer's receive window
   uint rcv_nxt;       // Next sequence number expected to receive
-  uint rcv_wnd;       // Receive window size
-  
+  uint rcv_wnd;       // Our receive window size (advertised to peer)
+
   // Retransmission
   uint rto;           // Retransmission timeout (ticks)
   uint rtt_est;       // Smoothed RTT estimate (ticks)
   uint retransmits;   // Number of retransmissions attempted
   uint last_send;     // Tick count of last send (for RTT and retransmit)
-  
+
   // Unacked data buffer for retransmission (simplified: single segment)
   char *unacked_buf;  // Buffer of unacked data (null if none)
   uint unacked_len;   // Length of unacked data
   uint unacked_seq;   // Sequence number of unacked data
-  
+
   // Teardown
   uint fin_seq;       // Sequence number of our FIN (if sent)
   uint time_wait_start; // Tick when TIME_WAIT started
+
+  // Set when socket_close() initiates FIN teardown; cleared when TCP
+  // reaches CLOSED and releases the extra teardown ref.
+  uint close_pending; // 1 = extra socket_deref needed on TCPS_CLOSED
 };
 
 #define TCP_RTO_INIT     100   // Initial RTO: ~1 second at 100Hz
@@ -131,6 +154,12 @@ struct socket {
 
   // Per-socket IP options
   uchar ttl;            // Outgoing TTL (default 64; set via IP_TTL setsockopt)
+
+  // Socket-level options
+  uchar reuseaddr;      // SO_REUSEADDR: allow rebinding a used port
+  uchar shut_rd;        // SHUT_RD: read side shut down
+  uchar shut_wr;        // SHUT_WR: write side shut down
 };
+
 
 #endif

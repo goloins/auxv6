@@ -18,7 +18,7 @@
 struct socket sockets[NSOCKET];
 struct spinlock socket_lock;
 static ushort next_ephemeral = 40000;
-static uint tcp_iss = 1000;
+uint tcp_iss = 1000;   // Shared ISN counter; also used by tcp.c via extern
 static ushort alloc_ephemeral_port_locked(void);
 
 // Allocate a file descriptor in the current process.
@@ -58,8 +58,17 @@ socket_reset_locked(struct socket *s)
   s->tcp.state = TCPS_CLOSED;
   s->tcp.iss = 0;
   s->tcp.snd_nxt = 0;
+  s->tcp.snd_una = 0;
+  s->tcp.snd_wnd = 0;
   s->tcp.irs = 0;
   s->tcp.rcv_nxt = 0;
+  s->tcp.rcv_wnd = 0;
+  s->tcp.close_pending = 0;
+  s->tcp.fin_seq = 0;
+  s->tcp.time_wait_start = 0;
+  s->tcp.unacked_buf = 0;
+  s->tcp.unacked_len = 0;
+  s->tcp.unacked_seq = 0;
   s->backlog = 0;
   s->qhead = 0;
   s->qtail = 0;
@@ -67,6 +76,9 @@ socket_reset_locked(struct socket *s)
   for(i = 0; i < SOCKET_LISTENQ_MAX; i++)
     s->listenq[i] = 0;
   s->ttl = 64;
+  s->reuseaddr = 0;
+  s->shut_rd = 0;
+  s->shut_wr = 0;
 }
 
 static void
@@ -427,6 +439,13 @@ alloc_ephemeral_port_locked(void)
   return 0;
 }
 
+// Exported wrapper so tcp.c can use the same allocator.
+ushort
+socket_alloc_port_locked(void)
+{
+  return alloc_ephemeral_port_locked();
+}
+
 int
 socket_stream_connect(struct socket *s, struct sockaddr_in *remote)
 {
@@ -771,6 +790,7 @@ int
 sys_bind(void)
 {
   int sockfd, addrlen;
+  int i;
   struct socket *s;
   struct sockaddr_in *addr;
   
@@ -791,8 +811,36 @@ sys_bind(void)
     cprintf("bind: invalid socket fd %d\n", sockfd);
     return -1;
   }
+
+  if(addr->sin_port == 0)
+    return -1;
   
   acquire(&socket_lock);
+
+  // Check for port conflict; allow if both sockets have SO_REUSEADDR.
+  if(addr->sin_port != 0) {
+    for(i = 0; i < NSOCKET; i++) {
+      if(&sockets[i] == s)
+        continue;
+      if(sockets[i].ref == 0)
+        continue;
+      if(sockets[i].family != addr->sin_family)
+        continue;
+      if(sockets[i].local_addr.sin_port != addr->sin_port)
+        continue;
+      // Check address overlap: INADDR_ANY overlaps with everything.
+      if(addr->sin_addr != INADDR_ANY &&
+         sockets[i].local_addr.sin_addr != INADDR_ANY &&
+         sockets[i].local_addr.sin_addr != addr->sin_addr)
+        continue;
+      // Port is in use.  Allow only if both sides have SO_REUSEADDR.
+      if(!s->reuseaddr || !sockets[i].reuseaddr) {
+        release(&socket_lock);
+        return -1;
+      }
+    }
+  }
+
   memmove(&s->local_addr, addr, sizeof(struct sockaddr_in));
   s->state = SOCK_BOUND;
   release(&socket_lock);
@@ -948,23 +996,28 @@ sys_send(void)
 
   if(argint(0, &sockfd) < 0 || argint(2, &len) < 0)
     return -1;
-  if(len < 0 || argptr(1, &buf, len) < 0)
+  if(len < 0)
     return -1;
 
   s = getfd_socket(sockfd);
   if(!s)
     return -1;
 
-  if((uint)len > MBUF_SIZE - sizeof(struct udp_hdr))
-    return -1;
-
   acquire(&socket_lock);
+  if(s->shut_wr) {
+    release(&socket_lock);
+    return -1;
+  }
   memmove(&src, &s->local_addr, sizeof(src));
   memmove(&dst, &s->remote_addr, sizeof(dst));
   type = s->type;
   proto = s->protocol;
   tcp_state = s->tcp.state;
   release(&socket_lock);
+
+  // Validate buf pointer — type-specific size check below.
+  if(argptr(1, &buf, len) < 0)
+    return -1;
 
   route_src = 0;
   ifp = route_lookup(dst.sin_addr, &route_src, 0);
@@ -973,20 +1026,40 @@ sys_send(void)
   if(src.sin_addr == 0)
     src.sin_addr = route_src;
 
-  if(type == SOCK_DGRAM){
+  if(type == SOCK_DGRAM) {
+    if((uint)len > MBUF_SIZE - sizeof(struct udp_hdr))
+      return -1;
     if(src.sin_port == 0 || dst.sin_port == 0)
       return -1;
     if(udp_output(ifp, &src, &dst, buf, (uint)len) < 0)
       return -1;
-  } else if(type == SOCK_STREAM){
+  } else if(type == SOCK_STREAM) {
+    // TCP: send in segments; tcp_output() clamps each call to MSS.
+    const char *p = buf;
+    int remaining = len;
+    int total_sent = 0;
+    int r;
+
     if(src.sin_port == 0 || dst.sin_port == 0)
       return -1;
     if(tcp_state != TCPS_ESTABLISHED)
       return -1;
-    if(tcp_output(ifp, &src, &dst, buf, (uint)len) < 0)
+
+    while(remaining > 0) {
+      r = tcp_output(ifp, &src, &dst, (char*)p, (uint)remaining);
+      if(r <= 0)
+        break;
+      total_sent += r;
+      p += r;
+      remaining -= r;
+    }
+    if(total_sent == 0)
       return -1;
-  } else if(type == SOCK_RAW){
+    return total_sent;
+  } else if(type == SOCK_RAW) {
     uchar snd_ttl;
+    if((uint)len > MBUF_SIZE - sizeof(struct ip_hdr))
+      return -1;
     if(dst.sin_addr == 0)
       return -1;
     if(src.sin_addr == 0)
@@ -1369,7 +1442,12 @@ sys_netifsetaddr(void)
 
 // close(fd) syscall - we'll handle sockets in the existing close
 // This is called from sys_close when the fd points to a socket
-
+//
+// Teardown ref protocol:
+//   When we initiate a TCP FIN (ESTABLISHED or CLOSE_WAIT), we bump the
+//   socket's refcount before dropping the user ref.  tcp.close_pending is
+//   set to signal that the extra ref must be released once TCP reaches
+//   TCPS_CLOSED.  All TCPS_CLOSED transition paths in tcp.c check this flag.
 void
 socket_close(struct socket *s)
 {
@@ -1382,11 +1460,28 @@ socket_close(struct socket *s)
   if(s->type == SOCK_STREAM && s->family == AF_INET) {
     acquire(&socket_lock);
     if(s->tcp.state == TCPS_ESTABLISHED || s->tcp.state == TCPS_CLOSE_WAIT) {
+      // Bump ref so the socket survives FIN teardown (close_pending ref).
+      s->ref++;
+      s->tcp.close_pending = 1;
       // Find interface for this connection
       ifp = route_lookup(s->remote_addr.sin_addr, &route_src, 0);
       release(&socket_lock);
       if(ifp) {
         tcp_close(s, ifp);
+      } else {
+        // No route; abort TCP cleanly.
+        acquire(&socket_lock);
+        if(s->tcp.close_pending) {
+          s->tcp.close_pending = 0;
+          s->ref--;  // undo the extra ref we just added
+        }
+        if(s->tcp.unacked_buf) {
+          kfree(s->tcp.unacked_buf);
+          s->tcp.unacked_buf = 0;
+        }
+        s->tcp.state = TCPS_CLOSED;
+        s->state = SOCK_CLOSED;
+        release(&socket_lock);
       }
     } else {
       // Not in a state that needs FIN, just mark closed
@@ -1441,6 +1536,19 @@ sys_setsockopt(void)
       return 0;
     }
   }
+
+  if(level == SOL_SOCKET) {
+    if(optname == SO_REUSEADDR) {
+      if(optlen < (int)sizeof(int))
+        return -1;
+      memmove(&v, optval, sizeof(int));
+      acquire(&socket_lock);
+      s->reuseaddr = v ? 1 : 0;
+      release(&socket_lock);
+      return 0;
+    }
+  }
+
   return -1;
 }
 
@@ -1480,7 +1588,149 @@ sys_getsockopt(void)
       return 0;
     }
   }
+
+  if(level == SOL_SOCKET) {
+    if(optname == SO_REUSEADDR) {
+      int v;
+      acquire(&socket_lock);
+      v = (int)s->reuseaddr;
+      release(&socket_lock);
+      memmove(optval, &v, sizeof(int));
+      *optlenp = sizeof(int);
+      return 0;
+    }
+  }
+
   return -1;
+}
+
+// shutdown(sockfd, how) syscall
+// how: SHUT_RD=0, SHUT_WR=1, SHUT_RDWR=2
+int
+sys_shutdown(void)
+{
+  int sockfd, how;
+  struct socket *s;
+  struct ifnet *ifp;
+  uint route_src;
+
+  if(argint(0, &sockfd) < 0 || argint(1, &how) < 0)
+    return -1;
+  if(how < 0 || how > 2)
+    return -1;
+
+  s = getfd_socket(sockfd);
+  if(!s)
+    return -1;
+
+  acquire(&socket_lock);
+
+  if(how == SHUT_RD || how == SHUT_RDWR)
+    s->shut_rd = 1;
+
+  if(how == SHUT_WR || how == SHUT_RDWR) {
+    s->shut_wr = 1;
+    // For TCP, send a FIN if the connection is still active.
+    if(s->type == SOCK_STREAM &&
+       (s->tcp.state == TCPS_ESTABLISHED || s->tcp.state == TCPS_CLOSE_WAIT)) {
+      // Hold teardown ref (matches socket_close protocol).
+      s->ref++;
+      s->tcp.close_pending = 1;
+      release(&socket_lock);
+      route_src = 0;
+      ifp = route_lookup(s->remote_addr.sin_addr, &route_src, 0);
+      if(ifp) {
+        tcp_close(s, ifp);
+      } else {
+        acquire(&socket_lock);
+        if(s->tcp.close_pending) {
+          s->tcp.close_pending = 0;
+          s->ref--;
+        }
+        s->tcp.state = TCPS_CLOSED;
+        s->state = SOCK_CLOSED;
+        release(&socket_lock);
+      }
+      // Do NOT socket_deref here — the FD is still open.  The extra ref
+      // is released when TCP teardown completes via close_pending.
+      // But we need to undo one extra ref since no socket_deref() is called
+      // from here (unlike socket_close).  So release:
+      socket_deref(s);
+      return 0;
+    }
+  }
+
+  wakeup(s);   // wake readers/writers so they see the shut flags
+  release(&socket_lock);
+  return 0;
+}
+
+// getsockname(sockfd, addr, addrlen) syscall
+int
+sys_getsockname(void)
+{
+  int sockfd, addrlen_raw;
+  struct socket *s;
+  struct sockaddr_in *addr;
+  int *addrlenp;
+
+  if(argint(0, &sockfd) < 0)
+    return -1;
+  if(argint(2, &addrlen_raw) < 0)
+    return -1;
+  if(addrlen_raw < (int)sizeof(struct sockaddr_in))
+    return -1;
+  if(argptr(1, (char**)&addr, sizeof(struct sockaddr_in)) < 0)
+    return -1;
+  if(argptr(2, (char**)&addrlenp, sizeof(int)) < 0)
+    return -1;
+
+  s = getfd_socket(sockfd);
+  if(!s)
+    return -1;
+
+  acquire(&socket_lock);
+  memmove(addr, &s->local_addr, sizeof(struct sockaddr_in));
+  release(&socket_lock);
+
+  *addrlenp = (int)sizeof(struct sockaddr_in);
+  return 0;
+}
+
+// getpeername(sockfd, addr, addrlen) syscall
+int
+sys_getpeername(void)
+{
+  int sockfd, addrlen_raw;
+  struct socket *s;
+  struct sockaddr_in *addr;
+  int *addrlenp;
+
+  if(argint(0, &sockfd) < 0)
+    return -1;
+  if(argint(2, &addrlen_raw) < 0)
+    return -1;
+  if(addrlen_raw < (int)sizeof(struct sockaddr_in))
+    return -1;
+  if(argptr(1, (char**)&addr, sizeof(struct sockaddr_in)) < 0)
+    return -1;
+  if(argptr(2, (char**)&addrlenp, sizeof(int)) < 0)
+    return -1;
+
+  s = getfd_socket(sockfd);
+  if(!s)
+    return -1;
+
+  acquire(&socket_lock);
+  if(s->state != SOCK_ESTAB && s->state != SOCK_CONNECT) {
+    release(&socket_lock);
+    return -1;
+  }
+  memmove(addr, &s->remote_addr, sizeof(struct sockaddr_in));
+  release(&socket_lock);
+
+  *addrlenp = (int)sizeof(struct sockaddr_in);
+  return 0;
 }
 
 struct socket*

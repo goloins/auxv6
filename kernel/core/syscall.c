@@ -172,6 +172,9 @@ extern int sys_clock_gettime(void);
 extern int sys_clock_settime(void);
 extern int sys_setsockopt(void);
 extern int sys_getsockopt(void);
+extern int sys_shutdown(void);
+extern int sys_getsockname(void);
+extern int sys_getpeername(void);
 
 static int (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -264,6 +267,9 @@ static int (*syscalls[])(void) = {
 [SYS_clock_settime] sys_clock_settime,
 [SYS_setsockopt] sys_setsockopt,
 [SYS_getsockopt] sys_getsockopt,
+[SYS_shutdown] sys_shutdown,
+[SYS_getsockname] sys_getsockname,
+[SYS_getpeername] sys_getpeername,
 };
 
 void

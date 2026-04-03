@@ -19,9 +19,8 @@ extern struct socket sockets[NSOCKET];
 extern struct spinlock socket_lock;
 extern struct spinlock tickslock;
 extern uint ticks;
-
-static uint tcp_iss = 50000;
-static ushort tcp_next_ephemeral = 45000;
+// Shared ISN counter and ephemeral-port allocator defined in socket.c.
+extern uint tcp_iss;
 
 static ushort
 tcp_cksum_finalize(uint sum)
@@ -230,7 +229,15 @@ tcp_close(struct socket *s, struct ifnet *ifp)
 		kfree(s->tcp.unacked_buf);
 		s->tcp.unacked_buf = 0;
 	}
-	
+
+	// Record send time so the retransmit timer can fire on FIN loss.
+	if(send_fin) {
+		acquire(&tickslock);
+		s->tcp.last_send = ticks;
+		release(&tickslock);
+		s->tcp.retransmits = 0;
+	}
+
 	release(&socket_lock);
 	
 	if(send_fin) {
@@ -297,6 +304,11 @@ tcp_retransmit_check(struct socket *s, struct ifnet *ifp)
 		s->tcp.unacked_buf = 0;
 		s->tcp.state = TCPS_CLOSED;
 		s->state = SOCK_CLOSED;
+		// do_retransmit is repurposed: -1 means "also deref close_pending"
+		if(s->tcp.close_pending) {
+			s->tcp.close_pending = 0;
+			do_retransmit = -1;
+		}
 		wakeup(s);
 	} else {
 		// Retransmit
@@ -318,6 +330,14 @@ out:
 	release(&socket_lock);
 	
 	if(do_retransmit) {
+		// do_retransmit == -1 means giveup + close_pending deref needed
+		if(do_retransmit == -1) {
+			socket_deref(s);
+			// Also notify peer with RST if we have an address.
+			if(dst.sin_addr)
+				tcp_send_segment(ifp, &src, &dst, seq, ack, TCP_FLAG_RST, 0, 0, 0);
+			return 0;
+		}
 		tcp_send_segment(ifp, &src, &dst, seq, ack, 
 			TCP_FLAG_ACK | TCP_FLAG_PSH, win, data, len);
 		return 1;
@@ -336,6 +356,7 @@ void
 tcp_timewait_check(struct socket *s)
 {
 	uint now;
+	int do_deref;
 
 	if(s == 0 || s->type != SOCK_STREAM)
 		return;
@@ -354,37 +375,17 @@ tcp_timewait_check(struct socket *s)
 	if(now - s->tcp.time_wait_start >= TCP_TIME_WAIT_TICKS) {
 		s->tcp.state = TCPS_CLOSED;
 		s->state = SOCK_CLOSED;
+		do_deref = s->tcp.close_pending;
+		if(do_deref)
+			s->tcp.close_pending = 0;
 		wakeup(s);
+		release(&socket_lock);
+		if(do_deref)
+			socket_deref(s);
+		return;
 	}
 	
 	release(&socket_lock);
-}
-
-static ushort
-tcp_alloc_ephemeral_locked(void)
-{
-	int i;
-	int tries;
-	ushort p;
-	int inuse;
-
-	for(tries = 0; tries < 20000; tries++) {
-		p = tcp_next_ephemeral++;
-		if(tcp_next_ephemeral < 45000)
-			tcp_next_ephemeral = 45000;
-
-		inuse = 0;
-		for(i = 0; i < NSOCKET; i++) {
-			if(sockets[i].ref > 0 && sockets[i].local_addr.sin_port == p) {
-				inuse = 1;
-				break;
-			}
-		}
-		if(!inuse)
-			return p;
-	}
-
-	return 0;
 }
 
 static struct socket*
@@ -438,7 +439,7 @@ tcp_connect(struct ifnet *ifp, struct socket *s, struct sockaddr_in *dst)
 	}
 
 	if(s->local_addr.sin_port == 0) {
-		p = tcp_alloc_ephemeral_locked();
+		p = socket_alloc_port_locked();
 		if(p == 0) {
 			release(&socket_lock);
 			return -1;
@@ -619,6 +620,18 @@ tcp_input(struct ifnet *ifp, struct ip_hdr *ip, char *payload, uint len)
 	if(hlen < TCP_HDR_LEN || hlen > len)
 		return;
 
+	// Verify TCP checksum before doing any processing.
+	{
+		ushort expected;
+		ushort received;
+		received = net_ntohs(th->csum);
+		th->csum = 0;
+		expected = tcp_checksum(net_ntohl(ip->src), net_ntohl(ip->dst), payload, len);
+		th->csum = net_htons(received);
+		if(expected != received)
+			return;
+	}
+
 	seq = net_ntohl(th->seq);
 	ack_num = net_ntohl(th->ack);
 	flags = th->flags;
@@ -655,14 +668,20 @@ tcp_input(struct ifnet *ifp, struct ip_hdr *ip, char *payload, uint len)
 
 	// Handle RST - always reset connection
 	if(flags & TCP_FLAG_RST) {
+		int do_deref;
 		if(s->tcp.unacked_buf) {
 			kfree(s->tcp.unacked_buf);
 			s->tcp.unacked_buf = 0;
 		}
 		s->tcp.state = TCPS_CLOSED;
 		s->state = SOCK_CLOSED;
+		do_deref = s->tcp.close_pending;
+		if(do_deref)
+			s->tcp.close_pending = 0;
 		wakeup(s);
 		release(&socket_lock);
+		if(do_deref)
+			socket_deref(s);
 		return;
 	}
 
@@ -711,6 +730,10 @@ tcp_input(struct ifnet *ifp, struct ip_hdr *ip, char *payload, uint len)
 		break;
 
 	case TCPS_ESTABLISHED:
+		// Track peer's advertised receive window.
+		if(flags & TCP_FLAG_ACK)
+			s->tcp.snd_wnd = (uint)net_ntohs(th->win);
+
 		// Process incoming data
 		if(plen > 0) {
 			if(seq == s->tcp.rcv_nxt && s->recv_buf && s->recv_cap > s->recv_len) {
@@ -722,6 +745,15 @@ tcp_input(struct ifnet *ifp, struct ip_hdr *ip, char *payload, uint len)
 				s->tcp.rcv_nxt += copylen;
 				memmove(&s->remote_addr, &src, sizeof(src));
 				wakeup(s);
+			} else if(seq != s->tcp.rcv_nxt) {
+				// Out-of-order segment: RFC 5681 requires an immediate duplicate ACK.
+				ack_seq = s->tcp.snd_nxt;
+				ack_ack = s->tcp.rcv_nxt;
+				ack_win = tcp_recv_window_locked(s);
+				release(&socket_lock);
+				tcp_send_segment(ifp, &dst, &src, ack_seq, ack_ack,
+					TCP_FLAG_ACK, ack_win, 0, 0);
+				return;
 			}
 			need_ack = 1;
 		}
@@ -801,6 +833,10 @@ tcp_input(struct ifnet *ifp, struct ip_hdr *ip, char *payload, uint len)
 		if((flags & TCP_FLAG_ACK) && ack_num == s->tcp.fin_seq + 1) {
 			s->tcp.state = TCPS_CLOSED;
 			s->state = SOCK_CLOSED;
+			if(s->tcp.close_pending) {
+				s->tcp.close_pending = 0;
+				need_ack = -1;  // signal: deref after release
+			}
 			wakeup(s);
 		}
 		break;
@@ -818,12 +854,132 @@ tcp_input(struct ifnet *ifp, struct ip_hdr *ip, char *payload, uint len)
 
 	release(&socket_lock);
 
-	if(need_ack)
+	if(need_ack == -1)
+		socket_deref(s);
+	else if(need_ack)
 		tcp_send_segment(ifp, &dst, &src, ack_seq, ack_ack, ack_flags, ack_win, 0, 0);
 }
 
-// Called from timer interrupt every 100ms (every 10 ticks at 100Hz)
-// Handles retransmission timeouts and TIME_WAIT cleanup
+
+// SYN retransmit helper: called from tcp_slowtimo when a socket is in SYN_SENT.
+static void
+tcp_syn_retransmit_ifp(struct socket *s, struct ifnet *ifp)
+{
+	struct sockaddr_in src, dst;
+	uint iss;
+	ushort win;
+	uint now;
+	int do_retransmit = 0;
+
+	acquire(&socket_lock);
+	if(s->tcp.state != TCPS_SYN_SENT) {
+		release(&socket_lock);
+		return;
+	}
+
+	acquire(&tickslock);
+	now = ticks;
+	release(&tickslock);
+
+	if(now - s->tcp.last_send < s->tcp.rto) {
+		release(&socket_lock);
+		return;
+	}
+
+	s->tcp.retransmits++;
+	if(s->tcp.retransmits > TCP_MAX_RETRANSMIT) {
+		s->tcp.state = TCPS_CLOSED;
+		s->state = SOCK_CLOSED;
+		wakeup(s);
+	} else {
+		do_retransmit = 1;
+		s->tcp.rto *= 2;
+		if(s->tcp.rto > TCP_RTO_MAX)
+			s->tcp.rto = TCP_RTO_MAX;
+		acquire(&tickslock);
+		s->tcp.last_send = ticks;
+		release(&tickslock);
+	}
+	iss = s->tcp.iss;
+	win = tcp_recv_window_locked(s);
+	memmove(&src, &s->local_addr, sizeof(src));
+	memmove(&dst, &s->remote_addr, sizeof(dst));
+	release(&socket_lock);
+
+	if(do_retransmit)
+		tcp_send_segment(ifp, &src, &dst, iss, 0, TCP_FLAG_SYN, win, 0, 0);
+}
+
+// FIN retransmit helper: retransmit lost FIN in FIN_WAIT_1 or LAST_ACK.
+static void
+tcp_fin_retransmit(struct socket *s, struct ifnet *ifp)
+{
+	struct sockaddr_in src, dst;
+	uint fin_seq, rcv_nxt;
+	ushort win;
+	uint now;
+	int do_retransmit = 0;
+	int do_deref = 0;
+
+	acquire(&socket_lock);
+	if(s->tcp.state != TCPS_FIN_WAIT_1 && s->tcp.state != TCPS_LAST_ACK) {
+		release(&socket_lock);
+		return;
+	}
+	// FIN outstanding = fin_seq not yet ACKed.
+	if(s->tcp.fin_seq == 0 || tcp_seq_leq(s->tcp.fin_seq + 1, s->tcp.snd_una)) {
+		release(&socket_lock);
+		return;
+	}
+	// Unacked data in flight: let the data retransmit path handle it first.
+	if(s->tcp.unacked_buf != 0) {
+		release(&socket_lock);
+		return;
+	}
+
+	acquire(&tickslock);
+	now = ticks;
+	release(&tickslock);
+
+	if(now - s->tcp.last_send < s->tcp.rto) {
+		release(&socket_lock);
+		return;
+	}
+
+	s->tcp.retransmits++;
+	if(s->tcp.retransmits > TCP_MAX_RETRANSMIT) {
+		s->tcp.state = TCPS_CLOSED;
+		s->state = SOCK_CLOSED;
+		do_deref = s->tcp.close_pending;
+		if(do_deref)
+			s->tcp.close_pending = 0;
+		wakeup(s);
+	} else {
+		do_retransmit = 1;
+		s->tcp.rto *= 2;
+		if(s->tcp.rto > TCP_RTO_MAX)
+			s->tcp.rto = TCP_RTO_MAX;
+		acquire(&tickslock);
+		s->tcp.last_send = ticks;
+		release(&tickslock);
+	}
+	fin_seq = s->tcp.fin_seq;
+	rcv_nxt = s->tcp.rcv_nxt;
+	win = tcp_recv_window_locked(s);
+	memmove(&src, &s->local_addr, sizeof(src));
+	memmove(&dst, &s->remote_addr, sizeof(dst));
+	release(&socket_lock);
+
+	if(do_retransmit)
+		tcp_send_segment(ifp, &src, &dst, fin_seq, rcv_nxt,
+			TCP_FLAG_FIN | TCP_FLAG_ACK, win, 0, 0);
+
+	if(do_deref)
+		socket_deref(s);
+}
+
+// Called from timer interrupt every 100ms (every 10 ticks at 100Hz).
+// Handles SYN/data/FIN retransmission timeouts and TIME_WAIT cleanup.
 void
 tcp_slowtimo(void)
 {
@@ -831,29 +987,39 @@ tcp_slowtimo(void)
 	struct socket *s;
 	struct ifnet *ifp;
 	uint route_src;
-	
+
 	for(i = 0; i < NSOCKET; i++) {
 		s = &sockets[i];
-		
-		// Quick check without lock
+
+		// Quick check without lock (safe on uniprocessor).
 		if(s->ref == 0)
 			continue;
 		if(s->family != AF_INET || s->type != SOCK_STREAM)
 			continue;
-		
-		// Check TIME_WAIT timeout
+
+		// TIME_WAIT expiry.
 		if(s->tcp.state == TCPS_TIME_WAIT) {
 			tcp_timewait_check(s);
 			continue;
 		}
-		
-		// Check retransmit timeout
-		if(s->tcp.state == TCPS_ESTABLISHED || s->tcp.state == TCPS_FIN_WAIT_1) {
-			// Find interface to use
-			ifp = route_lookup(s->remote_addr.sin_addr, &route_src, 0);
-			if(ifp) {
-				tcp_retransmit_check(s, ifp);
-			}
+
+		// All remaining paths need the outgoing interface.
+		ifp = route_lookup(s->remote_addr.sin_addr, &route_src, 0);
+		if(ifp == 0)
+			continue;
+
+		// Retransmit lost SYN.
+		if(s->tcp.state == TCPS_SYN_SENT) {
+			tcp_syn_retransmit_ifp(s, ifp);
+			continue;
 		}
+
+		// Retransmit lost FIN (FIN_WAIT_1 or LAST_ACK, no data in flight).
+		if(s->tcp.state == TCPS_FIN_WAIT_1 || s->tcp.state == TCPS_LAST_ACK)
+			tcp_fin_retransmit(s, ifp);
+
+		// Retransmit lost data segment.
+		if(s->tcp.state == TCPS_ESTABLISHED || s->tcp.state == TCPS_FIN_WAIT_1)
+			tcp_retransmit_check(s, ifp);
 	}
 }

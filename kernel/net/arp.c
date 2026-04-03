@@ -211,7 +211,7 @@ arp_resolve(struct ifnet *ifp, uint ip, uchar *mac, struct mbuf *pending)
 {
 	struct arp_entry *entry;
 	int need_request;
-
+	uint now;
 	if(ifp == 0 || mac == 0)
 		return -1;
 	if(ip == ifp->if_addr){
@@ -220,9 +220,12 @@ arp_resolve(struct ifnet *ifp, uint ip, uchar *mac, struct mbuf *pending)
 	}
 
 	need_request = 0;
+		acquire(&tickslock);
+		now = ticks;
+		release(&tickslock);
 	acquire(&arptab.lock);
 	entry = arp_lookup_locked(ifp, ip);
-	if(entry && entry->state == ARP_RESOLVED && entry->expire > ticks){
+	if(entry && entry->state == ARP_RESOLVED && entry->expire > now){
 		memmove(mac, entry->mac, ETH_ADDR_LEN);
 		release(&arptab.lock);
 		return 0;
@@ -241,9 +244,9 @@ arp_resolve(struct ifnet *ifp, uint ip, uchar *mac, struct mbuf *pending)
 	entry->ip = ip;
 	entry->ifp = ifp;
 	entry->state = ARP_PENDING;
-	if(entry->expire <= ticks)
+	if(entry->expire <= now)
 		need_request = 1;
-	entry->expire = ticks + ARP_PENDING_TICKS;
+	entry->expire = now + ARP_PENDING_TICKS;
 	release(&arptab.lock);
 
 	if(need_request && arp_send_request(ifp, ip) < 0){
@@ -272,6 +275,7 @@ arp_input(struct ifnet *ifp, struct mbuf *m)
 	ushort oper;
 	uint spa;
 	uint tpa;
+	uint now;
 
 	if(ifp == 0 || m == 0)
 		goto done;
@@ -289,6 +293,9 @@ arp_input(struct ifnet *ifp, struct mbuf *m)
 	spa = arp_ip_decode(arp->spa);
 	tpa = arp_ip_decode(arp->tpa);
 	pending = 0;
+	acquire(&tickslock);
+	now = ticks;
+	release(&tickslock);
 
 	acquire(&arptab.lock);
 	entry = arp_lookup_locked(ifp, spa);
@@ -299,7 +306,7 @@ arp_input(struct ifnet *ifp, struct mbuf *m)
 		entry->ifp = ifp;
 		memmove(entry->mac, arp->sha, ETH_ADDR_LEN);
 		entry->state = ARP_RESOLVED;
-		entry->expire = ticks + ARP_RESOLVED_TICKS;
+		entry->expire = now + ARP_RESOLVED_TICKS;
 		pending = entry->pending;
 		entry->pending = 0;
 	}

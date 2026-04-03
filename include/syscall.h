@@ -89,3 +89,6 @@
 #define SYS_setsockopt 88
 #define SYS_getsockopt 89
 #define SYS_clock_settime 90
+#define SYS_shutdown  91
+#define SYS_getsockname 92
+#define SYS_getpeername 93
