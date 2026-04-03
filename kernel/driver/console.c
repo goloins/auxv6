@@ -1525,12 +1525,22 @@ console_flush_tty_locked(struct console_tty_state *t)
 
   if(t != console_tty_by_index(console_active_tty))
     return;
+
+  if(console_gfx_boot_ready) {
+    console_gfx_sync_from_tty_locked(t);
+    if(console_gfx_dev && console_gfx_fb && console_gfx_ctx && console_gfx_vts) {
+      console_select_hw_surface();
+      return;
+    }
+  }
+
   console_stamp_logo_textmode_locked(t);
   console_copy_tty_to_hw_locked(t);
   console_select_hw_surface();
   hw_cursor = console_hw_cursor_from_tty(t);
   cga_write_cursor(hw_cursor);
-  console_gfx_sync_from_tty_locked(t);
+  if(!console_gfx_boot_ready)
+    console_gfx_sync_from_tty_locked(t);
 }
 
 static void
@@ -2962,7 +2972,7 @@ consoleintr(int (*getc)(void))
     /* ISIG: signal characters */
     if(isig) {
       if(vintr && c == (int)vintr) {
-        consputc('^'); consputc('C'); consputc('\n');
+        consputc_ansi(t, '^'); consputc_ansi(t, 'C'); consputc_ansi(t, '\n');
         proc_signal_pgid(t->fg_pgid, SIGINT);
         if(!(t->termios.c_lflag & NOFLSH))
           t->input.r = t->input.w = t->input.e;
@@ -2975,7 +2985,7 @@ consoleintr(int (*getc)(void))
         continue;
       }
       if(vsusp && c == (int)vsusp) {
-        consputc('^'); consputc('Z'); consputc('\n');
+        consputc_ansi(t, '^'); consputc_ansi(t, 'Z'); consputc_ansi(t, '\n');
         proc_signal_pgid(t->fg_pgid, SIGTSTP);
         if(!(t->termios.c_lflag & NOFLSH))
           t->input.r = t->input.w = t->input.e;
@@ -3036,7 +3046,7 @@ consoleintr(int (*getc)(void))
           t->input.e -= erase_n;
           if(t->termios.c_lflag & (ECHOE|ECHOKE))
             for(j = 0; j < erase_n; j++)
-              consputc(BACKSPACE);
+              consputc_ansi(t, BACKSPACE);
         }
         continue;
       }
@@ -3049,7 +3059,7 @@ consoleintr(int (*getc)(void))
             t->input.e -= erase_n;
             if(echo && (t->termios.c_lflag & ECHOE))
               for(j = 0; j < erase_n; j++)
-                consputc(BACKSPACE);
+                consputc_ansi(t, BACKSPACE);
           }
         }
         continue;
