@@ -28,6 +28,7 @@ static void consputc_ansi(struct console_tty_state *t, int c);
 static void console_emit_tty_char_locked(struct console_tty_state *t, int c);
 static struct console_tty_state *console_tty_by_index(int tty);
 static void console_gfx_sync_from_tty_locked(struct console_tty_state *t);
+static int console_pick_display_size(struct display_device *dev, uint *width_out, uint *height_out);
 static void cga_fill(int from, int to, uchar a);
 static void cga_write_cursor(int pos);
 static int cga_read_cursor(void);
@@ -277,7 +278,7 @@ console_gfx_note(const char *msg)
 }
 
 static int
-console_gfx_cell_width(void)
+console_gfx_raw_cell_width(void)
 {
   struct font *font;
   int w;
@@ -290,7 +291,7 @@ console_gfx_cell_width(void)
 }
 
 static int
-console_gfx_cell_height(void)
+console_gfx_raw_cell_height(void)
 {
   struct font *font;
   int h;
@@ -300,6 +301,44 @@ console_gfx_cell_height(void)
   if(h <= 0)
     h = 16;
   return h;
+}
+
+static void
+console_gfx_cell_metrics_for_size(uint pixel_width, uint pixel_height,
+                                  int cols, int rows,
+                                  int *cell_w_out, int *cell_h_out)
+{
+  if(cols <= 0)
+    cols = CONSOLE_DEFAULT_COLS;
+  if(rows <= 0)
+    rows = CONSOLE_DEFAULT_ROWS;
+
+  render_pick_cell_metrics(font_builtin_default(),
+                           pixel_width, pixel_height,
+                           (uint)cols, (uint)rows,
+                           cell_w_out, cell_h_out);
+}
+
+static void
+console_gfx_cell_metrics_for_grid(int cols, int rows,
+                                  int *cell_w_out, int *cell_h_out)
+{
+  struct display_device *dev;
+  uint pixel_width;
+  uint pixel_height;
+
+  pixel_width = 0;
+  pixel_height = 0;
+  if(console_gfx_fb) {
+    pixel_width = console_gfx_fb->width;
+    pixel_height = console_gfx_fb->height;
+  } else {
+    dev = console_gfx_dev ? console_gfx_dev : display_get_primary();
+    console_pick_display_size(dev, &pixel_width, &pixel_height);
+  }
+
+  console_gfx_cell_metrics_for_size(pixel_width, pixel_height, cols, rows,
+                                    cell_w_out, cell_h_out);
 }
 
 static int
@@ -387,11 +426,15 @@ console_pick_initial_winsize(ushort *rows_out, ushort *cols_out)
 
   rows = CONSOLE_DEFAULT_ROWS;
   cols = CONSOLE_DEFAULT_COLS;
-  cell_w = console_gfx_cell_width();
-  cell_h = console_gfx_cell_height();
+  cell_w = console_gfx_raw_cell_width();
+  cell_h = console_gfx_raw_cell_height();
   dev = display_get_primary();
 
   if(console_pick_display_size(dev, &width, &height)) {
+    console_gfx_cell_metrics_for_size(width, height,
+                                      CONSOLE_DEFAULT_COLS,
+                                      CONSOLE_DEFAULT_ROWS + 1,
+                                      &cell_w, &cell_h);
     cols = console_clamp_cols((int)(width / (uint)cell_w));
     rows = console_clamp_rows(((int)(height / (uint)cell_h)) - 1);
 
@@ -675,11 +718,14 @@ console_gfx_pick_origin(int cols, int rows, int *x_out, int *y_out)
   int y;
   int text_width;
   int text_height;
+  int cell_w;
+  int cell_h;
 
   x = 0;
   y = 0;
-  text_width = cols * console_gfx_cell_width();
-  text_height = rows * console_gfx_cell_height();
+  console_gfx_cell_metrics_for_grid(cols, rows, &cell_w, &cell_h);
+  text_width = cols * cell_w;
+  text_height = rows * cell_h;
 
   if(console_gfx_fb) {
     if((int)console_gfx_fb->width > text_width)
@@ -735,6 +781,104 @@ uint
 console_gfx_stats_flush_pixels(void)
 {
   return console_gfx_stat_flush_pixels;
+}
+
+int
+console_gfx_debug_snapshot(struct console_gfx_debug_info *out)
+{
+  struct console_tty_state *t;
+  struct display_mode *mode;
+  int cell_w;
+  int cell_h;
+  int row0;
+  int col0;
+  int cells;
+  int i;
+
+  if(!out)
+    return -1;
+
+  memset(out, 0, sizeof(*out));
+
+  acquire(&cons.lock);
+
+  out->sync_calls = console_gfx_stat_sync_calls;
+  out->cells_changed = console_gfx_stat_cells_changed;
+  out->cells_rendered = console_gfx_stat_cells_rendered;
+  out->flush_calls = console_gfx_stat_flush_calls;
+  out->flush_pixels = console_gfx_stat_flush_pixels;
+  out->boot_ready = console_gfx_boot_ready ? 1 : 0;
+  out->has_dev = console_gfx_dev ? 1 : 0;
+  out->has_fb = console_gfx_fb ? 1 : 0;
+  out->has_ctx = console_gfx_ctx ? 1 : 0;
+  out->has_vt = console_gfx_vts ? 1 : 0;
+  out->active_tty = (uint)console_active_tty;
+  cell_w = console_gfx_raw_cell_width();
+  cell_h = console_gfx_raw_cell_height();
+
+  mode = 0;
+  if(console_gfx_dev) {
+    if(console_gfx_dev->current_mode)
+      mode = console_gfx_dev->current_mode;
+    else if(console_gfx_dev->crtcs && console_gfx_dev->num_crtcs > 0)
+      mode = console_gfx_dev->crtcs[0].mode;
+  }
+  if(mode) {
+    out->mode_width = mode->width;
+    out->mode_height = mode->height;
+  }
+
+  if(console_gfx_fb) {
+    out->fb_width = console_gfx_fb->width;
+    out->fb_height = console_gfx_fb->height;
+    out->fb_stride = console_gfx_fb->stride;
+    out->fb_bpp = console_gfx_fb->bpp;
+  }
+
+  t = console_tty_by_index(console_active_tty);
+  if(t) {
+    out->tty_cols = (uint)console_tty_cols(t);
+    out->tty_rows = (uint)console_tty_rows(t);
+    console_gfx_cell_metrics_for_grid((int)out->tty_cols, (int)out->tty_rows,
+                                      &cell_w, &cell_h);
+    out->tty_cursor = (uint)console_clamp_tty_cursor(t, t->cursor);
+    if(out->tty_cols > 0) {
+      out->tty_cursor_row = out->tty_cursor / out->tty_cols;
+      out->tty_cursor_col = out->tty_cursor % out->tty_cols;
+    }
+    console_hw_view_origin(t, &row0, &col0);
+    out->hw_view_row0 = (uint)row0;
+    out->hw_view_col0 = (uint)col0;
+
+    cells = console_tty_cells(t);
+    for(i = 0; i < cells; i++) {
+      if((t->screen[i] & 0x00FF) != ' ' && (t->screen[i] & 0x00FF) != 0)
+        out->tty_nonblank_cells++;
+    }
+  }
+
+  if(console_gfx_vts) {
+    acquire(&console_gfx_vts->lock);
+    out->vt_cols = console_gfx_vts->width;
+    out->vt_rows = console_gfx_vts->height;
+    out->vt_origin_x = (uint)console_gfx_vts->fb_x;
+    out->vt_origin_y = (uint)console_gfx_vts->fb_y;
+    out->vt_cursor_x = (uint)console_gfx_vts->cursor_x;
+    out->vt_cursor_y = (uint)console_gfx_vts->cursor_y;
+    cells = (int)(console_gfx_vts->width * console_gfx_vts->height);
+    for(i = 0; i < cells; i++) {
+      if(console_gfx_vts->cells[i].codepoint != ' ' &&
+         console_gfx_vts->cells[i].codepoint != 0)
+        out->vt_nonblank_cells++;
+    }
+    release(&console_gfx_vts->lock);
+  }
+
+  out->cell_width = (uint)cell_w;
+  out->cell_height = (uint)cell_h;
+
+  release(&cons.lock);
+  return 0;
 }
 
 void
@@ -873,6 +1017,12 @@ console_gfx_draw_logo_locked(void)
   int total_w;
   int x;
   int y;
+  int cell_w;
+  int cell_h;
+  int text_left;
+  int text_top;
+  int text_right;
+  int text_bottom;
 
   if(!console_gfx_fb)
     return;
@@ -890,10 +1040,13 @@ console_gfx_draw_logo_locked(void)
     x = 0;
 
   if(console_gfx_vts) {
-    int text_left = console_gfx_vts->fb_x;
-    int text_top = console_gfx_vts->fb_y;
-    int text_right = text_left + (int)console_gfx_vts->width * console_gfx_cell_width();
-    int text_bottom = text_top + (int)console_gfx_vts->height * console_gfx_cell_height();
+    console_gfx_cell_metrics_for_grid((int)console_gfx_vts->width,
+                                      (int)console_gfx_vts->height,
+                                      &cell_w, &cell_h);
+    text_left = console_gfx_vts->fb_x;
+    text_top = console_gfx_vts->fb_y;
+    text_right = text_left + (int)console_gfx_vts->width * cell_w;
+    text_bottom = text_top + (int)console_gfx_vts->height * cell_h;
 
     if(x < text_right && x + total_w > text_left &&
        y < text_bottom && y + char_h + 6 > text_top)
@@ -922,12 +1075,14 @@ console_gfx_ensure_locked(struct console_tty_state *t)
   int rows;
   int origin_x;
   int origin_y;
+  int clear_full;
 
   if(!t)
     t = console_tty_by_index(console_active_tty);
 
   cols = console_tty_cols(t);
   rows = console_tty_rows(t);
+  clear_full = 0;
 
   console_gfx_dev = display_get_primary();
   if(!console_gfx_dev) {
@@ -958,6 +1113,7 @@ console_gfx_ensure_locked(struct console_tty_state *t)
       console_gfx_note("console: gfx framebuffer create failed\n");
       return 0;
     }
+    clear_full = 1;
   }
 
   if(console_gfx_dev->num_crtcs > 0) {
@@ -966,10 +1122,6 @@ console_gfx_ensure_locked(struct console_tty_state *t)
       return 0;
     }
   }
-
-  fb_fill_rect(console_gfx_fb, 0, 0, console_gfx_fb->width, console_gfx_fb->height,
-               0x00000000);
-  display_flush(console_gfx_dev, console_gfx_fb);
 
   if(!console_gfx_ctx)
     console_gfx_ctx = render_context_create(console_gfx_fb, font_builtin_default());
@@ -987,9 +1139,11 @@ console_gfx_ensure_locked(struct console_tty_state *t)
       console_gfx_pick_origin(cols, rows, &origin_x, &origin_y);
       console_gfx_vts->fb_x = origin_x;
       console_gfx_vts->fb_y = origin_y;
+      clear_full = 1;
+    }
+    if(clear_full)
       fb_fill_rect(console_gfx_fb, 0, 0, console_gfx_fb->width, console_gfx_fb->height,
                    0x00000000);
-    }
     return 1;
   }
 
@@ -1004,6 +1158,10 @@ console_gfx_ensure_locked(struct console_tty_state *t)
   console_gfx_pick_origin(cols, rows, &origin_x, &origin_y);
   console_gfx_vts->fb_x = origin_x;
   console_gfx_vts->fb_y = origin_y;
+
+  if(clear_full)
+    fb_fill_rect(console_gfx_fb, 0, 0, console_gfx_fb->width, console_gfx_fb->height,
+                 0x00000000);
 
   if(!console_gfx_announced) {
     const char *msg = "console: gfx mirror enabled\n";
@@ -2352,8 +2510,10 @@ cgaputc_ansi(struct console_tty_state *t, int c)
       if(!t->ansi.question && !t->ansi.greater && !t->ansi.dollar && !t->ansi.bang) {
         int rows = console_tty_rows(t);
         int cols = console_tty_cols(t);
-        int cell_h = console_gfx_cell_height();
-        int cell_w = console_gfx_cell_width();
+        int cell_h;
+        int cell_w;
+
+        console_gfx_cell_metrics_for_grid(cols, rows, &cell_w, &cell_h);
         switch(p1) {
         case 11:
           console_queue_simple_t_reply_locked(t, 1);

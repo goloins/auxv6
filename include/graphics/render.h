@@ -88,6 +88,10 @@ void render_context_set_palette(struct render_context *ctx,
                                 struct color_palette *palette);
 void render_context_set_clip(struct render_context *ctx,
                              int x, int y, uint w, uint h);
+void render_pick_cell_metrics(struct font *font,
+                              uint pixel_width, uint pixel_height,
+                              uint cols, uint rows,
+                              int *cell_w_out, int *cell_h_out);
 
 /* VT Surface management */
 struct vt_surface *vt_surface_create(uint width, uint height,

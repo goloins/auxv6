@@ -44,7 +44,7 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_PS_INO, "ps", 2048 },
   { PROCFS_MOUNTSTATS_INO, "mountstats", 1024 },
   { PROCFS_LOGO_INO, "logo", 16 },
-  { PROCFS_GFXSTATS_INO, "gfxstats", 256 },
+  { PROCFS_GFXSTATS_INO, "gfxstats", 1024 },
   { PROCFS_LSOF_INO, "lsof", 2048 },
   { PROCFS_NVME_TUNE_INO, "nvme_tune", 2048 },
   { 0, 0, 0 }
@@ -108,6 +108,18 @@ procfs_buf_putu(char *buf, uint max, uint *len, uint v)
     if(procfs_buf_putc(buf, max, len, tmp[i]) < 0)
       return -1;
   }
+  return 0;
+}
+
+static int
+procfs_buf_putkv_u(char *buf, uint max, uint *len, const char *key, uint v)
+{
+  if(procfs_buf_puts(buf, max, len, key) < 0)
+    return -1;
+  if(procfs_buf_putu(buf, max, len, v) < 0)
+    return -1;
+  if(procfs_buf_putc(buf, max, len, '\n') < 0)
+    return -1;
   return 0;
 }
 
@@ -432,40 +444,78 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     return procfs_copy_data(dst, off, n, buf, len);
   }
   if(ip->inum == PROCFS_GFXSTATS_INO){
+    struct console_gfx_debug_info gfx;
+
     len = 0;
-    if(procfs_buf_puts(buf, sizeof(buf), &len, "sync_calls ") < 0)
+    if(console_gfx_debug_snapshot(&gfx) < 0)
       return -1;
-    if(procfs_buf_putu(buf, sizeof(buf), &len, console_gfx_stats_sync_calls()) < 0)
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "sync_calls ", gfx.sync_calls) < 0)
       return -1;
-    if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "cells_changed ", gfx.cells_changed) < 0)
       return -1;
-
-    if(procfs_buf_puts(buf, sizeof(buf), &len, "cells_changed ") < 0)
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "cells_rendered ", gfx.cells_rendered) < 0)
       return -1;
-    if(procfs_buf_putu(buf, sizeof(buf), &len, console_gfx_stats_cells_changed()) < 0)
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "flush_calls ", gfx.flush_calls) < 0)
       return -1;
-    if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "flush_pixels ", gfx.flush_pixels) < 0)
       return -1;
-
-    if(procfs_buf_puts(buf, sizeof(buf), &len, "cells_rendered ") < 0)
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "boot_ready ", gfx.boot_ready) < 0)
       return -1;
-    if(procfs_buf_putu(buf, sizeof(buf), &len, console_gfx_stats_cells_rendered()) < 0)
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "has_dev ", gfx.has_dev) < 0)
       return -1;
-    if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "has_fb ", gfx.has_fb) < 0)
       return -1;
-
-    if(procfs_buf_puts(buf, sizeof(buf), &len, "flush_calls ") < 0)
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "has_ctx ", gfx.has_ctx) < 0)
       return -1;
-    if(procfs_buf_putu(buf, sizeof(buf), &len, console_gfx_stats_flush_calls()) < 0)
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "has_vt ", gfx.has_vt) < 0)
       return -1;
-    if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "active_tty ", gfx.active_tty) < 0)
       return -1;
-
-    if(procfs_buf_puts(buf, sizeof(buf), &len, "flush_pixels ") < 0)
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "mode_width ", gfx.mode_width) < 0)
       return -1;
-    if(procfs_buf_putu(buf, sizeof(buf), &len, console_gfx_stats_flush_pixels()) < 0)
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "mode_height ", gfx.mode_height) < 0)
       return -1;
-    if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "fb_width ", gfx.fb_width) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "fb_height ", gfx.fb_height) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "fb_stride ", gfx.fb_stride) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "fb_bpp ", gfx.fb_bpp) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "cell_width ", gfx.cell_width) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "cell_height ", gfx.cell_height) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "tty_cols ", gfx.tty_cols) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "tty_rows ", gfx.tty_rows) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "tty_cursor ", gfx.tty_cursor) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "tty_cursor_row ", gfx.tty_cursor_row) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "tty_cursor_col ", gfx.tty_cursor_col) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "tty_nonblank_cells ", gfx.tty_nonblank_cells) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "hw_view_row0 ", gfx.hw_view_row0) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "hw_view_col0 ", gfx.hw_view_col0) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vt_cols ", gfx.vt_cols) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vt_rows ", gfx.vt_rows) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vt_origin_x ", gfx.vt_origin_x) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vt_origin_y ", gfx.vt_origin_y) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vt_cursor_x ", gfx.vt_cursor_x) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vt_cursor_y ", gfx.vt_cursor_y) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vt_nonblank_cells ", gfx.vt_nonblank_cells) < 0)
       return -1;
 
     return procfs_copy_data(dst, off, n, buf, len);

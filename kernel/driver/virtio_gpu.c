@@ -880,22 +880,33 @@ virtio_gpu_display_flush_region(struct display_device *dev,
 static int
 virtio_gpu_display_flush(struct display_device *dev, struct framebuffer *fb)
 {
-    struct dirty_rect rect;
+    struct virtio_gpu_softc *sc;
+    int slot;
+    uint32_t rid;
     int rc;
 
     if(!dev || !fb)
         return -1;
 
-    if(fb_is_dirty(fb)) {
-        fb_get_dirty_rect(fb, &rect);
-    } else {
-        rect.left = 0;
-        rect.top = 0;
-        rect.right = (int)fb->width - 1;
-        rect.bottom = (int)fb->height - 1;
-    }
+    sc = (struct virtio_gpu_softc *)dev->driver_data;
+    if(!sc)
+        return -1;
 
-    rc = virtio_gpu_display_flush_region(dev, fb, &rect);
+    acquire(&sc->lock);
+    slot = virtio_gpu_resource_index_for_fb(sc, fb);
+    if(slot < 0) {
+        release(&sc->lock);
+        return -1;
+    }
+    rid = sc->resources[slot].resource_id;
+    release(&sc->lock);
+
+    /* Full-frame transfer is simpler and more reliable than partial dirty
+     * rect uploads for the current mirror path. */
+    fb_sync_for_device(fb);
+    rc = virtio_gpu_cmd_transfer_to_host_2d(sc, rid, 0, 0, fb->width, fb->height, 0);
+    if(rc == 0)
+        rc = virtio_gpu_cmd_resource_flush(sc, rid, 0, 0, fb->width, fb->height);
     if(rc == 0)
         fb_clear_dirty(fb);
     return rc;

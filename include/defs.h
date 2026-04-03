@@ -1,4 +1,5 @@
 struct buf;
+struct console_gfx_debug_info;
 struct context;
 struct file;
 struct inode;
@@ -45,6 +46,43 @@ int             bdevrw(struct buf *b);
 uint            bdev_nblocks(uint dev);
 
 // console.c
+struct console_gfx_debug_info {
+	uint sync_calls;
+	uint cells_changed;
+	uint cells_rendered;
+	uint flush_calls;
+	uint flush_pixels;
+	uint boot_ready;
+	uint has_dev;
+	uint has_fb;
+	uint has_ctx;
+	uint has_vt;
+	uint active_tty;
+	uint mode_width;
+	uint mode_height;
+	uint fb_width;
+	uint fb_height;
+	uint fb_stride;
+	uint fb_bpp;
+	uint cell_width;
+	uint cell_height;
+	uint tty_cols;
+	uint tty_rows;
+	uint tty_cursor;
+	uint tty_cursor_row;
+	uint tty_cursor_col;
+	uint tty_nonblank_cells;
+	uint hw_view_row0;
+	uint hw_view_col0;
+	uint vt_cols;
+	uint vt_rows;
+	uint vt_origin_x;
+	uint vt_origin_y;
+	uint vt_cursor_x;
+	uint vt_cursor_y;
+	uint vt_nonblank_cells;
+};
+
 void            consoleinit(void);
 void            console_gfx_late_enable(void);
 void            cprintf(char*, ...);
@@ -62,6 +100,7 @@ uint            console_gfx_stats_cells_changed(void);
 uint            console_gfx_stats_cells_rendered(void);
 uint            console_gfx_stats_flush_calls(void);
 uint            console_gfx_stats_flush_pixels(void);
+int             console_gfx_debug_snapshot(struct console_gfx_debug_info *out);
 int             console_ioctl(int fd, int request, uint arg);
 int             console_kmsg_read(char *dst, int max);
 void            panic(char*) __attribute__((noreturn));

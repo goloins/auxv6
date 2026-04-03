@@ -17,6 +17,8 @@ static const uint ansi16_rgb[16] = {
     0x5555FF, 0xFF55FF, 0x55FFFF, 0xFFFFFF,
 };
 
+#define RENDER_MAX_CELL_SCALE 2
+
 #define VT_MAX_WIDTH VT_SURFACE_MAX_WIDTH
 #define VT_MAX_HEIGHT VT_SURFACE_MAX_HEIGHT
 #define VT_MAX_CELLS (VT_MAX_WIDTH * VT_MAX_HEIGHT)
@@ -36,15 +38,11 @@ ansi_index_to_pixel(struct vt_surface *vts, int idx)
 }
 
 static void
-render_cell_metrics(struct vt_surface *vts, int *cell_w_out, int *cell_h_out)
+render_font_metrics(struct font *font, int *cell_w_out, int *cell_h_out)
 {
-    struct font *font;
     int cell_w;
     int cell_h;
 
-    font = 0;
-    if(vts)
-        font = vts->font;
     if(!font)
         font = font_builtin_default();
 
@@ -62,19 +60,90 @@ render_cell_metrics(struct vt_surface *vts, int *cell_w_out, int *cell_h_out)
         *cell_h_out = cell_h;
 }
 
+void
+render_pick_cell_metrics(struct font *font,
+                         uint pixel_width, uint pixel_height,
+                         uint cols, uint rows,
+                         int *cell_w_out, int *cell_h_out)
+{
+    uint scale;
+    uint scale_x;
+    uint scale_y;
+    uint span_w;
+    uint span_h;
+    int cell_w;
+    int cell_h;
+
+    render_font_metrics(font, &cell_w, &cell_h);
+    scale = 1;
+
+    if(pixel_width > 0 && pixel_height > 0 && cols > 0 && rows > 0) {
+        span_w = cols * (uint)cell_w;
+        span_h = rows * (uint)cell_h;
+        if(span_w > 0 && span_h > 0) {
+            scale_x = pixel_width / span_w;
+            scale_y = pixel_height / span_h;
+            scale = scale_x < scale_y ? scale_x : scale_y;
+            if(scale < 1)
+                scale = 1;
+            if(scale > RENDER_MAX_CELL_SCALE)
+                scale = RENDER_MAX_CELL_SCALE;
+        }
+    }
+
+    if(cell_w_out)
+        *cell_w_out = cell_w * (int)scale;
+    if(cell_h_out)
+        *cell_h_out = cell_h * (int)scale;
+}
+
+static void
+render_cell_metrics(struct vt_surface *vts, int *cell_w_out, int *cell_h_out)
+{
+    struct font *font;
+    uint pixel_width;
+    uint pixel_height;
+    uint cols;
+    uint rows;
+
+    font = 0;
+    pixel_width = 0;
+    pixel_height = 0;
+    cols = 0;
+    rows = 0;
+
+    if(vts) {
+        font = vts->font;
+        cols = vts->width;
+        rows = vts->height;
+        if(vts->fb) {
+            pixel_width = vts->fb->width;
+            pixel_height = vts->fb->height;
+        }
+    }
+
+    render_pick_cell_metrics(font, pixel_width, pixel_height, cols, rows,
+                             cell_w_out, cell_h_out);
+}
+
 static void
 render_cell_glyph(struct vt_surface *vts, int x, int y, struct text_cell *tc)
 {
     int px;
     int py;
+    int base_w;
+    int base_h;
     int cell_w;
     int cell_h;
+    int scale_x;
+    int scale_y;
     uint bg;
     uint fg;
     const struct glyph *g;
     struct font *font;
     int row;
     int col;
+    int run_start;
     int max_rows;
     int max_cols;
 
@@ -95,24 +164,50 @@ render_cell_glyph(struct vt_surface *vts, int x, int y, struct text_cell *tc)
     font = vts->font ? vts->font : font_builtin_default();
     if(!font)
         return;
+    render_font_metrics(font, &base_w, &base_h);
+    scale_x = base_w > 0 ? cell_w / base_w : 1;
+    scale_y = base_h > 0 ? cell_h / base_h : 1;
+    if(scale_x < 1)
+        scale_x = 1;
+    if(scale_y < 1)
+        scale_y = 1;
 
     g = font_get_glyph(font, tc->codepoint);
     if(!g || !g->bitmap)
         return;
 
-    max_rows = g->height < cell_h ? g->height : cell_h;
-    max_cols = g->width < cell_w ? g->width : cell_w;
+    max_rows = g->height < base_h ? g->height : base_h;
+    max_cols = g->width < base_w ? g->width : base_w;
 
     for(row = 0; row < max_rows; row++) {
         uchar bits = g->bitmap[row];
+        run_start = -1;
         for(col = 0; col < max_cols; col++) {
-            if(bits & (1 << (7 - col)))
-                fb_set_pixel(vts->fb, px + col, py + row, fg);
+            if(bits & (1 << (7 - col))) {
+                if(run_start < 0)
+                    run_start = col;
+            } else if(run_start >= 0) {
+                fb_fill_rect(vts->fb,
+                             px + run_start * scale_x,
+                             py + row * scale_y,
+                             (uint)(col - run_start) * (uint)scale_x,
+                             (uint)scale_y,
+                             fg);
+                run_start = -1;
+            }
         }
+        if(run_start >= 0)
+            fb_fill_rect(vts->fb,
+                         px + run_start * scale_x,
+                         py + row * scale_y,
+                         (uint)(max_cols - run_start) * (uint)scale_x,
+                         (uint)scale_y,
+                         fg);
     }
 
     if(tc->attr & TEXT_ATTR_UNDERLINE)
-        fb_fill_rect(vts->fb, px, py + cell_h - 1, cell_w, 1, fg);
+        fb_fill_rect(vts->fb, px, py + cell_h - scale_y,
+                     cell_w, (uint)scale_y, fg);
 }
 
 static int
@@ -540,7 +635,9 @@ vt_render_cursor(struct vt_surface *vts)
         return 0;
 
     render_cell_metrics(vts, &cell_w, &cell_h);
-    cursor_h = cell_h >= 2 ? 2 : 1;
+    cursor_h = cell_h / 8;
+    if(cursor_h < 1)
+        cursor_h = 1;
     x = vts->fb_x + vts->cursor_x * cell_w;
     y = vts->fb_y + vts->cursor_y * cell_h;
     fb_fill_rect(vts->fb, x, y + cell_h - cursor_h, cell_w, cursor_h,
