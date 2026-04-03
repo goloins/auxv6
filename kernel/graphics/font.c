@@ -530,8 +530,101 @@ static const uchar builtin_font_8x16[FONT_CHARS * FONT_HEIGHT] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
 
-/* Default font instance */
-static struct font builtin_font_default = {
+struct builtin_font_override {
+    uchar codepoint;
+    const uchar *bitmap;
+};
+
+/* Montecarlo is an original terminal-oriented variant tuned to better
+ * distinguish ambiguous glyphs while keeping the existing 8x16 pipeline. */
+static const uchar montecarlo_glyph_0[FONT_HEIGHT] = {
+    0x00, 0x00, 0x1C, 0x22, 0x26, 0x2A, 0x32, 0x22,
+    0x22, 0x22, 0x22, 0x1C, 0x00, 0x00, 0x00, 0x00,
+};
+
+static const uchar montecarlo_glyph_1[FONT_HEIGHT] = {
+    0x00, 0x00, 0x08, 0x18, 0x28, 0x08, 0x08, 0x08,
+    0x08, 0x08, 0x08, 0x3E, 0x00, 0x00, 0x00, 0x00,
+};
+
+static const uchar montecarlo_glyph_I[FONT_HEIGHT] = {
+    0x00, 0x00, 0x1C, 0x08, 0x08, 0x08, 0x08, 0x08,
+    0x08, 0x08, 0x08, 0x1C, 0x00, 0x00, 0x00, 0x00,
+};
+
+static const uchar montecarlo_glyph_O[FONT_HEIGHT] = {
+    0x00, 0x00, 0x1C, 0x22, 0x22, 0x22, 0x22, 0x22,
+    0x22, 0x22, 0x22, 0x1C, 0x00, 0x00, 0x00, 0x00,
+};
+
+static const uchar montecarlo_glyph_l[FONT_HEIGHT] = {
+    0x00, 0x00, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x04,
+    0x04, 0x04, 0x04, 0x1E, 0x00, 0x00, 0x00, 0x00,
+};
+
+static const uchar montecarlo_glyph_bar[FONT_HEIGHT] = {
+    0x00, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08,
+    0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x00,
+};
+
+static const uchar montecarlo_glyph_lparen[FONT_HEIGHT] = {
+    0x00, 0x00, 0x04, 0x08, 0x10, 0x10, 0x20, 0x20,
+    0x20, 0x20, 0x10, 0x10, 0x08, 0x04, 0x00, 0x00,
+};
+
+static const uchar montecarlo_glyph_rparen[FONT_HEIGHT] = {
+    0x00, 0x00, 0x10, 0x08, 0x04, 0x04, 0x02, 0x02,
+    0x02, 0x02, 0x04, 0x04, 0x08, 0x10, 0x00, 0x00,
+};
+
+static const uchar montecarlo_glyph_lbracket[FONT_HEIGHT] = {
+    0x00, 0x00, 0x1C, 0x10, 0x10, 0x10, 0x10, 0x10,
+    0x10, 0x10, 0x10, 0x10, 0x1C, 0x00, 0x00, 0x00,
+};
+
+static const uchar montecarlo_glyph_rbracket[FONT_HEIGHT] = {
+    0x00, 0x00, 0x1C, 0x04, 0x04, 0x04, 0x04, 0x04,
+    0x04, 0x04, 0x04, 0x04, 0x1C, 0x00, 0x00, 0x00,
+};
+
+static const uchar montecarlo_glyph_lbrace[FONT_HEIGHT] = {
+    0x00, 0x00, 0x06, 0x08, 0x08, 0x08, 0x10, 0x20,
+    0x10, 0x10, 0x08, 0x08, 0x08, 0x06, 0x00, 0x00,
+};
+
+static const uchar montecarlo_glyph_rbrace[FONT_HEIGHT] = {
+    0x00, 0x00, 0x18, 0x04, 0x04, 0x04, 0x02, 0x01,
+    0x02, 0x02, 0x04, 0x04, 0x04, 0x18, 0x00, 0x00,
+};
+
+static const uchar montecarlo_glyph_slash[FONT_HEIGHT] = {
+    0x00, 0x00, 0x02, 0x02, 0x04, 0x04, 0x08, 0x08,
+    0x10, 0x10, 0x20, 0x20, 0x00, 0x00, 0x00, 0x00,
+};
+
+static const uchar montecarlo_glyph_backslash[FONT_HEIGHT] = {
+    0x00, 0x00, 0x20, 0x20, 0x10, 0x10, 0x08, 0x08,
+    0x04, 0x04, 0x02, 0x02, 0x00, 0x00, 0x00, 0x00,
+};
+
+static const struct builtin_font_override montecarlo_overrides[] = {
+    { '0', montecarlo_glyph_0 },
+    { '1', montecarlo_glyph_1 },
+    { 'I', montecarlo_glyph_I },
+    { 'O', montecarlo_glyph_O },
+    { 'l', montecarlo_glyph_l },
+    { '|', montecarlo_glyph_bar },
+    { '(', montecarlo_glyph_lparen },
+    { ')', montecarlo_glyph_rparen },
+    { '[', montecarlo_glyph_lbracket },
+    { ']', montecarlo_glyph_rbracket },
+    { '{', montecarlo_glyph_lbrace },
+    { '}', montecarlo_glyph_rbrace },
+    { '/', montecarlo_glyph_slash },
+    { '\\', montecarlo_glyph_backslash },
+};
+
+static struct font builtin_font_classic = {
     .name = "builtin-8x16",
     .size = 16,
     .ascent = 12,
@@ -540,6 +633,37 @@ static struct font builtin_font_default = {
     .is_monospace = 1,
     .num_glyphs = FONT_CHARS,
 };
+
+static struct font builtin_font_montecarlo = {
+    .name = "montecarlo-8x16",
+    .size = 16,
+    .ascent = 12,
+    .descent = 4,
+    .linegap = 0,
+    .is_monospace = 1,
+    .num_glyphs = FONT_CHARS,
+};
+
+static int
+font_is_builtin(struct font *font)
+{
+    return font == &builtin_font_classic || font == &builtin_font_montecarlo;
+}
+
+static const uchar *
+builtin_font_bitmap(struct font *font, uint codepoint)
+{
+    uint i;
+
+    if(font == &builtin_font_montecarlo) {
+        for(i = 0; i < sizeof(montecarlo_overrides) / sizeof(montecarlo_overrides[0]); i++) {
+            if(montecarlo_overrides[i].codepoint == (uchar)codepoint)
+                return montecarlo_overrides[i].bitmap;
+        }
+    }
+
+    return &builtin_font_8x16[codepoint * FONT_HEIGHT];
+}
 
 /*
  * Load a font by name and size
@@ -554,9 +678,14 @@ font_load(const char *name, int size)
         return 0;
 
     /* Recognize builtin font names */
-    if(!strncmp(name, "builtin-8x16", 32) || !strncmp(name, "default", 32)) {
+    if(!strncmp(name, "default", 32) ||
+       !strncmp(name, "montecarlo", 32) ||
+       !strncmp(name, "montecarlo-8x16", 32))
         return font_builtin_default();
-    }
+
+    if(!strncmp(name, "builtin-8x16", 32) ||
+       !strncmp(name, "classic-8x16", 32))
+        return &builtin_font_classic;
 
     /* TODO: Load from filesystem */
     cprintf("font_load: unknown font %s\n", name);
@@ -564,12 +693,12 @@ font_load(const char *name, int size)
 }
 
 /*
- * Get the builtin 8x16 font
+ * Get the default terminal font
  */
 struct font *
 font_builtin_default(void)
 {
-    return &builtin_font_default;
+    return &builtin_font_montecarlo;
 }
 
 /*
@@ -578,7 +707,7 @@ font_builtin_default(void)
 struct font *
 font_builtin_mono(void)
 {
-    return &builtin_font_default;
+    return &builtin_font_montecarlo;
 }
 
 /*
@@ -591,7 +720,7 @@ font_free(struct font *font)
         return;
 
     /* Builtin fonts are static, don't free them */
-    if(font == &builtin_font_default)
+    if(font_is_builtin(font))
         return;
 
     /* TODO: Free dynamically loaded fonts */
@@ -621,7 +750,7 @@ font_get_glyph(struct font *font, uint codepoint)
     glyph_cache.advance_y = 0;
     glyph_cache.bearing_x = 0;
     glyph_cache.bearing_y = font->ascent;
-    glyph_cache.bitmap = &builtin_font_8x16[codepoint * FONT_HEIGHT];
+    glyph_cache.bitmap = builtin_font_bitmap(font, codepoint);
     glyph_cache.bitmap_size = FONT_HEIGHT;
 
     return &glyph_cache;
@@ -636,8 +765,8 @@ font_has_glyph(struct font *font, uint codepoint)
     if(!font)
         return 0;
 
-    /* Builtin font has all ASCII */
-    if(font == &builtin_font_default && codepoint < 128)
+    /* Builtin fonts have all ASCII */
+    if(font_is_builtin(font) && codepoint < 128)
         return 1;
 
     return 0;
