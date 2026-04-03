@@ -382,3 +382,68 @@ strndup(const char *s, uint n)
   }
   return p;
 }
+
+/*
+ * basename - return the final filename component of a path.
+ * Modifies the string in place (strips trailing slashes).
+ * Returns "." for an empty or all-slash path.
+ */
+char *
+basename(char *path)
+{
+  char *p;
+  char *last;
+  int len;
+
+  if(path == 0 || path[0] == '\0')
+    return (char *)".";
+
+  /* Strip trailing slashes */
+  len = strlen(path);
+  while(len > 1 && path[len - 1] == '/')
+    path[--len] = '\0';
+
+  /* Find last '/' */
+  last = strrchr(path, '/');
+  if(last == 0)
+    return path;
+
+  p = last + 1;
+  if(*p == '\0')
+    return (char *)"/";
+  return p;
+}
+
+/*
+ * dirname - return the directory portion of a path.
+ * Modifies the string in place (strips trailing slashes, then the last
+ * component). Returns "." if the result would be empty.
+ */
+char *
+dirname(char *path)
+{
+  char *last;
+  int len;
+
+  if(path == 0 || path[0] == '\0')
+    return (char *)".";
+
+  /* Strip trailing slashes */
+  len = strlen(path);
+  while(len > 1 && path[len - 1] == '/')
+    path[--len] = '\0';
+
+  /* Find last '/' */
+  last = strrchr(path, '/');
+  if(last == 0)
+    return (char *)".";
+
+  /* Trim trailing slash(es) of the dir portion */
+  while(last > path && *last == '/')
+    last--;
+  last[1] = '\0';
+
+  if(path[0] == '\0')
+    return (char *)"/";
+  return path;
+}
