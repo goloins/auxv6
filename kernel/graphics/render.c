@@ -17,8 +17,8 @@ static const uint ansi16_rgb[16] = {
     0x5555FF, 0xFF55FF, 0x55FFFF, 0xFFFFFF,
 };
 
-#define VT_MAX_WIDTH 80
-#define VT_MAX_HEIGHT 25
+#define VT_MAX_WIDTH VT_SURFACE_MAX_WIDTH
+#define VT_MAX_HEIGHT VT_SURFACE_MAX_HEIGHT
 #define VT_MAX_CELLS (VT_MAX_WIDTH * VT_MAX_HEIGHT)
 
 static struct text_cell vt0_cells[VT_MAX_CELLS];

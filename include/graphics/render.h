@@ -32,6 +32,8 @@ struct render_context {
 
 /* VT surface - terminal-like drawable */
 #define VT_FLAG_CURSOR_VISIBLE 1
+#define VT_SURFACE_MAX_WIDTH 160
+#define VT_SURFACE_MAX_HEIGHT 64
 
 struct vt_surface {
     /* Content */

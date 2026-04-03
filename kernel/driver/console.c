@@ -35,6 +35,17 @@ static void cgaputc_kernel(int c);
 
 static int panicked = 0;
 
+#define CONSOLE_HW_COLS 80
+#define CONSOLE_HW_ROWS 25
+#define CONSOLE_DEFAULT_COLS 80
+#define CONSOLE_DEFAULT_ROWS 24
+#define CONSOLE_DEFAULT_SCROLL_BOT (CONSOLE_DEFAULT_ROWS - 1)
+#define CONSOLE_BOOT_MAX_COLS 100
+#define CONSOLE_BOOT_MAX_ROWS 30
+#define CONSOLE_MAX_COLS VT_SURFACE_MAX_WIDTH
+#define CONSOLE_MAX_ROWS VT_SURFACE_MAX_HEIGHT
+#define CONSOLE_MAX_CELLS (CONSOLE_MAX_COLS * CONSOLE_MAX_ROWS)
+
 #define KMSG_RING_SIZE 16384
 
 static char kmsg_ring[KMSG_RING_SIZE];
@@ -145,7 +156,7 @@ struct console_ansi_state {
   int alt_active;
   int alt_saved_cursor;
   uchar alt_saved_attr;
-  ushort alt_buf[25 * 80];
+  ushort alt_buf[CONSOLE_MAX_CELLS];
 };
 
 struct console_tty_state {
@@ -158,7 +169,7 @@ struct console_tty_state {
   struct winsize winsize;
   struct console_input_state input;
   struct console_ansi_state ansi;
-  ushort screen[25 * 80];
+  ushort screen[CONSOLE_MAX_CELLS];
   int cursor;
 };
 
@@ -187,12 +198,12 @@ static struct console_tty_state console_tty_default = {
       [VEOL]   = 0,
     },
   },
-  .winsize = { .ws_row = 24, .ws_col = 80 },
+  .winsize = { .ws_row = CONSOLE_DEFAULT_ROWS, .ws_col = CONSOLE_DEFAULT_COLS },
   .ansi = {
     .state = 0,
     .attr = 0x07,
     .scroll_top = 0,
-    .scroll_bot = 23,
+    .scroll_bot = CONSOLE_DEFAULT_SCROLL_BOT,
     .saved_attr = 0x07,
     .g0_charset = 0,
     .g1_charset = 0,
@@ -234,6 +245,8 @@ static int console_active_tty = 0;
 static ushort *cga_hw = (ushort*)P2V(0xb8000);
 static ushort *crt = (ushort*)P2V(0xb8000);
 static int cga_render_offscreen = 0;
+static int crt_cols = CONSOLE_HW_COLS;
+static int crt_rows = CONSOLE_HW_ROWS;
 
 static struct display_device *console_gfx_dev;
 static struct framebuffer *console_gfx_fb;
@@ -251,8 +264,6 @@ static uint console_gfx_stat_flush_pixels;
 
 #define CONSOLE_GFX_FALLBACK_WIDTH 640
 #define CONSOLE_GFX_FALLBACK_HEIGHT 400
-#define CONSOLE_GFX_COLS 80
-#define CONSOLE_GFX_ROWS 25
 
 static void
 console_gfx_note(const char *msg)
@@ -291,27 +302,364 @@ console_gfx_cell_height(void)
   return h;
 }
 
+static int
+console_pick_display_size(struct display_device *dev, uint *width_out, uint *height_out)
+{
+  struct display_mode *mode;
+
+  mode = 0;
+  if(!dev)
+    return 0;
+
+  if(dev->current_mode)
+    mode = dev->current_mode;
+  else if(dev->crtcs && dev->num_crtcs > 0)
+    mode = dev->crtcs[0].mode;
+
+  if(!mode || mode->width == 0 || mode->height == 0)
+    return 0;
+
+  if(width_out)
+    *width_out = mode->width;
+  if(height_out)
+    *height_out = mode->height;
+  return 1;
+}
+
+static int
+console_clamp_cols(int cols)
+{
+  if(cols <= 0)
+    return CONSOLE_DEFAULT_COLS;
+  if(cols > CONSOLE_MAX_COLS)
+    return CONSOLE_MAX_COLS;
+  return cols;
+}
+
+static int
+console_clamp_rows(int rows)
+{
+  if(rows <= 0)
+    return CONSOLE_DEFAULT_ROWS;
+  if(rows > CONSOLE_MAX_ROWS)
+    return CONSOLE_MAX_ROWS;
+  return rows;
+}
+
+static int
+console_tty_cols(struct console_tty_state *t)
+{
+  if(!t)
+    return CONSOLE_DEFAULT_COLS;
+  return console_clamp_cols((int)t->winsize.ws_col);
+}
+
+static int
+console_tty_rows(struct console_tty_state *t)
+{
+  int rows;
+
+  if(!t)
+    return CONSOLE_DEFAULT_ROWS;
+
+  rows = console_clamp_rows((int)t->winsize.ws_row);
+  if(rows <= 0)
+    rows = CONSOLE_DEFAULT_ROWS;
+  return rows;
+}
+
+static int
+console_tty_cells(struct console_tty_state *t)
+{
+  return console_tty_cols(t) * console_tty_rows(t);
+}
+
+static void
+console_pick_initial_winsize(ushort *rows_out, ushort *cols_out)
+{
+  struct display_device *dev;
+  uint width;
+  uint height;
+  int rows;
+  int cols;
+  int cell_w;
+  int cell_h;
+
+  rows = CONSOLE_DEFAULT_ROWS;
+  cols = CONSOLE_DEFAULT_COLS;
+  cell_w = console_gfx_cell_width();
+  cell_h = console_gfx_cell_height();
+  dev = display_get_primary();
+
+  if(console_pick_display_size(dev, &width, &height)) {
+    cols = console_clamp_cols((int)(width / (uint)cell_w));
+    rows = console_clamp_rows(((int)(height / (uint)cell_h)) - 1);
+
+    /* Keep the boot console readable; larger grids remain available via winsize. */
+    if(cols > CONSOLE_BOOT_MAX_COLS)
+      cols = CONSOLE_BOOT_MAX_COLS;
+    if(rows > CONSOLE_BOOT_MAX_ROWS)
+      rows = CONSOLE_BOOT_MAX_ROWS;
+  }
+
+  if(rows_out)
+    *rows_out = (ushort)rows;
+  if(cols_out)
+    *cols_out = (ushort)cols;
+}
+
+static int
+console_surface_cols(void)
+{
+  return crt_cols > 0 ? crt_cols : CONSOLE_HW_COLS;
+}
+
+static int
+console_surface_rows(void)
+{
+  return crt_rows > 0 ? crt_rows : CONSOLE_HW_ROWS;
+}
+
+static int
+console_surface_cells(void)
+{
+  return console_surface_cols() * console_surface_rows();
+}
+
+static int
+console_clamp_surface_cursor(int pos)
+{
+  int cells;
+
+  cells = console_surface_cells();
+  if(cells <= 0)
+    return 0;
+  if(pos < 0)
+    return 0;
+  if(pos >= cells)
+    return cells - 1;
+  return pos;
+}
+
+static int
+console_clamp_tty_cursor(struct console_tty_state *t, int pos)
+{
+  int cells;
+
+  cells = console_tty_cells(t);
+  if(cells <= 0)
+    return 0;
+  if(pos < 0)
+    return 0;
+  if(pos >= cells)
+    return cells - 1;
+  return pos;
+}
+
+static int
+console_tty_cursor_from_hw(struct console_tty_state *t, int hw_pos)
+{
+  int row;
+  int col;
+  int tty_rows;
+  int tty_cols;
+
+  if(!t)
+    return 0;
+
+  tty_rows = console_tty_rows(t);
+  tty_cols = console_tty_cols(t);
+  row = hw_pos / CONSOLE_HW_COLS;
+  col = hw_pos % CONSOLE_HW_COLS;
+
+  if(row >= tty_rows)
+    row = tty_rows - 1;
+  if(col >= tty_cols)
+    col = tty_cols - 1;
+  if(row < 0)
+    row = 0;
+  if(col < 0)
+    col = 0;
+  return row * tty_cols + col;
+}
+
+static void
+console_tty_cursor_xy(struct console_tty_state *t, int *row_out, int *col_out)
+{
+  int cols;
+  int pos;
+
+  if(!t)
+    return;
+
+  cols = console_tty_cols(t);
+  pos = console_clamp_tty_cursor(t, t->cursor);
+  if(row_out)
+    *row_out = pos / cols;
+  if(col_out)
+    *col_out = pos % cols;
+}
+
+static void
+console_hw_view_origin(struct console_tty_state *t, int *row0_out, int *col0_out)
+{
+  int row0;
+  int col0;
+  int tty_rows;
+  int tty_cols;
+  int cursor_row;
+  int cursor_col;
+
+  row0 = 0;
+  col0 = 0;
+  if(!t) {
+    if(row0_out)
+      *row0_out = 0;
+    if(col0_out)
+      *col0_out = 0;
+    return;
+  }
+
+  tty_rows = console_tty_rows(t);
+  tty_cols = console_tty_cols(t);
+  console_tty_cursor_xy(t, &cursor_row, &cursor_col);
+
+  if(tty_rows > CONSOLE_HW_ROWS) {
+    row0 = cursor_row - (CONSOLE_HW_ROWS - 1);
+    if(row0 < 0)
+      row0 = 0;
+    if(row0 > tty_rows - CONSOLE_HW_ROWS)
+      row0 = tty_rows - CONSOLE_HW_ROWS;
+  }
+
+  if(tty_cols > CONSOLE_HW_COLS) {
+    col0 = cursor_col - (CONSOLE_HW_COLS - 1);
+    if(col0 < 0)
+      col0 = 0;
+    if(col0 > tty_cols - CONSOLE_HW_COLS)
+      col0 = tty_cols - CONSOLE_HW_COLS;
+  }
+
+  if(row0_out)
+    *row0_out = row0;
+  if(col0_out)
+    *col0_out = col0;
+}
+
+static void
+console_select_hw_surface(void)
+{
+  crt = cga_hw;
+  crt_cols = CONSOLE_HW_COLS;
+  crt_rows = CONSOLE_HW_ROWS;
+  cga_render_offscreen = 0;
+}
+
+static void
+console_select_tty_surface(struct console_tty_state *t)
+{
+  crt = t->screen;
+  crt_cols = console_tty_cols(t);
+  crt_rows = console_tty_rows(t);
+  cga_render_offscreen = 1;
+}
+
+static int
+console_hw_cursor_from_tty(struct console_tty_state *t)
+{
+  int row;
+  int col;
+  int row0;
+  int col0;
+
+  if(!t)
+    return 0;
+
+  console_tty_cursor_xy(t, &row, &col);
+  console_hw_view_origin(t, &row0, &col0);
+  row -= row0;
+  col -= col0;
+
+  if(row >= CONSOLE_HW_ROWS)
+    row = CONSOLE_HW_ROWS - 1;
+  if(col >= CONSOLE_HW_COLS)
+    col = CONSOLE_HW_COLS - 1;
+  if(row < 0)
+    row = 0;
+  if(col < 0)
+    col = 0;
+  return row * CONSOLE_HW_COLS + col;
+}
+
+static void
+console_copy_hw_to_tty_locked(struct console_tty_state *t)
+{
+  ushort blank;
+  int tty_rows;
+  int tty_cols;
+  int row;
+  int col;
+
+  if(!t)
+    return;
+
+  blank = (ushort)(' ' | (0x07 << 8));
+  tty_rows = console_tty_rows(t);
+  tty_cols = console_tty_cols(t);
+
+  for(row = 0; row < tty_rows; row++) {
+    for(col = 0; col < tty_cols; col++) {
+      if(row < CONSOLE_HW_ROWS && col < CONSOLE_HW_COLS)
+        t->screen[row * tty_cols + col] = cga_hw[row * CONSOLE_HW_COLS + col];
+      else
+        t->screen[row * tty_cols + col] = blank;
+    }
+  }
+}
+
+static void
+console_copy_tty_to_hw_locked(struct console_tty_state *t)
+{
+  ushort blank;
+  int tty_cols;
+  int tty_rows;
+  int row0;
+  int col0;
+  int row;
+  int col;
+
+  if(!t)
+    return;
+
+  blank = (ushort)(' ' | (0x07 << 8));
+  tty_rows = console_tty_rows(t);
+  tty_cols = console_tty_cols(t);
+  console_hw_view_origin(t, &row0, &col0);
+
+  for(row = 0; row < CONSOLE_HW_ROWS; row++) {
+    for(col = 0; col < CONSOLE_HW_COLS; col++) {
+      int tty_row = row0 + row;
+      int tty_col = col0 + col;
+
+      if(tty_row < tty_rows && tty_col < tty_cols)
+        cga_hw[row * CONSOLE_HW_COLS + col] = t->screen[tty_row * tty_cols + tty_col];
+      else
+        cga_hw[row * CONSOLE_HW_COLS + col] = blank;
+    }
+  }
+}
+
 static void
 console_gfx_pick_framebuffer_size(uint *width_out, uint *height_out)
 {
-  struct display_mode *mode;
   uint width;
   uint height;
 
   width = CONSOLE_GFX_FALLBACK_WIDTH;
   height = CONSOLE_GFX_FALLBACK_HEIGHT;
-  mode = 0;
 
-  if(console_gfx_dev) {
-    if(console_gfx_dev->current_mode)
-      mode = console_gfx_dev->current_mode;
-    else if(console_gfx_dev->crtcs && console_gfx_dev->num_crtcs > 0)
-      mode = console_gfx_dev->crtcs[0].mode;
-  }
-
-  if(mode && mode->width > 0 && mode->height > 0) {
-    width = mode->width;
-    height = mode->height;
+  if(console_pick_display_size(console_gfx_dev, &width, &height)) {
+    /* use the display-reported mode */
   }
 
   if(width_out)
@@ -321,7 +669,7 @@ console_gfx_pick_framebuffer_size(uint *width_out, uint *height_out)
 }
 
 static void
-console_gfx_pick_origin(int *x_out, int *y_out)
+console_gfx_pick_origin(int cols, int rows, int *x_out, int *y_out)
 {
   int x;
   int y;
@@ -330,8 +678,8 @@ console_gfx_pick_origin(int *x_out, int *y_out)
 
   x = 0;
   y = 0;
-  text_width = CONSOLE_GFX_COLS * console_gfx_cell_width();
-  text_height = CONSOLE_GFX_ROWS * console_gfx_cell_height();
+  text_width = cols * console_gfx_cell_width();
+  text_height = rows * console_gfx_cell_height();
 
   if(console_gfx_fb) {
     if((int)console_gfx_fb->width > text_width)
@@ -414,6 +762,7 @@ console_stamp_logo_textmode_locked(struct console_tty_state *t)
     0x09, /* light blue */
   };
   int col0;
+  int cols;
   int i;
 
   if(!t)
@@ -421,7 +770,10 @@ console_stamp_logo_textmode_locked(struct console_tty_state *t)
   if(!console_logo_enabled)
     return;
 
-  col0 = 80 - 6;
+  cols = console_tty_cols(t);
+  if(cols > CONSOLE_HW_COLS)
+    cols = CONSOLE_HW_COLS;
+  col0 = cols > 6 ? cols - 6 : 0;
   for(i = 0; i < 6; i++)
     t->screen[col0 + i] = (ushort)(text[i] | ((ushort)attr[i] << 8));
 
@@ -440,7 +792,8 @@ console_replay_boot_kmsg_locked(struct console_tty_state *t)
   if(!t)
     return;
 
-  cga_fill(0, 25 * 80, 0x07);
+  console_select_hw_surface();
+  cga_fill(0, console_surface_cells(), 0x07);
   cga_write_cursor(0);
 
   if(kmsg_size > 0) {
@@ -449,8 +802,8 @@ console_replay_boot_kmsg_locked(struct console_tty_state *t)
       cgaputc_kernel((uchar)kmsg_ring[(start + i) % KMSG_RING_SIZE]);
   }
 
-  memmove(t->screen, cga_hw, sizeof(t->screen));
-  t->cursor = cga_read_cursor();
+  console_copy_hw_to_tty_locked(t);
+  t->cursor = console_tty_cursor_from_hw(t, cga_read_cursor());
   console_stamp_logo_textmode_locked(t);
 }
 
@@ -536,6 +889,17 @@ console_gfx_draw_logo_locked(void)
   if(x < 0)
     x = 0;
 
+  if(console_gfx_vts) {
+    int text_left = console_gfx_vts->fb_x;
+    int text_top = console_gfx_vts->fb_y;
+    int text_right = text_left + (int)console_gfx_vts->width * console_gfx_cell_width();
+    int text_bottom = text_top + (int)console_gfx_vts->height * console_gfx_cell_height();
+
+    if(x < text_right && x + total_w > text_left &&
+       y < text_bottom && y + char_h + 6 > text_top)
+      return;
+  }
+
   fb_fill_rect(console_gfx_fb, x - 4, y - 3, total_w + 8, char_h + 6, 0x00000000);
   for(i = 0; i < 6; i++)
     console_gfx_draw_logo_char(console_gfx_fb,
@@ -547,18 +911,23 @@ console_gfx_draw_logo_locked(void)
 }
 
 static int
-console_gfx_ensure_locked(void)
+console_gfx_ensure_locked(struct console_tty_state *t)
 {
   struct render_context tmp;
   const char *msg;
   const char *p;
   uint fb_width;
   uint fb_height;
+  int cols;
+  int rows;
   int origin_x;
   int origin_y;
 
-  if(console_gfx_vts)
-    return 1;
+  if(!t)
+    t = console_tty_by_index(console_active_tty);
+
+  cols = console_tty_cols(t);
+  rows = console_tty_rows(t);
 
   console_gfx_dev = display_get_primary();
   if(!console_gfx_dev) {
@@ -609,15 +978,30 @@ console_gfx_ensure_locked(void)
     return 0;
   }
 
+  if(console_gfx_vts) {
+    if((int)console_gfx_vts->width != cols || (int)console_gfx_vts->height != rows) {
+      if(vt_surface_resize(console_gfx_vts, (uint)cols, (uint)rows) < 0) {
+        console_gfx_note("console: gfx vt resize failed\n");
+        return 0;
+      }
+      console_gfx_pick_origin(cols, rows, &origin_x, &origin_y);
+      console_gfx_vts->fb_x = origin_x;
+      console_gfx_vts->fb_y = origin_y;
+      fb_fill_rect(console_gfx_fb, 0, 0, console_gfx_fb->width, console_gfx_fb->height,
+                   0x00000000);
+    }
+    return 1;
+  }
+
   memset(&tmp, 0, sizeof(tmp));
   tmp = *console_gfx_ctx;
-  console_gfx_vts = vt_surface_create(CONSOLE_GFX_COLS, CONSOLE_GFX_ROWS, &tmp);
+  console_gfx_vts = vt_surface_create((uint)cols, (uint)rows, &tmp);
   if(!console_gfx_vts) {
     console_gfx_note("console: gfx vt surface failed\n");
     return 0;
   }
 
-  console_gfx_pick_origin(&origin_x, &origin_y);
+  console_gfx_pick_origin(cols, rows, &origin_x, &origin_y);
   console_gfx_vts->fb_x = origin_x;
   console_gfx_vts->fb_y = origin_y;
 
@@ -635,6 +1019,9 @@ console_gfx_ensure_locked(void)
 static void
 console_gfx_sync_from_tty_locked(struct console_tty_state *t)
 {
+  int cols;
+  int rows;
+  int cells;
   int i;
   int changed;
   int changed_cells;
@@ -650,8 +1037,12 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
     return;
   if(!console_gfx_boot_ready)
     return;
-  if(!console_gfx_ensure_locked())
+  if(!console_gfx_ensure_locked(t))
     return;
+
+  cols = console_tty_cols(t);
+  rows = console_tty_rows(t);
+  cells = cols * rows;
 
   console_gfx_stat_sync_calls++;
 
@@ -666,7 +1057,7 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
   old_cursor_x = console_gfx_vts->cursor_x;
   old_cursor_y = console_gfx_vts->cursor_y;
 
-  for(i = 0; i < 25 * 80; i++) {
+  for(i = 0; i < cells; i++) {
     ushort s = t->screen[i];
     struct text_cell tc;
     struct text_cell *dst;
@@ -690,8 +1081,8 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
     }
   }
 
-  new_cursor_x = t->cursor % 80;
-  new_cursor_y = t->cursor / 80;
+  new_cursor_x = t->cursor % cols;
+  new_cursor_y = t->cursor / cols;
   if(new_cursor_x != old_cursor_x || new_cursor_y != old_cursor_y) {
     if(old_cursor_x >= 0 && old_cursor_x < (int)console_gfx_vts->width &&
        old_cursor_y >= 0 && old_cursor_y < (int)console_gfx_vts->height &&
@@ -775,7 +1166,7 @@ console_emit_tty_char_locked(struct console_tty_state *t, int c)
 
   emit = 1;
   if(t->termios.c_oflag & OPOST) {
-    col = t->cursor % 80;
+    col = t->cursor % console_tty_cols(t);
 
     if(c == '\r' && (t->termios.c_oflag & ONOCR) && col == 0)
       emit = 0;
@@ -972,24 +1363,30 @@ static int cga_cursor = 0;
 static void
 console_flush_tty_locked(struct console_tty_state *t)
 {
+  int hw_cursor;
+
   if(t != console_tty_by_index(console_active_tty))
     return;
   console_stamp_logo_textmode_locked(t);
-  memmove(cga_hw, t->screen, sizeof(t->screen));
-  cga_render_offscreen = 0;
-  cga_cursor = t->cursor;
-  outb(CRTPORT, 14); outb(CRTPORT+1, t->cursor >> 8);
-  outb(CRTPORT, 15); outb(CRTPORT+1, t->cursor);
+  console_copy_tty_to_hw_locked(t);
+  console_select_hw_surface();
+  hw_cursor = console_hw_cursor_from_tty(t);
+  cga_write_cursor(hw_cursor);
   console_gfx_sync_from_tty_locked(t);
 }
 
 static void
 cga_write_cursor(int pos)
 {
+  int cells;
+
+  cells = console_surface_cells();
+  if(cells <= 0)
+    cells = 1;
   if(pos < 0)
     pos = 0;
-  if(pos >= 25*80)
-    pos = 25*80 - 1;
+  if(pos >= cells)
+    pos = cells - 1;
   cga_cursor = pos;
   if(cga_render_offscreen)
     return;
@@ -1012,8 +1409,11 @@ cga_fill(int from, int to, uchar a)
 {
   int i;
   ushort blank = (ushort)(' ' | ((ushort)a << 8));
+  int cells;
+
+  cells = console_surface_cells();
   if(from < 0)   from = 0;
-  if(to > 25*80) to   = 25*80;
+  if(to > cells) to   = cells;
   for(i = from; i < to; i++)
     crt[i] = blank;
 }
@@ -1021,23 +1421,29 @@ cga_fill(int from, int to, uchar a)
 static void
 cga_scroll_up(int top, int bot, int n, uchar a)
 {
+  int cols;
   int lines = bot - top + 1;
+
+  cols = console_surface_cols();
   if(n <= 0) return;
-  if(n >= lines) { cga_fill(top*80, (bot+1)*80, a); return; }
-  memmove(crt + top*80, crt + (top+n)*80, (lines-n)*80*sizeof(ushort));
-  cga_fill((bot+1-n)*80, (bot+1)*80, a);
+  if(n >= lines) { cga_fill(top * cols, (bot + 1) * cols, a); return; }
+  memmove(crt + top * cols, crt + (top + n) * cols, (lines - n) * cols * sizeof(ushort));
+  cga_fill((bot + 1 - n) * cols, (bot + 1) * cols, a);
 }
 
 static void
 cga_scroll_down(int top, int bot, int n, uchar a)
 {
+  int cols;
   int lines = bot - top + 1;
   int i;
+
+  cols = console_surface_cols();
   if(n <= 0) return;
-  if(n >= lines) { cga_fill(top*80, (bot+1)*80, a); return; }
+  if(n >= lines) { cga_fill(top * cols, (bot + 1) * cols, a); return; }
   for(i = bot; i >= top + n; i--)
-    memmove(crt + i*80, crt + (i-n)*80, 80*sizeof(ushort));
-  cga_fill(top*80, (top+n)*80, a);
+    memmove(crt + i * cols, crt + (i - n) * cols, cols * sizeof(ushort));
+  cga_fill(top * cols, (top + n) * cols, a);
 }
 
 /* --------------------------------------------------------------------------
@@ -1047,21 +1453,26 @@ cga_scroll_down(int top, int bot, int n, uchar a)
 static void
 cgaputc_kernel(int c)
 {
+  int cols;
+  int rows;
   int pos = cga_cursor;
 
+  cols = console_surface_cols();
+  rows = console_surface_rows();
+
   if(c == '\n')
-    pos += 80 - pos % 80;
+    pos += cols - pos % cols;
   else if(c == BACKSPACE) {
     if(pos > 0) --pos;
   } else
     crt[pos++] = (c & 0xff) | 0x0700;
 
-  if(pos < 0 || pos > 25*80) pos = 0;
+  if(pos < 0 || pos > cols * rows) pos = 0;
 
-  if((pos / 80) >= 24) {
-    memmove(crt, crt + 80, sizeof(crt[0]) * 23 * 80);
-    pos -= 80;
-    memset(crt + pos, 0, sizeof(crt[0]) * (24*80 - pos));
+  if((pos / cols) >= rows - 1) {
+    memmove(crt, crt + cols, sizeof(crt[0]) * (rows - 2) * cols);
+    pos -= cols;
+    memset(crt + pos, 0, sizeof(crt[0]) * ((rows - 1) * cols - pos));
   }
 
   cga_write_cursor(pos);
@@ -1112,22 +1523,28 @@ ansi_restore_cursor(struct console_tty_state *t)
 static void
 ansi_enter_alt_screen(struct console_tty_state *t)
 {
+  int cells;
+
   if(t->ansi.alt_active)
     return;
-  memmove(t->ansi.alt_buf, crt, sizeof(t->ansi.alt_buf));
+  cells = console_tty_cells(t);
+  memmove(t->ansi.alt_buf, crt, cells * sizeof(ushort));
   t->ansi.alt_saved_cursor = cga_cursor;
   t->ansi.alt_saved_attr = t->ansi.attr;
   t->ansi.alt_active = 1;
-  cga_fill(0, 25 * 80, t->ansi.attr);
+  cga_fill(0, console_surface_cells(), t->ansi.attr);
   cga_write_cursor(0);
 }
 
 static void
 ansi_leave_alt_screen(struct console_tty_state *t)
 {
+  int cells;
+
   if(!t->ansi.alt_active)
     return;
-  memmove(crt, t->ansi.alt_buf, sizeof(t->ansi.alt_buf));
+  cells = console_tty_cells(t);
+  memmove(crt, t->ansi.alt_buf, cells * sizeof(ushort));
   cga_write_cursor(t->ansi.alt_saved_cursor);
   t->ansi.attr = t->ansi.alt_saved_attr;
   t->ansi.alt_active = 0;
@@ -1141,7 +1558,7 @@ ansi_apply_private_mode(struct console_tty_state *t, int mode, int set)
   } else if(mode == 6) {
     t->ansi.origin_mode = set ? 1 : 0;
     if(set)
-      cga_write_cursor(t->ansi.scroll_top * 80);
+      cga_write_cursor(t->ansi.scroll_top * console_surface_cols());
     else
       cga_write_cursor(0);
   } else if(mode == 5) {
@@ -1310,7 +1727,7 @@ ansi_soft_reset(struct console_tty_state *t)
 {
   t->ansi.attr = 0x07;
   t->ansi.scroll_top = 0;
-  t->ansi.scroll_bot = 23;
+  t->ansi.scroll_bot = console_tty_rows(t) - 1;
   t->ansi.g0_charset = ANSI_CS_ASCII;
   t->ansi.g1_charset = ANSI_CS_ASCII;
   t->ansi.gl_charset = 0;
@@ -1391,8 +1808,11 @@ console_queue_input_cstr_locked(struct console_tty_state *t, const char *s)
 static void
 console_queue_dsr_reply_locked(struct console_tty_state *t, int dec_private, int mode)
 {
+  int cols;
   int row;
   int col;
+
+  cols = console_surface_cols();
 
   if(mode == 5) {
     console_queue_input_byte_locked(t, '\033');
@@ -1402,8 +1822,8 @@ console_queue_dsr_reply_locked(struct console_tty_state *t, int dec_private, int
     console_queue_input_byte_locked(t, '0');
     console_queue_input_byte_locked(t, 'n');
   } else if(mode == 6) {
-    row = (cga_cursor / 80) + 1;
-    col = (cga_cursor % 80) + 1;
+    row = (cga_cursor / cols) + 1;
+    col = (cga_cursor % cols) + 1;
     console_queue_input_byte_locked(t, '\033');
     console_queue_input_byte_locked(t, '[');
     if(dec_private)
@@ -1644,26 +2064,35 @@ ansi_decode_utf8_or_single(struct console_tty_state *t, int ch)
 static void
 cgaputc_ansi(struct console_tty_state *t, int c)
 {
+  int cols;
+  int rows;
+  int last_col;
+  int last_row;
   int pos, row, col, n, r2, c2, p1, p2;
   int row_base, row_max;
   uchar a = t->ansi.attr;
 
-  pos = cga_cursor;
-  row = pos / 80;
-  col = pos % 80;
+  cols = console_surface_cols();
+  rows = console_surface_rows();
+  last_col = cols - 1;
+  last_row = rows - 1;
+
+  pos = console_clamp_surface_cursor(cga_cursor);
+  row = pos / cols;
+  col = pos % cols;
 
   switch(t->ansi.state) {
   case ANSI_NORMAL:
     if(c == 0x1B) { t->ansi.utf8_need = 0; t->ansi.state = ANSI_ESC; return; }
     if(c == 0x0E) { t->ansi.gl_charset = 1; return; }  /* SO: shift out, use G1 */
     if(c == 0x0F) { t->ansi.gl_charset = 0; return; }  /* SI: shift in, use G0 */
-    if(c == '\r') { cga_write_cursor(row * 80); return; }
+    if(c == '\r') { cga_write_cursor(row * cols); return; }
     if(c == '\n') {
       if(row == t->ansi.scroll_bot) {
         cga_scroll_up(t->ansi.scroll_top, t->ansi.scroll_bot, 1, a);
-        cga_write_cursor(t->ansi.scroll_bot * 80 + col);
-      } else if(row < 24) {
-        cga_write_cursor((row + 1) * 80 + col);
+        cga_write_cursor(t->ansi.scroll_bot * cols + col);
+      } else if(row < last_row) {
+        cga_write_cursor((row + 1) * cols + col);
       }
       return;
     }
@@ -1677,8 +2106,10 @@ cgaputc_ansi(struct console_tty_state *t, int c)
       return;
     }
     if(c == '\t') {
-      c2 = (col+8)&~7; if(c2>79) c2=79;
-      cga_write_cursor(row*80+c2); return;
+      c2 = (col + 8) & ~7;
+      if(c2 > last_col)
+        c2 = last_col;
+      cga_write_cursor(row * cols + c2); return;
     }
     if(c == '\a') return;
     if(c >= 0x20 && c < 0x100) {
@@ -1686,19 +2117,19 @@ cgaputc_ansi(struct console_tty_state *t, int c)
       if(c < 0)
         return;
       t->ansi.last_glyph = c;
-      if(t->ansi.insert_mode && col < 79)
-        memmove(crt + pos + 1, crt + pos, (79 - col) * sizeof(ushort));
+      if(t->ansi.insert_mode && col < last_col)
+        memmove(crt + pos + 1, crt + pos, (last_col - col) * sizeof(ushort));
       crt[pos] = (ushort)((c & 0xff) | ((ushort)a << 8));
-      if(col == 79) {
+      if(col == last_col) {
         if(t->ansi.wraparound) {
           if(row == t->ansi.scroll_bot) {
             cga_scroll_up(t->ansi.scroll_top, t->ansi.scroll_bot, 1, a);
-            pos = t->ansi.scroll_bot * 80;
+            pos = t->ansi.scroll_bot * cols;
           } else {
-            pos = (row < 24) ? (row+1)*80 : 24*80;
+            pos = (row < last_row) ? (row + 1) * cols : last_row * cols;
           }
         } else {
-          pos = row * 80 + 79;
+          pos = row * cols + last_col;
         }
       } else {
         pos++;
@@ -1723,14 +2154,14 @@ cgaputc_ansi(struct console_tty_state *t, int c)
     if(c == 'c') {
       ansi_leave_alt_screen(t);
       ansi_soft_reset(t);
-      cga_fill(0, 25*80, 0x07); cga_write_cursor(0);
+      cga_fill(0, console_surface_cells(), 0x07); cga_write_cursor(0);
     } else if(c == 'Z') {
       console_queue_da_reply_locked(t, 1, 0);
     } else if(c == 'M') {
       if(row == t->ansi.scroll_top)
         cga_scroll_down(t->ansi.scroll_top, t->ansi.scroll_bot, 1, a);
       else if(row > 0)
-        cga_write_cursor((row-1)*80+col);
+        cga_write_cursor((row - 1) * cols + col);
     }
     t->ansi.state = ANSI_NORMAL;
     return;
@@ -1782,28 +2213,28 @@ cgaputc_ansi(struct console_tty_state *t, int c)
     p2 = (t->ansi.nparams>=2) ? t->ansi.params[1] : 0;
 
     switch(c) {
-    case 'a': n=p1?p1:1; c2=col+n; if(c2>79)c2=79; cga_write_cursor(row*80+c2); break;
-    case 'A': n=p1?p1:1; r2=row-n; if(r2<t->ansi.scroll_top)r2=t->ansi.scroll_top; cga_write_cursor(r2*80+col); break;
-    case 'B': n=p1?p1:1; r2=row+n; if(r2>t->ansi.scroll_bot)r2=t->ansi.scroll_bot; cga_write_cursor(r2*80+col); break;
-    case 'C': n=p1?p1:1; c2=col+n; if(c2>79)c2=79; cga_write_cursor(row*80+c2); break;
-    case 'D': n=p1?p1:1; c2=col-n; if(c2<0)c2=0; cga_write_cursor(row*80+c2); break;
+    case 'a': n=p1?p1:1; c2=col+n; if(c2>last_col)c2=last_col; cga_write_cursor(row*cols+c2); break;
+    case 'A': n=p1?p1:1; r2=row-n; if(r2<t->ansi.scroll_top)r2=t->ansi.scroll_top; cga_write_cursor(r2*cols+col); break;
+    case 'B': n=p1?p1:1; r2=row+n; if(r2>t->ansi.scroll_bot)r2=t->ansi.scroll_bot; cga_write_cursor(r2*cols+col); break;
+    case 'C': n=p1?p1:1; c2=col+n; if(c2>last_col)c2=last_col; cga_write_cursor(row*cols+c2); break;
+    case 'D': n=p1?p1:1; c2=col-n; if(c2<0)c2=0; cga_write_cursor(row*cols+c2); break;
     case 'd':
       row_base = t->ansi.origin_mode ? t->ansi.scroll_top : 0;
-      row_max = t->ansi.origin_mode ? t->ansi.scroll_bot : 24;
+      row_max = t->ansi.origin_mode ? t->ansi.scroll_bot : last_row;
       r2 = (p1 ? p1 - 1 : 0) + row_base;
       if(r2 < row_base)
         r2 = row_base;
       if(r2 > row_max)
         r2 = row_max;
-      cga_write_cursor(r2*80+col);
+      cga_write_cursor(r2*cols+col);
       break;
-    case 'e': n=p1?p1:1; r2=row+n; if(r2>t->ansi.scroll_bot)r2=t->ansi.scroll_bot; cga_write_cursor(r2*80+col); break;
-    case 'E': n=p1?p1:1; r2=row+n; if(r2>24)r2=24; cga_write_cursor(r2*80); break;
-    case 'F': n=p1?p1:1; r2=row-n; if(r2<0)r2=0; cga_write_cursor(r2*80); break;
-    case 'G': c2=p1?p1-1:0; if(c2<0)c2=0; if(c2>79)c2=79; cga_write_cursor(row*80+c2); break;
+    case 'e': n=p1?p1:1; r2=row+n; if(r2>t->ansi.scroll_bot)r2=t->ansi.scroll_bot; cga_write_cursor(r2*cols+col); break;
+    case 'E': n=p1?p1:1; r2=row+n; if(r2>last_row)r2=last_row; cga_write_cursor(r2*cols); break;
+    case 'F': n=p1?p1:1; r2=row-n; if(r2<0)r2=0; cga_write_cursor(r2*cols); break;
+    case 'G': c2=p1?p1-1:0; if(c2<0)c2=0; if(c2>last_col)c2=last_col; cga_write_cursor(row*cols+c2); break;
     case 'H': case 'f':
       row_base = t->ansi.origin_mode ? t->ansi.scroll_top : 0;
-      row_max = t->ansi.origin_mode ? t->ansi.scroll_bot : 24;
+      row_max = t->ansi.origin_mode ? t->ansi.scroll_bot : last_row;
       r2 = (p1 ? p1 - 1 : 0) + row_base;
       c2 = p2 ? p2 - 1 : 0;
       if(r2 < row_base)
@@ -1812,27 +2243,27 @@ cgaputc_ansi(struct console_tty_state *t, int c)
         r2 = row_max;
       if(c2 < 0)
         c2 = 0;
-      if(c2 > 79)
-        c2 = 79;
-      cga_write_cursor(r2*80+c2); break;
+      if(c2 > last_col)
+        c2 = last_col;
+      cga_write_cursor(r2*cols+c2); break;
     case 'J':
-      if(p1==0) cga_fill(pos, 25*80, a);
+      if(p1==0) cga_fill(pos, cols * rows, a);
       else if(p1==1) cga_fill(0, pos+1, a);
-      else cga_fill(0, 25*80, a);
+      else cga_fill(0, cols * rows, a);
       break;
     case 'K':
-      if(p1==0) cga_fill(row*80+col, row*80+80, a);
-      else if(p1==1) cga_fill(row*80, row*80+col+1, a);
-      else cga_fill(row*80, row*80+80, a);
+      if(p1==0) cga_fill(row*cols+col, row*cols+cols, a);
+      else if(p1==1) cga_fill(row*cols, row*cols+col+1, a);
+      else cga_fill(row*cols, row*cols+cols, a);
       break;
     case 'L': n=p1?p1:1; cga_scroll_down(row, t->ansi.scroll_bot, n, a); break;
     case 'M': n=p1?p1:1; cga_scroll_up(row,   t->ansi.scroll_bot, n, a); break;
     case 'P': {
-      int av=80-col; n=p1?p1:1; if(n>av)n=av;
+      int av=cols-col; n=p1?p1:1; if(n>av)n=av;
       memmove(crt+pos, crt+pos+n, (av-n)*sizeof(ushort));
       cga_fill(pos+av-n, pos+av, a); break; }
     case 'X': {
-      int av=80-col; n=p1?p1:1; if(n>av)n=av;
+      int av=cols-col; n=p1?p1:1; if(n>av)n=av;
       cga_fill(pos, pos+n, a); break; }
     case 'b':
       n = p1 ? p1 : 1;
@@ -1843,7 +2274,7 @@ cgaputc_ansi(struct console_tty_state *t, int c)
       }
       break;
     case '@': {
-      int av=80-col; int i2; n=p1?p1:1; if(n>av)n=av;
+      int av=cols-col; int i2; n=p1?p1:1; if(n>av)n=av;
       for(i2=av-1; i2>=n; i2--) crt[pos+i2]=crt[pos+i2-n];
       cga_fill(pos, pos+n, a); break; }
     case 'S': n=p1?p1:1; cga_scroll_up(t->ansi.scroll_top,  t->ansi.scroll_bot, n, a); break;
@@ -1889,11 +2320,11 @@ cgaputc_ansi(struct console_tty_state *t, int c)
       }
       break; }
     case 'r':
-      r2=p1?p1-1:0; n=p2?p2-1:23;
+      r2=p1?p1-1:0; n=p2?p2-1:last_row;
       if(r2 < 0)
         r2 = 0;
-      if(n > 24)
-        n = 24;
+      if(n > last_row)
+        n = last_row;
       if(r2<n) { t->ansi.scroll_top=r2; t->ansi.scroll_bot=n; }
       cga_write_cursor(0);
       break;
@@ -1919,8 +2350,10 @@ cgaputc_ansi(struct console_tty_state *t, int c)
       break;
     case 't':
       if(!t->ansi.question && !t->ansi.greater && !t->ansi.dollar && !t->ansi.bang) {
-        int rows = t->winsize.ws_row > 0 ? t->winsize.ws_row : 24;
-        int cols = t->winsize.ws_col > 0 ? t->winsize.ws_col : 80;
+        int rows = console_tty_rows(t);
+        int cols = console_tty_cols(t);
+        int cell_h = console_gfx_cell_height();
+        int cell_w = console_gfx_cell_width();
         switch(p1) {
         case 11:
           console_queue_simple_t_reply_locked(t, 1);
@@ -1929,13 +2362,13 @@ cgaputc_ansi(struct console_tty_state *t, int c)
           console_queue_pair_t_reply_locked(t, 3, 1, 1);
           break;
         case 14:
-          console_queue_pair_t_reply_locked(t, 4, rows * 16, cols * 8);
+          console_queue_pair_t_reply_locked(t, 4, rows * cell_h, cols * cell_w);
           break;
         case 15:
-          console_queue_pair_t_reply_locked(t, 5, rows * 16, cols * 8);
+          console_queue_pair_t_reply_locked(t, 5, rows * cell_h, cols * cell_w);
           break;
         case 16:
-          console_queue_pair_t_reply_locked(t, 6, 16, 8);
+          console_queue_pair_t_reply_locked(t, 6, cell_h, cell_w);
           break;
         case 18:
           console_queue_pair_t_reply_locked(t, 8, rows, cols);
@@ -2007,13 +2440,11 @@ consputc_ansi(struct console_tty_state *t, int c)
     }
   }
 
-  crt = t->screen;
-  cga_render_offscreen = 1;
-  cga_cursor = t->cursor;
+  console_select_tty_surface(t);
+  cga_cursor = console_clamp_tty_cursor(t, t->cursor);
   cgaputc_ansi(t, c);
-  t->cursor = cga_cursor;
-  crt = cga_hw;
-  cga_render_offscreen = 0;
+  t->cursor = console_clamp_tty_cursor(t, cga_cursor);
+  console_select_hw_surface();
   if(t == active)
     console_flush_tty_locked(t);
 }
@@ -2235,8 +2666,12 @@ console_ioctl(int fd, int request, uint arg)
     ws = (struct winsize *)arg;
     acquire(&cons.lock);
     t->winsize = *ws;
-    if(t->winsize.ws_row > 0 && t->winsize.ws_row <= 25)
-      t->ansi.scroll_bot = t->winsize.ws_row - 1;
+    t->winsize.ws_row = (ushort)console_clamp_rows((int)t->winsize.ws_row);
+    t->winsize.ws_col = (ushort)console_clamp_cols((int)t->winsize.ws_col);
+    t->cursor = console_clamp_tty_cursor(t, t->cursor);
+    t->ansi.scroll_bot = console_tty_rows(t) - 1;
+    if(t == console_tty_by_index(console_active_tty))
+      console_flush_tty_locked(t);
     pgid = t->fg_pgid;
     release(&cons.lock);
     proc_signal_pgid(pgid, SIGWINCH);
@@ -2691,15 +3126,22 @@ consoleinit(void)
 {
   int i;
   ushort blank;
+  ushort init_rows;
+  ushort init_cols;
 
   initlock(&cons.lock, "console");
+  console_select_hw_surface();
   cga_read_cursor();
   blank = (ushort)(' ' | (0x07 << 8));
+  console_pick_initial_winsize(&init_rows, &init_cols);
   for(i = 0; i < CONSOLE_NTTY; i++) {
     cttys[i] = console_tty_default;
+    cttys[i].winsize.ws_row = init_rows;
+    cttys[i].winsize.ws_col = init_cols;
+    cttys[i].ansi.scroll_bot = init_rows > 0 ? init_rows - 1 : 0;
     cttys[i].cursor = 0;
     memset(cttys[i].screen, 0, sizeof(cttys[i].screen));
-    for(int j = 0; j < 25 * 80; j++)
+    for(int j = 0; j < CONSOLE_MAX_CELLS; j++)
       cttys[i].screen[j] = blank;
   }
   console_active_tty = 0;

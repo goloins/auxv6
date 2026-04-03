@@ -603,8 +603,10 @@ check_winsize_ioctl(int fd)
     return -1;
 
   testw = oldw;
-  testw.ws_row = 24;
-  testw.ws_col = 80;
+  if(testw.ws_row < 30)
+    testw.ws_row = 30;
+  if(testw.ws_col < 100)
+    testw.ws_col = 100;
 
   if(ioctl(fd, TIOCSWINSZ, &testw) < 0)
     return -1;
