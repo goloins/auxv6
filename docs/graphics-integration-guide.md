@@ -23,6 +23,8 @@ This document tracks the current state of auxv6 graphics support as it exists in
 **Font and render path:**
 - `kernel/graphics/font.c` provides a builtin 8x16 monospace font and glyph lookup.
 - `kernel/graphics/render.c` provides a minimal VT surface, dirty-cell tracking, cell-to-pixel rendering, and cursor drawing.
+- Framebuffer cell metrics can now scale up to 2x for readability in higher-resolution modes while still using the existing builtin font.
+- Glyph drawing now uses row-span fills instead of a per-pixel foreground path, which reduces framebuffer write overhead.
 - The current font path is ASCII-oriented and intentionally minimal.
 
 **Display core:**
@@ -40,18 +42,23 @@ This document tracks the current state of auxv6 graphics support as it exists in
 
 **Console integration:**
 - `kernel/driver/console.c` now allocates its framebuffer from the discovered display mode when one is present, with `640x400` kept as a fallback.
-- The active tty is mirrored into an 80x25 VT surface, centered within the framebuffer, and flushed through the generic display ops.
+- The active tty is mirrored into a VT surface sized from the current tty winsize, centered within the framebuffer, and flushed through the generic display ops.
+- Boot winsize now derives from the discovered display mode plus scaled framebuffer cell metrics, which gives a readable default console on high-resolution modes such as `1280x800 -> 80x24` at `16x32` cells.
+- VGA hardware remains the physical `80x25` surface, but it now tracks a viewport over the larger logical tty when the tty grid exceeds hardware text-mode dimensions.
 - Console initialization now clears inherited BIOS VGA text and replays only buffered kernel output, which keeps early virtio-gpu bring-up noise from being mistaken for the initial tty state.
 - Kernel debug output stays on the VGA or UART path; the framebuffer mirror is driven from the tty output path instead of from `cprintf()` itself. That avoids recursive display-driver activity during early boot logging.
 - Framebuffer mirror activation is now deferred until after `kinit2()` so the first mirror allocation runs with the full post-bootstrap page pool instead of the tiny pre-`kinit2()` memory window.
 - Echoed input now uses the same tty output path as normal writes, which keeps carriage-return and newline handling aligned between login prompts, shell command entry, and command output.
-- `/proc/gfxstats` exposes framebuffer mirror counters (`sync_calls`, `cells_changed`, `cells_rendered`, `flush_calls`, `flush_pixels`).
+- `/proc/gfxstats` now exposes framebuffer mirror counters plus mode, framebuffer, tty, VT, cursor, and viewport geometry.
+- A major mirror regression in `console_gfx_ensure_locked()` has been fixed: the framebuffer is no longer cleared on every sync, only on initial allocation or VT resize. That restored stable text and removed the worst redraw slowdown during boot and shell use.
 
 ### What This Means Right Now
 
 - auxv6 does have a live virtio-gpu-backed framebuffer path.
+- Manual QEMU validation now shows a stable, readable virtio-gpu-backed framebuffer console through boot, login, and interactive shell use.
 - auxv6 does not yet have a true framebuffer-native console.
 - The authoritative console state is still the existing text-mode or per-tty shadow screen state in `console.c`; the framebuffer is a derived mirror of that state.
+- Performance is materially better after removing the per-sync full-screen clear, but the virtio-gpu present path still uses whole-frame uploads for correctness.
 - The graphics path is currently kernel-owned and terminal-first. There is no working `/dev/fb0`, `/dev/dri/card0`, or `libu6gfx` implementation yet.
 
 ## Gap Analysis
@@ -62,7 +69,7 @@ The normal console path still writes through the legacy CGA-style text path and 
 
 ### 2. Real Display Geometry
 
-The virtio-gpu driver now records preferred scanout geometry from `GET_DISPLAY_INFO`, and the current console graphics path now allocates its framebuffer from that discovered mode. The remaining gap is that the logical tty surface is still the existing fixed 80x25 model rather than a terminal grid derived from the display geometry.
+The virtio-gpu driver now records preferred scanout geometry from `GET_DISPLAY_INFO`, the framebuffer is allocated from that discovered mode, and boot tty sizing now derives from display geometry plus scaled framebuffer cell metrics. The remaining gap is ownership: the framebuffer geometry is now real, but the authoritative console path still lives in the legacy text or shadow-screen model rather than in a framebuffer-first VT.
 
 ### 3. Honest Display Model
 
@@ -88,6 +95,10 @@ The VT renderer is good enough for the current mirror path, but still limited:
 - no full width model
 - no grapheme-cluster semantics
 - no full cursor or scrollback correctness for framebuffer-first terminal semantics
+
+### 4a. Presentation Efficiency
+
+The mirror is now fast enough for normal boot and shell use after removing the accidental full-frame clear on every sync, but `virtio_gpu_display_flush()` still performs whole-frame uploads for correctness. The next performance step should be to restore bounded dirty-region transfer semantics without regressing visible correctness.
 
 ### 5. Userspace ABI
 
@@ -117,7 +128,8 @@ Definition of done:
 Primary target: replace the fixed `640x400` mirror surface with a device-reported scanout configuration.
 
 Work items:
-- Size the console VT grid from the selected display mode instead of the current fixed 80x25 surface.
+- Keep boot and default tty sizing derived from the selected display mode and scaled framebuffer cell metrics.
+- Finish moving the normal console path from VGA-era assumptions to display-derived geometry end-to-end.
 - Keep a conservative fallback mode if discovery fails.
 
 Definition of done:
@@ -132,6 +144,7 @@ Work items:
 - Add width accounting for non-ASCII text.
 - Add grapheme-aware cursor and erase boundaries.
 - Tighten dirty-region coalescing, cursor redraw, and scroll behavior.
+- Replace the current whole-frame virtio-gpu upload path with correct dirty-region presentation once the readable baseline is locked in.
 - Keep `/proc/gfxstats` useful for measuring real redraw behavior.
 
 Definition of done:
@@ -198,4 +211,4 @@ Definition of done:
 - **VirtIO-GPU:** good enough for the current mirror path, not yet a full userspace-facing graphics stack.
 - **Userspace graphics ABI:** planned only; not implemented.
 
-**Current state:** framebuffer support is real and in use, the console now consumes discovered framebuffer geometry, but the system is still in the mirror phase rather than the true framebuffer-console phase.
+**Current state:** framebuffer support is real, readable, and manually validated on virtio-gpu. The console now consumes discovered framebuffer geometry, scales cells for readability, and exposes honest mirror diagnostics, but the system is still in the mirror phase rather than the true framebuffer-console phase.
