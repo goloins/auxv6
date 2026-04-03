@@ -2,105 +2,194 @@
 #include "stat.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
-#include "fs.h"
+#include "dirent.h"
+#include "errno.h"
+#include "string.h"
+#include "stdio.h"
+#include "limits.h"
 
-int
-rm_path(char *path, int recursive)
+struct rm_opts {
+  int recursive;
+  int force;       /* -f: ignore nonexistent, never prompt, exit 0 */
+  int interactive; /* -i: prompt before each removal */
+  int verbose;     /* -v: print "removed 'path'" */
+};
+
+static struct rm_opts g_rmopts;
+
+static void
+usage(void)
 {
-  int fd;
-  int ok;
-  char buf[512];
-  char name[DIRSIZ + 1];
-  char *p;
+  dprintf(2, "usage: rm [-rRfiv] file...\n");
+  exit(1);
+}
+
+/*
+ * Prompt the user.  Returns 1 if the user answered yes, 0 otherwise.
+ */
+static int
+confirm(const char *msg)
+{
+  char ans[8];
+  int n;
+
+  dprintf(2, "%s", msg);
+  n = read(0, ans, sizeof(ans));
+  return (n > 0 && (ans[0] == 'y' || ans[0] == 'Y'));
+}
+
+/*
+ * Remove path recursively (when recursive=1 in opts) or as a plain file.
+ * Returns 0 on success, -1 on error, -2 if path is a dir and not recursive.
+ */
+static int
+rm_path(const char *path)
+{
   struct stat st;
-  struct dirent de;
+  DIR *dp;
+  struct dirent *de;
+  char child[PATH_MAX];
+  int plen;
+  int ok;
+  char prompt[PATH_MAX + 32];
 
-  if(path == 0 || path[0] == 0)
+  if(path == 0 || path[0] == '\0')
     return -1;
-  if(strcmp(path, ".") == 0 || strcmp(path, "..") == 0)
+  if(strcmp(path, ".") == 0 || strcmp(path, "..") == 0) {
+    dprintf(2, "rm: refusing to remove '.' or '..'\n");
     return -1;
+  }
 
-  if(stat(path, &st) < 0)
+  if(lstat(path, &st) < 0) {
+    if(errno == ENOENT && g_rmopts.force)
+      return 0;   /* -f: silently ignore missing */
     return -1;
+  }
 
-  if(st.st_type != T_DIR)
-    return unlink(path);
+  if(st.st_type != T_DIR) {
+    /* Regular file / symlink */
+    if(g_rmopts.interactive) {
+      snprintf(prompt, sizeof(prompt), "rm: remove '%s'? ", path);
+      if(!confirm(prompt))
+        return 0;
+    }
+    if(unlink(path) < 0)
+      return -1;
+    if(g_rmopts.verbose)
+      dprintf(1, "removed '%s'\n", path);
+    return 0;
+  }
 
-  if(!recursive)
+  /* Directory */
+  if(!g_rmopts.recursive)
     return -2;
 
-  fd = open(path, O_RDONLY);
-  if(fd < 0)
+  if(g_rmopts.interactive) {
+    snprintf(prompt, sizeof(prompt), "rm: descend into directory '%s'? ", path);
+    if(!confirm(prompt))
+      return 0;
+  }
+
+  dp = opendir(path);
+  if(dp == 0)
     return -1;
 
   ok = 0;
-  while(read(fd, &de, sizeof(de)) == sizeof(de)) {
-    if(de.inum == 0)
+  plen = strlen(path);
+  while((de = readdir(dp)) != 0) {
+    int nlen;
+
+    if(strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
       continue;
 
-    memmove(name, de.name, DIRSIZ);
-    name[DIRSIZ] = 0;
-
-    if(strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
-      continue;
-
-    if(strlen(path) + 1 + DIRSIZ + 1 > sizeof(buf)) {
+    nlen = strlen(de->d_name);
+    if(plen + 1 + nlen + 1 > (int)sizeof(child)) {
+      dprintf(2, "rm: path too long: %s\n", path);
       ok = -1;
-      break;
+      continue;
     }
+    memmove(child, path, plen);
+    if(plen > 0 && child[plen - 1] != '/')
+      child[plen] = '/', child[plen + 1] = '\0';
+    else
+      child[plen] = '\0';
+    strncat(child, de->d_name, sizeof(child) - strlen(child) - 1);
 
-    strcpy(buf, path);
-    p = buf + strlen(buf);
-    if(p > buf && p[-1] != '/')
-      *p++ = '/';
-    strcpy(p, name);
-
-    if(rm_path(buf, 1) < 0)
+    if(rm_path(child) < 0)
       ok = -1;
   }
-  close(fd);
+  closedir(dp);
 
   if(ok < 0)
     return -1;
 
-  return unlink(path);
+  if(g_rmopts.interactive) {
+    snprintf(prompt, sizeof(prompt), "rm: remove directory '%s'? ", path);
+    if(!confirm(prompt))
+      return 0;
+  }
+
+  if(unlink(path) < 0)
+    return -1;
+  if(g_rmopts.verbose)
+    dprintf(1, "removed directory '%s'\n", path);
+  return 0;
 }
 
 int
 main(int argc, char *argv[])
 {
   int i;
-  int recursive;
-  int ret;
+  int status;
 
-  recursive = 0;
+  g_rmopts.recursive   = 0;
+  g_rmopts.force       = 0;
+  g_rmopts.interactive = 0;
+  g_rmopts.verbose     = 0;
+  status               = 0;
 
-  if(argc < 2){
-    dprintf(2, "Usage: rm [-r] files...\n");
+  /* Parse flags */
+  for(i = 1; i < argc && argv[i][0] == '-' && argv[i][1] != '\0'; i++) {
+    char *f;
+
+    for(f = argv[i] + 1; *f; f++) {
+      switch(*f) {
+      case 'r':
+      case 'R': g_rmopts.recursive   = 1; break;
+      case 'f': g_rmopts.force       = 1; g_rmopts.interactive = 0; break;
+      case 'i': g_rmopts.interactive = 1; g_rmopts.force       = 0; break;
+      case 'v': g_rmopts.verbose     = 1; break;
+      case '-': goto done_flags;
+      default:
+        dprintf(2, "rm: unknown option '-%c'\n", *f);
+        usage();
+      }
+    }
+  }
+done_flags:
+
+  if(i >= argc) {
+    if(!g_rmopts.force)
+      usage();
     exit(0);
   }
 
-  for(i = 1; i < argc; i++) {
-    if(argv[i][0] == '-') {
-      if(strcmp(argv[i], "-r") == 0)
-        recursive = 1;
-      else {
-        dprintf(2, "rm: unknown option %s\n", argv[i]);
-        exit(0);
-      }
-      continue;
-    }
+  for(; i < argc; i++) {
+    int ret;
 
-    ret = rm_path(argv[i], recursive);
+    ret = rm_path(argv[i]);
     if(ret == -2) {
-      dprintf(2, "rm: %s is a directory (use -r)\n", argv[i]);
-      break;
-    }
-    if(ret < 0){
-      dprintf(2, "rm: %s failed to delete\n", argv[i]);
-      break;
+      if(!g_rmopts.force) {
+        dprintf(2, "rm: cannot remove '%s': Is a directory\n", argv[i]);
+        status = 1;
+      }
+    } else if(ret < 0) {
+      if(!g_rmopts.force) {
+        dprintf(2, "rm: cannot remove '%s': %s\n", argv[i], strerror(errno));
+        status = 1;
+      }
     }
   }
 
-  exit(0);
+  exit(status);
 }
