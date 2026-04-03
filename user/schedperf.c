@@ -26,6 +26,8 @@ static int failed = 0;
 static int perf_score = 0;
 static int perf_score_max = 0;
 
+#define SCHEDPERF_PROFILE "2026-04-03-r2"
+
 static int
 ops_per_sec(int ops, uint start_ticks, uint end_ticks)
 {
@@ -437,6 +439,7 @@ main(int argc, char *argv[])
 
   dprintf(1, "schedperf: scheduler and process-table stress\n");
   dprintf(1, "  NPROC=%d NCPU=%d\n", NPROC, NCPU);
+  dprintf(1, "  profile=%s\n", SCHEDPERF_PROFILE);
   dprintf(1, "\n");
 
   test_fork_storm();

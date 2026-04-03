@@ -288,6 +288,17 @@ updates, reduced full-frame blits) is explicitly acknowledged as high value,
 but remains a separate graphics-focused performance stream and is out of scope
 for this allocator-first roadmap.
 
+## 7  Perf Target Maintenance Rule
+
+When adjusting performance targets or adding new perf edge-case coverage,
+update all of the following together:
+
+1. `user/schedperf.c` and/or `user/fsperf.c`
+2. corresponding manpages under `targetfs/usr/share/man/`
+3. performance documentation (`docs/kernel-perf-hardening.md` and/or this file)
+
+This keeps benchmark output, operator docs, and roadmap expectations aligned.
+
 ---
 
 *See also:* [kernel-perf-hardening.md](kernel-perf-hardening.md) for the

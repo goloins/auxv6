@@ -19,6 +19,7 @@ None.
 - Runs multiple filesystem sub-tests and prints `[PASS]` / `[FAIL]` lines.
 - Emits `[PERF]` lines for measured operation rates.
 - Prints a final weighted score in the form `fsperf score: X/100`.
+- Prints a `profile=...` marker so target revisions are traceable.
 
 ## Score Interpretation
 - `>= 75/100` - Meets current filesystem performance target.
@@ -33,11 +34,13 @@ None.
 - `parallel-writers` - independent concurrent write/read throughput
 - `inode-limit` and `inode-limit-rate` - raised inode/open headroom check
 - `hash-correctness` - repeated integrity verification under cache lookup load
+- `poststress-create` - create/open/unlink loop after churn to catch leak-style edge cases
 
 ## Notes
 - Creates and removes temporary files under `/tmp`.
 - Throughput units are based on `uptime()` ticks (100 ticks/sec).
 - Compare scores on consistent VM settings for meaningful trend lines.
+- When tuning targets, update both this manpage and `user/fsperf.c` in the same change.
 
 ## Examples
 ```

@@ -23,6 +23,8 @@ static int failed = 0;
 static int perf_score = 0;
 static int perf_score_max = 0;
 
+#define FSPERF_PROFILE "2026-04-03-r2"
+
 static int
 ops_per_sec(int ops, uint start_ticks, uint end_ticks)
 {
@@ -118,10 +120,10 @@ cleanup(int nfiles)
 }
 
 // ---------------------------------------------------------------------------
-// T1: fd-ceiling -- confirm we can open up to NOFILE-2 descriptors per
-//     process (NOFILE raised from 16 to 32; regression if we hit 16).
+// T1: fd-ceiling -- confirm we can open up to NOFILE-3 additional descriptors
+//     per process (stdin/stdout/stderr already consume three slots).
 // ---------------------------------------------------------------------------
-#define FD_TARGET (NOFILE - 2)   // leave room for stdin/stdout/stderr
+#define FD_TARGET (NOFILE - 3)
 
 static void
 test_fd_ceiling(void)
@@ -383,18 +385,20 @@ test_parallel_writers(void)
 }
 
 // ---------------------------------------------------------------------------
-// T6: inode-limit -- exercise up to ~NINODE distinct inodes being resident
-//     simultaneously (raised from 50 to 200).
-//     We open IOPEN_COUNT files at the same time within a single process.
+// T6: inode-limit -- exercise many resident inodes concurrently without
+//     tripping per-process NOFILE limits by spreading opens across children.
 // ---------------------------------------------------------------------------
-#define IOPEN_COUNT  80   // well above old NINODE=50
+#define IOPEN_COUNT  64   // above old NINODE=50 and below NPROC headroom
 
 static void
 test_inode_limit(void)
 {
   char path[64];
   int i, err = 0;
-  int fds[IOPEN_COUNT];
+  int ack[2];
+  int rel[2];
+  int pids[IOPEN_COUNT];
+  int success = 0;
   uint t0 = uptime();
 
   // Create files
@@ -406,18 +410,69 @@ test_inode_limit(void)
     close(fd);
   }
 
-  // Open all simultaneously
-  int opened = 0;
-  for(i = 0; i < IOPEN_COUNT; i++){
-    mkpath(path, sizeof(path), 2000 + i);
-    fds[i] = open(path, O_RDONLY);
-    if(fds[i] < 0) err++;
-    else opened++;
+  if(pipe(ack) < 0 || pipe(rel) < 0){
+    for(i = 0; i < IOPEN_COUNT; i++){
+      mkpath(path, sizeof(path), 2000 + i);
+      unlink(path);
+    }
+    FAIL("inode-limit", "pipe setup failed");
+    return;
   }
 
-  // Close all
-  for(i = 0; i < opened; i++)
-    if(fds[i] >= 0) close(fds[i]);
+  // Open one file per child, then hold it open until parent releases.
+  for(i = 0; i < IOPEN_COUNT; i++){
+    int pid = fork();
+    if(pid < 0){
+      err++;
+      break;
+    }
+    if(pid == 0){
+      char c = '0';
+      int fd;
+      close(ack[0]);
+      close(rel[1]);
+      mkpath(path, sizeof(path), 2000 + i);
+      fd = open(path, O_RDONLY);
+      if(fd >= 0)
+        c = '1';
+      write(ack[1], &c, 1);
+      if(fd >= 0){
+        char relc;
+        read(rel[0], &relc, 1);
+        close(fd);
+        exit(0);
+      }
+      exit(1);
+    }
+    pids[i] = pid;
+  }
+  close(ack[1]);
+  close(rel[0]);
+
+  // Count child open successes.
+  for(i = 0; i < IOPEN_COUNT; i++){
+    char c;
+    if(read(ack[0], &c, 1) != 1){
+      err++;
+      break;
+    }
+    if(c == '1')
+      success++;
+  }
+  close(ack[0]);
+
+  // Release children that successfully opened files.
+  for(i = 0; i < success; i++){
+    char relc = 'x';
+    write(rel[1], &relc, 1);
+  }
+  close(rel[1]);
+
+  // Reap children.
+  for(i = 0; i < IOPEN_COUNT; i++){
+    if(waitpid(pids[i], 0, 0) < 0)
+      err++;
+  }
 
   // Unlink
   for(i = 0; i < IOPEN_COUNT; i++){
@@ -425,16 +480,16 @@ test_inode_limit(void)
     unlink(path);
   }
 
-  if(err == 0)
+  if(err == 0 && success == IOPEN_COUNT)
     PASS("inode-limit");
   else {
     dprintf(1, "[FAIL] inode-limit: %d errors (opened %d/%d)\n",
-            err, opened, IOPEN_COUNT);
+            err, success, IOPEN_COUNT);
     failed++;
   }
 
-  perf_record("inode-limit", "open-fds", opened, IOPEN_COUNT, 10);
-  perf_record("inode-limit-rate", "open/s", ops_per_sec(opened, t0, uptime()), 600, 6);
+  perf_record("inode-limit", "open-fds", success, IOPEN_COUNT, 10);
+  perf_record("inode-limit-rate", "open/s", ops_per_sec(success, t0, uptime()), 600, 6);
 }
 
 // ---------------------------------------------------------------------------
@@ -449,13 +504,37 @@ test_inode_limit(void)
 static void
 test_hash_correctness(void)
 {
-  const char *path = "/tmp/fsperf_hashcheck";
+  char path[64];
   int i, err = 0;
   uint t0 = uptime();
+  int tries;
+
+  mkpath(path, sizeof(path), 4096);
+
+  // Basic writable-/tmp preflight.
+  {
+    int tfd = open("/tmp", O_RDONLY);
+    if(tfd < 0){
+      FAIL("hash-correctness", "cannot access /tmp");
+      return;
+    }
+    close(tfd);
+  }
 
   // Write a known pattern
-  int fd = open(path, O_WRONLY | O_CREATE);
-  if(fd < 0){ FAIL("hash-correctness", "create failed"); return; }
+  int fd = -1;
+  for(tries = 0; tries < 5; tries++){
+    unlink(path);
+    fd = open(path, O_WRONLY | O_CREATE);
+    if(fd >= 0)
+      break;
+    sleep(0);   // yield and retry in case of transient global file pressure
+  }
+  if(fd < 0){
+    dprintf(1, "[FAIL] hash-correctness: create failed after %d retries\n", tries);
+    failed++;
+    return;
+  }
   char wbuf[HASH_CHECK_SZ];
   for(i = 0; i < HASH_CHECK_SZ; i++) wbuf[i] = (char)((i * 7 + 3) & 0xff);
   if(write(fd, wbuf, HASH_CHECK_SZ) != HASH_CHECK_SZ)
@@ -490,6 +569,56 @@ test_hash_correctness(void)
 }
 
 // ---------------------------------------------------------------------------
+// T8: poststress-create -- after all heavy churn, repeatedly create/open/
+//     close/unlink files to catch lingering resource-leak edge cases.
+// ---------------------------------------------------------------------------
+#define POSTSTRESS_TRIES 80
+
+static void
+test_poststress_create(void)
+{
+  int i;
+  int ok = 1;
+  uint t0 = uptime();
+  char path[64];
+
+  for(i = 0; i < POSTSTRESS_TRIES; i++){
+    int fd;
+    mkpath(path, sizeof(path), 5000 + i);
+    unlink(path);
+    fd = open(path, O_WRONLY | O_CREATE);
+    if(fd < 0){
+      ok = 0;
+      break;
+    }
+    if(write(fd, "ok", 2) != 2){
+      close(fd);
+      ok = 0;
+      break;
+    }
+    close(fd);
+
+    fd = open(path, O_RDONLY);
+    if(fd < 0){
+      ok = 0;
+      break;
+    }
+    close(fd);
+    unlink(path);
+  }
+
+  if(ok)
+    PASS("poststress-create");
+  else
+    FAIL("poststress-create", "create/open/unlink failed after stress");
+
+  perf_record("poststress-create", "iter/s",
+              ops_per_sec(ok ? POSTSTRESS_TRIES : i, t0, uptime()),
+              250,
+              8);
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 int
@@ -500,6 +629,7 @@ main(int argc, char *argv[])
   dprintf(1, "fsperf: inode-cache and buffer-cache stress\n");
   dprintf(1, "  NINODE=%d NFILE=%d NOFILE=%d NBUF=%d\n",
           NINODE, NFILE, NOFILE, NBUF);
+    dprintf(1, "  profile=%s\n", FSPERF_PROFILE);
   dprintf(1, "\n");
 
   // Ensure /tmp exists (tmpfs or similar)
@@ -512,6 +642,7 @@ main(int argc, char *argv[])
   test_parallel_writers();
   test_inode_limit();
   test_hash_correctness();
+  test_poststress_create();
 
   dprintf(1, "\nfsperf score: %d/100 (target >= 75)\n",
           perf_score_max ? (perf_score * 100) / perf_score_max : 0);

@@ -21,6 +21,7 @@ None.
 - Runs a sequence of sub-tests and prints `[PASS]` / `[FAIL]` per test.
 - Emits `[PERF]` lines with measured throughput for key paths.
 - Prints a final weighted score in the form `schedperf score: X/100`.
+- Prints a `profile=...` marker so target revisions are traceable.
 
 ## Score Interpretation
 - `>= 75/100` - Meets current kernel performance target.
@@ -41,6 +42,7 @@ None.
 - Throughput units are derived from `uptime()` ticks (100 ticks/sec).
 - Use comparative runs on the same QEMU profile for trend tracking.
 - Keep `[PASS]`/`[FAIL]` as the correctness gate; score is the performance ruler.
+- When tuning targets, update both this manpage and `user/schedperf.c` in the same change.
 
 ## Examples
 ```

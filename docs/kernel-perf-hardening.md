@@ -337,6 +337,25 @@ process-table capacity headroom.
 buffer-cache sequential throughput, concurrent open throughput, parallel write
 throughput, inode-capacity headroom, and hash verification throughput.
 
+### Iteration Discipline (Required)
+
+For every performance-target iteration, update all three in the same commit:
+
+- `user/schedperf.c` and/or `user/fsperf.c` targets/tests/profile marker
+- corresponding manpage(s) in `targetfs/usr/share/man/`
+- this section (or roadmap section) with any changed threshold rationale
+
+This prevents score drift where binaries, docs, and expected outcomes diverge.
+
+### Current Baseline Snapshot (2026-04-03)
+
+- `schedperf`: `83/100`, `8 passed`, `0 failed`
+- `fsperf`: `86/100`, `7 passed`, `0 failed`
+
+Known weak-but-passing areas to track for future tightening:
+- `parallel-writers` throughput
+- `inode-limit-rate` throughput
+
 ---
 
 ## Debug Flags Reference
