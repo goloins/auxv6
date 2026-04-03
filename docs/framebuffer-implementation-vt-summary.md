@@ -36,6 +36,7 @@ The key architectural rule is: **treat this as a terminal architecture migration
 - Display discovery, modern virtio-pci transport, multi-page DMA backing, delayed post-`kinit2()` mirror activation, display-derived geometry, readable cell scaling, the tty-local logical-surface refactor, and the per-sync clear regression fix now work together as one coherent path.
 - Canonical erase display and control-character echo now stay aligned with the framebuffer-visible console state, and active interactive refresh is now framebuffer-first once the graphics path is live.
 - The framebuffer console is visibly faster after the sync-clear fix because stable pixels are preserved between dirty updates instead of being erased every frame.
+- The latest flush batching plus dirty-region present path (2026-04-03) produced an immediate, high-confidence manual responsiveness improvement in normal shell interaction, making this one of the strongest performance wins so far in the mirror phase.
 
 ## What Must Stay Stable During The Migration
 

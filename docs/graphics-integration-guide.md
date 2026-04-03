@@ -70,6 +70,7 @@ What S1 does not solve yet:
 - `/proc/gfxstats` now exposes framebuffer mirror counters plus mode, framebuffer, tty, VT, cursor, and viewport geometry.
 - A major mirror regression in `console_gfx_ensure_locked()` has been fixed: the framebuffer is no longer cleared on every sync, only on initial allocation or VT resize. That restored stable text and removed the worst redraw slowdown during boot and shell use.
 - The display core now prefers dirty-region presents when a backend provides `flush_region`, and the console write path batches active-tty flushes so one write call can produce one framebuffer present instead of per-character presents.
+- **Manual runtime impact (2026-04-03):** immediate interactive testing reported a dramatic responsiveness improvement in the framebuffer console after these two changes, with visibly lower redraw churn during normal shell output.
 
 ### What This Means Right Now
 
@@ -78,6 +79,7 @@ What S1 does not solve yet:
 - auxv6 does not yet have a true framebuffer-native console.
 - Normal tty mutation is now authoritative at the per-tty logical screen and cursor level in `console.c` rather than in the old shared CGA offscreen shim, but the framebuffer is still a derived mirror of tty state rather than the source of truth.
 - Performance is materially better after removing the per-sync full-screen clear, and the normal console path now uses dirty-region presents for backends that support `flush_region`.
+- The current operator eye-test for the latest batching and dirty-region changes indicates this was a major practical performance win for day-to-day console use.
 - The graphics path is currently kernel-owned and terminal-first. There is no working `/dev/fb0`, `/dev/dri/card0`, or `libu6gfx` implementation yet.
 
 ## Gap Analysis
