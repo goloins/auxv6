@@ -35,7 +35,6 @@ int
 main(int argc, char **argv)
 {
   int fd;
-  struct winsize ws;
 
   (void)argc;
   (void)argv;
@@ -48,12 +47,6 @@ main(int argc, char **argv)
 
   set_sane_termios(fd);
   ioctl(fd, TCFLSH, TCIOFLUSH);
-
-  ws.ws_row = 24;
-  ws.ws_col = 80;
-  ws.ws_xpixel = 0;
-  ws.ws_ypixel = 0;
-  ioctl(fd, TIOCSWINSZ, &ws);
 
   write(fd, "\033c", 2);
   write(fd, "\033[0m\033[2J\033[H", 12);

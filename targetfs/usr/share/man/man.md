@@ -26,8 +26,9 @@ Markdown formatting (headings, lists, code fences) is rendered for readability.
 - Inline formatting is also rendered for common constructs: `code`,
   `**bold**`, `*emphasis*`, ordered lists, block quotes (`> ...`),
   horizontal rules, and Markdown links (`[text](url)`).
-- When standard input and output are terminals, output is paged every
-  24 lines with a `--More--` prompt.
+- When standard input and output are terminals, output is paged using the
+  terminal's current `TIOCGWINSZ` rows and columns instead of a fixed 80x24
+  layout.
 - At the pager prompt, press **Enter** to advance one page or press
   **q** to quit immediately.
 

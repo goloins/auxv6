@@ -4,13 +4,20 @@
 #include "fs.h"
 #include "fcntl.h"
 #include "termios.h"
+#include "sys/ioctl.h"
 
 #define MAN_DIR "/usr/share/man"
-#define MAN_PAGE_LINES 24
+#define MAN_DEFAULT_PAGE_LINES 24
+#define MAN_DEFAULT_COLS 80
+#define MAN_DEFAULT_RULE_COLS 40
 
 static char buf[512];
 static int pager_enabled;
+static int pager_page_lines;
 static int pager_lines;
+static int pager_cols;
+static int pager_col;
+static int pager_wrap_pending;
 static int pager_quit;
 static int style_enabled;
 
@@ -18,6 +25,180 @@ static int style_enabled;
 #define ANSI_BOLD "\033[1m"
 #define ANSI_UNDERLINE "\033[4m"
 #define ANSI_REVERSE "\033[7m"
+
+static void
+raw_write1(const char *s, int n)
+{
+  if(n <= 0)
+    return;
+  write(1, s, n);
+}
+
+static void
+raw_puts1(const char *s)
+{
+  raw_write1(s, strlen(s));
+}
+
+static void
+detect_terminal_size(int *rows_out, int *cols_out)
+{
+  struct winsize ws;
+  int rows;
+  int cols;
+  int fds[3];
+  int i;
+
+  rows = MAN_DEFAULT_PAGE_LINES;
+  cols = MAN_DEFAULT_COLS;
+  fds[0] = 1;
+  fds[1] = 0;
+  fds[2] = 2;
+
+  for(i = 0; i < 3; i++) {
+    if(!isatty(fds[i]))
+      continue;
+    memset(&ws, 0, sizeof(ws));
+    if(ioctl(fds[i], TIOCGWINSZ, &ws) < 0)
+      continue;
+    if(ws.ws_row > 0)
+      rows = ws.ws_row;
+    if(ws.ws_col > 0)
+      cols = ws.ws_col;
+    break;
+  }
+
+  if(rows_out)
+    *rows_out = rows;
+  if(cols_out)
+    *cols_out = cols;
+}
+
+static void pager_prompt(void);
+static void putc1(char c);
+
+static void
+pager_reset_screenline(void)
+{
+  pager_col = 0;
+  pager_wrap_pending = 0;
+}
+
+static void
+pager_reset_page(void)
+{
+  pager_lines = 0;
+  pager_reset_screenline();
+}
+
+static void
+pager_advance_line(void)
+{
+  if(!pager_enabled)
+    return;
+
+  pager_lines++;
+  if(pager_page_lines > 0 && pager_lines >= pager_page_lines)
+    pager_prompt();
+}
+
+static void
+pager_before_visible(void)
+{
+  if(!pager_enabled || !pager_wrap_pending)
+    return;
+
+  pager_advance_line();
+  pager_reset_screenline();
+}
+
+static void
+pager_after_cells(int cells)
+{
+  int available;
+
+  if(!pager_enabled || cells <= 0)
+    return;
+  if(pager_cols <= 0)
+    return;
+
+  while(cells > 0) {
+    available = pager_cols - pager_col;
+    if(available <= 0) {
+      pager_wrap_pending = 1;
+      pager_before_visible();
+      if(pager_quit)
+        return;
+      continue;
+    }
+    if(cells < available) {
+      pager_col += cells;
+      return;
+    }
+    pager_col = pager_cols;
+    pager_wrap_pending = 1;
+    cells -= available;
+    if(cells > 0) {
+      pager_before_visible();
+      if(pager_quit)
+        return;
+    }
+  }
+}
+
+static void
+pager_after_newline(void)
+{
+  if(!pager_enabled)
+    return;
+
+  pager_advance_line();
+  pager_reset_screenline();
+}
+
+static void
+pager_after_carriage_return(void)
+{
+  if(!pager_enabled)
+    return;
+
+  pager_reset_screenline();
+}
+
+static int
+pager_prompt_width(void)
+{
+  int width;
+
+  width = pager_cols;
+  if(width <= 0)
+    width = MAN_DEFAULT_COLS;
+  if(width > 1)
+    return width - 1;
+  return width;
+}
+
+static int
+man_rule_width(void)
+{
+  if(style_enabled && pager_cols > 0)
+    return pager_cols;
+  return MAN_DEFAULT_RULE_COLS;
+}
+
+static void
+print_rule(void)
+{
+  int i;
+  int width;
+
+  width = man_rule_width();
+  if(width <= 0)
+    width = MAN_DEFAULT_RULE_COLS;
+  for(i = 0; i < width; i++)
+    putc1('-');
+  putc1('\n');
+}
 
 static char
 read_pager_key(void)
@@ -60,31 +241,88 @@ read_pager_key(void)
 static void
 pager_prompt(void)
 {
+  static const char prompt_full[] = "--More-- (Enter:next, q:quit)";
+  static const char prompt_short[] = "--More-- (q:quit)";
+  static const char prompt_mini[] = "--More--";
+  static const char prompt_tiny[] = ">";
+  const char *prompt;
+  int prompt_len;
+  int clear_len;
   char c;
+  int i;
 
-  write(1, "--More-- (Enter:next, q:quit)", 29);
+  prompt = prompt_full;
+  prompt_len = sizeof(prompt_full) - 1;
+  if(prompt_len > pager_prompt_width()) {
+    prompt = prompt_short;
+    prompt_len = sizeof(prompt_short) - 1;
+  }
+  if(prompt_len > pager_prompt_width()) {
+    prompt = prompt_mini;
+    prompt_len = sizeof(prompt_mini) - 1;
+  }
+  if(prompt_len > pager_prompt_width()) {
+    prompt = prompt_tiny;
+    prompt_len = sizeof(prompt_tiny) - 1;
+  }
+  if(prompt_len > pager_prompt_width())
+    prompt_len = pager_prompt_width();
+
+  raw_write1(prompt, prompt_len);
   c = read_pager_key();
-  write(1, "\r                             \r", 31);
+
+  raw_write1("\r", 1);
+  clear_len = prompt_len;
+  for(i = 0; i < clear_len; i++)
+    raw_write1(" ", 1);
+  raw_write1("\r", 1);
 
   if(c == 'q' || c == 'Q')
     pager_quit = 1;
 
-  pager_lines = 0;
+  pager_reset_page();
 }
 
 static void
 putc1(char c)
 {
+  int tabw;
+
+  if(pager_quit)
+    return;
+
+  if(c == '\n') {
+    write(1, &c, 1);
+    pager_after_newline();
+    return;
+  }
+
+  if(c == '\r') {
+    write(1, &c, 1);
+    pager_after_carriage_return();
+    return;
+  }
+
+  pager_before_visible();
   if(pager_quit)
     return;
 
   write(1, &c, 1);
 
-  if(pager_enabled && c == '\n') {
-    pager_lines++;
-    if(pager_lines >= MAN_PAGE_LINES)
-      pager_prompt();
+  if(!pager_enabled)
+    return;
+
+  if(c == '\t') {
+    if(pager_cols > 0)
+      tabw = 8 - (pager_col % 8);
+    else
+      tabw = 8;
+    pager_after_cells(tabw);
+    return;
   }
+
+  if(c >= ' ')
+    pager_after_cells(1);
 }
 
 static void
@@ -99,15 +337,15 @@ puts1(const char *s)
 static void
 style_begin(const char *code)
 {
-  if(style_enabled)
-    puts1(code);
+  if(style_enabled && !pager_quit)
+    raw_puts1(code);
 }
 
 static void
 style_end(void)
 {
-  if(style_enabled)
-    puts1(ANSI_RESET);
+  if(style_enabled && !pager_quit)
+    raw_puts1(ANSI_RESET);
 }
 
 static int
@@ -319,7 +557,7 @@ render_line(char *line, int *in_code)
   }
 
   if(strcmp(line + i, "---") == 0 || strcmp(line + i, "***") == 0 || strcmp(line + i, "___") == 0) {
-    puts1("----------------------------------------\n");
+    print_rule();
     return;
   }
 
@@ -363,7 +601,12 @@ render_markdown_file(const char *path)
 
   pager_enabled = isatty(0) && isatty(1);
   style_enabled = isatty(1);
-  pager_lines = 0;
+  detect_terminal_size(&pager_page_lines, &pager_cols);
+  if(pager_page_lines <= 0)
+    pager_page_lines = MAN_DEFAULT_PAGE_LINES;
+  if(pager_cols <= 0)
+    pager_cols = MAN_DEFAULT_COLS;
+  pager_reset_page();
   pager_quit = 0;
 
   llen = 0;
