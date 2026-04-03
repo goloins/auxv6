@@ -34,10 +34,14 @@ environment variables.
 - **Background**: `cmd &`
 - **Variable expansion**: `$VAR`, `$PATH`
 - **Profile**: Reads `/etc/profile` on startup if it exists
+- **History**: Up/Down arrow recall of recent commands
+- **Persistent history**: Stores recent commands in `$HOME/.6sh_history`
 
 ## Notes
 - `sh` is the login shell started by `login`.
 - Job control uses process groups (SIGSTOP/SIGCONT).
+- History stores up to 64 most-recent non-empty commands and avoids
+	consecutive duplicates.
 
 ## Examples
 ```

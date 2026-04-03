@@ -20,7 +20,7 @@ None.
 - Credentials are verified against the password field in `/etc/passwd`.
 - On successful login, the process UID/GID are set to the user's values and
   the user's shell is exec'd.
-- After three failed attempts the process exits.
+- Password entry is hidden and supports erase/backspace editing.
 
 ## Examples
 ```

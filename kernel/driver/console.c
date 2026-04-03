@@ -3164,15 +3164,6 @@ consoleintr(int (*getc)(void))
         }
         continue;
       }
-    } else {
-      if((verase && c == (int)verase) || c == C('H') || c == '\x7f') {
-        if(t->input.e != t->input.r) {
-          t->input.e--;
-          t->input.w = t->input.e;
-          wakeup(&t->input.r);
-        }
-        continue;
-      }
     }
 
     /* Input CR/NL mapping controls. */

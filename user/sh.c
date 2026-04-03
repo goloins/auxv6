@@ -25,6 +25,9 @@
 #define USER_MAX 32
 #define HOST_MAX 32
 #define CWD_MAX 128
+#define HISTORY_MAX 64
+#define HISTORY_LINE_MAX 100
+#define HISTORY_PATH_MAX (CWD_MAX + 16)
 
 struct cmd {
   int type;
@@ -95,6 +98,9 @@ void sync_cwd_from_kernel(void);
 void exec_with_path(char *cmd, char **argv);
 void set_interactive_signal_handlers(void);
 void reset_child_signal_handlers(void);
+void history_init(void);
+void history_add(const char *line);
+int history_readline(char *buf, int nbuf, const char *prompt);
 
 static char sh_path[PATH_MAX] = "/:/bin:/sbin";
 static char sh_prompt[PROMPT_MAX] = "\\u:\\w";
@@ -103,6 +109,9 @@ static char sh_host[HOST_MAX] = "auxv6";
 static char sh_cwd[CWD_MAX] = "/";
 static char sh_home[CWD_MAX] = "/";
 static int sh_uid = 0;
+static char sh_history[HISTORY_MAX][HISTORY_LINE_MAX];
+static int sh_history_count = 0;
+static char sh_history_path[HISTORY_PATH_MAX];
 
 struct job {
   int used;
@@ -204,10 +213,8 @@ getcmd(char *buf, int nbuf)
   char prompt[256];
 
   prompt_string(prompt, sizeof(prompt));
-  dprintf(2, "%s", prompt);
   memset(buf, 0, nbuf);
-  gets(buf, nbuf);
-  if(buf[0] == 0) // EOF
+  if(history_readline(buf, nbuf, prompt) < 0)
     return -1;
   return 0;
 }
@@ -234,6 +241,7 @@ main(void)
   load_hostname();
   load_passwd_defaults();
   load_profile();
+  history_init();
   sync_cwd_from_kernel();
   set_interactive_signal_handlers();
 
@@ -245,7 +253,14 @@ main(void)
 
   // Read and run input commands.
   while(getcmd(buf, sizeof(buf)) >= 0){
+    char histline[sizeof(buf)];
+
     reapchildren();
+
+    sh_copy(histline, buf, sizeof(histline));
+    trim_trailing_ws(histline);
+    if(histline[0] != 0)
+      history_add(histline);
 
     if(maybe_builtin(buf, shell_pgid))
       continue;
@@ -307,6 +322,262 @@ main(void)
     tcsetpgrp(shell_pgid);
   }
   exit(0);
+}
+
+static void
+history_build_path(void)
+{
+  if(sh_home[0] == 0 || strcmp(sh_home, "/") == 0) {
+    sh_copy(sh_history_path, "/.6sh_history", sizeof(sh_history_path));
+    return;
+  }
+
+  sh_copy(sh_history_path, sh_home, sizeof(sh_history_path));
+  if(strcmp(sh_history_path, "/") != 0)
+    sh_append(sh_history_path, "/", sizeof(sh_history_path));
+  sh_append(sh_history_path, ".6sh_history", sizeof(sh_history_path));
+}
+
+static void
+history_push_in_memory(const char *line)
+{
+  int i;
+
+  if(line == 0 || line[0] == 0)
+    return;
+
+  if(sh_history_count > 0 &&
+     strcmp(sh_history[sh_history_count - 1], line) == 0)
+    return;
+
+  if(sh_history_count < HISTORY_MAX) {
+    sh_copy(sh_history[sh_history_count], line, HISTORY_LINE_MAX);
+    sh_history_count++;
+    return;
+  }
+
+  for(i = 1; i < HISTORY_MAX; i++)
+    sh_copy(sh_history[i - 1], sh_history[i], HISTORY_LINE_MAX);
+  sh_copy(sh_history[HISTORY_MAX - 1], line, HISTORY_LINE_MAX);
+}
+
+static void
+history_save(void)
+{
+  int fd;
+  int i;
+
+  fd = open(sh_history_path, O_CREATE | O_WRONLY | O_TRUNC);
+  if(fd < 0)
+    return;
+
+  for(i = 0; i < sh_history_count; i++) {
+    int n;
+
+    n = strlen(sh_history[i]);
+    if(n <= 0)
+      continue;
+    write(fd, sh_history[i], n);
+    write(fd, "\n", 1);
+  }
+
+  close(fd);
+}
+
+void
+history_init(void)
+{
+  int fd;
+  int n;
+  int i;
+  int start;
+  char buf[HISTORY_MAX * HISTORY_LINE_MAX + 2];
+  char line[HISTORY_LINE_MAX];
+
+  sh_history_count = 0;
+  history_build_path();
+
+  fd = open(sh_history_path, O_RDONLY);
+  if(fd < 0)
+    return;
+
+  n = read(fd, buf, sizeof(buf) - 1);
+  close(fd);
+  if(n <= 0)
+    return;
+
+  buf[n] = 0;
+  start = 0;
+  for(i = 0; i <= n; i++) {
+    if(buf[i] == '\n' || buf[i] == 0) {
+      int len;
+
+      len = i - start;
+      if(len > 0) {
+        if(len >= HISTORY_LINE_MAX)
+          len = HISTORY_LINE_MAX - 1;
+        memmove(line, buf + start, len);
+        line[len] = 0;
+        trim_trailing_ws(line);
+        history_push_in_memory(line);
+      }
+      start = i + 1;
+    }
+  }
+}
+
+void
+history_add(const char *line)
+{
+  history_push_in_memory(line);
+  history_save();
+}
+
+static void
+history_replace_line(char *line, int *len, const char *src, int max)
+{
+  int i;
+  int oldlen;
+  int newlen;
+
+  oldlen = *len;
+  for(i = 0; i < oldlen; i++)
+    write(2, "\b \b", 3);
+
+  newlen = strlen(src);
+  if(newlen > max - 2)
+    newlen = max - 2;
+  if(newlen < 0)
+    newlen = 0;
+
+  if(newlen > 0)
+    memmove(line, src, newlen);
+  line[newlen] = 0;
+  *len = newlen;
+
+  if(newlen > 0)
+    write(2, line, newlen);
+}
+
+int
+history_readline(char *buf, int nbuf, const char *prompt)
+{
+  struct termios oldt;
+  struct termios newt;
+  int have_termios;
+  int len;
+  int nav;
+  int cc;
+  char c;
+  char current[HISTORY_LINE_MAX];
+
+  if(nbuf <= 1)
+    return -1;
+
+  dprintf(2, "%s", prompt);
+  buf[0] = 0;
+  current[0] = 0;
+  len = 0;
+  nav = -1;
+
+  have_termios = (tcgetattr(0, &oldt) == 0);
+  if(have_termios) {
+    newt = oldt;
+    newt.c_lflag &= ~(ICANON | ECHO);
+    if(tcsetattr(0, TCSANOW, &newt) < 0)
+      have_termios = 0;
+  }
+
+  for(;;) {
+    cc = read(0, &c, 1);
+    if(cc < 1) {
+      if(len == 0) {
+        if(have_termios)
+          tcsetattr(0, TCSANOW, &oldt);
+        return -1;
+      }
+      break;
+    }
+
+    if(c == '\r' || c == '\n') {
+      write(2, "\n", 1);
+      break;
+    }
+
+    if(c == 4) {
+      if(len == 0) {
+        if(have_termios)
+          tcsetattr(0, TCSANOW, &oldt);
+        return -1;
+      }
+      continue;
+    }
+
+    if(c == '\b' || c == '\x7f') {
+      if(len > 0) {
+        len--;
+        buf[len] = 0;
+        write(2, "\b \b", 3);
+      }
+      continue;
+    }
+
+    if(c == '\033') {
+      char c2;
+      char c3;
+
+      if(read(0, &c2, 1) < 1)
+        continue;
+      if(c2 != '[' && c2 != 'O')
+        continue;
+      if(read(0, &c3, 1) < 1)
+        continue;
+
+      if(c3 == 'A') {
+        if(sh_history_count <= 0)
+          continue;
+        if(nav < 0)
+          sh_copy(current, buf, sizeof(current));
+        if(nav + 1 < sh_history_count)
+          nav++;
+        history_replace_line(buf, &len,
+                             sh_history[sh_history_count - 1 - nav],
+                             nbuf);
+      } else if(c3 == 'B') {
+        if(nav < 0)
+          continue;
+        nav--;
+        if(nav >= 0)
+          history_replace_line(buf, &len,
+                               sh_history[sh_history_count - 1 - nav],
+                               nbuf);
+        else
+          history_replace_line(buf, &len, current, nbuf);
+      }
+      continue;
+    }
+
+    if(c >= 0x20 && c < 0x7f) {
+      if(len < nbuf - 2) {
+        if(nav >= 0) {
+          nav = -1;
+          current[0] = 0;
+        }
+        buf[len++] = c;
+        buf[len] = 0;
+        write(2, &c, 1);
+      }
+    }
+  }
+
+  if(have_termios)
+    tcsetattr(0, TCSANOW, &oldt);
+
+  if(len >= nbuf - 1)
+    len = nbuf - 2;
+  buf[len++] = '\n';
+  buf[len] = 0;
+  return 0;
 }
 
 void
