@@ -58,7 +58,7 @@ struct proc_rec {
   int  state;          /* encoded STAT character index                     */
   unsigned int sz;     /* virtual size in bytes                            */
   unsigned int cticks; /* cumulative CPU ticks (100Hz)                     */
-  char stat[8];        /* state string from /proc/ps                       */
+  char stat[12];       /* state string from /proc/ps                       */
   char name[16];       /* process name                                     */
 };
 
@@ -489,6 +489,31 @@ update_dtable(struct proc_rec *fresh, int nfresh, unsigned int elapsed)
  * Rendering
  * --------------------------------------------------------------------- */
 
+/* Map verbose kernel state name to a single UNIX-style status character:
+ *   R = running / runnable
+ *   S = sleeping
+ *   Z = zombie
+ *   T = stopped
+ *   E = embryo (not yet runnable)
+ *   ? = unknown
+ */
+static char
+stat_char(const char *s)
+{
+  if(s[0] == 'r'){
+    if(s[1] == 'u' && s[2] == 'n' && s[3] == 'n'){
+      if(s[4] == 'i') return 'R';   /* running  */
+      if(s[4] == 'a') return 'R';   /* runnable */
+    }
+    return '?';
+  }
+  if(s[0] == 's' && s[1] == 'l') return 'S'; /* sleep    */
+  if(s[0] == 's' && s[1] == 't') return 'T'; /* stopped  */
+  if(s[0] == 'z') return 'Z';       /* zombie   */
+  if(s[0] == 'e') return 'E';       /* embryo   */
+  return '?';
+}
+
 static void
 render(unsigned int uptime_ticks, unsigned int la1, unsigned int la5,
        unsigned int la15, int nrun, int ntot, int mem_total, int mem_free)
@@ -557,8 +582,8 @@ render(unsigned int uptime_ticks, unsigned int la1, unsigned int la5,
   {
     char hdr[ts.cols + 2];
     snprintf(hdr, ts.cols + 1,
-             "%-6s %-8s %-5s  %5s  %5s  %5s  %s",
-             "PID", "USER", "STAT", "VIRT", "CPU%", "TIME+", "COMMAND");
+             "%-6s %-8s %-1s  %5s  %5s  %5s  %s",
+             "PID", "USER", "S", "VIRT", "CPU%", "TIME+", "COMMAND");
     /* Pad to column width */
     int hlen = 0; while(hdr[hlen]) hlen++;
     while(hlen < ts.cols){ hdr[hlen++] = ' '; }
@@ -608,8 +633,8 @@ render(unsigned int uptime_ticks, unsigned int la1, unsigned int la5,
       char line[ts.cols + 2];
       int ll;
       ll = snprintf(line, ts.cols + 1,
-                    "%-6d %-8s %-5s  %5s  %5s  %6s  %s",
-                    dr->snap.pid, userbuf, dr->snap.stat,
+                    "%-6d %-8s %-1c  %5s  %5s  %6s  %s",
+                    dr->snap.pid, userbuf, stat_char(dr->snap.stat),
                     vbuf, cpubuf, timbuf, dr->snap.name);
       /* Pad to column width */
       while(ll < ts.cols){ line[ll++] = ' '; }
