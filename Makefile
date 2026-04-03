@@ -742,6 +742,7 @@ FATROOT_STAGE ?= .fatroot
 EXT2QEMU = -drive file=$(EXT2IMG)$(comma)index=2$(comma)media=disk$(comma)format=raw
 FATQEMU = -drive file=$(FATIMG)$(comma)index=3$(comma)media=disk$(comma)format=raw
 QEMUNETOPTS ?= -netdev user,id=auxnet0 -device virtio-net-pci,netdev=auxnet0,mac=52:54:00:12:34:56,disable-modern=on
+QEMUNETOPTS_E1000 ?= -netdev user,id=auxnet0 -device e1000,netdev=auxnet0,mac=52:54:00:12:34:56
 QEMUGFXOPTS ?= -vga none -device virtio-gpu-pci,disable-modern=on,xres=1200,yres=800
 QEMUOPTS = -drive file=aux.bootkern,index=0,media=disk,format=raw $(EXT2QEMU) $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
@@ -830,6 +831,9 @@ vblk-reset:
 # Default: EXT2 root filesystem (easier to modify/mount from other systems)
 qemu: aux.bootkern $(EXT2IMG)
 	$(QEMU) -serial mon:stdio -drive file=aux.bootkern,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
+e1000: aux.bootkern $(EXT2IMG)
+	$(QEMU) -serial mon:stdio -drive file=aux.bootkern,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS_E1000) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 qemu-server7: aux.bootkern test_ext2_server7.img
 	$(QEMU) -serial mon:stdio -drive file=aux.bootkern,index=0,media=disk,format=raw -drive file=test_ext2_server7.img,index=2,media=disk,format=raw $(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
@@ -1059,4 +1063,4 @@ tar:
 	cp dist/* config/.gdbinit.tmpl /tmp/xv6
 	(cd /tmp; tar cf - xv6) | gzip >xv6-rev10.tar.gz  # the next one will be 10 (9/17)
 
-.PHONY: dist-test dist ext2-reset fat-reset ext2root qemu-ext2root qemu-nox-ext2root qemu-gdb-ext2root qemu-nox-gdb-ext2root qemu-fat qemu-nox-fat qemu-oldinit
+.PHONY: dist-test dist ext2-reset fat-reset ext2root qemu-ext2root qemu-nox-ext2root qemu-gdb-ext2root qemu-nox-gdb-ext2root qemu-fat qemu-nox-fat qemu-oldinit e1000
