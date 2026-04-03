@@ -83,6 +83,8 @@ struct console_gfx_debug_info {
 	uint vt_cursor_x;
 	uint vt_cursor_y;
 	uint vt_nonblank_cells;
+	int gfx_owner_pid;
+	uint input_events;
 };
 
 void            consoleinit(void);
@@ -97,6 +99,10 @@ void            console_set_active_tty(int tty);
 int             console_get_active_tty(void);
 int             console_logo_get_enabled(void);
 int             console_logo_set_enabled(int enabled);
+int             console_gfx_server_claim(int pid);
+int             console_gfx_server_release(int pid);
+int             console_gfx_server_owner(void);
+uint            console_input_events(void);
 uint            console_gfx_stats_sync_calls(void);
 uint            console_gfx_stats_cells_changed(void);
 uint            console_gfx_stats_cells_rendered(void);

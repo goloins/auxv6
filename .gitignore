@@ -102,11 +102,13 @@ user/tail
 user/lsof
 user/which
 user/file
+user/server7
 user/date
 user/time
 user/halt
 include/rootfs_config.h
 .ext2root/
+.ext2root-server7/
 .fatroot/
 virtio_boot.log
 ports/dash-0.5.12/src/mksyntax

@@ -1,0 +1,6 @@
+#!/bin/dash
+
+echo "rc.2: multi-user mode (server7 profile)"
+
+# Start server7 from init runlevel script.
+/bin/server7

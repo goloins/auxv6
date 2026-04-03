@@ -498,6 +498,9 @@ _which: user/which
 _file: user/file
 	cp user/file _file
 
+_server7: user/server7
+	cp user/server7 _server7
+
 _date: user/date
 	cp user/date _date
 
@@ -605,6 +608,7 @@ UPROGS=\
 	_date\
 	_time\
 	_dmesg\
+	_server7\
 	_dash\
 	_symlinktest\
 
@@ -647,6 +651,7 @@ clean:
 	xv6memfs.img mkfs .gdbinit $(ROOTFS_CONFIG) \
 	test_ext2.img \
 	test_ext2_oldinit.img \
+	test_ext2_server7.img \
 	test_fat.img \
 	vblk0.img \
 	vblk1.img \
@@ -656,6 +661,7 @@ clean:
 	$(UPROGS_OLDINIT) \
 	.ext2root \
 	.ext2root-oldinit \
+	.ext2root-server7 \
 	.fatroot \
 	targetfs/tmp/test.iso .isoroot \
 	kernel/**/*.o kernel/**/*.d kernel/**/*.asm \
@@ -676,6 +682,7 @@ clean:
 	user/dhcp user/v6dhcpd user/ntpd user/nslookup \
 	user/6get \
 	user/lsof user/which user/file \
+	user/server7 \
 	user/date user/time user/killall user/halt \
 	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/dmesg user/tail user/lspci user/v6init
 
@@ -713,6 +720,7 @@ TARGETFS_MAN_DIR ?= $(TARGETFS_DIR)/usr/share/man
 EXT2ROOT_FSTAB ?= $(TARGETFS_ETC)/fstab.ext2root
 ROOTFS_COMMON_FILES = README $(TARGETFS_ETC)/hosts $(EXT2ROOT_FSTAB) $(TARGETFS_ETC)/profile $(TARGETFS_ETC)/termcap $(TARGETFS_ETC)/passwd $(TARGETFS_ETC)/groups $(TARGETFS_ETC)/hostname $(TARGETFS_ETC)/motd $(TARGETFS_ETC)/resolv.conf $(TARGETFS_SBIN)/mount.ext2 $(TARGETFS_SBIN)/mount.msdosfs $(TARGETFS_SBIN)/mount.isofs $(TARGETFS_SBIN)/mount.xv6fs $(TARGETFS_DIR)/tmp/test.iso
 ROOTFS_RC_FILES = $(TARGETFS_ETC)/rc.S $(TARGETFS_ETC)/rc.0 $(TARGETFS_ETC)/rc.1 $(TARGETFS_ETC)/rc.2 $(TARGETFS_ETC)/rc.3 $(TARGETFS_ETC)/rc.6
+ROOTFS_RC_FILES_SERVER7 = $(filter-out $(TARGETFS_ETC)/rc.2,$(ROOTFS_RC_FILES)) $(TARGETFS_ETC)/rc.2.server7
 ROOTFS_MAN_FILES = $(wildcard $(TARGETFS_MAN_DIR)/*.md)
 ROOTFS_TARGETFS_FILES = $(shell find $(TARGETFS_DIR) -type f -o -type l 2>/dev/null)
 FATIMG ?= test_fat.img
@@ -743,6 +751,9 @@ $(TARGETFS_DIR)/tmp/test.iso:
 #nice
 test_ext2.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) $(UPROGS)
 	sh tools/stage-ext2-root.sh .ext2root $(EXT2IMG) $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) $(UPROGS)
+
+test_ext2_server7.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES_SERVER7) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) $(UPROGS)
+	sh tools/stage-ext2-root.sh .ext2root-server7 test_ext2_server7.img $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES_SERVER7) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) $(UPROGS)
 
 test_ext2_oldinit.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(UPROGS_OLDINIT)
 	sh tools/stage-ext2-root.sh .ext2root-oldinit test_ext2_oldinit.img $(ROOTFS_COMMON_FILES) $(UPROGS_OLDINIT)
@@ -806,6 +817,9 @@ vblk-reset:
 # Default: EXT2 root filesystem (easier to modify/mount from other systems)
 qemu: aux.bootkern $(EXT2IMG)
 	$(QEMU) -serial mon:stdio -drive file=aux.bootkern,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
+qemu-server7: aux.bootkern test_ext2_server7.img
+	$(QEMU) -serial mon:stdio -drive file=aux.bootkern,index=0,media=disk,format=raw -drive file=test_ext2_server7.img,index=2,media=disk,format=raw $(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 qemu-oldinit: aux.bootkern test_ext2_oldinit.img
 	$(QEMU) -serial mon:stdio -drive file=aux.bootkern,index=0,media=disk,format=raw -drive file=test_ext2_oldinit.img,index=2,media=disk,format=raw $(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)

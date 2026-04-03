@@ -6,19 +6,30 @@ This document tracks the current state of auxv6 graphics support as it exists in
 
 ## Current Implementation Snapshot (2026-04-02)
 
-### Landed Components
+### Server7 Tranche S1 (2026-04-03)
 
-**Build and boot integration:**
-- `Makefile` already links `kernel/graphics/framebuffer.o`, `kernel/graphics/display.o`, `kernel/graphics/font.o`, `kernel/graphics/render.o`, and `kernel/driver/virtio_gpu.o` into `aux.kern`.
-- `kernel/core/main.c` already initializes `display_init()`, `pci_init()`, and `virtio_gpu_init()` before `consoleinit()`.
-- `Makefile` now defaults QEMU graphics to `-vga none -device virtio-gpu-pci,disable-modern=on,xres=1200,yres=800`, which suppresses the default QEMU VGA window, requests a modestly larger default virtio-gpu scanout from the host, and keeps the visible graphics device aligned with the same virtio-backed framebuffer path auxv6 uses.
-- Recent QEMU still exposes that gpu transport through PCI capabilities rather than a pure legacy BAR0 I/O path, so auxv6 relies on the modern virtio-pci capability support added in `kernel/driver/virtio.c`.
-- `kernel/driver/virtio.c` now has an initial modern virtio-pci capability path so auxv6 can probe that gpu transport instead of failing immediately on the missing legacy BAR0 path.
+- Added a dedicated init boot profile and target (`make qemu-server7`) that starts `server7` from runlevel scripts without changing default `make qemu` behavior.
+- Added kernel control and status endpoint `/proc/server7`.
+	- Read: `owner_pid`, `claimed`, `input_events`, and available commands.
+	- Write: `claim` and `release` for display ownership control.
+- Added console-owned display arbitration hooks in `console.c`:
+	- `console_gfx_server_claim(pid)` and `console_gfx_server_release(pid)`
+	- `console_gfx_server_owner()` and `console_input_events()`
+	- While claimed, console display flush is suppressed to avoid overwriting the server-owned presentation path.
+- Added early input observability hook by counting console input events and exposing the counter in `/proc/server7` and `/proc/gfxstats`.
+- Upgraded `server7` userspace daemon from placeholder to protocol bootstrap:
+	- Claims ownership via `/proc/server7` at startup and releases on shutdown.
+	- Native line protocol handshake (`HELLO server7/1`, `STATUS`, `PING`) for early client compatibility work.
+  - Startup flow policy:
+    - authenticated tty user (`uid>0` with tty) -> `desktop-direct`
+    - init/system launch -> `login-dialog` (A/UX-style GUI login path target)
+  - Flow is surfaced in protocol status for early client integration.
 
-**Framebuffer core:**
-- `kernel/graphics/framebuffer.c` provides DMA-backed framebuffer allocation.
-- The DMA allocator now supports contiguous multi-page allocations, which removes the earlier hard stop where framebuffer creation failed for any surface larger than one page.
-- Dirty-rectangle tracking, fill, blit, set-pixel, and sync-for-device hooks are implemented.
+What S1 does not solve yet:
+- No `/dev/fb0` or `/dev/input/event*` ABI yet.
+- No userspace framebuffer mapping yet.
+- No true event queue delivery path for keyboard or mouse yet.
+- Login dialog visuals and desktop compositor are scaffolded as flow modes, not fully rendered UI yet.
 - Several helper surfaces remain stubbed, especially format conversion and userspace mapping helpers.
 
 **Font and render path:**

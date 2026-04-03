@@ -145,6 +145,28 @@ Primary goal: convert recently landed features into a more reliable baseline whi
 - `mount -t nfs server:/export /mnt/nfs` succeeds in basic read-only tests.
 - `ls /mnt/nfs` and `cat /mnt/nfs/file.txt` work on a simple export.
 
+### Tranche E - server7 display-server bootstrap
+- Add dedicated boot profile (`make qemu-server7`) that starts `server7` from init runlevel scripts while preserving default boot behavior.
+- Add kernel display ownership control endpoint (`/proc/server7`) with `claim`/`release` commands and status fields.
+- Add initial server7 native protocol handshake (`HELLO server7/1`) plus `STATUS`/`PING` commands for early client integration.
+- Add early input observability counter surfaced through `/proc/server7` and `/proc/gfxstats`.
+- Add startup policy split aligned with unix session semantics:
+  - authenticated terminal user session -> draw desktop directly (main flow)
+  - init/system launch -> present GUI login flow modeled after A/UX login dialog
+
+**Current status (2026-04-03):**
+- Boot profile and init startup path landed.
+- `/proc/server7` read/write control landed.
+- Console-side ownership arbitration hooks landed.
+- Server7 protocol bootstrap and ownership claim/release wiring landed.
+- Startup flow policy scaffold landed in server7 with auto-detection and explicit mode override.
+
+**Definition of done:**
+- `make qemu-server7` boots with server7 started by init and uses login-dialog flow.
+- Running `server7` from an authenticated user tty session enters desktop-direct flow.
+- Server7 can claim and release display ownership through kernel control path.
+- Early clients can complete protocol handshake and retrieve flow/status metadata.
+
 ---
 
 ## Next Steps (Recommended Order)

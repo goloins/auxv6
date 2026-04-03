@@ -66,6 +66,7 @@ Generated: 2026-04-03
 | rm | targetfs/usr/share/man/rm.md | 2026-04-01 | user/rm.c | source-derived usage/options |
 | route | targetfs/usr/share/man/route.md | 2026-04-01 | user/route.c | source-derived usage/options |
 | runlevel | targetfs/usr/share/man/runlevel.md | 2026-04-01 | user/runlevel.c | source-derived usage/options |
+| server7 | targetfs/usr/share/man/server7.md | 2026-04-03 | user/server7.c | bootstrap display-server daemon entrypoint |
 | sh | targetfs/usr/share/man/sh.md | 2026-04-01 | user/sh.c | source-derived usage/options |
 | sigtest | targetfs/usr/share/man/sigtest.md | 2026-04-01 | user/sigtest.c | source-derived usage/options |
 | sockettest | targetfs/usr/share/man/sockettest.md | 2026-04-01 | user/sockettest.c | source-derived usage/options |

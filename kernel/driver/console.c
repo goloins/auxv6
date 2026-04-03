@@ -27,6 +27,7 @@ static void consputc(int);
 static void consputc_ansi(struct console_tty_state *t, int c);
 static void console_emit_tty_char_locked(struct console_tty_state *t, int c);
 static struct console_tty_state *console_tty_by_index(int tty);
+static void console_flush_tty_locked(struct console_tty_state *t);
 static void console_gfx_sync_from_tty_locked(struct console_tty_state *t);
 static int console_pick_display_size(struct display_device *dev, uint *width_out, uint *height_out);
 static void cga_fill(int from, int to, uchar a);
@@ -260,6 +261,8 @@ static uint console_gfx_stat_cells_changed;
 static uint console_gfx_stat_cells_rendered;
 static uint console_gfx_stat_flush_calls;
 static uint console_gfx_stat_flush_pixels;
+static int console_gfx_owner_pid = -1;
+static uint console_input_event_count;
 
 #define CONSOLE_GFX_FALLBACK_WIDTH 640
 #define CONSOLE_GFX_FALLBACK_HEIGHT 400
@@ -812,6 +815,70 @@ console_logo_set_enabled(int enabled)
   return 0;
 }
 
+int
+console_gfx_server_claim(int pid)
+{
+  int rc;
+
+  if(pid <= 0)
+    return -1;
+
+  acquire(&cons.lock);
+  if(console_gfx_owner_pid >= 0 && console_gfx_owner_pid != pid)
+    rc = -1;
+  else {
+    console_gfx_owner_pid = pid;
+    rc = 0;
+  }
+  release(&cons.lock);
+  return rc;
+}
+
+int
+console_gfx_server_release(int pid)
+{
+  int rc;
+
+  if(pid <= 0)
+    return -1;
+
+  acquire(&cons.lock);
+  if(console_gfx_owner_pid != pid)
+    rc = -1;
+  else {
+    struct console_tty_state *t;
+
+    console_gfx_owner_pid = -1;
+    t = console_tty_by_index(console_active_tty);
+    console_flush_tty_locked(t);
+    rc = 0;
+  }
+  release(&cons.lock);
+  return rc;
+}
+
+int
+console_gfx_server_owner(void)
+{
+  int pid;
+
+  acquire(&cons.lock);
+  pid = console_gfx_owner_pid;
+  release(&cons.lock);
+  return pid;
+}
+
+uint
+console_input_events(void)
+{
+  uint n;
+
+  acquire(&cons.lock);
+  n = console_input_event_count;
+  release(&cons.lock);
+  return n;
+}
+
 uint
 console_gfx_stats_sync_calls(void)
 {
@@ -935,6 +1002,8 @@ console_gfx_debug_snapshot(struct console_gfx_debug_info *out)
 
   out->cell_width = (uint)cell_w;
   out->cell_height = (uint)cell_h;
+  out->gfx_owner_pid = console_gfx_owner_pid;
+  out->input_events = console_input_event_count;
 
   release(&cons.lock);
   return 0;
@@ -1643,6 +1712,9 @@ console_flush_tty_locked(struct console_tty_state *t)
   int hw_cursor;
 
   if(t != console_tty_by_index(console_active_tty))
+    return;
+
+  if(console_gfx_owner_pid > 0)
     return;
 
   if(console_gfx_boot_ready) {
@@ -3039,6 +3111,7 @@ consoleintr(int (*getc)(void))
   acquire(&cons.lock);
   while((c = getc()) >= 0) {
     t = console_tty_by_index(console_active_tty);
+    console_input_event_count++;
 
     if(c == KEY_F1 || c == KEY_F2 || c == KEY_F3 || c == KEY_F4) {
       console_active_tty = c - KEY_F1;

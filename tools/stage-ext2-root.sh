@@ -143,6 +143,9 @@ for src in "$@"; do
     etc/rc.2)
       install -m 0755 "$src" "$rootdir/etc/rc.d/rc.2"
       ;;
+    etc/rc.2.server7)
+      install -m 0755 "$src" "$rootdir/etc/rc.d/rc.2"
+      ;;
     etc/rc.3)
       install -m 0755 "$src" "$rootdir/etc/rc.d/rc.3"
       ;;

@@ -26,6 +26,7 @@
 #define PROCFS_GFXSTATS_INO 11
 #define PROCFS_LSOF_INO     12
 #define PROCFS_NVME_TUNE_INO 13
+#define PROCFS_SERVER7_INO  14
 #define PROCFS_VERSION_STR  "a/ux86 aux86 i686\n"
 
 struct procfs_inode {
@@ -47,6 +48,7 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_GFXSTATS_INO, "gfxstats", 1024 },
   { PROCFS_LSOF_INO, "lsof", 2048 },
   { PROCFS_NVME_TUNE_INO, "nvme_tune", 2048 },
+  { PROCFS_SERVER7_INO, "server7", 256 },
   { 0, 0, 0 }
 };
 
@@ -56,7 +58,12 @@ static uint procfs_write_uint(char *buf, uint value);
 static uint
 procfs_root_dir_size(void)
 {
-  return 14 * sizeof(struct dirent);
+  int n;
+
+  n = 0;
+  while(procfs_inodes[n].name)
+    n++;
+  return (uint)(n + 2) * sizeof(struct dirent);
 }
 
 static const char*
@@ -217,6 +224,10 @@ procfs_fill_inode(struct inode *ip, uint inum)
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IWUSR | M_IRGRP | M_IROTH;
     ip->size = 2048;
+  } else if(inum == PROCFS_SERVER7_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IWUSR | M_IRGRP | M_IROTH;
+    ip->size = 256;
   } else {
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
@@ -396,7 +407,7 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     return -1;
   if(ip->inum == PROCFS_ROOT_INO){
     // Note: . and .. are synthesized by VFS for mount roots
-    struct dirent more_entries[12];
+    struct dirent more_entries[13];
     memset(more_entries, 0, sizeof(more_entries));
     more_entries[0].inum = PROCFS_UPTIME_INO;
     safestrcpy(more_entries[0].name, "uptime", DIRSIZ);
@@ -422,6 +433,8 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     safestrcpy(more_entries[10].name, "lsof", DIRSIZ);
     more_entries[11].inum = PROCFS_NVME_TUNE_INO;
     safestrcpy(more_entries[11].name, "nvme_tune", DIRSIZ);
+    more_entries[12].inum = PROCFS_SERVER7_INO;
+    safestrcpy(more_entries[12].name, "server7", DIRSIZ);
     return procfs_copy_data(dst, off, n, (char*)more_entries, sizeof(more_entries));
   }
   if(ip->inum == PROCFS_VERSION_INO)
@@ -516,6 +529,19 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vt_cursor_y ", gfx.vt_cursor_y) < 0)
       return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vt_nonblank_cells ", gfx.vt_nonblank_cells) < 0)
+      return -1;
+    if(procfs_buf_puts(buf, sizeof(buf), &len, "gfx_owner_pid ") < 0)
+      return -1;
+    if(gfx.gfx_owner_pid < 0) {
+      if(procfs_buf_puts(buf, sizeof(buf), &len, "none\n") < 0)
+        return -1;
+    } else {
+      if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)gfx.gfx_owner_pid) < 0)
+        return -1;
+      if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+        return -1;
+    }
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "input_events ", gfx.input_events) < 0)
       return -1;
 
     return procfs_copy_data(dst, off, n, buf, len);
@@ -718,6 +744,33 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     }
     return procfs_copy_data(dst, off, n, buf, len);
   }
+  if(ip->inum == PROCFS_SERVER7_INO){
+    int owner;
+
+    len = 0;
+    owner = console_gfx_server_owner();
+
+    if(procfs_buf_puts(buf, sizeof(buf), &len, "owner_pid ") < 0)
+      return -1;
+    if(owner < 0) {
+      if(procfs_buf_puts(buf, sizeof(buf), &len, "none\n") < 0)
+        return -1;
+    } else {
+      if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)owner) < 0)
+        return -1;
+      if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+        return -1;
+    }
+
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "claimed ", owner > 0 ? 1U : 0U) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "input_events ", console_input_events()) < 0)
+      return -1;
+    if(procfs_buf_puts(buf, sizeof(buf), &len, "commands claim|release\n") < 0)
+      return -1;
+
+    return procfs_copy_data(dst, off, n, buf, len);
+  }
   if(ip->inum != PROCFS_UPTIME_INO)
     return -1;
 
@@ -742,7 +795,8 @@ procfs_writei(struct inode *ip, char *src, uint off, uint n)
   if(ip->inum != PROCFS_VBLK_FLUSH_INO &&
       ip->inum != PROCFS_AHCI_TUNE_INO &&
       ip->inum != PROCFS_NVME_TUNE_INO &&
-      ip->inum != PROCFS_LOGO_INO)
+      ip->inum != PROCFS_LOGO_INO &&
+      ip->inum != PROCFS_SERVER7_INO)
     return -1;
   if(off != 0)
     return -1;
@@ -770,6 +824,39 @@ procfs_writei(struct inode *ip, char *src, uint off, uint n)
     if(nvme_set_tune(kbuf, n) < 0)
       return -1;
     return n;
+  }
+
+  if(ip->inum == PROCFS_SERVER7_INO){
+    int pid;
+
+    pid = myproc() ? myproc()->pid : -1;
+    i = 0;
+    while(kbuf[i] == ' ' || kbuf[i] == '\t' || kbuf[i] == '\n' || kbuf[i] == '\r')
+      i++;
+
+    if(strncmp(kbuf + i, "claim", 5) == 0) {
+      i += 5;
+      while(kbuf[i] == ' ' || kbuf[i] == '\t' || kbuf[i] == '\n' || kbuf[i] == '\r')
+        i++;
+      if(kbuf[i] != 0)
+        return -1;
+      if(console_gfx_server_claim(pid) < 0)
+        return -1;
+      return n;
+    }
+
+    if(strncmp(kbuf + i, "release", 7) == 0) {
+      i += 7;
+      while(kbuf[i] == ' ' || kbuf[i] == '\t' || kbuf[i] == '\n' || kbuf[i] == '\r')
+        i++;
+      if(kbuf[i] != 0)
+        return -1;
+      if(console_gfx_server_release(pid) < 0)
+        return -1;
+      return n;
+    }
+
+    return -1;
   }
 
   val = 0;
