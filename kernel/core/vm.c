@@ -422,6 +422,46 @@ uvm_release_pte(uint *pte)
   return 1;
 }
 
+int
+cow_fault(pde_t *pgdir, uint va)
+{
+  pte_t *pte;
+  uint pa;
+  uint flags;
+  char *mem;
+
+  va = PGROUNDDOWN(va);
+  pte = walkpgdir(pgdir, (char*)va, 0);
+  if(pte == 0 || ((*pte & PTE_P) == 0))
+    return -1;
+  pte_assert_sane(*pte);
+  if(!pte_is_cow(*pte))
+    return -1;
+
+  pa = PTE_ADDR(*pte);
+  if(pa == 0)
+    return -1;
+  flags = PTE_FLAGS(*pte);
+
+  if(kpage_refcount(pa) > 1){
+    mem = kalloc();
+    if(mem == 0)
+      return -1;
+    memmove(mem, (char*)P2V(pa), PGSIZE);
+    if(uvm_release_pte((uint*)pte) < 0){
+      kfree(mem);
+      return -1;
+    }
+    flags = (flags & ~PTE_COW) | PTE_W;
+    *pte = V2P(mem) | flags | PTE_P;
+  } else {
+    pte_mark_writable((uint*)pte);
+  }
+
+  lcr3(V2P(pgdir));
+  return 0;
+}
+
 // Given a parent process's page table, create a copy
 // of it for a child.
 pde_t*
@@ -431,6 +471,7 @@ copyuvm(pde_t *pgdir, uint sz)
   pte_t *pte;
   uint pa, i, flags;
   char *mem;
+  uint cow_flags;
 
   if((d = setupkvm()) == 0)
     return 0;
@@ -441,6 +482,19 @@ copyuvm(pde_t *pgdir, uint sz)
     pte_assert_sane(*pte);
     pa = PTE_ADDR(*pte);
     flags = PTE_FLAGS(*pte);
+
+    // Phase 4 slice 1: share writable user pages as read-only COW.
+    if((flags & PTE_U) && (flags & PTE_W) && kpage_is_managed(pa)){
+      cow_flags = (flags | PTE_COW) & ~PTE_W;
+      kpage_incref(pa);
+      if(mappages(d, (void*)i, PGSIZE, pa, cow_flags) < 0){
+        // Undo ref bump if child map install fails.
+        kfree(P2V(pa));
+        goto bad;
+      }
+      continue;
+    }
+
     if((mem = kalloc()) == 0)
       goto bad;
     memmove(mem, (char*)P2V(pa), PGSIZE);
@@ -448,6 +502,15 @@ copyuvm(pde_t *pgdir, uint sz)
       kfree(mem);
       goto bad;
     }
+  }
+
+  // After child mapping succeeds, write-protect parent writable user pages.
+  for(i = 0; i < sz; i += PGSIZE){
+    pte = walkpgdir(pgdir, (void *)i, 0);
+    if(pte == 0 || ((*pte & PTE_P) == 0))
+      continue;
+    if((*pte & PTE_U) && (*pte & PTE_W) && kpage_is_managed(PTE_ADDR(*pte)))
+      pte_mark_cow((uint*)pte);
   }
   return d;
 

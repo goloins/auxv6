@@ -853,6 +853,8 @@ fork(void)
     np->state = UNUSED;
     return -1;
   }
+  // copyuvm may COW-write-protect parent PTEs; flush current TLB view.
+  switchuvm(curproc);
   np->sz = curproc->sz;
   np->stack_top = curproc->stack_top;
   np->stack_bot = curproc->stack_bot;

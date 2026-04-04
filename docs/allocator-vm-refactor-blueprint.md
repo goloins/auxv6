@@ -570,6 +570,32 @@ Exit criteria:
 - `kallocstress` fork-copyuvm rises materially
 - no regression in `stackgrowtest`
 
+Implementation status (2026-04-04, slice 1):
+- landed in-tree
+- host build clean (`sudo make aux.kern`)
+- first COW semantic slice enabled:
+	- `copyuvm()` now shares writable managed user pages as read-only COW mappings
+	  and bumps physical-page refcounts
+	- parent writable user mappings are write-protected for COW after child map
+	  install succeeds
+	- trap page-fault path calls `cow_fault()` before stack-growth fallback
+	- `cow_fault()` resolves COW writes by either private-copying shared pages or
+	  restoring writability when refcount is 1
+	- fork path refreshes parent TLB view after potential parent write-protect
+	  changes
+- safety guard:
+	- COW remains scoped to writable managed user pages only in this slice
+	- further mapping classes stay on dense-copy path until guest validation passes
+- next gate:
+	- completed: guest stability and perf validation passed
+	- `/proc/vmstat` confirms expected COW activity (`ref_increments 172`,
+	  `deferred_frees 172`)
+	- `kallocstress -n 3`: `84/100` avg
+	- `schedperf -n 3`: `82/100` avg
+	- `fsperf -n 3`: one low outlier run; confirmation rerun `fsperf -n 5`
+	  stabilized at `85/100` avg
+	- decision: promote slice-1 and proceed to slice-2 scope expansion
+
 ### Phase 5: child-list wait and reap
 
 Purpose:

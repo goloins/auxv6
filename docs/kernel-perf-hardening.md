@@ -390,6 +390,13 @@ Latest confirmed results are now best read as a phase timeline:
        `global_drain_batches 288`
     - Outcome: no observable regression and no stability incident after the
        dealloc teardown helper refactor.
+- Phase 4 slice-1 COW fork/fault path validated:
+    - `/proc/vmstat`: `ref_increments 172`, `deferred_frees 172`
+    - `kallocstress -n 3`: `84/100` avg (min 84, max 84)
+    - `schedperf -n 3`: `82/100` avg (min 82, max 82)
+    - `fsperf -n 3`: one transient low outlier (`52/100`) amid otherwise normal
+       runs; confirmation `fsperf -n 5` stabilized at `85/100` avg (min 85, max 85)
+    - Outcome: promote slice-1; treat low fsperf single run as host-noise outlier.
 
 Scores show meaningful run-to-run variance (~5–10 pts) driven by host scheduler
 load rather than code changes.  Use `schedperf -n 3` / `fsperf -n 3` /

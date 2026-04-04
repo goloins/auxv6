@@ -565,6 +565,7 @@ void            pte_mark_cow(uint *pte);
 void            pte_mark_writable(uint *pte);
 void            pte_mark_user(uint *pte, int enabled);
 int             uvm_release_pte(uint *pte);
+int             cow_fault(pde_t *pgdir, uint va);
 
 // socket.c
 void            socket_init(void);

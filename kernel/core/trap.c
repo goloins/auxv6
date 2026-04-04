@@ -250,6 +250,9 @@ trap(struct trapframe *tf)
     // The faulting virtual address is in CR2.
     if(myproc() && (tf->cs & 3) == DPL_USER){
       uint fa = rcr2();
+      // Phase 4 slice 1: resolve write faults on COW mappings.
+      if(cow_fault(myproc()->pgdir, fa) == 0)
+        break;
       if(proc_try_grow_stack(myproc(), fa))
         break;  // Stack grown; resume user instruction
       // Not a growable stack fault — fall through to signal delivery.

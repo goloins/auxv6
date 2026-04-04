@@ -164,7 +164,15 @@ Primary goal: consolidate recent kernel-core and userland wins into a dependable
 - Phase 3 tranche-1 guest validation (post-scaffolding) is clean: `kallocstress -n 3` `85/100` avg (85-85), `schedperf -n 3` `81/100` avg (81-82), `fsperf -n 3` `85/100` avg (85-86), all pass/no panic.
 - `/proc/vmstat` remained stable and consistent with Phase 2c behavior (`cache_alloc_hits 6669`, `cache_alloc_misses 0`, `global_refill_batches 405`, `global_drain_batches 288`).
 - Phase 3 tranche-2 is now landed (build clean): added helperized PTE user-transition APIs (`pte_is_user`, `pte_mark_user`), added VM PTE invariant checks, and routed remaining user-PTE transition call sites through helpers without enabling COW fork behavior.
-- Next immediate action: guest-validate tranche-2 with vmstat + perf suite and panic check before touching any COW map/install semantics.
+- Phase 3 tranche-2 guest validation is clean: `kallocstress -n 3` `85/100` avg (85-85), `schedperf -n 3` `81/100` avg (81-82), `fsperf -n 3` `85/100` avg (84-86), all pass/no panic.
+- Phase 4 slice-1 has now started and is landed build-clean: fork now installs COW mappings for writable managed user pages, trap page-fault path attempts COW resolution before stack-growth fallback, and parent TLB is refreshed after fork-time write-protect changes.
+- Phase 4 slice-1 guest validation is now complete and stable:
+  - `/proc/vmstat` confirms active sharing activity (`ref_increments 172`, `deferred_frees 172`) with no panic.
+  - `kallocstress -n 3`: `84/100` avg (84-84)
+  - `schedperf -n 3`: `82/100` avg (82-82)
+  - `fsperf -n 3`: one transient low run (`52/100`) but follow-up `fsperf -n 5` stabilized at `85/100` avg (85-85).
+- Phase 4 interpretation: COW slice-1 behavior is functionally correct and performance-stable in averaged runs; the single low fsperf run is treated as host-noise/outlier.
+- Next immediate action: proceed to Phase 4 slice-2 scope expansion while preserving current guardrails.
 
 ### Tranche A - Storage reliability hardening
 - Virtio-blk: keep bounded retry policy but tighten transient-vs-fatal error accounting and operator-visible diagnostics.
