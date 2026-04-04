@@ -159,7 +159,11 @@ Primary goal: consolidate recent kernel-core and userland wins into a dependable
 - Phase 2c validation snapshot: `kallocstress -n 3` `84/100` avg (83-85), `schedperf -n 3` `81/100` avg (81-81), `fsperf -n 3` `86/100` avg (86-86).
 - Delta vs rollback checkpoint (`82/81/83`): `kallocstress +2`, `schedperf +0`, `fsperf +3`, with no observed stability regressions.
 - `/proc/vmstat` also moved in the expected direction for this retune (`global_refill_batches 405` from `438`, `global_refill_pages 6480` from `7008`, `global_drain_batches 288` from `321`, `global_drain_pages 4608` from `5136`, misses still `0`).
-- Next immediate action: begin Phase 3 VM scaffolding for shared-page-safe teardown/refcount plumbing while keeping Phase 2c policy fixed.
+- Phase 3 has now started with tranche-1 VM scaffolding: software PTE COW bit definitions (`PTE_COW`) and VM helper routines (`pte_mark_cow`, `pte_mark_writable`, `uvm_release_pte`) are in-tree, and `deallocuvm()` now releases mappings through the shared helper path.
+- Phase 3 scope guard remains intact: no COW fork enablement yet, no user-visible fork semantic changes.
+- Phase 3 tranche-1 guest validation (post-scaffolding) is clean: `kallocstress -n 3` `85/100` avg (85-85), `schedperf -n 3` `81/100` avg (81-82), `fsperf -n 3` `85/100` avg (85-86), all pass/no panic.
+- `/proc/vmstat` remained stable and consistent with Phase 2c behavior (`cache_alloc_hits 6669`, `cache_alloc_misses 0`, `global_refill_batches 405`, `global_drain_batches 288`).
+- Next immediate action: start Phase 3 tranche-2 by applying teardown/transition invariants to remaining VM call sites, while keeping fork behavior unchanged until those paths are fully verified.
 
 ### Tranche A - Storage reliability hardening
 - Virtio-blk: keep bounded retry policy but tighten transient-vs-fatal error accounting and operator-visible diagnostics.

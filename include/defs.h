@@ -558,6 +558,11 @@ int             copyin(pde_t*, void*, uint, uint);
 void            clearpteu(pde_t *pgdir, char *uva);
 void            setpteu(pde_t *pgdir, char *uva);
 int             user_page_state(pde_t *pgdir, char *uva);
+int             pte_is_cow(uint pte);
+int             pte_is_writable(uint pte);
+void            pte_mark_cow(uint *pte);
+void            pte_mark_writable(uint *pte);
+int             uvm_release_pte(uint *pte);
 
 // socket.c
 void            socket_init(void);

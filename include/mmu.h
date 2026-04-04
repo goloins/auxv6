@@ -95,6 +95,10 @@ struct segdesc {
 #define PTE_W           0x002   // Writeable
 #define PTE_U           0x004   // User
 #define PTE_PS          0x080   // Page Size
+#define PTE_SW0         0x200   // Software-managed bit 0 (x86 AVL)
+#define PTE_SW1         0x400   // Software-managed bit 1 (x86 AVL)
+#define PTE_SW2         0x800   // Software-managed bit 2 (x86 AVL)
+#define PTE_COW         PTE_SW0 // Copy-on-write marker (Phase 3+)
 
 // Address in page table or page directory entry
 #define PTE_ADDR(pte)   ((uint)(pte) & ~0xFFF)

@@ -381,6 +381,15 @@ Latest confirmed results are now best read as a phase timeline:
        `global_refill_batches 405`, `global_drain_batches 288`
     - Delta vs post-rollback checkpoint: `kallocstress +2`, `schedperf +0`,
        `fsperf +3`, with lower refill/drain batch traffic.
+- Phase 3 tranche-1 VM scaffolding validated (no COW semantics yet):
+    - `kallocstress -n 3`: `85/100` avg (min 85, max 85)
+    - `schedperf -n 3`: `81/100` avg (min 81, max 82)
+    - `fsperf -n 3`: `85/100` avg (min 85, max 86)
+    - `/proc/vmstat` key counters remained stable: `cache_alloc_hits 6669`,
+       `cache_alloc_misses 0`, `global_refill_batches 405`,
+       `global_drain_batches 288`
+    - Outcome: no observable regression and no stability incident after the
+       dealloc teardown helper refactor.
 
 Scores show meaningful run-to-run variance (~5–10 pts) driven by host scheduler
 load rather than code changes.  Use `schedperf -n 3` / `fsperf -n 3` /

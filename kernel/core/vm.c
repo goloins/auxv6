@@ -265,7 +265,7 @@ int
 deallocuvm(pde_t *pgdir, uint oldsz, uint newsz)
 {
   pte_t *pte;
-  uint a, pa;
+  uint a;
 
   if(newsz >= oldsz)
     return oldsz;
@@ -276,12 +276,8 @@ deallocuvm(pde_t *pgdir, uint oldsz, uint newsz)
     if(!pte)
       a = PGADDR(PDX(a) + 1, 0, 0) - PGSIZE;
     else if((*pte & PTE_P) != 0){
-      pa = PTE_ADDR(*pte);
-      if(pa == 0)
-        panic("kfree");
-      char *v = P2V(pa);
-      kfree(v);
-      *pte = 0;
+      if(uvm_release_pte(pte) < 0)
+        panic("deallocuvm");
     }
   }
   return newsz;
@@ -344,6 +340,57 @@ user_page_state(pde_t *pgdir, char *uva)
     return 0;
   if(*pte & PTE_U)
     return 2;
+  return 1;
+}
+
+int
+pte_is_cow(uint pte)
+{
+  return (pte & PTE_COW) != 0;
+}
+
+int
+pte_is_writable(uint pte)
+{
+  return (pte & PTE_W) != 0;
+}
+
+void
+pte_mark_cow(uint *pte)
+{
+  if(pte == 0)
+    panic("pte_mark_cow");
+  *pte &= ~PTE_W;
+  *pte |= PTE_COW;
+}
+
+void
+pte_mark_writable(uint *pte)
+{
+  if(pte == 0)
+    panic("pte_mark_writable");
+  *pte |= PTE_W;
+  *pte &= ~PTE_COW;
+}
+
+int
+uvm_release_pte(uint *pte)
+{
+  uint pa;
+
+  if(pte == 0)
+    return -1;
+  if((*pte & PTE_P) == 0)
+    return 0;
+
+  pa = PTE_ADDR(*pte);
+  if(pa == 0)
+    return -1;
+
+  // Phase 3 scaffolding: release through allocator refcount path so
+  // shared-page teardown is safe when COW mappings are introduced.
+  kfree(P2V(pa));
+  *pte = 0;
   return 1;
 }
 

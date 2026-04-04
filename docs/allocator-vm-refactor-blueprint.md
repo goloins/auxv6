@@ -523,6 +523,25 @@ Exit criteria:
 - no double-free or leaked-page regressions
 - dense fork still works unchanged functionally
 
+Implementation status (2026-04-04, tranche 1):
+- started in-tree
+- added software-defined COW marker bit in `include/mmu.h` (`PTE_COW`)
+- added VM transition helpers in `kernel/core/vm.c`:
+	- `pte_is_cow()`, `pte_is_writable()`
+	- `pte_mark_cow()`, `pte_mark_writable()`
+	- `uvm_release_pte()`
+- routed `deallocuvm()` through `uvm_release_pte()` so user-page teardown uses
+	a single refcount-safe release path ahead of COW mapping work
+- explicit scope guard: no copy-on-write fork behavior enabled yet
+- guest validation complete with no regression/panic:
+	- `kallocstress -n 3`: `85/100` avg (85-85)
+	- `schedperf -n 3`: `81/100` avg (81-82)
+	- `fsperf -n 3`: `85/100` avg (85-86)
+	- `/proc/vmstat`: `cache_alloc_hits 6669`, `cache_alloc_misses 0`,
+	  `global_refill_batches 405`, `global_drain_batches 288`
+- tranche-1 decision: accepted; proceed to tranche-2 invariants before enabling
+	any COW fork mapping semantics
+
 ### Phase 4: copy-on-write fork
 
 Purpose:
