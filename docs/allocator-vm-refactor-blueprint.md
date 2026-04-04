@@ -613,6 +613,9 @@ Implementation status (2026-04-04, slice 2):
 	  - `kallocstress -n 3`: `92/100` avg
 	  - `schedperf -n 3`: `87/100` avg
 	  - `fsperf -n 3`: `87/100` avg
+	  - `stackgrowtest`: `3/3` pass
+	  - `stackgrowtest -d`: deep recursion/fork inherit path good; max-exceed path
+	    terminates with SIGSEGV (`exit=11`)
 	- decision: promote slice-2 as current best baseline; pause scope expansion
 	  and harden correctness/coverage around current COW behavior first
 

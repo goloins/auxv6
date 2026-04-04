@@ -180,6 +180,9 @@ Primary goal: consolidate recent kernel-core and userland wins into a dependable
   - `kallocstress -n 3`: `92/100` avg (92-92)
   - `schedperf -n 3`: `87/100` avg (87-88)
   - `fsperf -n 3`: `87/100` avg (87-87)
+- Focused correctness probe also passed after COW slice-2:
+  - `stackgrowtest`: `3/3` pass
+  - `stackgrowtest -d`: confirms deep recursion growth, fork-inherited stack growth, and SIGSEGV (`exit=11`) on max-stack exceed path
 - Phase 4 slice-2 interpretation: this is the best combined allocator/scheduler/filesystem benchmark band in the current track while remaining stable.
 - Next immediate action: keep current COW mapping scope fixed and do correctness hardening (fault-path invariants + focused regression probes like `stackgrowtest`/fork-heavy suites) before any wider COW class expansion.
 

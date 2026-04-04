@@ -404,6 +404,8 @@ Latest confirmed results are now best read as a phase timeline:
     - `fsperf -n 3`: `87/100` avg (min 87, max 87)
     - Outcome: best combined score band in the current Track 0/Phase 4 cycle
        with stable behavior; keep mapping scope fixed and harden correctness next.
+    - Focused correctness gate: `stackgrowtest` and `stackgrowtest -d` both pass,
+       including fork-inherited growth and expected SIGSEGV overflow termination.
 
 Scores show meaningful run-to-run variance (~5–10 pts) driven by host scheduler
 load rather than code changes.  Use `schedperf -n 3` / `fsperf -n 3` /
