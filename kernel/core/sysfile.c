@@ -143,8 +143,13 @@ child_name_in_parent(struct inode *parent, uint child_inum, char *name)
 
   want_inum = visible_dirent_inum(child_inum);
 
-  for(off = 0; off < parent->size; off += sizeof(de)){
-    if(inode_dir_read(parent, &de, off) != sizeof(de))
+  for(off = 0; ; off += sizeof(de)){
+    int r;
+
+    r = inode_dir_read(parent, &de, off);
+    if(r == 0)
+      break;
+    if(r != sizeof(de))
       return -1;
     if(de.inum != want_inum)
       continue;
@@ -169,16 +174,18 @@ buildcwd(struct inode *cwd, char *buf, int size)
   struct inode *ip;
   struct inode *parent;
   struct inode *cross;
-  char parts[GETCWD_MAX_DEPTH][DIRSIZ + 1];
+  char part[DIRSIZ + 1];
   int depth;
-  int i;
-  int len;
+  int plen;
+  char *dst;
 
   if(cwd == 0 || buf == 0 || size < 2)
     return -1;
 
   ip = idup(cwd);
   depth = 0;
+  dst = buf + size - 1;
+  *dst = 0;
 
   for(;;){
     ilock(ip);
@@ -222,10 +229,21 @@ buildcwd(struct inode *cwd, char *buf, int size)
     }
     ilock(parent);
     if(parent->type != T_DIR || depth >= GETCWD_MAX_DEPTH ||
-       child_name_in_parent(parent, ip->inum, parts[depth]) < 0){
+       child_name_in_parent(parent, ip->inum, part) < 0){
       iunlockput(parent);
       iput(ip);
       return -1;
+    }
+    plen = strlen(part);
+    if(plen > 0){
+      if(dst - buf < plen + 1){
+        iunlockput(parent);
+        iput(ip);
+        return -1;
+      }
+      dst -= plen;
+      memmove(dst, part, plen);
+      *--dst = '/';
     }
     depth++;
     iunlock(parent);
@@ -234,26 +252,13 @@ buildcwd(struct inode *cwd, char *buf, int size)
   }
   iput(ip);
 
-  if(depth == 0){
+  if(*dst == 0){
     buf[0] = '/';
     buf[1] = 0;
     return 0;
   }
 
-  len = 0;
-  for(i = depth - 1; i >= 0; i--){
-    int plen;
-
-    plen = strlen(parts[i]);
-    if(plen <= 0)
-      continue;
-    if(len + 1 + plen >= size)
-      return -1;
-    buf[len++] = '/';
-    memmove(buf + len, parts[i], plen);
-    len += plen;
-  }
-  buf[len] = 0;
+  memmove(buf, dst, (buf + size) - dst);
   return 0;
 }
 
