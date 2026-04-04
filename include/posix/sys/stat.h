@@ -9,8 +9,8 @@
 #ifndef _SYS_STAT_H
 #define _SYS_STAT_H
 
-/* Chain to include/sys/stat.h (which wraps include/stat.h) */
-#include_next <sys/stat.h>
+/* Use the native auxv6 stat surface directly in this toolchain layout. */
+#include "stat.h"
 /* Pull in mode_t and friends */
 #include <sys/types.h>
 
@@ -57,9 +57,15 @@ int __posix_stat(const char *path, struct stat *buf);
 int __posix_fstat(int fd, struct stat *buf);
 int __posix_lstat(const char *path, struct stat *buf);
 
+/*
+ * Avoid macro/prototype collisions if auxv6/user.h is included after this
+ * header in the same translation unit.
+ */
+#ifndef AUXV6_USER_API_H
 #define stat(path, buf)   __posix_stat((path), (buf))
 #define fstat(fd, buf)    __posix_fstat((fd), (buf))
 #define lstat(path, buf)  __posix_lstat((path), (buf))
+#endif
 
 /* auxv6 has no large-file distinction. */
 #define stat64   stat

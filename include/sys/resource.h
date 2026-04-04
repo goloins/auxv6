@@ -25,16 +25,9 @@ struct rlimit {
 #define RLIMIT_NOFILE   7
 #define RLIMIT_AS       9
 
-static inline int getrlimit(int resource, struct rlimit *rlp) {
-    (void)resource;
-    (void)rlp;
-    return -1;
-}
+#define RLIMIT_NLIMITS  10
 
-static inline int setrlimit(int resource, const struct rlimit *rlp) {
-    (void)resource;
-    (void)rlp;
-    return -1;
-}
+int getrlimit(int resource, struct rlimit *rlp);
+int setrlimit(int resource, const struct rlimit *rlp);
 
 #endif /* _SYS_RESOURCE_H */

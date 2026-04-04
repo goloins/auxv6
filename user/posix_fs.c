@@ -5,7 +5,9 @@
 #include "types.h"
 #include "fcntl.h"
 #include "stat.h"
+#include "dirent.h"
 #include "errno.h"
+#include "string.h"
 #include "auxv6/user.h"
 
 #ifndef AT_FDCWD
@@ -192,6 +194,60 @@ int
 access(const char *path, int mode)
 {
   return faccessat(AT_FDCWD, path, mode, 0);
+}
+
+int
+rmdir(const char *path)
+{
+  struct stat st;
+  DIR *dp;
+  struct dirent *de;
+  int empty;
+
+  if(path == 0 || *path == 0) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  if(strcmp(path, ".") == 0 || strcmp(path, "..") == 0) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  if(__posix_lstat(path, &st) < 0)
+    return -1;
+  if(st.st_type != T_DIR) {
+    errno = ENOTDIR;
+    return -1;
+  }
+
+  dp = opendir(path);
+  if(dp == 0) {
+    if(errno == 0)
+      errno = EACCES;
+    return -1;
+  }
+
+  empty = 1;
+  while((de = readdir(dp)) != 0) {
+    if(strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
+      continue;
+    empty = 0;
+    break;
+  }
+  closedir(dp);
+
+  if(!empty) {
+    errno = ENOTEMPTY;
+    return -1;
+  }
+
+  errno = 0;
+  if(__auxv6_sys_rmdir(path) == 0)
+    return 0;
+  if(errno == 0)
+    errno = EIO;
+  return -1;
 }
 
 int

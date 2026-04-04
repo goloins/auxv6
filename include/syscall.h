@@ -92,3 +92,6 @@
 #define SYS_shutdown  91
 #define SYS_getsockname 92
 #define SYS_getpeername 93
+#define SYS_getrlimit 94
+#define SYS_setrlimit 95
+#define SYS_rmdir 96

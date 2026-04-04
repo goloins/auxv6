@@ -33,8 +33,19 @@ static int inode_is_owner_or_root(struct inode *ip);
 static int inode_is_root_user(void);
 static struct inode* vfs_resolve(char *path);
 static struct inode* vfs_resolve_parent(char *path, char *name);
+static int remove_path(char *path, int dironly);
 static int tmpfs_alloc_dev(void);
 static int nfs_alloc_dev(void);
+
+static int
+proc_fd_limit(struct proc *p)
+{
+  if(p == 0)
+    return NOFILE;
+  if(p->rlimit_nofile_cur > (uint)NOFILE)
+    return NOFILE;
+  return (int)p->rlimit_nofile_cur;
+}
 
 #define SELECT_BITS_PER_WORD (8 * sizeof(uint))
 #define SELECT_WORDS ((NOFILE + SELECT_BITS_PER_WORD - 1) / SELECT_BITS_PER_WORD)
@@ -297,8 +308,11 @@ fdalloc(struct file *f)
 {
   int fd;
   struct proc *curproc = myproc();
+  int limit;
 
-  for(fd = 0; fd < NOFILE; fd++){
+  limit = proc_fd_limit(curproc);
+
+  for(fd = 0; fd < limit; fd++){
     if(curproc->ofile[fd] == 0){
       curproc->ofile[fd] = f;
       return fd;
@@ -808,18 +822,14 @@ isdirempty(struct inode *dp)
   return 1;
 }
 
-//PAGEBREAK!
-int
-sys_unlink(void)
+static int
+remove_path(char *path, int dironly)
 {
   const struct vnode_ops *ops;
   struct inode *ip, *dp;
   struct dirent de;
-  char name[DIRSIZ], *path;
+  char name[DIRSIZ];
   uint off;
-
-  if(argstr(0, &path) < 0)
-    return -1;
 
   begin_op();
   if((dp = vfs_resolve_parent(path, name)) == 0){
@@ -829,35 +839,47 @@ sys_unlink(void)
 
   ilock(dp);
   if(iaccess(dp, IACC_WRITE | IACC_EXEC) < 0)
-    goto bad;
+    goto bad_dp;
 
-  // Cannot unlink "." or "..".
   if(namecmp(name, ".") == 0 || namecmp(name, "..") == 0)
-    goto bad;
+    goto bad_dp;
+
+  if((ip = inode_dir_lookup(dp, name, &off)) == 0)
+    goto bad_dp;
+  ilock(ip);
+
+  if(ip->nlink < 1)
+    panic("remove_path: nlink < 1");
+
+  if(dironly) {
+    if(ip->type != T_DIR){
+      iunlockput(ip);
+      goto bad_dp;
+    }
+    if(!isdirempty(ip)){
+      iunlockput(ip);
+      goto bad_dp;
+    }
+  } else {
+    if(ip->type == T_DIR){
+      iunlockput(ip);
+      goto bad_dp;
+    }
+  }
 
   ops = vfs_dev_vops(dp->dev);
   if(ops && ops->remove){
+    iunlockput(ip);
     if(ops->remove(dp, name) < 0)
-      goto bad;
+      goto bad_dp;
     iunlockput(dp);
     end_op();
     return 0;
   }
 
-  if((ip = dirlookup(dp, name, &off)) == 0)
-    goto bad;
-  ilock(ip);
-
-  if(ip->nlink < 1)
-    panic("unlink: nlink < 1");
-  if(ip->type == T_DIR && !isdirempty(ip)){
-    iunlockput(ip);
-    goto bad;
-  }
-
   memset(&de, 0, sizeof(de));
   if(writei(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
-    panic("unlink: writei");
+    panic("remove_path: writei");
   if(ip->type == T_DIR){
     dp->nlink--;
     iupdate(dp);
@@ -869,13 +891,33 @@ sys_unlink(void)
   iunlockput(ip);
 
   end_op();
-
   return 0;
 
-bad:
+bad_dp:
   iunlockput(dp);
   end_op();
   return -1;
+}
+
+//PAGEBREAK!
+int
+sys_unlink(void)
+{
+  char *path;
+
+  if(argstr(0, &path) < 0)
+    return -1;
+  return remove_path(path, 0);
+}
+
+int
+sys_rmdir(void)
+{
+  char *path;
+
+  if(argstr(0, &path) < 0)
+    return -1;
+  return remove_path(path, 1);
 }
 
 static struct inode*
@@ -1798,6 +1840,9 @@ sys_dup2(void)
   if(oldfd == newfd)
     return newfd;
 
+  if(newfd >= proc_fd_limit(curproc))
+    return -1;
+
   // If newfd is already open, close it first
   if(curproc->ofile[newfd] != 0){
     fileclose(curproc->ofile[newfd]);
@@ -1833,7 +1878,7 @@ sys_fcntl(void)
     if(arg < 0 || arg >= NOFILE)
       return -1;
     // Find lowest available fd >= arg
-    for(int i = arg; i < NOFILE; i++){
+    for(int i = arg; i < proc_fd_limit(curproc); i++){
       if(curproc->ofile[i] == 0){
         curproc->ofile[i] = f;
         filedup(f);
@@ -1879,7 +1924,7 @@ sys_fcntl(void)
       return -1;
     if(arg < 0 || arg >= NOFILE)
       return -1;
-    for(int i = arg; i < NOFILE; i++){
+    for(int i = arg; i < proc_fd_limit(curproc); i++){
       if(curproc->ofile[i] == 0){
         curproc->ofile[i] = f;
         filedup(f);

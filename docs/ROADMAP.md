@@ -10,7 +10,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - Multi-filesystem support with mount table
 
 **Architecture:** x86 32-bit, single address space per process  
-**Current State:** OS with working core components, ext2-root boot as the default path, and a growing POSIX-style userland, but still missing several modern drivers and full POSIX compliance
+**Current State:** ext2-root is the default boot path, the kernel has received a substantial 2026-04 performance-hardening pass, the first NFS read-only path is partially wired, server7 has an initial session-aware bootstrap, and the userland now includes a broader admin/TUI layer (`top`, `abrowse`, `man`, `which`, `lsof`, `file`) with expanding documentation.
 
 ---
 
@@ -20,40 +20,50 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | Subsystem | Status | Notes |
 |-----------|--------|-------|
 | VFS Layer | 90% | Multi-backend, mount table, longest-prefix matching |
-| ext2 filesystem | 85% | Read/write, directories, inode management, default rootfs build target |
+| ext2 filesystem | 90% | Read/write, directory create/link/unlink/rename, inode/block allocation, rollback hardening, and default rootfs build target |
 | FAT/msdosfs | 80% | ~1650 LOC, FAT12/16/32, short/long filenames |
-| TCP/IP stack | 80% | UDP works, DNS/resolver works, TCP handshake + data + retransmission + teardown work; flow control still basic |
+| TCP/IP stack | 82% | UDP works, DNS/resolver works, TCP handshake + data + retransmission + teardown work, and raw-socket tooling (`ping`, `traceroute`) is in place; flow control still basic |
 | Process model | 85% | fork/exec/wait, process groups, sessions |
-| Job control | 80% | setpgid, setsid, tcsetpgrp, terminal control |
+| Job control | 82% | setpgid, setsid, tcsetpgrp, terminal control, and tty-stop behavior integrated with the PTY stack |
 | Signal handling | 95% | Full userspace delivery, alarm(), SIGPIPE, hardware fault mapping |
-| Bootstrapping / init | 80% | VFS-launched init, rc scripts, runlevels, telinit, shebang exec, early-runlevel `devman` device-node bootstrap |
-| Memory management | 80% | Virtual memory, page tables, kalloc/kfree |
+| Bootstrapping / init | 85% | VFS-launched init, rc scripts, runlevels, telinit, shebang exec, early-runlevel `devman` bootstrap, and dedicated server7 boot profile |
+| Memory management | 83% | Virtual memory, page tables, kalloc/kfree, and a landed per-CPU allocator-cache hardening pass |
 | PCI subsystem | 80% | Bus 0 enumeration, BAR decode/mapping, helper APIs, `lspci`; MSI/MSI-X still missing |
-| DMA support | 75% | Page-based DMA allocation with physical address tracking and alignment |
-| Loop devices | 85% | 8 block devices; setup validation hardened, busy-teardown guard, extended status (offset + mounted flag), `looptest` regression suite, 256 MB rootfs |
+| DMA support | 78% | Page-based DMA allocation with physical address tracking, alignment support, and multi-page framebuffer-friendly backing |
+| Loop devices | 88% | 8 block devices; setup validation hardened, busy-teardown guard, extended status (offset + mounted flag), `looptest` regression suite, 256 MB rootfs |
 | ISO 9660 | 85% | Working read-only implementation with VFS integration and loop-mount testing |
 | Symlinks | 90% | `symlink/readlink/lstat` wired, VFS follow/no-follow behavior landed, ext2 path traversal follows intermediate links, loop-depth limits and regression tests added |
-| Terminal/PTY stack | 85% | Console + dynamic PTY allocation (`/dev/ptmx` -> `/dev/pts/N`), per-endpoint queue/termios/winsize/ioctl routing, stress-tested create/terminate lifecycle, and dynamic node creation via `devman` |
+| Terminal/PTY stack | 90% | Console + dynamic PTY allocation (`/dev/ptmx` -> `/dev/pts/N`), per-endpoint queue/termios/winsize/ioctl routing, job-control integration, query/reply compatibility work, and termcheck coverage |
 | Virtio storage | 95% | Virtio core + virtio-blk with DoD checklist complete; queue-depth tuning and retry telemetry in place |
 
 ### ⚠️ Partially Implemented (50-74%)
 | Subsystem | Status | Notes |
 |-----------|--------|-------|
-| Networking interfaces | 60% | BSD ifnet abstraction, loopback, virtio-net, routing, DHCP tooling, outbound packet path |
-| POSIX compatibility layer | 70% | Broader tty/ioctl compatibility, dynamic `openpty`/`ptsname_r` path, dash portability fixes; many APIs still stubbed or partial |
-| Userland docs/manpages | 72% | `man` utility plus baseline pages are available; coverage and completeness still growing |
-| Graphics / framebuffer console | 70% | Framebuffer core, display registry, builtin font/render path, rich `/proc/gfxstats`, virtio-gpu scanout discovery, display-sized framebuffer allocation, display-derived readable boot geometry, and a manually validated stable virtio-gpu mirror path are landed; the normal console path is still CGA-authoritative, virtio-gpu still uses whole-frame uploads, and no `/dev/fb0` or `/dev/dri/card0` userspace ABI exists yet |
-| procfs | 75% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`, `/proc/meminfo`, `/proc/ps`, `/proc/mountstats`, `/proc/gfxstats`, `/proc/lsof`; breadth improved but still sparse overall |
-| Real NICs | 65% | E1000, PCNET, RTL8111 have full ifnet integration; VMXnet3 has a basic polling datapath; Hyper-V netvsc, Intel I219-V, Intel I226-V, and ASIX AX88179 PCI remain stubs |
-| Device node management | 70% | `devman -s` creates `/dev` nodes at early runlevel from kernel-visible inventory; hotplug/event mode and richer policy rules still pending |
-| Modern storage | 70% | AHCI interrupt-driven completions with slot allocator and ATAPI read-only; NVMe basic RW path in place; timeout recovery still pending |
+| Networking interfaces | 68% | BSD ifnet abstraction, loopback, virtio-net, routing, DHCP tooling, outbound packet path, and multiple working drivers; link-state polish and broader real-hardware parity still lag |
+| POSIX compatibility layer | 72% | Broader tty/ioctl compatibility, dynamic `openpty`/`ptsname_r` path, truthful time/stdio tranche work, and dash portability fixes are in-tree; shell/text/identity tranches are still open |
+| Userland docs/manpages | 82% | `man` now renders richer markdown and the tree ships 90+ documented utilities, but coverage depth and maintenance discipline still need work |
+| Graphics / framebuffer console | 72% | Framebuffer core, display registry, builtin font/render path, rich `/proc/gfxstats`, virtio-gpu scanout discovery, display-sized framebuffer allocation, display-derived readable boot geometry, stable mirror behavior, ownership plumbing for server7, and recent sync-path speedups are landed; CGA still owns the canonical console path, virtio-gpu still uses whole-frame uploads, and no `/dev/fb0` or `/dev/dri/card0` ABI exists yet |
+| procfs | 78% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`, `/proc/meminfo`, `/proc/ps`, `/proc/loadavg`, `/proc/mountstats`, `/proc/gfxstats`, `/proc/lsof`, `/proc/server7`; breadth is now solid but per-process drill-down remains sparse |
+| Real NICs | 60% | E1000, PCNET, and RTL8111 have full ifnet integration; virtio-net continues to improve; VMXnet3 has a basic polling datapath; netvsc, I219-V, I226-V, and AX88179 PCI remain stub-grade |
+| Device node management | 68% | `devman -s` creates `/dev` nodes at early runlevel from kernel-visible inventory and `/etc/devman.conf` can tune verbosity, but policy rules, cleanup mode, and hotplug/event support are still pending |
+| Modern storage | 76% | AHCI now has interrupt-driven completions, slot allocation, telemetry, and fault-injection hooks; NVMe basic RW path is in place; timeout/reset recovery still needs to be finished |
 
 ### 🚧 Early Or Stubbed (0-49%)
 | Subsystem | Status | Notes |
 |-----------|--------|-------|
+| NFS | 45% | XDR/RPC transport, MOUNT plumbing, read-only VFS wiring, and basic GETATTR/LOOKUP/READ paths landed; READDIR decode is still incomplete and live-server validation is still outstanding |
 | Btrfs | None | Planned read-only support |
-| NFS | None | Planned; requires XDR/RPC infrastructure |
 | Device hotplug/eventing | None | Planned kernel event path for live node add/remove beyond boot-time `devman -s` |
+
+---
+
+## Recent Wins (2026-04 Snapshot)
+
+- Kernel-core performance hardening landed: larger core limits, O(1) cache lookups for buffers/inodes, per-CPU allocator caching, faster `mycpu()`, scheduler idle `hlt`, and syscall-return signal fast paths.
+- `top(1)` and `libterm` landed, backed by new `/proc/loadavg` support and per-process `cticks` accounting.
+- `abrowse(1)` landed as a text-mode browser layered on the existing HTTP client path.
+- Server7 now has a dedicated boot profile, `/proc/server7` ownership control, and session-aware startup policy scaffolding.
+- Documentation/manpage coverage expanded substantially, with markdown-aware `man(1)` support and a much broader default userland.
 
 ---
 
@@ -72,16 +82,18 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 1. Tranche 1: truthful surface and low-kernel-dependency portability helpers.
   Promote wrapper-only canonical headers and implement userspace-only helpers
   such as `system`, `realpath`, `mk*temp`, `getlogin_r`, `pause`,
-  `confstr`/`pathconf`, and PTY POSIX wrappers.
+  `confstr`/`pathconf`, and PTY POSIX wrappers. This tranche is now in-tree.
 2. Tranche 2: time and stream correctness. Replace stub time surfaces and add
   stdio positioning, scanning, and basic truthful stream-buffering APIs that
-  portable tools expect. This tranche is now basically closed.
-3. Tranche 3: shell, text, and find surfaces. Add `fnmatch`, `glob`,
-  `scandir`/`alphasort`, one tree-walk API (`nftw` or `fts`), and minimal
-  C-locale plumbing.
-4. Tranche 4: identity and portability polish. Add `pwd.h`/`grp.h` lookups and
-  clean up any declarations that still do not meet the target profile.
-5. Parallel thread-enablement track: replace placeholder `pthread_*` types with
+  portable tools expect. This tranche is now basically closed and in-tree.
+3. Unified libc/POSIX portability tranche: treat the remaining non-thread
+  work as one coordinated batch so headers, libc helpers, light syscall
+  truthfulness, and porting surfaces can move together. Scope includes
+  `fnmatch`, `glob`, `scandir`/`alphasort`, one tree-walk API (`nftw` or
+  `fts`), minimal `locale.h` for C-locale-only behavior, `pwd.h`/`grp.h`
+  lookups, `getrlimit`/`setrlimit` syscall backing, `netdb.h`, and cleanup of
+  any declarations that still over-promise relative to the implementation.
+4. Parallel thread-enablement track: replace placeholder `pthread_*` types with
   a real shared-address-space thread model, TLS-ready libc state, and a
   minimal pthread subset once the kernel/runtime pieces exist.
 
@@ -89,12 +101,27 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 
 ## Active Plan (2026-04)
 
-Primary goal: convert recently landed features into a more reliable baseline while unblocking NFS and broader POSIX ports.
+Primary goal: consolidate recent kernel-core and userland wins into a dependable baseline while finishing the first usable NFS read-only milestone and teeing up the unified libc/POSIX portability tranche.
+
+### Track 0 - Kernel-core performance follow-through
+- Soak the recent allocator, scheduler, inode-cache, and buffer-cache changes under mixed `schedperf`/`fsperf`/`kallocstress` workloads.
+- Add low-risk observability where it clarifies regressions quickly: cache/fallback counters, expanded procfs summaries, or other cheap diagnostics rather than another large scheduler rewrite.
+- Keep higher-risk redesigns such as per-CPU run queues, MLFQ, or wider wakeup-structure changes out-of-scope until the current fast-path work is fully validated.
+
+**Definition of done:**
+- Repeated perf runs stay stable without reintroducing login/procfs regressions.
+- At least one additional low-risk hot-path improvement is either landed or explicitly deferred with data.
+- The current perf utilities remain good enough to compare changes across builds.
 
 ### Tranche A - Storage reliability hardening
-- Virtio-blk: tighten error accounting + bounded retry policy for transient I/O failures.
+- Virtio-blk: keep bounded retry policy but tighten transient-vs-fatal error accounting and operator-visible diagnostics.
 - AHCI: finish mount/unmount endurance loops with timeout/recover telemetry and no controller lockups.
 - NVMe: add command timeout handling with controller reset-on-fatal fallback.
+
+**Current status (2026-04-03):**
+- Virtio-blk retry telemetry and stress tooling are in-tree.
+- AHCI recovery instrumentation, fault injection, and soak-oriented tuning hooks are in-tree.
+- NVMe still lacks the corresponding timeout/reset recovery path.
 
 **Definition of done:**
 - `lsblk`/mount behavior remains stable across repeated attach/mount/unmount cycles on virtio-blk, AHCI, and NVMe.
@@ -106,30 +133,40 @@ Primary goal: convert recently landed features into a more reliable baseline whi
 - Add optional stale-node cleanup mode for boot-time reconciliation.
 - Keep hotplug/event mode out-of-scope for this tranche, but define kernel/userspace interface requirements.
 
+**Current status (2026-04-03):**
+- Boot-time static scan mode is in place.
+- `/etc/devman.conf` already has a runtime debug knob, but not the richer policy engine yet.
+
 **Definition of done:**
 - Policy-driven node mode/ownership works in boot scan mode.
 - Cleanup mode is opt-in and safe against active device nodes.
 - Hotplug interface proposal is documented with concrete data structures and event semantics.
 
 ### Tranche C - observability and userland ergonomics
-- Expand procfs coverage where low-risk and high-value (`/proc/lsof` formatting polish, per-process filtering strategy notes).
-- Continue manpage expansion for recently landed storage/network/admin commands.
-- Add scripted smoke checks for `which`, `lsof`, and `file` in the userland regression flow.
+- Expand procfs coverage where low-risk and high-value (`/proc/net`, `/proc/sockets`, `/proc/lsof` filtering/polish, per-process filtering strategy notes).
+- Continue manpage expansion and freshness checks for recently landed storage/network/admin/TUI tools.
+- Add scripted smoke checks for `which`, `lsof`, `file`, and the newer procfs-backed userland where practical.
+
+**Current status (2026-04-03):**
+- `which`, `lsof`, `file`, `top`, and `abrowse` are in the default userland.
+- `man(1)` has richer markdown support and the tree now carries broad baseline page coverage.
+- `/proc/loadavg` and `/proc/server7` landed since the earlier roadmap snapshot.
 
 **Definition of done:**
 - New utilities are covered by scripted smoke tests in QEMU boot runs.
 - Manpages exist for each tool promoted to default userland in this tranche.
+- Procfs breadth improves without committing prematurely to a large per-process ABI.
 
 **Scope note:**
 - Framebuffer/screen-draw performance work (dirty-rect updates, partial flush,
   glyph batching, reduced full-frame mirror cost) is acknowledged as a major
-  optimization area, but intentionally tracked as a separate graphics stream
-  from the current kernel-core performance hardening work.
+  optimization area, but intentionally tracked as a separate graphics/server7
+  stream from the current kernel-core performance hardening work.
 
-### Tranche D - NFS foundation
-- Implement XDR (`kernel/net/xdr.c`) and RPC client (`kernel/net/rpc.c`).
-- Implement portmapper probe and minimal MOUNT protocol path.
-- Land a read-only NFS v3 mount path as the first filesystem client milestone.
+### Tranche D - NFS read-only completion
+- Finish READDIR entry decoding and make directory iteration usable.
+- Run the first live-server smoke validation of read-only mount/`ls`/`cat` behavior.
+- Add just enough diagnostics under existing debug gates to make mount/RPC/NFS failures actionable.
 
 **Current status (2026-04-02):**
 - XDR + RPC codec path landed in kernel.
@@ -145,18 +182,19 @@ Primary goal: convert recently landed features into a more reliable baseline whi
   basic `namei`/`dirlookup`/`read`/`stat` vnode plumbing.
 - `mount` userspace now passes NFS source strings to `mount(2)` so
   `mount server:/share nfs /mnt/nfs` maps into kernel mount data.
+- READDIR result decoding is still intentionally minimal, so the `ls`-level DoD is not yet met.
 - Detailed notes: `docs/nfs-v3-integration.md`.
 
 **Definition of done:**
 - `mount -t nfs server:/export /mnt/nfs` succeeds in basic read-only tests.
 - `ls /mnt/nfs` and `cat /mnt/nfs/file.txt` work on a simple export.
+- Basic failure modes (timeout, bad export, short reply) are diagnosable without ad-hoc instrumentation.
 
-### Tranche E - server7 display-server bootstrap
-- Add dedicated boot profile (`make qemu-server7`) that starts `server7` from init runlevel scripts while preserving default boot behavior.
-- Add kernel display ownership control endpoint (`/proc/server7`) with `claim`/`release` commands and status fields.
-- Add initial server7 native protocol handshake (`HELLO server7/1`) plus `STATUS`/`PING` commands for early client integration.
-- Add early input observability counter surfaced through `/proc/server7` and `/proc/gfxstats`.
-- Add startup policy split aligned with unix session semantics:
+### Tranche E - server7 bootstrap follow-through
+- Keep `make qemu-server7` and init integration as the dedicated graphics bootstrap path while preserving default boot behavior.
+- Build on the landed display ownership control path and early protocol (`HELLO`, `STATUS`, `PING`) instead of reworking it.
+- Decide the next lowest-risk boundary between tty/console and server7 ownership: input queue handoff, richer status metadata, or small client-side protocol growth.
+- Preserve the startup policy split aligned with unix session semantics:
   - authenticated terminal user session -> draw desktop directly (main flow)
   - init/system launch -> present GUI login flow modeled after A/UX login dialog
 
@@ -177,29 +215,32 @@ Primary goal: convert recently landed features into a more reliable baseline whi
 
 ## Next Steps (Recommended Order)
 
-1. **Execute Tranche A (storage reliability hardening)** to reduce corruption/lockup risk before larger feature work.
-2. **Execute Tranche B (devman policy parsing + optional cleanup)** to strengthen `/dev` lifecycle safety.
-3. **Execute Tranche C (observability + manpages + utility smoke tests)** to lock in operational confidence.
-4. **Begin Tranche D (XDR/RPC + NFS read-only mount)** once storage reliability is stable.
-5. **After NFS foundation:** return to Btrfs read-only and devman hotplug/event lifecycle enhancements.
+1. **Continue Track 0 (kernel-core performance follow-through)** before taking on another broad structural kernel rewrite.
+2. **Execute Tranche A (storage reliability hardening)** to reduce corruption/lockup risk across AHCI and NVMe while preserving the virtio-blk baseline.
+3. **Execute Tranche B (devman policy parsing + optional cleanup)** to strengthen `/dev` lifecycle safety.
+4. **Execute Tranche C (observability + manpages + utility smoke tests)** to lock in operational confidence around the larger default userland.
+5. **Finish Tranche D (NFS read-only completion)** once the base kernel/storage path is quieter; the immediate blocker is READDIR usability, not transport plumbing.
+6. **After NFS read-only completion:** return to the unified libc/POSIX portability tranche, Btrfs read-only, and devman hotplug/event lifecycle enhancements.
 
 ---
 
 ## Remaining POSIX/Libc Gaps (Selected)
 
 - Missing syscalls: `mmap`, `getrlimit`/`setrlimit`; broader `ioctl` coverage for non-tty devices.
-- libc: `fscanf`/`vfscanf` family, `tmpfile`, writable `fmemopen` semantics, and fuller `perror` parity.
+- libc/POSIX portability tranche scope: shell/text/find surfaces (`fnmatch`, `glob`, `scandir`/`alphasort`, one tree-walk API), `pwd.h`/`grp.h` lookups, `fscanf`/`vfscanf`, `tmpfile`, writable `fmemopen` semantics, fuller `perror` parity, and truthful `netdb.h` exposure.
+- identity/user database: `pwd.h`/`grp.h` lookups and associated libc/runtime plumbing.
 - Headers: `netdb.h` plus fuller socket-family declarations and constants for larger ports.
 
 ---
 
-## Quick Wins (Can be done anytime)
+## Recommended Low-Level Continuations
 
-1. **Expand procfs further** - add `procfs` summaries like `/proc/net`, `/proc/sockets`, or per-process fd filters.
-2. **Back real getrlimit/setrlimit syscalls behind the existing header stubs** - 1 hour.
-3. **Polish virtio-net link state / diagnostics** - 2 hours.
-4. **Expand manpage coverage for key networking/storage/admin tools** - 2-4 hours.
-5. **Add a small `lsblk`/`mount` smoke test** for multiple devices (virtio-blk + AHCI + NVMe) - 2-4 hours.
+1. **Finish NFS READDIR decoding** so the existing read-only mount path reaches an actually usable `ls` milestone.
+2. **Back real `getrlimit`/`setrlimit` syscalls behind the current stubs** to remove an easy portability lie.
+3. **Expand procfs with `/proc/net`, `/proc/sockets`, and filtered fd views** to make perf/network/storage debugging cheaper.
+4. **Finish NVMe timeout/reset recovery and expose counters comparable to AHCI** so storage reliability work is not lopsided.
+5. **Polish virtio-net link-state and diagnostics** now that poll/IRQ instrumentation exists.
+6. **Start the graphics performance pass with dirty-rect uploads and partial flush** before considering a broader framebuffer ABI.
 
 ---
 
@@ -538,3 +579,9 @@ linked cleanly against the full kernel tree.
 - Virtio-blk stress and retry harnesses added; virtio multi-device probe fixes landed.
 - Loop device hardening and `looptest` regression suite landed.
 - Terminal/PTY compatibility tranches landed (query/reply support, job control, termcap upgrades, termcheck smoke/full suites).
+- Kernel-core performance hardening landed: larger core limits, buffer/inode hash tables, faster `mycpu()`, per-CPU allocator caching, scheduler idle `hlt`, and syscall-return signal fast paths.
+- `top(1)` and `libterm` landed, with `/proc/loadavg` plus per-process `cticks` support behind them.
+- `abrowse(1)` landed as the first in-tree text-mode browser built on the existing HTTP client path.
+- `make e1000` and `make qemu-server7` boot profiles were added for more targeted bring-up and validation.
+- virtio-net runtime diagnostics/polling resilience improved, alongside follow-on fixes in `telnet`, `sh`, and DHCP tooling.
+- Framebuffer console sync-path speedups landed, reducing full-refresh overhead without changing the current ownership model.

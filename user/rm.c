@@ -1,5 +1,6 @@
 #include "types.h"
 #include "stat.h"
+#include "unistd.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
 #include "dirent.h"
@@ -7,6 +8,18 @@
 #include "string.h"
 #include "stdio.h"
 #include "limits.h"
+
+int __posix_lstat(const char *path, struct stat *buf);
+
+static int
+path_is_dir(const struct stat *st)
+{
+  if(st == 0)
+    return 0;
+  if(st->st_type == T_DIR)
+    return 1;
+  return (st->st_mode & M_IFMT) == M_IFDIR;
+}
 
 struct rm_opts {
   int recursive;
@@ -60,21 +73,24 @@ rm_path(const char *path)
     return -1;
   }
 
-  if(lstat(path, &st) < 0) {
+  if(__posix_lstat(path, &st) < 0) {
     if(errno == ENOENT && g_rmopts.force)
       return 0;   /* -f: silently ignore missing */
     return -1;
   }
 
-  if(st.st_type != T_DIR) {
+  if(!path_is_dir(&st)) {
     /* Regular file / symlink */
     if(g_rmopts.interactive) {
       snprintf(prompt, sizeof(prompt), "rm: remove '%s'? ", path);
       if(!confirm(prompt))
         return 0;
     }
-    if(unlink(path) < 0)
+    if(unlink(path) < 0) {
+      if(errno == 0)
+        errno = EIO;
       return -1;
+    }
     if(g_rmopts.verbose)
       dprintf(1, "removed '%s'\n", path);
     return 0;
@@ -129,8 +145,11 @@ rm_path(const char *path)
       return 0;
   }
 
-  if(unlink(path) < 0)
+  if(rmdir(path) < 0) {
+    if(errno == 0)
+      errno = EIO;
     return -1;
+  }
   if(g_rmopts.verbose)
     dprintf(1, "removed directory '%s'\n", path);
   return 0;

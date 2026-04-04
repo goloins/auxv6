@@ -5,6 +5,8 @@
 #include "types.h"
 #include "fcntl.h"
 #include "dirent.h"
+#include "string.h"
+#include "stdlib.h"
 #include "auxv6/user.h"
 
 #define KDIRENT_BUF  16
@@ -90,4 +92,97 @@ rewinddir(DIR *dp)
   lseek(dp->dd_fd, 0, 0);
   dp->dd_loc = 0;
   dp->dd_size = 0;
+}
+
+int
+alphasort(const struct dirent **a, const struct dirent **b)
+{
+  if(a == 0 || b == 0 || *a == 0 || *b == 0)
+    return 0;
+  return strcmp((*a)->d_name, (*b)->d_name);
+}
+
+static struct dirent*
+dirent_dup(const struct dirent *de)
+{
+  struct dirent *copy;
+
+  copy = (struct dirent*)malloc(sizeof(struct dirent));
+  if(copy == 0)
+    return 0;
+
+  memmove(copy, de, sizeof(struct dirent));
+  return copy;
+}
+
+int
+scandir(const char *path, struct dirent ***namelist,
+        int (*filter)(const struct dirent *),
+        int (*compar)(const struct dirent **, const struct dirent **))
+{
+  DIR *dp;
+  struct dirent *de;
+  struct dirent **list;
+  int cap;
+  int n;
+  int i;
+
+  if(path == 0 || namelist == 0)
+    return -1;
+
+  dp = opendir(path);
+  if(dp == 0)
+    return -1;
+
+  cap = 16;
+  n = 0;
+  list = (struct dirent**)malloc(sizeof(struct dirent*) * cap);
+  if(list == 0) {
+    closedir(dp);
+    return -1;
+  }
+
+  while((de = readdir(dp)) != 0) {
+    struct dirent *copy;
+
+    if(filter && !filter(de))
+      continue;
+
+    copy = dirent_dup(de);
+    if(copy == 0)
+      goto fail;
+
+    if(n >= cap) {
+      struct dirent **newlist;
+      int newcap;
+
+      newcap = cap * 2;
+      newlist = (struct dirent**)realloc(list, sizeof(struct dirent*) * newcap);
+      if(newlist == 0) {
+        free(copy);
+        goto fail;
+      }
+      list = newlist;
+      cap = newcap;
+    }
+
+    list[n++] = copy;
+  }
+
+  closedir(dp);
+
+  if(compar) {
+    qsort(list, n, sizeof(struct dirent*),
+          (int (*)(const void*, const void*))compar);
+  }
+
+  *namelist = list;
+  return n;
+
+fail:
+  closedir(dp);
+  for(i = 0; i < n; i++)
+    free(list[i]);
+  free(list);
+  return -1;
 }

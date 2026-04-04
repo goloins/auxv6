@@ -627,6 +627,8 @@ found:
   p->tty = -1;
   p->uid = 0;
   p->gid = 0;
+  p->rlimit_nofile_cur = NOFILE;
+  p->rlimit_nofile_max = NOFILE;
   p->xstatus = 0;
   p->wait_event = WAIT_EVENT_NONE;
   p->wait_status = 0;
@@ -700,6 +702,8 @@ userinit(void)
   p->tty = 0;
   p->uid = 0;
   p->gid = 0;
+  p->rlimit_nofile_cur = NOFILE;
+  p->rlimit_nofile_max = NOFILE;
   p->xstatus = 0;
   p->wait_event = WAIT_EVENT_NONE;
   p->wait_status = 0;
@@ -767,6 +771,8 @@ fork(void)
   np->tty = curproc->tty;
   np->uid = curproc->uid;
   np->gid = curproc->gid;
+  np->rlimit_nofile_cur = curproc->rlimit_nofile_cur;
+  np->rlimit_nofile_max = curproc->rlimit_nofile_max;
   np->xstatus = 0;
   np->wait_event = WAIT_EVENT_NONE;
   np->wait_status = 0;
@@ -918,6 +924,8 @@ proc_waitpid(int pid, int *status, int options)
         p->tty = -1;
         p->uid = 0;
         p->gid = 0;
+        p->rlimit_nofile_cur = 0;
+        p->rlimit_nofile_max = 0;
         p->xstatus = 0;
         p->wait_event = WAIT_EVENT_NONE;
         p->wait_status = 0;

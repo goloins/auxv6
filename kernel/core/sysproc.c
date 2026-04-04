@@ -9,6 +9,7 @@
 #include "termios.h"
 #include "signal.h"
 #include "spinlock.h"
+#include "sys/resource.h"
 #include "sys/time.h"
 
 #ifndef CONSOLE
@@ -607,6 +608,82 @@ sys_uname(void)
 
   safestrcpy(buf, "a/ux86 aux86 i686", size);
   return 0;
+}
+
+int
+sys_getrlimit(void)
+{
+  int resource;
+  struct rlimit *rlp;
+  struct proc *p;
+  rlim_t fixed_stack;
+
+  if(argint(0, &resource) < 0)
+    return -1;
+  if(argptr(1, (char**)&rlp, sizeof(*rlp)) < 0)
+    return -1;
+
+  p = myproc();
+  fixed_stack = (rlim_t)(USER_STACK_PAGES * PGSIZE);
+
+  switch(resource) {
+  case RLIMIT_NOFILE:
+    rlp->rlim_cur = p ? (rlim_t)p->rlimit_nofile_cur : (rlim_t)NOFILE;
+    rlp->rlim_max = p ? (rlim_t)p->rlimit_nofile_max : (rlim_t)NOFILE;
+    return 0;
+  case RLIMIT_STACK:
+    rlp->rlim_cur = fixed_stack;
+    rlp->rlim_max = fixed_stack;
+    return 0;
+  case RLIMIT_CPU:
+  case RLIMIT_FSIZE:
+  case RLIMIT_DATA:
+  case RLIMIT_CORE:
+  case RLIMIT_RSS:
+  case RLIMIT_AS:
+    rlp->rlim_cur = RLIM_INFINITY;
+    rlp->rlim_max = RLIM_INFINITY;
+    return 0;
+  default:
+    return -1;
+  }
+}
+
+int
+sys_setrlimit(void)
+{
+  int resource;
+  struct rlimit *rlp;
+  struct proc *p;
+  rlim_t fixed_stack;
+
+  if(argint(0, &resource) < 0)
+    return -1;
+  if(argptr(1, (char**)&rlp, sizeof(*rlp)) < 0)
+    return -1;
+
+  p = myproc();
+  if(p == 0)
+    return -1;
+  if(rlp->rlim_cur > rlp->rlim_max)
+    return -1;
+
+  fixed_stack = (rlim_t)(USER_STACK_PAGES * PGSIZE);
+
+  switch(resource) {
+  case RLIMIT_NOFILE:
+    if(rlp->rlim_max > (rlim_t)NOFILE)
+      return -1;
+    p->rlimit_nofile_cur = (uint)rlp->rlim_cur;
+    p->rlimit_nofile_max = (uint)rlp->rlim_max;
+    return 0;
+  case RLIMIT_STACK:
+    if(rlp->rlim_cur == fixed_stack && rlp->rlim_max == fixed_stack)
+      return 0;
+    return -1;
+  default:
+    return -1;
+  }
 }
 
   int

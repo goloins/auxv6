@@ -14,6 +14,7 @@
 #include "stddef.h"
 #include "sys/types.h"
 #include "signal.h"
+#include "sys/resource.h"
 #include "wait.h"
 #include "termios.h"
 #include "sys/select.h"
@@ -96,6 +97,8 @@ int exec(char*, char**);
 int open(const char*, int);
 int mknod(const char*, int, short, short);
 int unlink(const char*);
+int __auxv6_sys_rmdir(const char*);
+int rmdir(const char*);
 int fstat(int fd, struct stat*);
 int link(const char*, const char*);
 int rename(const char*, const char*);
@@ -155,6 +158,8 @@ int sigreturn(void);
 unsigned int alarm(unsigned int seconds);
 int __auxv6_sys_clock_gettime(int clock_id, struct timespec *tp);
 int __auxv6_sys_clock_settime(int clock_id, const struct timespec *tp);
+int __auxv6_sys_getrlimit(int resource, struct rlimit *rlp);
+int __auxv6_sys_setrlimit(int resource, const struct rlimit *rlp);
 #ifndef _UNISTD_H
 int tcsetpgrp(pid_t pgid);
 pid_t tcgetpgrp(void);

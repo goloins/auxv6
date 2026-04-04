@@ -18,6 +18,24 @@ Phase 5 results are documented in `docs/libc-reorg-phase5.md`.
   kernel-plus-libc enablement stream rather than folded into the first
   pure-userspace tranche.
 
+## Planning Update (2026-04-03)
+
+Tranches 1 and 2 are now effectively landed, and the remaining non-thread
+libc/POSIX work is best treated as one coordinated portability tranche rather
+than several narrowly separated mini-phases.
+
+Reasoning:
+
+- The remaining gaps are coupled in practice: shell/text/find surfaces,
+  identity lookups, truthful headers, and a few syscall-backed semantics all
+  unlock the same class of ports.
+- Treating them as one batch encourages header, runtime, and syscall cleanup
+  to move together instead of leaving another round of half-truthful surfaces.
+- This still does not fold pthread support into the same tranche; the thread
+  track remains parallel because it needs coordinated kernel/runtime design.
+
+Detailed working inventory: `docs/libc-posix-unified-tranche-inventory.md`.
+
 ## Explicit Non-Goals
 
 - Full POSIX coverage.
@@ -153,7 +171,7 @@ Truthful Surface And Low-Kernel-Dependency Portability
 - Dash plus representative shell/coreutils-style probes build without local
   auxv6 shims for the tranche-1 APIs.
 
-## Later Tranches
+## Landed Tranches
 
 ### Tranche 2
 
@@ -235,27 +253,79 @@ Time And Stream Correctness
   only the pre-existing `signames.c` excess-initializer warnings and the
   existing RWX LOAD-segment linker warning.
 
-### Tranche 3
+## Unified Portability Tranche
 
-Shell, Text, And Find Surfaces
+With tranches 1 and 2 landed, the next libc/POSIX step is one larger
+non-thread portability tranche.
 
-- Add `fnmatch.h` and `fnmatch`.
-- Add `glob.h`, `glob`, and `globfree`.
-- Add `scandir` and `alphasort`.
-- Pick and implement one directory-tree-walk surface for findutils-grade ports:
-  - `nftw`, or
-  - `fts`
-- Add minimal `locale.h` with C-locale-only behavior.
+### Name
 
-### Tranche 4
+Shell, Text, Identity, And Portability Completion
 
-Identity And Porting Polish
+### Goals
 
-- Add `pwd.h` and `grp.h`.
-- Implement `getpwnam`, `getpwuid`, `getgrnam`, and `getgrgid`.
-- Clean up remaining portability miscellany around resource, hostname, and
-  process-environment APIs.
-- Prune or gate any declarations that still do not meet the target profile.
+- Unlock a wider class of shell/coreutils/findutils-grade ports without
+  forcing a second planning split between text APIs and identity APIs.
+- Move headers, libc runtime work, and a few syscall-backed truthfulness fixes
+  together so the public surface stays coherent.
+- Keep the pthread/kernel thread work explicitly separate.
+
+### Planned Deliverables
+
+- Shell/text/find surfaces:
+  - `fnmatch.h` and `fnmatch`
+  - `glob.h`, `glob`, and `globfree`
+  - `scandir` and `alphasort`
+  - one directory-tree-walk surface suitable for findutils-grade ports:
+    - `nftw`, or
+    - `fts`
+  - minimal `locale.h` with C-locale-only behavior
+- Identity and account lookup:
+  - `pwd.h` and `grp.h`
+  - `getpwnam`, `getpwuid`, `getgrnam`, and `getgrgid`
+- Truthfulness and syscall-backed cleanup:
+  - real `getrlimit` / `setrlimit` backing behind existing headers
+  - `netdb.h` with only truthful socket/name-service exposure
+  - cleanup of remaining portability miscellany around resource, hostname,
+    process-environment, stdio, and declaration gating
+
+### Non-Goals
+
+- Pthread runtime support
+- Shared-address-space threads
+- Full locale or wide-character-first behavior
+- `mmap` or broader VM-heavy POSIX completeness beyond what is required to
+  keep headers honest and unlock small-to-medium ports
+
+### Suggested Execution Order Inside The Unified Tranche
+
+1. Land header truthfulness and low-risk syscall backing (`getrlimit`,
+   `setrlimit`, `netdb.h`) first.
+2. Land shell/text/find APIs (`fnmatch`, `glob`, `scandir`, tree walk,
+   minimal `locale.h`).
+3. Land identity lookups (`pwd.h`, `grp.h`) and the remaining declaration
+   cleanup.
+
+### Early Progress Note (2026-04-03)
+
+- `getrlimit` / `setrlimit` moved from inline stubs to real syscall-backed
+  behavior with truthful, currently narrow scope.
+- A minimal truthful IPv4-only `netdb.h` surface (`gethostbyname`,
+  `gethostbyaddr`, `hstrerror`) is now in-tree, while `getaddrinfo`-family
+  APIs remain intentionally deferred.
+- Step 2 is now underway: `fnmatch`, `scandir`/`alphasort`, and
+  `glob`/`globfree` are in-tree, both tree-walk surfaces (`nftw` and `fts`)
+  are available for compatibility, and minimal C-locale support (`locale.h`,
+  `setlocale`, `localeconv`) is landed.
+
+### Exit Criteria
+
+- The remaining advertised libc/POSIX surface in the target portability band
+  is truthful.
+- Representative shell/find/coreutils-style ports build without local auxv6
+  shims for the APIs listed above.
+- Any declaration that still lacks real backing is either removed, clearly
+  stubbed, or documented as intentionally unavailable.
 
 ## Parallel Thread-Enablement Track
 

@@ -242,7 +242,7 @@ tags: $(OBJS) kernel/boot/entryother.S user/_init
 kernel/core/vectors.S: tools/vectors.pl
 	./tools/vectors.pl > kernel/core/vectors.S
 
-LIBC_OBJS = user/ulib.o user/string.o user/errstr.o user/umalloc.o user/tty.o user/inet.o user/fmt.o user/dirent.o user/env.o user/conf.o user/path.o user/tempfile.o user/timecore.o user/stdlib.o user/posix_fs.o user/posix.o user/stdio.o user/regex.o user/calloc.o user/libterm.o
+LIBC_OBJS = user/ulib.o user/string.o user/errstr.o user/umalloc.o user/tty.o user/inet.o user/fmt.o user/dirent.o user/fnmatch.o user/glob.o user/ftw.o user/fts.o user/locale.o user/env.o user/conf.o user/path.o user/tempfile.o user/timecore.o user/resource.o user/netdb.o user/stdlib.o user/posix_fs.o user/posix.o user/stdio.o user/regex.o user/calloc.o user/libterm.o
 LIBAUXV6_OBJS = user/crt0.o user/usys.o user/printf.o user/resolve.o
 ULIB = $(LIBC_OBJS) $(LIBAUXV6_OBJS)
 
@@ -538,6 +538,15 @@ _dash: ports/dash-0.5.12/Makefile.auxv6 $(ULIB) user/setjmp.o
 _symlinktest: user/symlinktest
 	cp user/symlinktest _symlinktest
 
+_nftwtest: user/nftwtest
+	cp user/nftwtest _nftwtest
+
+_ftwtest: user/ftwtest
+	cp user/ftwtest _ftwtest
+
+_ftstest: user/ftstest
+	cp user/ftstest _ftstest
+
 mkfs: tools/mkfs.c include/fs.h
 	gcc -Werror -Wall -o mkfs tools/mkfs.c
 
@@ -597,7 +606,6 @@ UPROGS=\
 	_netstat\
 	_netcat\
 	_6get\
-	_abrowse\
 	_telnet\
 	_runlevel\
 	_telinit\
@@ -637,6 +645,9 @@ UPROGS=\
 	_server7\
 	_dash\
 	_symlinktest\
+	_nftwtest\
+	_ftwtest\
+	_ftstest\
 
 # Old-init fallback set for machines without ports/dash.
 UPROGS_OLDINIT = $(filter-out _dash _init,$(UPROGS)) _v6init

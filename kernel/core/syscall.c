@@ -130,6 +130,7 @@ extern int sys_read(void);
 extern int sys_sbrk(void);
 extern int sys_sleep(void);
 extern int sys_unlink(void);
+extern int sys_rmdir(void);
 extern int sys_wait(void);
 extern int sys_write(void);
 extern int sys_uptime(void);
@@ -175,6 +176,8 @@ extern int sys_getsockopt(void);
 extern int sys_shutdown(void);
 extern int sys_getsockname(void);
 extern int sys_getpeername(void);
+extern int sys_getrlimit(void);
+extern int sys_setrlimit(void);
 
 static int (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -220,6 +223,7 @@ static int (*syscalls[])(void) = {
 [SYS_write]   sys_write,
 [SYS_mknod]   sys_mknod,
 [SYS_unlink]  sys_unlink,
+[SYS_rmdir]   sys_rmdir,
 [SYS_link]    sys_link,
 [SYS_rename]  sys_rename,
 [SYS_mkdir]   sys_mkdir,
@@ -270,6 +274,8 @@ static int (*syscalls[])(void) = {
 [SYS_shutdown] sys_shutdown,
 [SYS_getsockname] sys_getsockname,
 [SYS_getpeername] sys_getpeername,
+[SYS_getrlimit] sys_getrlimit,
+[SYS_setrlimit] sys_setrlimit,
 };
 
 void
