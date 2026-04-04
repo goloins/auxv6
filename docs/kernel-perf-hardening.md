@@ -397,6 +397,13 @@ Latest confirmed results are now best read as a phase timeline:
     - `fsperf -n 3`: one transient low outlier (`52/100`) amid otherwise normal
        runs; confirmation `fsperf -n 5` stabilized at `85/100` avg (min 85, max 85)
     - Outcome: promote slice-1; treat low fsperf single run as host-noise outlier.
+- Phase 4 slice-2 COW scope expansion validated:
+    - `/proc/vmstat`: `ref_increments 371`, `deferred_frees 371`
+    - `kallocstress -n 3`: `92/100` avg (min 92, max 92)
+    - `schedperf -n 3`: `87/100` avg (min 87, max 88)
+    - `fsperf -n 3`: `87/100` avg (min 87, max 87)
+    - Outcome: best combined score band in the current Track 0/Phase 4 cycle
+       with stable behavior; keep mapping scope fixed and harden correctness next.
 
 Scores show meaningful run-to-run variance (~5–10 pts) driven by host scheduler
 load rather than code changes.  Use `schedperf -n 3` / `fsperf -n 3` /

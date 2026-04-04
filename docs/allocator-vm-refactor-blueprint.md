@@ -608,8 +608,13 @@ Implementation status (2026-04-04, slice 2):
 	- writable managed user mappings still use explicit COW path
 	- unmanaged or non-user mappings remain on dense-copy behavior
 - next gate:
-	- guest validation (`/proc/vmstat`, `kallocstress`, `schedperf`, `fsperf`)
-	  before any broader COW mapping-class expansion
+	- completed with strong results:
+	  - `/proc/vmstat`: `ref_increments 371`, `deferred_frees 371`
+	  - `kallocstress -n 3`: `92/100` avg
+	  - `schedperf -n 3`: `87/100` avg
+	  - `fsperf -n 3`: `87/100` avg
+	- decision: promote slice-2 as current best baseline; pause scope expansion
+	  and harden correctness/coverage around current COW behavior first
 
 ### Phase 5: child-list wait and reap
 

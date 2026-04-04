@@ -175,7 +175,13 @@ Primary goal: consolidate recent kernel-core and userland wins into a dependable
 - Phase 4 slice-2 is now landed (build clean):
   - COW fault handling is now gated to true user write-protection faults (`present=1`, `write=1`) before invoking `cow_fault()`.
   - `copyuvm()` now additionally shares safe read-only managed user pages directly (refcounted) instead of dense-copying them.
-- Next immediate action: guest-validate slice-2 stability and benchmark envelope before expanding COW coverage further.
+- Phase 4 slice-2 guest validation is complete and strongly positive:
+  - `/proc/vmstat` shows expected COW activity growth (`ref_increments 371`, `deferred_frees 371`).
+  - `kallocstress -n 3`: `92/100` avg (92-92)
+  - `schedperf -n 3`: `87/100` avg (87-88)
+  - `fsperf -n 3`: `87/100` avg (87-87)
+- Phase 4 slice-2 interpretation: this is the best combined allocator/scheduler/filesystem benchmark band in the current track while remaining stable.
+- Next immediate action: keep current COW mapping scope fixed and do correctness hardening (fault-path invariants + focused regression probes like `stackgrowtest`/fork-heavy suites) before any wider COW class expansion.
 
 ### Tranche A - Storage reliability hardening
 - Virtio-blk: keep bounded retry policy but tighten transient-vs-fatal error accounting and operator-visible diagnostics.
