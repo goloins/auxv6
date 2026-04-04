@@ -21,7 +21,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 |-----------|--------|-------|
 | VFS Layer | 90% | Multi-backend, mount table, longest-prefix matching |
 | ext2 filesystem | 90% | Read/write, directory create/link/unlink/rename, inode/block allocation, rollback hardening, and default rootfs build target |
-| FAT/msdosfs | 80% | ~1650 LOC, FAT12/16/32, short/long filenames |
+| FAT/msdosfs | 84% | ~1650 LOC, FAT16/32 backend in-tree, short/long filenames, and validated FAT16 NVMe test-image workflow (`qemu-nvme-fat`) |
 | TCP/IP stack | 82% | UDP works, DNS/resolver works, TCP handshake + data + retransmission + teardown work, and raw-socket tooling (`ping`, `traceroute`) is in place; flow control still basic |
 | Process model | 85% | fork/exec/wait, process groups, sessions |
 | Job control | 82% | setpgid, setsid, tcsetpgrp, terminal control, and tty-stop behavior integrated with the PTY stack |
@@ -43,10 +43,10 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | POSIX compatibility layer | 79% | Broader tty/ioctl compatibility, dynamic `openpty`/`ptsname_r` path, truthful time/stdio tranche work, `getrlimit`/`setrlimit`, minimal `netdb`, shell/text traversal helpers (`fnmatch`, `glob`, `scandir`, `nftw`, `fts`), C-locale scaffolding, and corrected `unlink`/`rmdir` semantics are in-tree; identity/account and stdio follow-on work remain |
 | Userland docs/manpages | 82% | `man` now renders richer markdown and the tree ships 90+ documented utilities, but coverage depth and maintenance discipline still need work |
 | Graphics / framebuffer console | 72% | Framebuffer core, display registry, builtin font/render path, rich `/proc/gfxstats`, virtio-gpu scanout discovery, display-sized framebuffer allocation, display-derived readable boot geometry, stable mirror behavior, ownership plumbing for server7, and recent sync-path speedups are landed; CGA still owns the canonical console path, virtio-gpu still uses whole-frame uploads, and no `/dev/fb0` or `/dev/dri/card0` ABI exists yet |
-| procfs | 78% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`, `/proc/meminfo`, `/proc/ps`, `/proc/loadavg`, `/proc/mountstats`, `/proc/gfxstats`, `/proc/lsof`, `/proc/server7`; breadth is now solid but per-process drill-down remains sparse |
+| procfs | 80% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`, `/proc/meminfo`, `/proc/ps`, `/proc/loadavg`, `/proc/mountstats`, `/proc/gfxstats`, `/proc/lsof`, `/proc/server7`, `/proc/bdev_table`; breadth is now solid but per-process drill-down remains sparse |
 | Real NICs | 60% | E1000, PCNET, and RTL8111 have full ifnet integration; virtio-net continues to improve; VMXnet3 has a basic polling datapath; netvsc, I219-V, I226-V, and AX88179 PCI remain stub-grade |
 | Device node management | 68% | `devman -s` creates `/dev` nodes at early runlevel from kernel-visible inventory and `/etc/devman.conf` can tune verbosity, but policy rules, cleanup mode, and hotplug/event support are still pending |
-| Modern storage | 88% | AHCI now has interrupt-driven completions, slot allocation, telemetry, and fault-injection hooks; NVMe correctness hardening complete (polled-only IRQ model, monotonic CID counter, recovery memory-safety, shutdown notification, LBA-size guard); NVMe timeout/reset recovery path is in place |
+| Modern storage | 91% | AHCI now has interrupt-driven completions, slot allocation, telemetry, and fault-injection hooks; NVMe correctness hardening complete (polled-only IRQ model, monotonic CID counter, recovery memory-safety, shutdown notification, LBA-size guard), dev-number collision with loop devices fixed, and ext2/ext2fs mount alias validated on `/dev/nda`; NVMe timeout/reset recovery path is in place |
 
 ### 🚧 Early Or Stubbed (0-49%)
 | Subsystem | Status | Notes |
@@ -64,6 +64,9 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - `abrowse(1)` landed as a text-mode browser layered on the existing HTTP client path.
 - Server7 now has a dedicated boot profile, `/proc/server7` ownership control, and session-aware startup policy scaffolding.
 - Documentation/manpage coverage expanded substantially, with markdown-aware `man(1)` support and a much broader default userland.
+- NVMe/loop device-number collision was fixed by moving loop base to dev 44, restoring stable `nda` visibility in `lsblk` and successful NVMe ext2 mounting.
+- Storage diagnostics improved with `/proc/bdev_table` and `lsblk -v`, making block-device registration/capacity state directly inspectable.
+- `qemu-nvme-fat` image generation now uses dosfstools (`mkfs.fat`/`mkdosfs`) and produces a deterministic FAT16 image containing a known `README.TXT` marker for quick validation.
 
 ---
 
@@ -124,6 +127,10 @@ Primary goal: consolidate recent kernel-core and userland wins into a dependable
 - Virtio-blk retry telemetry and stress tooling are in-tree.
 - AHCI recovery instrumentation, fault injection, and soak-oriented tuning hooks are in-tree.
 - NVMe: spurious-IRQ bug fixed (polled-only mode), recovery memory leak and admin queue state reset fixed, monotonic CID counter added, LBA>BSIZE guard added, shutdown notification (`nvme_shutdown`) added and called from `sys_halt`.
+- NVMe/loop dev-number collision fixed (`loop0..7` moved to dev 44-51); downstream userspace mapping (`mount`, `devman`) updated.
+- `sys_mount` now accepts both `ext2` and `ext2fs` for ext2 backend selection.
+- NVMe ext2 mount path validated with both numeric dev (`mount 40 ext2fs /mnt`) and name-based dev (`mount /dev/nda ext2fs /mnt`).
+- FAT16 NVMe test image workflow validated under `sudo make qemu-nvme-fat`; generated image includes deterministic `README.TXT` content for no-mount hex-level verification.
 
 **Definition of done:**
 - `lsblk`/mount behavior remains stable across repeated attach/mount/unmount cycles on virtio-blk, AHCI, and NVMe.
@@ -387,6 +394,16 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 - [x] No hardcoded device-0 behavior remains in I/O and capacity paths
 - [x] Flush/discard/write-zeroes are feature-gated and return deterministic errors when unsupported
 - [x] Stress pass: repeated mount/write/umount/remount cycles complete without data corruption (`make test-virtioblk-mount-stress`)
+
+#### 3.2 NVMe + FAT16 Validation Path [COMPLETE]
+**Status:** Validated 2026-04-03.  
+**Files:** `kernel/driver/loop.c`, `kernel/core/sysfile.c`, `kernel/fs/procfs.c`, `kernel/core/blockdev.c`, `user/lsblk.c`, `user/mount.c`, `user/devman.c`, `Makefile`, `docs/nvme-driver.md`  
+**Definition of done:**
+- [x] Fixed dev-number overlap that let loop registration overwrite NVMe (`ND_DISK_BASE` at 40, loop moved to 44-51)
+- [x] Added low-friction block-device diagnostics (`/proc/bdev_table`, `lsblk -v`)
+- [x] Added `ext2fs` alias support in mount dispatch (alongside `ext2`)
+- [x] Confirmed NVMe ext2 mounts via both numeric and `/dev/nda` forms
+- [x] Confirmed `qemu-nvme-fat` produces mountable FAT16 media with deterministic `README.TXT` marker bytes
 
 #### 5.3 Loop Devices [COMPLETE]
 **Status:** Implemented 2026-03-31; hardened 2026-04-01  
