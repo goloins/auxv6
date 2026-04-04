@@ -596,6 +596,21 @@ Implementation status (2026-04-04, slice 1):
 	  stabilized at `85/100` avg
 	- decision: promote slice-1 and proceed to slice-2 scope expansion
 
+Implementation status (2026-04-04, slice 2):
+- landed in-tree
+- host build clean (`sudo make aux.kern`)
+- correctness and scope updates:
+	- page-fault COW resolution now runs only on user write-protection faults
+	  (`present=1`, `write=1`) before stack-growth fallback
+	- `copyuvm()` now directly shares read-only managed user mappings with
+	  refcount bumps instead of dense-copying them
+- safety guard:
+	- writable managed user mappings still use explicit COW path
+	- unmanaged or non-user mappings remain on dense-copy behavior
+- next gate:
+	- guest validation (`/proc/vmstat`, `kallocstress`, `schedperf`, `fsperf`)
+	  before any broader COW mapping-class expansion
+
 ### Phase 5: child-list wait and reap
 
 Purpose:

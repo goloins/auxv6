@@ -483,12 +483,22 @@ copyuvm(pde_t *pgdir, uint sz)
     pa = PTE_ADDR(*pte);
     flags = PTE_FLAGS(*pte);
 
-    // Phase 4 slice 1: share writable user pages as read-only COW.
-    if((flags & PTE_U) && (flags & PTE_W) && kpage_is_managed(pa)){
-      cow_flags = (flags | PTE_COW) & ~PTE_W;
+    if((flags & PTE_U) && kpage_is_managed(pa)){
+      // Phase 4 slice 1: writable user pages become read-only COW-shared.
+      if(flags & PTE_W){
+        cow_flags = (flags | PTE_COW) & ~PTE_W;
+        kpage_incref(pa);
+        if(mappages(d, (void*)i, PGSIZE, pa, cow_flags) < 0){
+          // Undo ref bump if child map install fails.
+          kfree(P2V(pa));
+          goto bad;
+        }
+        continue;
+      }
+
+      // Phase 4 slice 2: safe sharing for read-only managed user pages.
       kpage_incref(pa);
-      if(mappages(d, (void*)i, PGSIZE, pa, cow_flags) < 0){
-        // Undo ref bump if child map install fails.
+      if(mappages(d, (void*)i, PGSIZE, pa, flags) < 0){
         kfree(P2V(pa));
         goto bad;
       }

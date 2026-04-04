@@ -172,7 +172,10 @@ Primary goal: consolidate recent kernel-core and userland wins into a dependable
   - `schedperf -n 3`: `82/100` avg (82-82)
   - `fsperf -n 3`: one transient low run (`52/100`) but follow-up `fsperf -n 5` stabilized at `85/100` avg (85-85).
 - Phase 4 interpretation: COW slice-1 behavior is functionally correct and performance-stable in averaged runs; the single low fsperf run is treated as host-noise/outlier.
-- Next immediate action: proceed to Phase 4 slice-2 scope expansion while preserving current guardrails.
+- Phase 4 slice-2 is now landed (build clean):
+  - COW fault handling is now gated to true user write-protection faults (`present=1`, `write=1`) before invoking `cow_fault()`.
+  - `copyuvm()` now additionally shares safe read-only managed user pages directly (refcounted) instead of dense-copying them.
+- Next immediate action: guest-validate slice-2 stability and benchmark envelope before expanding COW coverage further.
 
 ### Tranche A - Storage reliability hardening
 - Virtio-blk: keep bounded retry policy but tighten transient-vs-fatal error accounting and operator-visible diagnostics.
