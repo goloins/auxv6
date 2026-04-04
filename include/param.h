@@ -17,3 +17,5 @@
 #define USER_STACK_GUARD_PAGES 1
 #define USER_STACK_PAGES       4
 
+#define NSOCKET 64              /* max open sockets system-wide */
+

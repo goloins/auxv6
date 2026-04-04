@@ -13,6 +13,7 @@ struct spinlock;
 struct sleeplock;
 struct stat;
 struct socket;
+struct socket_info_k;
 struct sockaddr_in;
 struct ifnet;
 struct arp_info;
@@ -562,6 +563,7 @@ void            socket_poll_events(struct socket*, int*, int*, int*);
 int             ksock_open_udp(struct socket**);
 int             ksock_sendto(struct socket*, struct sockaddr_in*, char*, uint);
 int             ksock_recvfrom_timeout(struct socket*, char*, uint, int, struct sockaddr_in*);
+int             socket_get_table(struct socket_info_k *out, int max);
 
 // net device layer
 void            netdev_init(void);

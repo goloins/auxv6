@@ -14,7 +14,6 @@
 #include "../../include/socket.h"
 #include "../../include/net.h"
 
-#define NSOCKET 64
 struct socket sockets[NSOCKET];
 struct spinlock socket_lock;
 static ushort next_ephemeral = 40000;
@@ -1788,4 +1787,44 @@ socket_poll_events(struct socket *s, int *readable, int *writable, int *error)
     *error = err;
 
   release(&socket_lock);
+}
+
+/*
+ * socket_get_table - snapshot all non-closed sockets into caller's buffer.
+ *
+ * Acquires socket_lock, copies up to max entries, releases the lock, and
+ * returns the count of entries written (>= 0) or -1 on bad arguments.
+ * All address/port fields use host byte order.
+ */
+int
+socket_get_table(struct socket_info_k *out, int max)
+{
+  int i;
+  int n;
+  struct socket *s;
+
+  if(out == 0 || max <= 0)
+    return -1;
+
+  n = 0;
+  acquire(&socket_lock);
+  for(i = 0; i < NSOCKET && n < max; i++){
+    s = &sockets[i];
+    if(s->state == SOCK_CLOSED || s->ref == 0)
+      continue;
+    out[n].family     = s->family;
+    out[n].type       = s->type;
+    out[n].state      = s->state;
+    out[n].tcp_state  = s->tcp.state;
+    out[n].local_ip   = s->local_addr.sin_addr;
+    out[n].local_port = s->local_addr.sin_port;
+    out[n].remote_ip  = s->remote_addr.sin_addr;
+    out[n].remote_port= s->remote_addr.sin_port;
+    out[n].recv_len   = s->recv_len;
+    out[n].send_len   = s->send_len;
+    out[n].pid        = -1;
+    n++;
+  }
+  release(&socket_lock);
+  return n;
 }

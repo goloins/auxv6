@@ -10,6 +10,8 @@
 #include "fs.h"
 #include "fcntl.h"
 #include "file.h"
+#include "../../include/socket.h"
+#include "../../include/net.h"
 
 // Simple procfs implementation for testing mount system.
 
@@ -29,6 +31,9 @@
 #define PROCFS_SERVER7_INO  14
 #define PROCFS_LOADAVG_INO  15
 #define PROCFS_BDEV_TABLE_INO 16
+#define PROCFS_NET_TCP_INO    17   /* /proc/net_tcp  — TCP socket table */
+#define PROCFS_NET_UDP_INO    18   /* /proc/net_udp  — UDP socket table */
+#define PROCFS_NET_DEV_INO    19   /* /proc/net_dev  — interface counters */
 #define PROCFS_VERSION_STR  "a/ux86 aux86 i686\n"
 
 struct procfs_inode {
@@ -53,6 +58,9 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_SERVER7_INO, "server7", 256 },
   { PROCFS_LOADAVG_INO, "loadavg", 64 },
   { PROCFS_BDEV_TABLE_INO, "bdev_table", 4096 },
+  { PROCFS_NET_TCP_INO, "net_tcp", 4096 },
+  { PROCFS_NET_UDP_INO, "net_udp", 4096 },
+  { PROCFS_NET_DEV_INO, "net_dev", 1024 },
   { 0, 0, 0 }
 };
 
@@ -60,6 +68,10 @@ static struct procfs_inode procfs_inodes[] = {
 // the kernel stack avoids stack overflow in read-heavy paths.
 static struct procinfo_k procfs_read_pinfo[NPROC];
 static struct vfs_mount_info procfs_read_mounts[VFS_MOUNTS_MAX];
+// Net node snapshot + formatted output buffers.  Protected by the inode lock
+// held across procfs_readi calls, which serialises concurrent readers.
+static struct socket_info_k procfs_net_sockets[NSOCKET];
+static char procfs_net_outbuf[4096];
 
 static int procfs_writei(struct inode *ip, char *src, uint off, uint n);
 static uint procfs_write_uint(char *buf, uint value);
@@ -152,6 +164,38 @@ procfs_state_name(int state)
   case ZOMBIE:   return "zombie";
   default:       return "?";
   }
+}
+
+static const char*
+procfs_tcp_state_name(uint state)
+{
+  switch(state){
+  case TCPS_CLOSED:       return "CLOSED";
+  case TCPS_LISTEN:       return "LISTEN";
+  case TCPS_SYN_SENT:     return "SYN_SENT";
+  case TCPS_SYN_RECEIVED: return "SYN_RCVD";
+  case TCPS_ESTABLISHED:  return "ESTABLISHED";
+  case TCPS_FIN_WAIT_1:   return "FIN_WAIT_1";
+  case TCPS_FIN_WAIT_2:   return "FIN_WAIT_2";
+  case TCPS_CLOSE_WAIT:   return "CLOSE_WAIT";
+  case TCPS_LAST_ACK:     return "LAST_ACK";
+  case TCPS_TIME_WAIT:    return "TIME_WAIT";
+  default:                return "UNKNOWN";
+  }
+}
+
+/* Format a host-order IPv4 uint as dotted-quad into procfs output buf. */
+static int
+procfs_buf_put_ipv4(char *buf, uint max, uint *len, uint ip)
+{
+  if(procfs_buf_putu(buf, max, len, (ip >> 24) & 0xff) < 0) return -1;
+  if(procfs_buf_putc(buf, max, len, '.') < 0) return -1;
+  if(procfs_buf_putu(buf, max, len, (ip >> 16) & 0xff) < 0) return -1;
+  if(procfs_buf_putc(buf, max, len, '.') < 0) return -1;
+  if(procfs_buf_putu(buf, max, len, (ip >> 8) & 0xff) < 0) return -1;
+  if(procfs_buf_putc(buf, max, len, '.') < 0) return -1;
+  if(procfs_buf_putu(buf, max, len, ip & 0xff) < 0) return -1;
+  return 0;
 }
 
 static uint
@@ -427,7 +471,7 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     return -1;
   if(ip->inum == PROCFS_ROOT_INO){
     // Note: . and .. are synthesized by VFS for mount roots
-    struct dirent more_entries[15];
+    struct dirent more_entries[18];
     memset(more_entries, 0, sizeof(more_entries));
     more_entries[0].inum = PROCFS_UPTIME_INO;
     safestrcpy(more_entries[0].name, "uptime", DIRSIZ);
@@ -459,6 +503,12 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     safestrcpy(more_entries[13].name, "loadavg", DIRSIZ);
     more_entries[14].inum = PROCFS_BDEV_TABLE_INO;
     safestrcpy(more_entries[14].name, "bdev_table", DIRSIZ);
+    more_entries[15].inum = PROCFS_NET_TCP_INO;
+    safestrcpy(more_entries[15].name, "net_tcp", DIRSIZ);
+    more_entries[16].inum = PROCFS_NET_UDP_INO;
+    safestrcpy(more_entries[16].name, "net_udp", DIRSIZ);
+    more_entries[17].inum = PROCFS_NET_DEV_INO;
+    safestrcpy(more_entries[17].name, "net_dev", DIRSIZ);
     return procfs_copy_data(dst, off, n, (char*)more_entries, sizeof(more_entries));
   }
   if(ip->inum == PROCFS_VERSION_INO)
@@ -842,6 +892,136 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0) return -1;
 #undef LAVG_DIV
     return procfs_copy_data(dst, off, n, buf, len);
+  }
+  if(ip->inum == PROCFS_NET_TCP_INO || ip->inum == PROCFS_NET_UDP_INO){
+    /* Snapshot all sockets, then format matching ones into procfs_net_outbuf. */
+    int ns;
+    int si;
+    uint olen;
+    int want_stream;
+    const char *hdr;
+
+    want_stream = (ip->inum == PROCFS_NET_TCP_INO);
+    hdr = want_stream
+      ? "Local Address           Remote Address          State          RxBuf TxBuf\n"
+      : "Local Address           Remote Address          RxBuf TxBuf\n";
+
+    ns = socket_get_table(procfs_net_sockets, NSOCKET);
+    if(ns < 0)
+      ns = 0;
+
+    olen = 0;
+    if(procfs_buf_puts(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, hdr) < 0)
+      return -1;
+
+    for(si = 0; si < ns; si++){
+      struct socket_info_k *sk = &procfs_net_sockets[si];
+      int match;
+
+      if(want_stream)
+        match = (sk->type == SOCK_STREAM);
+      else
+        match = (sk->type == SOCK_DGRAM);
+
+      if(!match)
+        continue;
+
+      /* local ip:port */
+      if(procfs_buf_put_ipv4(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, sk->local_ip) < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+      if(procfs_buf_putc(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, ':') < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+      if(procfs_buf_putu(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, sk->local_port) < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+
+      /* pad to column 24 */
+      {
+        uint col = olen;
+        while(col < 24){ /* approximate; good enough for alignment */
+          if(procfs_buf_putc(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, ' ') < 0)
+            return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+          col++;
+        }
+      }
+
+      /* remote ip:port */
+      if(sk->remote_ip == 0 && sk->remote_port == 0){
+        if(procfs_buf_puts(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, "*:*") < 0)
+          return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+      } else {
+        if(procfs_buf_put_ipv4(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, sk->remote_ip) < 0)
+          return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+        if(procfs_buf_putc(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, ':') < 0)
+          return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+        if(procfs_buf_putu(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, sk->remote_port) < 0)
+          return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+      }
+
+      if(procfs_buf_putc(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, ' ') < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+
+      /* state (TCP only) */
+      if(want_stream){
+        const char *st = procfs_tcp_state_name(sk->tcp_state);
+        /* pad remote+state block to column 24+24=48 then print state */
+        if(procfs_buf_puts(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, st) < 0)
+          return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+        if(procfs_buf_putc(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, ' ') < 0)
+          return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+      }
+
+      /* rxbuf txbuf */
+      if(procfs_buf_putu(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, sk->recv_len) < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+      if(procfs_buf_putc(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, ' ') < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+      if(procfs_buf_putu(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, sk->send_len) < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+      if(procfs_buf_putc(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, '\n') < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+    }
+    return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+  }
+  if(ip->inum == PROCFS_NET_DEV_INO){
+    struct ifnet *ifp_iter;
+    uint olen;
+
+    olen = 0;
+    if(procfs_buf_puts(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen,
+                       "Iface    RxPkts   RxBytes  RxErr  TxPkts   TxBytes  TxErr\n") < 0)
+      return -1;
+
+    for(ifp_iter = if_first(); ifp_iter != 0; ifp_iter = if_next(ifp_iter)){
+      if(procfs_buf_puts(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, ifp_iter->if_xname) < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+      if(procfs_buf_putc(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, ' ') < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+      if(procfs_buf_putu(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, ifp_iter->if_ipackets) < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+      if(procfs_buf_putc(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, ' ') < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+      if(procfs_buf_putu(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, ifp_iter->if_ibytes) < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+      if(procfs_buf_putc(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, ' ') < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+      if(procfs_buf_putu(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, ifp_iter->if_ierrors) < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+      if(procfs_buf_putc(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, ' ') < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+      if(procfs_buf_putu(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, ifp_iter->if_opackets) < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+      if(procfs_buf_putc(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, ' ') < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+      if(procfs_buf_putu(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, ifp_iter->if_obytes) < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+      if(procfs_buf_putc(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, ' ') < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+      if(procfs_buf_putu(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, ifp_iter->if_oerrors) < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+      if(procfs_buf_putc(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, '\n') < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+    }
+    return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
   }
   if(ip->inum == PROCFS_BDEV_TABLE_INO){
     int r;

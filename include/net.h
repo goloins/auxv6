@@ -132,6 +132,13 @@ struct ifnet {
   struct ifnet_ops *if_ops;
   void (*if_input)(struct ifnet *ifp, struct mbuf *m);
   struct ifnet *if_next;
+  /* Per-interface traffic counters */
+  uint if_ipackets;   /* inbound packets delivered */
+  uint if_opackets;   /* outbound packets sent */
+  uint if_ibytes;     /* inbound bytes (after ethernet strip) */
+  uint if_obytes;     /* outbound bytes (after ethernet header prepend) */
+  uint if_ierrors;    /* inbound errors: dropped/malformed */
+  uint if_oerrors;    /* outbound errors: driver send failures */
 };
 
 struct route {

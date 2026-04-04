@@ -56,8 +56,15 @@ ether_output(struct ifnet *ifp, struct mbuf *m, const uchar *dst, ushort type)
 		m->len = ETHER_MIN_FRAME;
 	}
 
-	if(if_output(ifp, m) < 0)
-		return -1;
+	{
+		uint pktlen = m->len;
+		if(if_output(ifp, m) < 0){
+			ifp->if_oerrors++;
+			return -1;
+		}
+		ifp->if_opackets++;
+		ifp->if_obytes += pktlen;
+	}
 	return 0;
 }
 
@@ -105,6 +112,9 @@ ether_input(struct ifnet *ifp, struct mbuf *m)
 	type = net_ntohs(eh->type);
 	memmove(m->data, m->data + ETHER_HDR_LEN, m->len - ETHER_HDR_LEN);
 	m->len -= ETHER_HDR_LEN;
+
+	ifp->if_ipackets++;
+	ifp->if_ibytes += m->len;
 
 	if(type == NET_PROTO_IP)
 		ip_input(ifp, m);

@@ -161,5 +161,25 @@ struct socket {
   uchar shut_wr;        // SHUT_WR: write side shut down
 };
 
+/*
+ * Flat snapshot record produced by socket_get_table().
+ * Safe to read outside socket_lock once the snapshot is complete.
+ * All addresses and ports are in host byte order (same convention as
+ * the rest of this codebase).
+ */
+struct socket_info_k {
+  uint   family;       /* AF_INET */
+  uint   type;         /* SOCK_STREAM, SOCK_DGRAM, SOCK_RAW */
+  uint   state;        /* SOCK_* socket-level state */
+  uint   tcp_state;    /* TCPS_* for SOCK_STREAM; 0 otherwise */
+  uint   local_ip;     /* local address (host order) */
+  ushort local_port;   /* local port (host order) */
+  uint   remote_ip;    /* remote address (host order; 0 if unconnected) */
+  ushort remote_port;  /* remote port (host order; 0 if unconnected) */
+  uint   recv_len;     /* bytes pending in recv buffer */
+  uint   send_len;     /* bytes pending in send buffer */
+  int    pid;          /* owning process PID; -1 if not tracked */
+};
+
 
 #endif

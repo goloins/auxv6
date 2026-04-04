@@ -107,11 +107,13 @@ ip_input(struct ifnet *ifp, struct mbuf *m)
 		return;
 	}
 	if(ip_checksum(ip, hlen) != 0){
+		if(ifp) ifp->if_ierrors++;
 		mbuf_free(m);
 		return;
 	}
 	total_len = net_ntohs(ip->len);
 	if(total_len < hlen || total_len > m->len){
+		if(ifp) ifp->if_ierrors++;
 		mbuf_free(m);
 		return;
 	}
