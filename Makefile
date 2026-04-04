@@ -408,6 +408,9 @@ _sockettest: user/sockettest
 _su: user/su
 	cp user/su _su
 
+_testdaemon: user/testdaemon
+	cp user/testdaemon _testdaemon
+
 _whoami: user/whoami
 	cp user/whoami _whoami
 
@@ -651,6 +654,7 @@ UPROGS=\
 	_nftwtest\
 	_ftwtest\
 	_ftstest\
+	_testdaemon\
 
 # Old-init fallback set for machines without ports/dash.
 UPROGS_OLDINIT = $(filter-out _dash _init,$(UPROGS)) _v6init
@@ -737,7 +741,7 @@ clean:
 	user/server7 \
 	user/top \
 	user/date user/time user/killall user/halt \
-	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/dmesg user/tail user/lspci user/v6init \
+	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/dmesg user/tail user/lspci user/v6init user/testdaemon \
 	user/schedperf user/fsperf user/kallocstress
 
 # make a printout

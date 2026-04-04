@@ -164,7 +164,7 @@ Primary goal: consolidate recent kernel-core and userland wins into a dependable
 - Policy rules: `/etc/devman.conf` now supports `<glob-pattern> <octal-mode>` lines; first matching rule wins; built-in defaults are fallback only.
 - `strncpy`/`strncat` added to `user/string.c` (declarations in `include/string.h`) — the correct libc home.
 - `devman -c`: enumerates `/dev` and `/dev/pts`, stats each device node, and unlinks any not present in the current kernel inventory.
-- `devman -d`: double-fork + `setsid()` + stdin/stdout/stderr redirect to `/dev/null`; runs initial scan then loops `sleep(30)` → re-enumerate → cleanup. Acts as a lightweight stand-in until a kernel `/dev/devevent` fd is available.
+- `devman -d`: double-fork + `setsid()` + stdin/stdout/stderr redirect to `/dev/null`; runs initial scan then loops `sleep(30)` → re-enumerate → cleanup. **FIXME:** `-d` mode causes a bootloop in rc.3; currently using `-s` mode only in rc.S. Needs debugging with `testdaemon` diagnostic tool.
 - Hotplug event interface fully specified in `docs/future-devicenode-daemon.md`: `struct devman_event`, `/dev/devevent` ring-buffer design, daemon event loop sketch, and rollout stages.
 
 **Definition of done:** ✅ Met.
