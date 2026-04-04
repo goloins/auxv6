@@ -3,9 +3,9 @@
 
 echo "rc.S: begin"
 
-# Populate /dev with device nodes based on kernel inventory
-echo "rc.S: running devman to create device nodes"
-/bin/devman -s
+# Populate /dev with device nodes and start devman in background for cleanup
+echo "rc.S: running devman"
+/bin/devman -d
 
 # Mount filesystems listed in /etc/fstab.
 /bin/mount /etc/fstab
