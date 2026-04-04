@@ -91,7 +91,33 @@ Control filesystem and driver diagnostic output:
 | `DBG_IDE` | IDE driver diagnostics | `AUXV6_DEBUG` |
 | `DBG_EXEC` | exec/load diagnostics (including stack allocation policy) | `AUXV6_DEBUG` |
 | `DBG_AHCI` | AHCI controller diagnostics | 0 (always off) |
+| `DBG_NVME` | Deep NVMe bring-up tracing (reset/enable/identify/MSI disable) | 0 (always off) |
 | `DBG_VIRTIO_NET` | Verbose virtio-net queue/IRQ/poll diagnostics | 0 (always off) |
+
+### Block Device Table Snapshot (`/proc/bdev_table`)
+
+`/proc/bdev_table` dumps the raw kernel block device table — one line per
+registered device (slots with no ops pointer are omitted).
+
+**Read-only.** No writable controls.
+
+**Fields per line:**
+- `dev=N` — device index (matches `devblocks(N)` argument)
+- `nblocks=N` — capacity stored in the bdev table by `bdev_set_nblocks`
+- `is_part=N` — 1 if this is a partition entry, 0 for a whole-disk device
+- `parent=N` — parent device (for partitions; equals `dev` for disks)
+- `start=N` — partition start offset in blocks (0 for disks)
+- `has_nblocks_cb=N` — 1 if the driver supplies an `nblocks()` callback
+- `query=N` — effective block count as returned by `bdev_nblocks()` (what
+  `lsblk` and `sys_devblocks` see)
+
+**Example:**
+```
+cat /proc/bdev_table
+```
+
+Cross-reference with `lsblk -v` to see the exact `devblocks()` return value
+per slot from userspace.
 
 ### AHCI Runtime Tuning (`/proc/ahci_tune`)
 
@@ -151,6 +177,20 @@ echo test_fail_count=2 > /proc/ahci_tune
 | `nvme: initializing driver` | NVMe controller startup |
 | `virtio_blk: initializing driver` | Virtio block device startup |
 | `loop: initialized N loop devices` | Loop device subsystem init |
+
+### Runtime: NVMe Bring-Up Deep Trace
+**Flag:** `DBG_NVME`  
+**Files:** `kernel/driver/nvme.c`, `kernel/driver/pci.c`
+
+| Message | When |
+|---------|------|
+| `nvme: DBG_NVME=1 verbose bring-up tracing enabled` | NVMe driver init banner |
+| `pci: B:S.F disable_msi start ...` | Before walking PCI capabilities |
+| `pci: B:S.F cap@.. id=.. next=..` | Per-capability traversal during MSI/MSI-X disable |
+| `nvme: reset begin ...` / `reset complete ...` | Around CC=0 reset flow |
+| `nvme: enable begin ...` / `enable write cc=...` / `enable ready ...` / `enable intms=...` | Around AQA/ASQ/ACQ/CC programming, RDY polling, and post-reset interrupt re-mask |
+| `nvme: init before id_ctrl alloc` / `init before identify controller` | Narrowing crash window after controller ready |
+| `nvme: identify nsid=... cns=... cid=... prp1=...` | Admin IDENTIFY submission details |
 
 ### Boot: Network Device Discovery
 **Flag:** `AUXV6_BOOTINFO`  
@@ -243,6 +283,16 @@ make EXTRA_CFLAGS="-DAUXV6_NET_DEBUG=1" clean aux.kern
 ```bash
 make EXTRA_CFLAGS="-DDBG_VIRTIO_NET=1" clean aux.kern
 ```
+
+### Enable Only NVMe Bring-Up Logs
+```bash
+make EXTRA_CFLAGS="-DDBG_NVME=1" qemu-nvme
+# or: make qemu-nvme-dbg
+```
+
+Important: do not split this into `make ... aux.kern` followed by a separate
+plain `make qemu-nvme`. The second invocation resets `EXTRA_CFLAGS`, updates
+`.extra_cflags.stamp`, and rebuilds the kernel with `DBG_NVME=0`.
 
 ### Enable Both Boot and Network Debugging
 ```bash
@@ -353,6 +403,7 @@ connect: <internal handling>
 #define EXT2DBG(...)  do { if(DBG_EXT2) cprintf(__VA_ARGS__); } while(0)
 #define IDEDBG(...)   do { if(DBG_IDE) cprintf(__VA_ARGS__); } while(0)
 #define AHCIDBG(...)  do { if(DBG_AHCI) cprintf(__VA_ARGS__); } while(0)
+#define NVMEDBG(...)  do { if(DBG_NVME) cprintf(__VA_ARGS__); } while(0)
 ```
 
 ### Zero Overhead When Disabled

@@ -289,7 +289,7 @@ devman_enumerate_block_devices(void)
 
   /* Loop devices */
   for(unit = 0; unit < 8; unit++) {
-    dev = 40 + unit;
+    dev = 44 + unit;
     if(devblocks(dev) > 0) {
       strcpy(path, "/dev/loop0");
       path[9] = '0' + unit;

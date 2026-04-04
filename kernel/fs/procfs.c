@@ -28,6 +28,7 @@
 #define PROCFS_NVME_TUNE_INO 13
 #define PROCFS_SERVER7_INO  14
 #define PROCFS_LOADAVG_INO  15
+#define PROCFS_BDEV_TABLE_INO 16
 #define PROCFS_VERSION_STR  "a/ux86 aux86 i686\n"
 
 struct procfs_inode {
@@ -51,6 +52,7 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_NVME_TUNE_INO, "nvme_tune", 2048 },
   { PROCFS_SERVER7_INO, "server7", 256 },
   { PROCFS_LOADAVG_INO, "loadavg", 64 },
+  { PROCFS_BDEV_TABLE_INO, "bdev_table", 4096 },
   { 0, 0, 0 }
 };
 
@@ -239,6 +241,10 @@ procfs_fill_inode(struct inode *ip, uint inum)
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
     ip->size = 64;
+  } else if(inum == PROCFS_BDEV_TABLE_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
+    ip->size = 4096;
   } else {
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
@@ -421,7 +427,7 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     return -1;
   if(ip->inum == PROCFS_ROOT_INO){
     // Note: . and .. are synthesized by VFS for mount roots
-    struct dirent more_entries[14];
+    struct dirent more_entries[15];
     memset(more_entries, 0, sizeof(more_entries));
     more_entries[0].inum = PROCFS_UPTIME_INO;
     safestrcpy(more_entries[0].name, "uptime", DIRSIZ);
@@ -451,6 +457,8 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     safestrcpy(more_entries[12].name, "server7", DIRSIZ);
     more_entries[13].inum = PROCFS_LOADAVG_INO;
     safestrcpy(more_entries[13].name, "loadavg", DIRSIZ);
+    more_entries[14].inum = PROCFS_BDEV_TABLE_INO;
+    safestrcpy(more_entries[14].name, "bdev_table", DIRSIZ);
     return procfs_copy_data(dst, off, n, (char*)more_entries, sizeof(more_entries));
   }
   if(ip->inum == PROCFS_VERSION_INO)
@@ -834,6 +842,14 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0) return -1;
 #undef LAVG_DIV
     return procfs_copy_data(dst, off, n, buf, len);
+  }
+  if(ip->inum == PROCFS_BDEV_TABLE_INO){
+    int r;
+
+    r = bdev_format_table(buf, sizeof(buf));
+    if(r < 0)
+      return -1;
+    return procfs_copy_data(dst, off, n, buf, (uint)r);
   }
   if(ip->inum != PROCFS_UPTIME_INO)
     return -1;

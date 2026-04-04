@@ -4,6 +4,7 @@
 
 static struct mountinfo g_mounts[MOUNTINFO_MAX];
 static int g_nmounts;
+static int g_verbose;
 
 static const struct mountinfo*
 find_mount_for_dev(int dev)
@@ -94,6 +95,9 @@ print_one(char *name, int dev, char *kind)
   const struct mountinfo *mi;
 
   blocks = devblocks(dev);
+  if(g_verbose)
+    dprintf(1, "  probe dev=%2d (%s) -> %d blocks%s\n",
+            dev, name, blocks, blocks <= 0 ? " [skipped]" : "");
   if(blocks <= 0)
     return;
 
@@ -206,15 +210,24 @@ print_cdroms(void)
 int
 main(int argc, char *argv[])
 {
-  if(argc != 1){
-    dprintf(2, "usage: lsblk\n");
-    exit(1);
+  int i;
+
+  g_verbose = 0;
+  for(i = 1; i < argc; i++){
+    if(strcmp(argv[i], "-v") == 0)
+      g_verbose = 1;
+    else {
+      dprintf(2, "usage: lsblk [-v]\n");
+      exit(1);
+    }
   }
 
   g_nmounts = mountinfo(g_mounts, MOUNTINFO_MAX);
   if(g_nmounts < 0)
     g_nmounts = 0;
 
+  if(g_verbose)
+    dprintf(1, "--- probing all block device slots ---\n");
   dprintf(1, "NAME     DEV TYPE  BLOCKS  MOUNT\n");
   print_family('h', HD_DISK_UNITS, HD_PARTS_PER_DISK);
   print_cdroms();

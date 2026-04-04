@@ -46,6 +46,7 @@ int             bdev_register_part(uint dev, uint parent, uint start, uint nbloc
 int             bdev_set_nblocks(uint dev, uint nblocks);
 int             bdevrw(struct buf *b);
 uint            bdev_nblocks(uint dev);
+int             bdev_format_table(char *buf, int max);
 
 // console.c
 struct console_gfx_debug_info {
@@ -156,6 +157,10 @@ void            pty_poll_events(struct file *f, int *rd, int *wr, int *err);
 #define DBG_AHCI 1
 #endif
 
+#ifndef DBG_NVME
+#define DBG_NVME 0
+#endif
+
 #ifndef DBG_VIRTIO_NET
 #define DBG_VIRTIO_NET 0
 #endif
@@ -171,6 +176,7 @@ void            pty_poll_events(struct file *f, int *rd, int *wr, int *err);
 #define IDEDBG(...)   do { if(DBG_IDE) cprintf(__VA_ARGS__); } while(0)
 #define EXECDBG(...)  do { if(DBG_EXEC) cprintf(__VA_ARGS__); } while(0)
 #define AHCIDBG(...)  do { if(DBG_AHCI) cprintf(__VA_ARGS__); } while(0)
+#define NVMEDBG(...)  do { if(DBG_NVME) cprintf(__VA_ARGS__); } while(0)
 #define VNETDBG(...)  do { if(DBG_VIRTIO_NET) cprintf(__VA_ARGS__); } while(0)
 
 // Boot information macro - for verbose discovery and enumeration details
@@ -263,6 +269,7 @@ int             ahci_set_tune(const char *buf, int n);
 
 // nvme.c
 void            nvme_init(void);
+void            nvme_shutdown(void);
 int             nvme_get_tune(char *buf, int max);
 int             nvme_set_tune(const char *buf, int n);
 

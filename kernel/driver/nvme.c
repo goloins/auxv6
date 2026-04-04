@@ -199,7 +199,7 @@ struct nvme_id_ns {
 
 /* Queue configuration */
 #define NVME_ADMIN_QUEUE_SIZE  64
-#define NVME_IO_QUEUE_SIZE     256
+#define NVME_IO_QUEUE_SIZE     64   /* kalloc() gives one 4096-byte page; 64×64B SQ = 4096 bytes exactly */
 
 /* Per-queue state */
 struct nvme_queue {
@@ -216,7 +216,7 @@ struct nvme_queue {
     volatile uint32_t *sq_doorbell;
     volatile uint32_t *cq_doorbell;
     
-    struct sleeplock lock;
+    struct spinlock  lock;
 };
 
 /* Per-controller state */
@@ -254,6 +254,9 @@ struct nvme_softc {
     
     /* Block device ID */
     uint dev_id;
+
+    /* Monotonic command ID counter — wraps at 0xFFFF, skips 0 */
+    uint16_t next_cid;
 };
 
 /* Global array of NVMe controllers */
@@ -416,6 +419,11 @@ static int
 nvme_wait_ready(struct nvme_softc *sc, int expected)
 {
     uint32_t timeout = NVME_CAP_TO(sc->cap) * 500;  /* timeout in ms */
+    uint32_t first_csts;
+
+    first_csts = nvme_read32(sc, NVME_REG_CSTS);
+    NVMEDBG("nvme: wait_ready expected=%d timeout_ms=%d csts0=%x\n",
+            expected, timeout, first_csts);
     
     for (uint32_t i = 0; i < timeout; i++) {
         uint32_t csts = nvme_read32(sc, NVME_REG_CSTS);
@@ -425,8 +433,10 @@ nvme_wait_ready(struct nvme_softc *sc, int expected)
             return -1;
         }
         
-        if ((csts & NVME_CSTS_RDY) == expected)
+        if ((csts & NVME_CSTS_RDY) == expected) {
+            NVMEDBG("nvme: wait_ready done iter=%d csts=%x\n", i, csts);
             return 0;
+        }
         
         microdelay(1000);
     }
@@ -441,12 +451,18 @@ nvme_wait_ready(struct nvme_softc *sc, int expected)
 static int
 nvme_reset(struct nvme_softc *sc)
 {
+    NVMEDBG("nvme: reset begin cc=%x csts=%x\n",
+            nvme_read32(sc, NVME_REG_CC), nvme_read32(sc, NVME_REG_CSTS));
+
     /* Disable controller */
     nvme_write32(sc, NVME_REG_CC, 0);
     
     /* Wait for not ready */
     if (nvme_wait_ready(sc, 0) < 0)
         return -1;
+
+    NVMEDBG("nvme: reset complete cc=%x csts=%x\n",
+            nvme_read32(sc, NVME_REG_CC), nvme_read32(sc, NVME_REG_CSTS));
     
     return 0;
 }
@@ -463,7 +479,7 @@ nvme_queue_init(struct nvme_softc *sc, struct nvme_queue *q, int qid, int depth)
     q->cq_head = 0;
     q->cq_phase = 1;
     
-    initsleeplock(&q->lock, "nvme_q");
+    initlock(&q->lock, "nvme_q");
     
     /* Allocate submission queue */
     q->sq = (struct nvme_sqe *)kalloc();
@@ -491,18 +507,32 @@ nvme_queue_init(struct nvme_softc *sc, struct nvme_queue *q, int qid, int depth)
 static int
 nvme_submit_cmd(struct nvme_queue *q, struct nvme_sqe *cmd)
 {
-    acquiresleep(&q->lock);
+    uint16_t old_tail;
+
+    acquire(&q->lock);
+    old_tail = q->sq_tail;
+
+    NVMEDBG("nvme: submit qid=%d tail=%d cid=%d opc=%x nsid=%d db=%p\n",
+        q->qid, old_tail, cmd->cid, cmd->opcode, cmd->nsid, q->sq_doorbell);
     
     /* Copy command to submission queue */
     memmove(&q->sq[q->sq_tail], cmd, sizeof(*cmd));
     
     /* Advance tail */
     q->sq_tail = (q->sq_tail + 1) % q->depth;
+
+    NVMEDBG("nvme: submit copied qid=%d tail=%d->%d sqe0=%x cdw10=%x\n",
+        q->qid, old_tail, q->sq_tail, q->sq[old_tail].opcode,
+        q->sq[old_tail].cdw10);
     
     /* Ring doorbell */
+    NVMEDBG("nvme: submit ring qid=%d doorbell=%p val=%d\n",
+        q->qid, q->sq_doorbell, q->sq_tail);
     *q->sq_doorbell = q->sq_tail;
+    NVMEDBG("nvme: submit rung qid=%d doorbell=%p val=%d\n",
+        q->qid, q->sq_doorbell, q->sq_tail);
     
-    releasesleep(&q->lock);
+    release(&q->lock);
     
     return 0;
 }
@@ -522,6 +552,9 @@ nvme_poll_completion(struct nvme_softc *sc, struct nvme_queue *q,
     if (loops < 1)
         loops = 1;
 
+    NVMEDBG("nvme: poll qid=%d cid=%d head=%d phase=%d loops=%d cq=%p db=%p\n",
+            q->qid, cid, q->cq_head, q->cq_phase, loops, q->cq, q->cq_doorbell);
+
     /* Poll for completion */
     for (i = 0; i < loops; i++) {
         uint32_t csts;
@@ -533,10 +566,17 @@ nvme_poll_completion(struct nvme_softc *sc, struct nvme_queue *q,
         }
 
         cqe = &q->cq[q->cq_head];
+        if (i < 4) {
+            NVMEDBG("nvme: poll iter=%d csts=%x cqe[cid=%d status=%x head=%d phase=%d]\n",
+                    i, csts, cqe->cid, cqe->status, q->cq_head, q->cq_phase);
+        }
         
         if (NVME_CQE_STATUS_PHASE(cqe->status) == q->cq_phase) {
             /* Got a completion */
             if (cqe->cid == cid) {
+                NVMEDBG("nvme: poll match cid=%d result=%x status=%x sqh=%d sqid=%d\n",
+                        cqe->cid, cqe->result, cqe->status,
+                        cqe->sq_head, cqe->sq_id);
                 if (result)
                     *result = cqe->result;
                 
@@ -549,6 +589,8 @@ nvme_poll_completion(struct nvme_softc *sc, struct nvme_queue *q,
                 
                 /* Update doorbell */
                 *q->cq_doorbell = q->cq_head;
+                NVMEDBG("nvme: poll cq doorbell=%p head=%d next_phase=%d\n",
+                    q->cq_doorbell, q->cq_head, q->cq_phase);
                 
                 /* Check status */
                 if (NVME_CQE_STATUS_SC(cqe->status) != 0) {
@@ -570,22 +612,44 @@ nvme_poll_completion(struct nvme_softc *sc, struct nvme_queue *q,
 }
 
 /*
+ * Allocate a unique command ID for this controller.
+ * Skips 0 (reserved); wraps from 0xFFFF back to 1.
+ * Caller must hold the relevant queue lock.
+ */
+static uint16_t
+nvme_alloc_cid(struct nvme_softc *sc)
+{
+    uint16_t cid;
+
+    sc->next_cid++;
+    if (sc->next_cid == 0)
+        sc->next_cid = 1;
+    cid = sc->next_cid;
+    return cid;
+}
+
+/*
  * Send IDENTIFY command
  */
 static int
 nvme_identify(struct nvme_softc *sc, uint32_t nsid, uint32_t cns, void *data)
 {
     struct nvme_sqe cmd;
+    uint16_t cid;
+
     memset(&cmd, 0, sizeof(cmd));
-    
+    cid = nvme_alloc_cid(sc);
     cmd.opcode = NVME_ADMIN_IDENTIFY;
     cmd.nsid = nsid;
     cmd.prp1 = V2P(data);
     cmd.cdw10 = cns;
-    cmd.cid = 1;
+    cmd.cid = cid;
+
+    NVMEDBG("nvme: identify nsid=%d cns=%d cid=%d prp1=%x\n",
+            nsid, cns, cid, (uint32_t)cmd.prp1);
     
     nvme_submit_cmd(&sc->admin_q, &cmd);
-    return nvme_poll_completion(sc, &sc->admin_q, 1, 0);
+    return nvme_poll_completion(sc, &sc->admin_q, cid, 0);
 }
 
 static struct nvme_softc *
@@ -623,14 +687,14 @@ nvme_create_io_queues(struct nvme_softc *sc)
     /* Create I/O Completion Queue (IOCQ) */
     memset(&cmd, 0, sizeof(cmd));
     cmd.opcode = NVME_ADMIN_CREATE_CQ;
-    cmd.cid = 2;
+    cmd.cid = nvme_alloc_cid(sc);
     cmd.prp1 = V2P(ioq->cq);
     dw10 = ((NVME_IO_QUEUE_SIZE - 1) << 16) | 1;  /* size | qid */
     cmd.cdw10 = dw10;
     cmd.cdw11 = 1;  /* Physically contiguous */
     
     nvme_submit_cmd(&sc->admin_q, &cmd);
-    if (nvme_poll_completion(sc, &sc->admin_q, 2, 0) < 0) {
+    if (nvme_poll_completion(sc, &sc->admin_q, cmd.cid, 0) < 0) {
         cprintf("nvme: create IO CQ failed\n");
         return -1;
     }
@@ -638,21 +702,20 @@ nvme_create_io_queues(struct nvme_softc *sc)
     /* Create I/O Submission Queue (IOSQ) */
     memset(&cmd, 0, sizeof(cmd));
     cmd.opcode = NVME_ADMIN_CREATE_SQ;
-    cmd.cid = 3;
+    cmd.cid = nvme_alloc_cid(sc);
     cmd.prp1 = V2P(ioq->sq);
     dw10 = ((NVME_IO_QUEUE_SIZE - 1) << 16) | 1;  /* size | qid */
     cmd.cdw10 = dw10;
     cmd.cdw11 = (1 << 16) | 1;  /* CQID=1 | Physically contiguous */
     
     nvme_submit_cmd(&sc->admin_q, &cmd);
-    if (nvme_poll_completion(sc, &sc->admin_q, 3, 0) < 0) {
+    if (nvme_poll_completion(sc, &sc->admin_q, cmd.cid, 0) < 0) {
         cprintf("nvme: create IO SQ failed\n");
         return -1;
     }
     
     sc->num_io_queues = 1;
     cprintf("nvme: created I/O queue pair\n");
-    
     return 0;
 }
 
@@ -679,8 +742,12 @@ nvme_do_rw(struct nvme_softc *sc, uint64_t lba, void *data, int is_write)
     
     /* Calculate number of LBAs based on BSIZE and device LBA size */
     nlb = BSIZE / sc->lba_size;
-    if (nlb == 0)
-        nlb = 1;
+    if (nlb == 0) {
+        /* Drive uses LBAs larger than our buffer — not supported */
+        cprintf("nvme: lba_size=%d > BSIZE=%d, cannot issue I/O\n",
+                sc->lba_size, BSIZE);
+        return -1;
+    }
     
     /* Prepare command */
     memset(&cmd, 0, sizeof(cmd));
@@ -696,8 +763,8 @@ nvme_do_rw(struct nvme_softc *sc, uint64_t lba, void *data, int is_write)
     /* CDW12: NLB (0-based count) */
     cmd.cdw12 = nlb - 1;
     
-    /* Command ID - use a simple counter */
-    cid = (uint16_t)((ioq->sq_tail + 100) & 0xFFFF);
+    /* Command ID - use per-controller monotonic counter */
+    cid = nvme_alloc_cid(sc);
     cmd.cid = cid;
     
     max_attempts = 1 + nvme_rw_retries;
@@ -705,7 +772,7 @@ nvme_do_rw(struct nvme_softc *sc, uint64_t lba, void *data, int is_write)
         max_attempts = 1;
 
     for (attempt = 0; attempt < max_attempts; attempt++) {
-        acquiresleep(&ioq->lock);
+        acquire(&ioq->lock);
 
         /* Copy command to submission queue */
         memmove(&ioq->sq[ioq->sq_tail], &cmd, sizeof(cmd));
@@ -714,7 +781,7 @@ nvme_do_rw(struct nvme_softc *sc, uint64_t lba, void *data, int is_write)
         ioq->sq_tail = (ioq->sq_tail + 1) % ioq->depth;
         *ioq->sq_doorbell = ioq->sq_tail;
 
-        releasesleep(&ioq->lock);
+        release(&ioq->lock);
 
         /* Poll for completion */
         rc = nvme_poll_completion(sc, ioq, cid, 0);
@@ -754,8 +821,19 @@ nvme_recover_controller(struct nvme_softc *sc, const char *why)
     cprintf("nvme: recovering controller (%s)\n", why ? why : "unknown");
     sc->resets++;
 
+    /* Free old I/O queues before reset so we don't leak on re-init */
+    if (sc->io_queues) {
+        kfree((char *)sc->io_queues);
+        sc->io_queues = 0;
+        sc->num_io_queues = 0;
+    }
+
     if (nvme_reset(sc) < 0)
         goto fail;
+    /* Reset admin queue driver-side state to match controller after reset */
+    sc->admin_q.sq_tail = 0;
+    sc->admin_q.cq_head = 0;
+    sc->admin_q.cq_phase = 1;
     if (nvme_enable_controller(sc) < 0)
         goto fail;
     if (nvme_identify_namespace(sc, sc->nsid ? sc->nsid : 1) < 0)
@@ -885,6 +963,12 @@ nvme_enable_controller(struct nvme_softc *sc)
     if (!sc)
         return -1;
 
+    NVMEDBG("nvme: enable begin csts=%x aqa=%x asq=%x acq=%x\n",
+            nvme_read32(sc, NVME_REG_CSTS),
+            ((NVME_ADMIN_QUEUE_SIZE - 1) << 16) | (NVME_ADMIN_QUEUE_SIZE - 1),
+            (uint32_t)V2P(sc->admin_q.sq),
+            (uint32_t)V2P(sc->admin_q.cq));
+
     nvme_write32(sc, NVME_REG_AQA,
         ((NVME_ADMIN_QUEUE_SIZE - 1) << 16) |
         (NVME_ADMIN_QUEUE_SIZE - 1));
@@ -900,9 +984,23 @@ nvme_enable_controller(struct nvme_softc *sc)
          NVME_CC_IOSQES(6) |
          NVME_CC_IOCQES(4);
 
+    NVMEDBG("nvme: enable write cc=%x\n", cc);
     nvme_write32(sc, NVME_REG_CC, cc);
+    NVMEDBG("nvme: enable posted cc=%x csts=%x\n",
+            nvme_read32(sc, NVME_REG_CC), nvme_read32(sc, NVME_REG_CSTS));
     if (nvme_wait_ready(sc, NVME_CSTS_RDY) < 0)
         return -1;
+
+    /*
+     * Controller reset/enable transitions can clear INTMS state.  Re-mask all
+     * controller interrupts after RDY so the first admin completion does not
+     * raise an IRQ into an unhandled vector on this polled-only driver.
+     */
+    nvme_write32(sc, NVME_REG_INTMS, 0xFFFFFFFF);
+
+    NVMEDBG("nvme: enable ready cc=%x csts=%x\n",
+            nvme_read32(sc, NVME_REG_CC), nvme_read32(sc, NVME_REG_CSTS));
+    NVMEDBG("nvme: enable intms=%x\n", nvme_read32(sc, NVME_REG_INTMS));
 
     return 0;
 }
@@ -920,14 +1018,25 @@ nvme_init_controller(struct nvme_softc *sc)
     cprintf("nvme: cap=0x%x%x mqes=%d dstrd=%d\n",
             (uint32_t)(sc->cap >> 32), (uint32_t)sc->cap,
             (int)NVME_CAP_MQES(sc->cap), sc->db_stride);
+    NVMEDBG("nvme: cap raw=%x%x to=%d mpsmin=%d mpsmax=%d\n",
+            (uint32_t)(sc->cap >> 32), (uint32_t)sc->cap,
+            (int)NVME_CAP_TO(sc->cap), (int)NVME_CAP_MPSMIN(sc->cap),
+            (int)NVME_CAP_MPSMAX(sc->cap));
     
     /* Reset controller */
+    NVMEDBG("nvme: init before reset\n");
     if (nvme_reset(sc) < 0)
         return -1;
     
     /* Initialize admin queue */
+    NVMEDBG("nvme: init before admin queue sqe_bytes=%d cqe_bytes=%d\n",
+            NVME_ADMIN_QUEUE_SIZE * (int)sizeof(struct nvme_sqe),
+            NVME_ADMIN_QUEUE_SIZE * (int)sizeof(struct nvme_cqe));
     if (nvme_queue_init(sc, &sc->admin_q, 0, NVME_ADMIN_QUEUE_SIZE) < 0)
         return -1;
+    NVMEDBG("nvme: init admin queue sq=%p cq=%p sq_db=%p cq_db=%p\n",
+            sc->admin_q.sq, sc->admin_q.cq,
+            sc->admin_q.sq_doorbell, sc->admin_q.cq_doorbell);
     
     if (nvme_enable_controller(sc) < 0)
         return -1;
@@ -935,15 +1044,20 @@ nvme_init_controller(struct nvme_softc *sc)
     cprintf("nvme: controller enabled\n");
     
     /* Allocate and execute IDENTIFY CONTROLLER */
+    NVMEDBG("nvme: init before id_ctrl alloc\n");
     sc->id_ctrl = (struct nvme_id_ctrl *)kalloc();
     if (!sc->id_ctrl)
         return -1;
     memset(sc->id_ctrl, 0, 4096);
+    NVMEDBG("nvme: init id_ctrl=%p paddr=%x\n",
+            sc->id_ctrl, (uint32_t)V2P(sc->id_ctrl));
     
+    NVMEDBG("nvme: init before identify controller\n");
     if (nvme_identify(sc, 0, 1, sc->id_ctrl) < 0) {
         cprintf("nvme: identify controller failed\n");
         return -1;
     }
+    NVMEDBG("nvme: init identify controller complete\n");
     
     /* Print controller info */
     char sn[21], mn[41];
@@ -1024,16 +1138,31 @@ nvme_probe(struct pci_dev *pci)
     pci_enable_mem(pci);
     pci_set_master(pci);
     
-    /* Disable interrupts during init */
+    /*
+     * Disable MSI/MSI-X at PCI config level before touching the controller.
+     * QEMU's nvme device defaults to MSI enabled; the INTMS register only
+     * masks legacy INTx# and has no effect on MSI.  If MSI fires into an
+     * unregistered IDT vector before we install a handler we triple-fault.
+     */
+    pci_disable_msi(pci);
+    pci_disable_interrupts(pci);    /* belt-and-suspenders: mask legacy INTx# too */
+
+    /* Mask all interrupts at the controller level (polled-only driver) */
     nvme_write32(sc, NVME_REG_INTMS, 0xFFFFFFFF);
     
     /* Initialize controller */
-    if (nvme_init_controller(sc) < 0)
+    if (nvme_init_controller(sc) < 0) {
+        cprintf("nvme: init failed nsid=%d queues=%d offline=%d blocks512=%d\n",
+                sc->nsid, sc->num_io_queues, sc->offline,
+                (uint)sc->nblocks_512);
         return -1;
-    
-    /* Enable interrupts */
-    nvme_write32(sc, NVME_REG_INTMC, 0xFFFFFFFF);
-    pci_enable_irq(pci, ncpu - 1);
+    }
+
+    cprintf("nvme: probe summary nsid=%d queues=%d offline=%d blocks512=%d\n",
+            sc->nsid, sc->num_io_queues, sc->offline,
+            (uint)sc->nblocks_512);
+
+    /* Leave interrupts masked — polled-only driver */
 
     if (sc->nsid != 0 && sc->num_io_queues > 0 && nvme_count < ND_DISK_UNITS) {
         uint dev_id = ND_DISK_DEV(nvme_count);
@@ -1047,6 +1176,10 @@ nvme_probe(struct pci_dev *pci)
         } else {
             cprintf("nvme: failed bdev_register dev=%d\n", dev_id);
         }
+    } else {
+        cprintf("nvme: not registering nsid=%d queues=%d count=%d blocks512=%d\n",
+                sc->nsid, sc->num_io_queues, nvme_count,
+                (uint)sc->nblocks_512);
     }
     
     nvme_count++;
@@ -1061,6 +1194,10 @@ void
 nvme_init(void)
 {
     BOOTDBG("nvme: initializing driver\n");
+
+#if DBG_NVME
+    cprintf("nvme: DBG_NVME=1 verbose bring-up tracing enabled\n");
+#endif
     
     /* Search for NVMe PCI devices */
     for (int i = 0; i < pci_device_count(); i++) {
@@ -1072,5 +1209,52 @@ nvme_init(void)
             dev->subclass == PCI_SUBCLASS_NVME) {
             nvme_probe(dev);
         }
+    }
+}
+
+/*
+ * Notify all NVMe controllers of an imminent shutdown.
+ * Sets CC.SHN_NORMAL and waits for CSTS.SHST == 2 (shutdown complete)
+ * on each controller.  Must be called before powering off.
+ *
+ * Per NVM Express Base Specification §3.6.2: the host sets CC.SHN to
+ * 01b (Normal), and may poll CSTS.SHST until it reads 10b (complete).
+ * Timeout is derived from CC.TO (500ms units).
+ */
+void
+nvme_shutdown(void)
+{
+    int i;
+
+    for (i = 0; i < nvme_count; i++) {
+        struct nvme_softc *sc = &nvme_devices[i];
+        uint32_t cc;
+        uint32_t timeout_ms;
+        uint32_t j;
+
+        if (sc->offline)
+            continue;
+
+        cc = nvme_read32(sc, NVME_REG_CC);
+        if (!(cc & NVME_CC_EN))
+            continue;
+
+        /* Request normal shutdown */
+        cc = (cc & ~(3U << 14)) | NVME_CC_SHN_NORMAL;
+        nvme_write32(sc, NVME_REG_CC, cc);
+
+        /* Wait for CSTS.SHST == 2 (shutdown complete); 500ms * TO */
+        timeout_ms = NVME_CAP_TO(sc->cap) * 500;
+        if (timeout_ms < 1000)
+            timeout_ms = 1000;
+
+        for (j = 0; j < timeout_ms; j++) {
+            uint32_t csts = nvme_read32(sc, NVME_REG_CSTS);
+            if (((csts >> 2) & 0x3) == 2)
+                break;
+            microdelay(1000);
+        }
+
+        cprintf("nvme: controller %d shutdown complete\n", i);
     }
 }

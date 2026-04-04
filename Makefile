@@ -695,6 +695,8 @@ clean:
 	vblk1.img \
 	vblk-stress.img \
 	ahci-stress.img \
+	nvme-ext2.img \
+	nvme-fat.img \
 	$(UPROGS) \
 	$(UPROGS_OLDINIT) \
 	.ext2root \
@@ -852,6 +854,42 @@ ahci-stress.img:
 		exit 1; \
 	fi
 
+# NVMe ext2 test image: 32 MB ext2 volume for NVMe driver validation.
+# Mount inside the guest with: mount -t ext2 n0 /mnt/nvme
+nvme-ext2.img:
+	@if command -v mke2fs >/dev/null 2>&1; then \
+		mke2fs -q -t ext2 -F $@ 65536; \
+	elif [ -x /sbin/mke2fs ]; then \
+		/sbin/mke2fs -q -t ext2 -F $@ 65536; \
+	else \
+		echo "error: mke2fs not found; unable to create NVMe ext2 test image" >&2; \
+		exit 1; \
+	fi
+
+# NVMe FAT test image: 16 MB FAT16 volume for NVMe + msdosfs driver validation.
+# Mount inside the guest with: mount -t msdosfs n0 /mnt/nvme
+nvme-fat.img:
+	@MKFS_FAT=$$(command -v mkfs.fat 2>/dev/null || command -v mkdosfs 2>/dev/null || true); \
+	if [ -z "$$MKFS_FAT" ]; then \
+		for p in /opt/homebrew/sbin/mkfs.fat /opt/homebrew/sbin/mkdosfs /usr/local/sbin/mkfs.fat /usr/local/sbin/mkdosfs /opt/homebrew/bin/mkfs.fat /opt/homebrew/bin/mkdosfs /usr/local/bin/mkfs.fat /usr/local/bin/mkdosfs; do \
+			if [ -x "$$p" ]; then MKFS_FAT="$$p"; break; fi; \
+		done; \
+	fi; \
+	if [ -n "$$MKFS_FAT" ]; then \
+		dd if=/dev/zero of=$@ bs=512 count=32768 2>/dev/null; \
+		"$$MKFS_FAT" -F 16 -n NVMETEST ./$@; \
+		STAMP_TEXT='auxv6 nvme-fat stamp'; \
+		STAMP_SIZE=$$(printf '%s\n' "$$STAMP_TEXT" | wc -c | tr -d ' '); \
+		printf '\377\377' | dd of=$@ bs=1 seek=$$((4*512 + 4)) conv=notrunc 2>/dev/null; \
+		printf '\377\377' | dd of=$@ bs=1 seek=$$((36*512 + 4)) conv=notrunc 2>/dev/null; \
+		perl -e 'my $$n="README  TXT"; my $$s=shift; print $$n, pack("C C C v v v v v v v V", 0x20,0,0,0,0,0,0,0,0,2,$$s);' "$$STAMP_SIZE" \
+			| dd of=$@ bs=1 seek=$$((68*512 + 32)) conv=notrunc 2>/dev/null; \
+		printf '%s\n' "$$STAMP_TEXT" | dd of=$@ bs=1 seek=$$((100*512)) conv=notrunc 2>/dev/null; \
+	else \
+		echo "error: mkfs.fat/mkdosfs not found; install dosfstools" >&2; \
+		exit 1; \
+	fi
+
 vblk-reset:
 	rm -f vblk0.img vblk1.img
 	$(MAKE) vblk0.img vblk1.img
@@ -926,6 +964,44 @@ qemu-nox-ahcistress: aux.bootkern $(EXT2IMG) ahci-stress.img
 		-drive file=ahci-stress.img,if=none,id=ahcidisk,format=raw \
 		-device ide-hd,drive=ahcidisk,bus=ahci.3 \
 		$(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
+# NVMe ext2 test: boot with an NVMe controller holding a pre-formatted ext2 volume.
+# The kernel registers the NVMe device as n0 (ND_DISK_DEV(0)).
+# Inside the guest:
+#   mkdir /mnt/nvme && mount -t ext2 n0 /mnt/nvme
+#   lsblk  (should show n0)
+qemu-nvme: aux.bootkern $(EXT2IMG) nvme-ext2.img
+	$(QEMU) -serial mon:stdio \
+		-drive file=aux.bootkern,index=0,media=disk,format=raw \
+		-drive file=$(EXT2IMG),index=2,media=disk,format=raw \
+		-drive file=nvme-ext2.img,if=none,id=nvme0,format=raw \
+		-device nvme,drive=nvme0,serial=auxv6nvme0 \
+		$(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
+qemu-nvme-dbg:
+	$(MAKE) EXTRA_CFLAGS="$(EXTRA_CFLAGS) -DDBG_NVME=1" qemu-nvme
+
+qemu-nox-nvme: aux.bootkern $(EXT2IMG) nvme-ext2.img
+	$(QEMU) -nographic \
+		-drive file=aux.bootkern,index=0,media=disk,format=raw \
+		-drive file=$(EXT2IMG),index=2,media=disk,format=raw \
+		-drive file=nvme-ext2.img,if=none,id=nvme0,format=raw \
+		-device nvme,drive=nvme0,serial=auxv6nvme0 \
+		$(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
+qemu-nox-nvme-dbg:
+	$(MAKE) EXTRA_CFLAGS="$(EXTRA_CFLAGS) -DDBG_NVME=1" qemu-nox-nvme
+
+# NVMe FAT test: same config but with a FAT16 volume.
+# Inside the guest:
+#   mkdir /mnt/nvme && mount -t msdosfs n0 /mnt/nvme
+qemu-nvme-fat: aux.bootkern $(EXT2IMG) nvme-fat.img
+	$(QEMU) -serial mon:stdio \
+		-drive file=aux.bootkern,index=0,media=disk,format=raw \
+		-drive file=$(EXT2IMG),index=2,media=disk,format=raw \
+		-drive file=nvme-fat.img,if=none,id=nvme0,format=raw \
+		-device nvme,drive=nvme0,serial=auxv6nvme0 \
+		$(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 # Generic automated guest test template (extend by changing target + command file).
 AUXV6_QEMU_TARGET ?= qemu-nox

@@ -18,8 +18,8 @@
 #include "stat.h"
 #include "vfs.h"
 
-#define NLOOP 8           // Number of loop devices
-#define LOOP_DEV_BASE 40  // /dev/loop0 is minor 40
+#define NLOOP 8
+#define LOOP_DEV_BASE 44  // /dev/loop0 is dev 44 (after NVMe 40-43)
 
 struct loop_device {
   struct spinlock lock;

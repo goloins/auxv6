@@ -46,12 +46,12 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | procfs | 78% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`, `/proc/meminfo`, `/proc/ps`, `/proc/loadavg`, `/proc/mountstats`, `/proc/gfxstats`, `/proc/lsof`, `/proc/server7`; breadth is now solid but per-process drill-down remains sparse |
 | Real NICs | 60% | E1000, PCNET, and RTL8111 have full ifnet integration; virtio-net continues to improve; VMXnet3 has a basic polling datapath; netvsc, I219-V, I226-V, and AX88179 PCI remain stub-grade |
 | Device node management | 68% | `devman -s` creates `/dev` nodes at early runlevel from kernel-visible inventory and `/etc/devman.conf` can tune verbosity, but policy rules, cleanup mode, and hotplug/event support are still pending |
-| Modern storage | 76% | AHCI now has interrupt-driven completions, slot allocation, telemetry, and fault-injection hooks; NVMe basic RW path is in place; timeout/reset recovery still needs to be finished |
+| Modern storage | 88% | AHCI now has interrupt-driven completions, slot allocation, telemetry, and fault-injection hooks; NVMe correctness hardening complete (polled-only IRQ model, monotonic CID counter, recovery memory-safety, shutdown notification, LBA-size guard); NVMe timeout/reset recovery path is in place |
 
 ### 🚧 Early Or Stubbed (0-49%)
 | Subsystem | Status | Notes |
 |-----------|--------|-------|
-| NFS | 45% | XDR/RPC transport, MOUNT plumbing, read-only VFS wiring, and basic GETATTR/LOOKUP/READ paths landed; READDIR decode is still incomplete and live-server validation is still outstanding |
+| NFS | 45% | XDR/RPC transport, MOUNT plumbing, read-only VFS wiring, and basic GETATTR/LOOKUP/READ paths landed; READDIR decode stub still in place; deprioritized pending other work |
 | Btrfs | None | Planned read-only support |
 | Device hotplug/eventing | None | Planned kernel event path for live node add/remove beyond boot-time `devman -s` |
 
@@ -118,12 +118,12 @@ Primary goal: consolidate recent kernel-core and userland wins into a dependable
 ### Tranche A - Storage reliability hardening
 - Virtio-blk: keep bounded retry policy but tighten transient-vs-fatal error accounting and operator-visible diagnostics.
 - AHCI: finish mount/unmount endurance loops with timeout/recover telemetry and no controller lockups.
-- NVMe: add command timeout handling with controller reset-on-fatal fallback.
+- NVMe: correctness hardening complete. Remaining gap: interrupt-driven completion path (currently polled).
 
 **Current status (2026-04-03):**
 - Virtio-blk retry telemetry and stress tooling are in-tree.
 - AHCI recovery instrumentation, fault injection, and soak-oriented tuning hooks are in-tree.
-- NVMe still lacks the corresponding timeout/reset recovery path.
+- NVMe: spurious-IRQ bug fixed (polled-only mode), recovery memory leak and admin queue state reset fixed, monotonic CID counter added, LBA>BSIZE guard added, shutdown notification (`nvme_shutdown`) added and called from `sys_halt`.
 
 **Definition of done:**
 - `lsblk`/mount behavior remains stable across repeated attach/mount/unmount cycles on virtio-blk, AHCI, and NVMe.
@@ -165,32 +165,17 @@ Primary goal: consolidate recent kernel-core and userland wins into a dependable
   optimization area, but intentionally tracked as a separate graphics/server7
   stream from the current kernel-core performance hardening work.
 
-### Tranche D - NFS read-only completion
-- Finish READDIR entry decoding and make directory iteration usable.
-- Run the first live-server smoke validation of read-only mount/`ls`/`cat` behavior.
-- Add just enough diagnostics under existing debug gates to make mount/RPC/NFS failures actionable.
+### Tranche D - NFS read-only (deprioritized)
+- NFS is intentionally on the backburner. The existing XDR/RPC/UDP transport and basic VFS wiring are in-tree and not being removed.
+- READDIR stub decode remains incomplete; live-server validation has not been run.
+- Return to this tranche when the base kernel/storage and userland work has settled further.
 
-**Current status (2026-04-02):**
+**Current status (2026-04-03):**
 - XDR + RPC codec path landed in kernel.
-- Kernel-internal UDP RPC transport is integrated via socket layer helpers
-  (`ksock_open_udp`, `ksock_sendto`, `ksock_recvfrom_timeout`) and `rpc_call()` now
-  performs real UDP send/receive with timeout and RPC reply validation.
-- MOUNT portmapper (`PMAPPROC_GETPORT`) and MOUNT/UMOUNT requests now run over the
-  integrated RPC UDP path.
-- NFSv3 procedures (`GETATTR`, `LOOKUP`, `READ`, `READDIR`) now execute RPC requests
-  over UDP through the shared RPC transport.
-- VFS NFS backend (`kernel/fs/vfs_nfs.c`) is wired as a read-only filesystem type,
-  with mount-time source parsing (`server:/export`), root handle acquisition, and
-  basic `namei`/`dirlookup`/`read`/`stat` vnode plumbing.
-- `mount` userspace now passes NFS source strings to `mount(2)` so
-  `mount server:/share nfs /mnt/nfs` maps into kernel mount data.
-- READDIR result decoding is still intentionally minimal, so the `ls`-level DoD is not yet met.
+- MOUNT portmapper and basic NFSv3 procedure RPCs (GETATTR, LOOKUP, READ, READDIR stub) are in place.
+- VFS NFS backend wired as read-only filesystem type.
+- READDIR decode intentionally deferred.
 - Detailed notes: `docs/nfs-v3-integration.md`.
-
-**Definition of done:**
-- `mount -t nfs server:/export /mnt/nfs` succeeds in basic read-only tests.
-- `ls /mnt/nfs` and `cat /mnt/nfs/file.txt` work on a simple export.
-- Basic failure modes (timeout, bad export, short reply) are diagnosable without ad-hoc instrumentation.
 
 ### Tranche E - server7 bootstrap follow-through
 - Keep `make qemu-server7` and init integration as the dedicated graphics bootstrap path while preserving default boot behavior.
@@ -218,11 +203,11 @@ Primary goal: consolidate recent kernel-core and userland wins into a dependable
 ## Next Steps (Recommended Order)
 
 1. **Continue Track 0 (kernel-core performance follow-through)** before taking on another broad structural kernel rewrite.
-2. **Execute Tranche A (storage reliability hardening)** to reduce corruption/lockup risk across AHCI and NVMe while preserving the virtio-blk baseline.
+2. **Execute Tranche A (storage reliability hardening)** — NVMe correctness work is done; AHCI soak validation and virtio-blk diagnostics tightening remain.
 3. **Execute Tranche B (devman policy parsing + optional cleanup)** to strengthen `/dev` lifecycle safety.
 4. **Execute Tranche C (observability + manpages + utility smoke tests)** to lock in operational confidence around the larger default userland.
-5. **Finish Tranche D (NFS read-only completion)** once the base kernel/storage path is quieter; the immediate blocker is READDIR usability, not transport plumbing.
-6. **After NFS read-only completion:** return to the unified libc/POSIX portability tranche, Btrfs read-only, and devman hotplug/event lifecycle enhancements.
+5. **Tranche D (NFS) is deprioritized** — return to it after the base kernel/storage work has settled; the immediate blocker remains READDIR decode.
+6. **After storage/devman/observability:** return to the unified libc/POSIX portability tranche, Btrfs read-only, and devman hotplug/event lifecycle enhancements.
 
 ### Prepared Next Slice (2026-04-03)
 
@@ -253,10 +238,10 @@ The next prepared tranche after the newly landed libc identity/stdio work is:
 
 ## Recommended Low-Level Continuations
 
-1. **Finish NFS READDIR decoding** so the existing read-only mount path reaches an actually usable `ls` milestone.
+1. **Finish NVMe interrupt-driven completion path** — the polled model works but an IRQ handler would allow concurrent I/O without blocking the CPU; the `irq_register` infrastructure is already in place.
 2. **Start the thread groundwork slice** so the current portability baseline can grow into real pthread support instead of placeholder types.
 3. **Expand procfs with `/proc/net`, `/proc/sockets`, and filtered fd views** to make perf/network/storage debugging cheaper.
-4. **Finish NVMe timeout/reset recovery and expose counters comparable to AHCI** so storage reliability work is not lopsided.
+4. **Finish NVMe interrupt-driven completions** to match AHCI's IRQ-driven model and reduce poll overhead.
 5. **Polish virtio-net link-state and diagnostics** now that poll/IRQ instrumentation exists.
 6. **Tighten the remaining stdio/runtime truthfulness edges (`fmemopen` writable semantics only if needed, `perror` parity)** before treating the portability tranche as stable.
 

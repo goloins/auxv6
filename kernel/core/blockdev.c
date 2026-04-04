@@ -253,3 +253,96 @@ bdev_nblocks(uint dev)
 
   return ops->nblocks(dev);
 }
+
+static int
+bdev_fmt_str(char *buf, int max, int pos, const char *s)
+{
+  while(*s && pos < max - 1)
+    buf[pos++] = *s++;
+  return pos;
+}
+
+static int
+bdev_fmt_uint(char *buf, int max, int pos, uint v)
+{
+  char tmp[12];
+  int n;
+
+  n = 0;
+  if(v == 0){
+    tmp[n++] = '0';
+  } else {
+    while(v){
+      tmp[n++] = '0' + (v % 10);
+      v /= 10;
+    }
+  }
+  /* tmp[] holds the digits in reverse; write them out forward */
+  while(n-- > 0 && pos < max - 1)
+    buf[pos++] = tmp[n];
+  return pos;
+}
+
+/*
+ * Format the block device table as human-readable text.
+ * One line per registered device (entries with no ops are omitted).
+ * Returns number of bytes written (not counting NUL).
+ */
+int
+bdev_format_table(char *buf, int max)
+{
+  struct {
+    uint dev;
+    uint nblocks;
+    uint parent;
+    uint start;
+    int  is_part;
+    int  has_ops;
+    int  has_nblocks_cb;
+  } snap[NDEV];
+  int i;
+  int pos;
+  uint query;
+
+  if(buf == 0 || max <= 0)
+    return 0;
+
+  acquire(&bdevtable.lock);
+  for(i = 0; i < NDEV; i++){
+    snap[i].dev            = (uint)i;
+    snap[i].has_ops        = (bdevtable.dev[i].ops != 0);
+    snap[i].nblocks        = bdevtable.dev[i].nblocks;
+    snap[i].is_part        = bdevtable.dev[i].is_part;
+    snap[i].parent         = bdevtable.dev[i].parent;
+    snap[i].start          = bdevtable.dev[i].start;
+    snap[i].has_nblocks_cb = (bdevtable.dev[i].ops != 0 &&
+                              bdevtable.dev[i].ops->nblocks != 0);
+  }
+  release(&bdevtable.lock);
+
+  pos = 0;
+  for(i = 0; i < NDEV; i++){
+    if(!snap[i].has_ops)
+      continue;
+    pos = bdev_fmt_str(buf, max, pos, "dev=");
+    pos = bdev_fmt_uint(buf, max, pos, snap[i].dev);
+    pos = bdev_fmt_str(buf, max, pos, " nblocks=");
+    pos = bdev_fmt_uint(buf, max, pos, snap[i].nblocks);
+    pos = bdev_fmt_str(buf, max, pos, " is_part=");
+    pos = bdev_fmt_uint(buf, max, pos, (uint)snap[i].is_part);
+    pos = bdev_fmt_str(buf, max, pos, " parent=");
+    pos = bdev_fmt_uint(buf, max, pos, snap[i].parent);
+    pos = bdev_fmt_str(buf, max, pos, " start=");
+    pos = bdev_fmt_uint(buf, max, pos, snap[i].start);
+    pos = bdev_fmt_str(buf, max, pos, " has_nblocks_cb=");
+    pos = bdev_fmt_uint(buf, max, pos, (uint)snap[i].has_nblocks_cb);
+    /* Effective block count as seen by the rest of the kernel */
+    query = bdev_nblocks(snap[i].dev);
+    pos = bdev_fmt_str(buf, max, pos, " query=");
+    pos = bdev_fmt_uint(buf, max, pos, query);
+    if(pos < max - 1)
+      buf[pos++] = '\n';
+  }
+  buf[pos] = 0;
+  return pos;
+}

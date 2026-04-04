@@ -424,6 +424,54 @@ pci_enable_interrupts(struct pci_dev *dev)
 }
 
 /*
+ * Walk the PCI capability list and disable any MSI or MSI-X capability found.
+ * Must be called before the device raises any interrupts.
+ */
+void
+pci_disable_msi(struct pci_dev *dev)
+{
+    /* Capability pointer at 0x34; low two bits reserved, must be masked */
+    uint8_t cap = pci_read8(dev, PCI_CAPABILITIES) & 0xFC;
+    uint16_t cmd = pci_read16(dev, PCI_COMMAND);
+    uint16_t status = pci_read16(dev, PCI_STATUS);
+    int limit = 48; /* PCI config space is 256 bytes; cap on iterations */
+
+    NVMEDBG("pci: %d:%d.%d disable_msi start cap=%x cmd=%x status=%x\n",
+            dev->bus, dev->slot, dev->func, cap, cmd, status);
+
+    while (cap && limit-- > 0) {
+        uint8_t id = pci_read8(dev, cap);
+        uint8_t next = pci_read8(dev, cap + 1) & 0xFC;
+
+        NVMEDBG("pci: %d:%d.%d cap@%x id=%x next=%x\n",
+                dev->bus, dev->slot, dev->func, cap, id, next);
+
+        if (id == 0x05) {
+            /* MSI: Message Control at cap+2, bit 0 = MSI Enable */
+            uint16_t mc = pci_read16(dev, cap + 2);
+            NVMEDBG("pci: %d:%d.%d msi mc=%x -> %x\n",
+                    dev->bus, dev->slot, dev->func, mc,
+                    (uint16_t)(mc & ~(uint16_t)(1 << 0)));
+            mc &= ~(uint16_t)(1 << 0);
+            pci_write16(dev, cap + 2, mc);
+        } else if (id == 0x11) {
+            /* MSI-X: Message Control at cap+2, bit 15 = MSI-X Enable */
+            uint16_t mc = pci_read16(dev, cap + 2);
+            NVMEDBG("pci: %d:%d.%d msix mc=%x -> %x\n",
+                    dev->bus, dev->slot, dev->func, mc,
+                    (uint16_t)(mc & ~(uint16_t)(1 << 15)));
+            mc &= ~(uint16_t)(1 << 15);
+            pci_write16(dev, cap + 2, mc);
+        }
+        cap = next;
+    }
+
+    NVMEDBG("pci: %d:%d.%d disable_msi done cmd=%x status=%x\n",
+            dev->bus, dev->slot, dev->func,
+            pci_read16(dev, PCI_COMMAND), pci_read16(dev, PCI_STATUS));
+}
+
+/*
  * Device lookup functions
  */
 struct pci_dev *

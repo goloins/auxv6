@@ -193,6 +193,7 @@ void     pci_set_master(struct pci_dev *dev);
 void     pci_enable_io(struct pci_dev *dev);
 void     pci_enable_mem(struct pci_dev *dev);
 void     pci_disable_interrupts(struct pci_dev *dev);
+void     pci_disable_msi(struct pci_dev *dev);
 void     pci_enable_interrupts(struct pci_dev *dev);
 
 /* Device lookup */

@@ -127,3 +127,4 @@ ports/dash-0.5.12/src/mkinit
 user/vblktest
 user/netcat
 aux.bootkern
+.extra_cflags.stamp
