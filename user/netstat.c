@@ -1,6 +1,11 @@
 #include "types.h"
+#include "fcntl.h"
 #include "auxv6/user.h"
 #include "netcommon.h"
+
+#define PROC_NET_TCP "/proc/net_tcp"
+#define PROC_NET_UDP "/proc/net_udp"
+#define PROC_NET_DEV "/proc/net_dev"
 
 static void
 show_routes(void)
@@ -41,11 +46,46 @@ show_routes(void)
   }
 }
 
+/*
+ * Dump a /proc/net_* file to stdout, reading in chunks.
+ * Returns 0 on success, -1 if the file cannot be opened.
+ */
+static int
+show_proc_net(const char *path)
+{
+  int fd;
+  int n;
+  char buf[512];
+
+  fd = open(path, O_RDONLY);
+  if(fd < 0){
+    dprintf(2, "netstat: cannot open %s\n", path);
+    return -1;
+  }
+  while((n = read(fd, buf, sizeof(buf))) > 0)
+    write(1, buf, n);
+  close(fd);
+  return 0;
+}
+
 int
 main(int argc, char *argv[])
 {
   struct netifinfo ifs[NETIFINFO_MAX];
   int nif;
+
+  if(argc == 2 && strcmp(argv[1], "-t") == 0){
+    show_proc_net(PROC_NET_TCP);
+    exit(0);
+  }
+  if(argc == 2 && strcmp(argv[1], "-u") == 0){
+    show_proc_net(PROC_NET_UDP);
+    exit(0);
+  }
+  if(argc == 2 && strcmp(argv[1], "-s") == 0){
+    show_proc_net(PROC_NET_DEV);
+    exit(0);
+  }
 
   nif = net_load_ifs(ifs, NETIFINFO_MAX);
   if(nif < 0)
@@ -67,6 +107,6 @@ main(int argc, char *argv[])
     exit(0);
   }
 
-  dprintf(2, "usage: netstat [-i|-r|-rn]\n");
+  dprintf(2, "usage: netstat [-i|-r|-rn|-t|-u|-s]\n");
   exit(1);
 }
