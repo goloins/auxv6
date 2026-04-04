@@ -6,8 +6,8 @@ The `msdosfs` driver (implemented in `kernel/fs/vfs_msdosfs.c`) provides
 read/write access to FAT12, FAT16, and FAT32 volumes via the auxv6 VFS
 interface. FAT type is determined at mount time by cluster count per the
 Microsoft FAT specification. As of the 2026-04 FAT32 bringup, the backend has
-verified create/read/write/truncate/unlink and mkdir/rmdir coverage on an NVMe
-FAT32 image, including VFAT long-filename round trips.
+verified create/read/write/truncate/unlink/mkdir/rmdir/rename coverage on an
+NVMe FAT32 image, including VFAT long-filename round trips.
 
 ## Path/Name Limit Alignment
 
@@ -28,6 +28,29 @@ The fix was applied at the root contract instead of only in `msdos_walk()`:
 
 This removed the 14-character truncation at the VFS boundary and allowed FAT32
 LFN lookup to work end to end.
+
+### Fallout and Follow-up Repairs
+
+That root-contract change also widened every fixed-size kernel `struct dirent`
+record, which exposed a few unrelated assumptions outside the msdosfs driver:
+
+- Several direct `getdents()` callers in userland (`ls`, `man`, `fatregress`,
+  `fsregress`, `usertests`) were still requesting 16 or 32 records per call.
+  After `struct dirent` grew, those requests exceeded the one-page syscall
+  limit and started failing immediately. The fix was to reduce the direct batch
+  sizes to match the wider ABI rather than reintroduce a truncated kernel ABI.
+- `getcwd()` path reconstruction in `kernel/core/sysfile.c` had multiple old
+  assumptions tied to the smaller synthetic dirent size. The parent walk mixed
+  raw directory byte sizes with synthetic fixed-size dirent offsets, compared
+  full inode numbers against the 16-bit visible dirent inode values, and also
+  kept a deep per-component pathname array on the 4 KB kernel stack. Those were
+  repaired by switching parent-name lookup to EOF-driven synthetic dirent
+  iteration, matching against the visible 16-bit dirent inode mapping, and
+  building the result path backward in place instead of storing all components
+  on the stack.
+- The shell prompt showing `/` was only a symptom: `sh` keeps its previous cwd
+  when `getcwd()` fails, so fixing the kernel cwd reconstruction restored both
+  `pwd(1)` and prompt sync without a shell-local semantic change.
 
 ## FAT Type Detection
 
@@ -179,8 +202,11 @@ Observed result:
 - Short-name create/read/unlink passed.
 - Multi-block growth/truncate passed.
 - Long-filename create/read/unlink passed.
+- Rename coverage passed, including overwrite rename, cross-directory file move,
+  and directory subtree rejection.
 - Directory create/file-in-dir/remove passed.
 - Seeded reads skipped cleanly when the image lacked mtools-populated content.
+- Final `fatregress -d /mnt/fat32` run completed with `fatregress: all checks passed`.
 
 ## Recent Hardening
 
@@ -198,12 +224,20 @@ Post-bringup cleanup landed in the backend after the initial FAT32 validation:
 - Rename is now wired through the VFS rename hook with driver-local FAT move
   semantics for same-filesystem file/directory moves, non-directory overwrite,
   cross-directory file moves, and directory parent updates via `..` rewrite.
+- The first FAT directory-rename implementation deadlocked because subtree
+  detection walked parent directories through inode refs that were already
+  locked by `sys_rename()`. That check now walks parent clusters directly from
+  on-disk `..` metadata instead of reacquiring those inode sleep locks.
 
 ## Known Limitations
 
 - **Feature parity**: The backend now supports read/write/create/remove/mkdir/
   truncate/rename semantics, but not hard links, symlinks, chmod/chown, or
   richer metadata operations.
+- **Cross-layer sensitivity**: Because auxv6 still uses a fixed-size synthetic
+  dirent ABI internally, global size changes such as the `DIRSIZ -> NAME_MAX+1`
+  conversion can affect unrelated callers (`getdents`, `getcwd`, prompt sync)
+  even when the filesystem backend itself is correct.
 - **Cluster size > 512 B**: The `msdos_find_free_run` scan allocates new cluster
   pages for the directory when slots are exhausted. This works but does not
   compact previously-deleted slots across cluster boundaries.

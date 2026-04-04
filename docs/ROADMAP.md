@@ -21,7 +21,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 |-----------|--------|-------|
 | VFS Layer | 90% | Multi-backend, mount table, longest-prefix matching |
 | ext2 filesystem | 90% | Read/write, directory create/link/unlink/rename, inode/block allocation, rollback hardening, and default rootfs build target |
-| FAT/msdosfs | 88% | FAT16/32 backend in-tree, short/long filenames, root-cause filename-limit fix landed, and both FAT16/FAT32 NVMe workflows are validated (`qemu-nvme-fat`, `qemu-nvme-fat32`) |
+| FAT/msdosfs | 90% | FAT16/32 backend in-tree with create/remove/mkdir/rename coverage, root-cause filename-limit fix landed, and the FAT32 NVMe regression pass is back green under `fatregress` |
 | TCP/IP stack | 82% | UDP works, DNS/resolver works, TCP handshake + data + retransmission + teardown work, and raw-socket tooling (`ping`, `traceroute`) is in place; flow control still basic |
 | Process model | 85% | fork/exec/wait, process groups, sessions |
 | Job control | 82% | setpgid, setsid, tcsetpgrp, terminal control, and tty-stop behavior integrated with the PTY stack |
@@ -71,6 +71,8 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - FAT32 NVMe workflow is now validated end to end (`qemu-nvme-fat32`): mount, short-name create/read/unlink, multi-block growth/truncate, long-filename create/read/unlink, and mkdir/rmdir all pass in guest.
 - The FAT long-filename failure was fixed at the root contract instead of only in the backend: the old 14-character directory-component limit was removed in favor of `NAME_MAX + 1`, and the `getdents`/`readdir` bridge plus shell path handling were updated to match.
 - FAT/msdosfs follow-up hardening landed after bringup: real FAT timestamps are now written and surfaced through `stat(2)`, VFAT unlink removes the full LFN chain, create rejects duplicate generated short-name aliases, and basic FAT rename support is now wired through the VFS rename hook.
+- The FAT32 follow-up regression sweep also repaired cross-layer fallout from the global dirent-size change: direct `getdents()` callers were resized to stay within the syscall page limit, `getcwd()` path reconstruction was fixed for the widened synthetic dirent ABI, and the first FAT directory-rename subtree check was rewritten to avoid a sleep-lock deadlock.
+- Current guest status on `qemu-nvme-fat32`: `fatregress -d /mnt/fat32` completes with `fatregress: all checks passed`.
 - Btrfs gained an initial read-only backend (`mount ... btrfs ...`) integrated through VFS, with explicit first-tranche constraints documented in `docs/btrfs-driver.md`.
 - UFS2 gained an initial read-only backend (`mount ... ufs2 ...` and `mount ... ffs ...`) integrated through VFS, with first-tranche constraints documented in `docs/ufs2-driver.md`.
 - Linux-host Btrfs image tooling landed (`tools/stage-btrfs-root.sh`, `make nvme-btrfs.img`, `qemu-nvme-btrfs`, `qemu-nox-nvme-btrfs`, `btrfs-reset`) to support repeatable guest validation.
@@ -139,6 +141,7 @@ Primary goal: consolidate recent kernel-core and userland wins into a dependable
 - NVMe ext2 mount path validated with both numeric dev (`mount 40 ext2fs /mnt`) and name-based dev (`mount /dev/nda ext2fs /mnt`).
 - FAT16 NVMe test image workflow validated under `sudo make qemu-nvme-fat`; generated image includes deterministic `README.TXT` content for no-mount hex-level verification.
 - FAT32 NVMe workflow validated under `sudo make qemu-nvme-fat32`; verified guest-side mount plus short-name, LFN, growth/truncate, and mkdir/rmdir regression coverage.
+- FAT32 NVMe workflow now revalidated after rename and ABI fallout fixes; overwrite rename, cross-directory file rename, and directory subtree rejection are covered by `fatregress` and currently passing.
 - Remaining FAT/msdosfs gaps are now mostly parity/polish items: link/symlink support, richer metadata semantics beyond native FAT attributes, Unicode LFN fidelity, and less host-tool-dependent seeded-image staging.
 
 **Definition of done:**

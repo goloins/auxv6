@@ -30,6 +30,9 @@ umounts on its own.
 8. **mkdir / file in dir / rmdir** — Creates `/fat32/newdir`, writes a file inside,
    reads back, unlinks the file, then removes the empty directory.
 
+Current status: on the validated `qemu-nvme-fat32` guest workflow, the full
+suite completes with `fatregress: all checks passed`.
+
 ## Options
 - `-d`: Enable verbose debug logging.
 - `mountpoint`: Filesystem mountpoint to test. Defaults to `/fat`.
@@ -38,6 +41,9 @@ umounts on its own.
 The FAT32 test image is built by `tools/stage-fat32-root.sh` into `nvme-fat32.img`
 and attached as the second NVMe device in the QEMU targets `qemu-nvme-fat32`
 and `qemu-nox-nvme-fat32`.
+
+The plain `qemu` target does not attach the FAT32 NVMe validation image; use
+the FAT32-specific QEMU target when reproducing msdosfs FAT32 guest tests.
 
 If the image was built without host `mtools`, seeded files may be absent and
 the seeded-read checks will skip while the create/read/write/remove checks still run.
