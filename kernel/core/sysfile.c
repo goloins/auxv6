@@ -1434,6 +1434,11 @@ sys_mount(void)
   } else if(memcmp(fstype_buf, "msdosfs", 8) == 0 ||
             memcmp(fstype_buf, "fat", 4) == 0) {
     vfs_msdosfs_init(fs);
+  } else if(memcmp(fstype_buf, "btrfs", 6) == 0) {
+    vfs_btrfs_init(fs);
+  } else if(memcmp(fstype_buf, "ufs2", 5) == 0 ||
+            memcmp(fstype_buf, "ffs", 4) == 0) {
+    vfs_ufs2_init(fs);
   } else if(memcmp(fstype_buf, "isofs", 6) == 0 ||
             memcmp(fstype_buf, "iso9660", 8) == 0 ||
             memcmp(fstype_buf, "cd9660", 7) == 0) {
@@ -1457,6 +1462,11 @@ sys_mount(void)
     dev = has_dev_override ? dev_override : ROOTDEV;
   else if(memcmp(fstype_buf, "msdosfs", 8) == 0 ||
           memcmp(fstype_buf, "fat", 4) == 0)
+    dev = has_dev_override ? dev_override : DISK_DEV(3);
+  else if(memcmp(fstype_buf, "btrfs", 6) == 0)
+    dev = has_dev_override ? dev_override : DISK_DEV(3);
+  else if(memcmp(fstype_buf, "ufs2", 5) == 0 ||
+          memcmp(fstype_buf, "ffs", 4) == 0)
     dev = has_dev_override ? dev_override : DISK_DEV(3);
   else if(memcmp(fstype_buf, "isofs", 6) == 0 ||
           memcmp(fstype_buf, "iso9660", 8) == 0 ||

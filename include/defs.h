@@ -254,6 +254,8 @@ int             tmpfs_block_usage(uint dev, uint *total_blocks, uint *free_block
 void            vfs_xv6fs_init(struct vfs*);
 void            vfs_ext2_init(struct vfs*);
 void            vfs_msdosfs_init(struct vfs*);
+void            vfs_btrfs_init(struct vfs*);
+void            vfs_ufs2_init(struct vfs*);
 void            vfs_procfs_init(struct vfs*);
 void            vfs_isofs_init(struct vfs*);
 void            vfs_tmpfs_init(struct vfs*);

@@ -11,6 +11,8 @@ OBJS = \
 	kernel/fs/procfs.o\
 	kernel/fs/vfs_ext2.o\
 	kernel/fs/vfs_msdosfs.o\
+	kernel/fs/vfs_btrfs.o\
+	kernel/fs/vfs_ufs2.o\
 	kernel/fs/vfs_isofs.o\
 	kernel/fs/vfs_tmpfs.o\
 	kernel/fs/vfs_nfs.o\
@@ -697,12 +699,14 @@ clean:
 	ahci-stress.img \
 	nvme-ext2.img \
 	nvme-fat.img \
+	nvme-btrfs.img \
 	$(UPROGS) \
 	$(UPROGS_OLDINIT) \
 	.ext2root \
 	.ext2root-oldinit \
 	.ext2root-server7 \
 	.fatroot \
+	.btrfsroot \
 	targetfs/tmp/test.iso .isoroot \
 	kernel/**/*.o kernel/**/*.d kernel/**/*.asm \
 	user/*.o user/*.d user/*.asm user/cat user/echo \
@@ -768,6 +772,8 @@ ROOTFS_MAN_FILES = $(wildcard $(TARGETFS_MAN_DIR)/*.md)
 ROOTFS_TARGETFS_FILES = $(shell find $(TARGETFS_DIR) -type f -o -type l 2>/dev/null)
 FATIMG ?= test_fat.img
 FATROOT_STAGE ?= .fatroot
+BTRFSIMG ?= nvme-btrfs.img
+BTRFSROOT_STAGE ?= .btrfsroot
 # qemu* targets already depend on $(EXT2IMG), so always attach it as index=2.
 EXT2QEMU = -drive file=$(EXT2IMG)$(comma)index=2$(comma)media=disk$(comma)format=raw
 FATQEMU = -drive file=$(FATIMG)$(comma)index=3$(comma)media=disk$(comma)format=raw
@@ -812,6 +818,10 @@ ext2-reset:
 fat-reset:
 	rm -f $(FATIMG)
 	$(MAKE) $(FATIMG)
+
+btrfs-reset:
+	rm -f $(BTRFSIMG)
+	$(MAKE) $(BTRFSIMG)
 
 # Virtio-blk test images (empty ext2 filesystems for testing virtio-blk operations)
 vblk0.img:
@@ -889,6 +899,13 @@ nvme-fat.img:
 		echo "error: mkfs.fat/mkdosfs not found; install dosfstools" >&2; \
 		exit 1; \
 	fi
+
+# NVMe Btrfs test image: 64 MB Btrfs volume for NVMe + btrfs driver validation.
+# Linux-host only (mkfs.btrfs from btrfs-progs).
+# Inside the guest:
+#   mkdir /mnt/nvme && mount -t btrfs n0 /mnt/nvme
+nvme-btrfs.img: tools/stage-btrfs-root.sh
+	sh tools/stage-btrfs-root.sh $(BTRFSROOT_STAGE) $(BTRFSIMG)
 
 vblk-reset:
 	rm -f vblk0.img vblk1.img
@@ -1002,6 +1019,25 @@ qemu-nvme-fat: aux.bootkern $(EXT2IMG) nvme-fat.img
 		-drive file=nvme-fat.img,if=none,id=nvme0,format=raw \
 		-device nvme,drive=nvme0,serial=auxv6nvme0 \
 		$(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
+# NVMe Btrfs test: same config with a Btrfs test volume.
+# Inside the guest:
+#   mkdir /mnt/nvme && mount -t btrfs n0 /mnt/nvme
+qemu-nvme-btrfs: aux.bootkern $(EXT2IMG) nvme-btrfs.img
+	$(QEMU) -serial mon:stdio \
+		-drive file=aux.bootkern,index=0,media=disk,format=raw \
+		-drive file=$(EXT2IMG),index=2,media=disk,format=raw \
+		-drive file=nvme-btrfs.img,if=none,id=nvme0,format=raw \
+		-device nvme,drive=nvme0,serial=auxv6nvme0 \
+		$(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
+qemu-nox-nvme-btrfs: aux.bootkern $(EXT2IMG) nvme-btrfs.img
+	$(QEMU) -nographic \
+		-drive file=aux.bootkern,index=0,media=disk,format=raw \
+		-drive file=$(EXT2IMG),index=2,media=disk,format=raw \
+		-drive file=nvme-btrfs.img,if=none,id=nvme0,format=raw \
+		-device nvme,drive=nvme0,serial=auxv6nvme0 \
+		$(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 # Generic automated guest test template (extend by changing target + command file).
 AUXV6_QEMU_TARGET ?= qemu-nox
@@ -1129,7 +1165,7 @@ test-termcap-smoke: aux.bootkern $(EXT2IMG)
 # check in that version.
 
 EXTRA=\
-	tools/mkfs.c tools/stage-fat-root.sh user/ulib.c include/user.h user/cat.c user/echo.c user/fatregress.c user/grep.c user/kill.c\
+	tools/mkfs.c tools/stage-fat-root.sh tools/stage-btrfs-root.sh user/ulib.c include/user.h user/cat.c user/echo.c user/fatregress.c user/grep.c user/kill.c\
 	user/stdio.c user/regex.c user/calloc.c\
 	user/date.c user/time.c user/killall.c user/halt.c\
 	user/lsof.c user/which.c user/file.c\
@@ -1167,4 +1203,4 @@ tar:
 	cp dist/* config/.gdbinit.tmpl /tmp/xv6
 	(cd /tmp; tar cf - xv6) | gzip >xv6-rev10.tar.gz  # the next one will be 10 (9/17)
 
-.PHONY: dist-test dist ext2-reset fat-reset ext2root qemu-ext2root qemu-nox-ext2root qemu-gdb-ext2root qemu-nox-gdb-ext2root qemu-fat qemu-nox-fat qemu-oldinit e1000
+.PHONY: dist-test dist ext2-reset fat-reset btrfs-reset ext2root qemu-ext2root qemu-nox-ext2root qemu-gdb-ext2root qemu-nox-gdb-ext2root qemu-fat qemu-nox-fat qemu-oldinit e1000 qemu-nvme-btrfs qemu-nox-nvme-btrfs

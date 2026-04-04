@@ -86,7 +86,7 @@ Control filesystem and driver diagnostic output:
 | Flag | Description | Default |
 |------|-------------|---------|
 | `DBG_VFS` | VFS layer diagnostics | `AUXV6_DEBUG` |
-| `DBG_MOUNT` | Mount operation details (ext2, isofs) | `AUXV6_DEBUG` |
+| `DBG_MOUNT` | Mount operation details (ext2, isofs, ufs2) | `AUXV6_DEBUG` |
 | `DBG_EXT2` | Ext2 filesystem details | `AUXV6_DEBUG` |
 | `DBG_IDE` | IDE driver diagnostics | `AUXV6_DEBUG` |
 | `DBG_EXEC` | exec/load diagnostics (including stack allocation policy) | `AUXV6_DEBUG` |

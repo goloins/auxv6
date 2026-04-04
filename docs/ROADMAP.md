@@ -3,7 +3,7 @@
 ## Project Overview
 
 auxv6 is an xv6-derived Unix-like operating system with significant enhancements including:
-- Multi-backend VFS layer (xv6fs, ext2, msdosfs, procfs, tmpfs)
+- Multi-backend VFS layer (xv6fs, ext2, msdosfs, procfs, tmpfs, isofs, btrfs, ufs2)
 - BSD-style networking with TCP/IP stack
 - Signal handling infrastructure
 - Job control with process groups, sessions, terminal control
@@ -52,7 +52,8 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | Subsystem | Status | Notes |
 |-----------|--------|-------|
 | NFS | 45% | XDR/RPC transport, MOUNT plumbing, read-only VFS wiring, and basic GETATTR/LOOKUP/READ paths landed; READDIR decode stub still in place; deprioritized pending other work |
-| Btrfs | None | Planned read-only support |
+| Btrfs | 35% | Initial read-only VFS backend landed (`btrfs` mount type): single-device volumes, metadata-tree traversal, directory lookup/readdir, regular-file reads, and symlink reads; write paths, compression/RAID/multi-device, and many advanced features remain out of scope |
+| UFS2/FFS | 28% | Initial read-only VFS backend landed (`ufs2`/`ffs` mount type): superblock probe, inode/directory traversal, direct/single-indirect file reads, and symlink reads with conservative format assumptions; write paths and broader on-disk compatibility hardening remain out of scope |
 | Device hotplug/eventing | None | Planned kernel event path for live node add/remove beyond boot-time `devman -s` |
 
 ---
@@ -67,6 +68,9 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - NVMe/loop device-number collision was fixed by moving loop base to dev 44, restoring stable `nda` visibility in `lsblk` and successful NVMe ext2 mounting.
 - Storage diagnostics improved with `/proc/bdev_table` and `lsblk -v`, making block-device registration/capacity state directly inspectable.
 - `qemu-nvme-fat` image generation now uses dosfstools (`mkfs.fat`/`mkdosfs`) and produces a deterministic FAT16 image containing a known `README.TXT` marker for quick validation.
+- Btrfs gained an initial read-only backend (`mount ... btrfs ...`) integrated through VFS, with explicit first-tranche constraints documented in `docs/btrfs-driver.md`.
+- UFS2 gained an initial read-only backend (`mount ... ufs2 ...` and `mount ... ffs ...`) integrated through VFS, with first-tranche constraints documented in `docs/ufs2-driver.md`.
+- Linux-host Btrfs image tooling landed (`tools/stage-btrfs-root.sh`, `make nvme-btrfs.img`, `qemu-nvme-btrfs`, `qemu-nox-nvme-btrfs`, `btrfs-reset`) to support repeatable guest validation.
 
 ---
 
@@ -214,7 +218,7 @@ Primary goal: consolidate recent kernel-core and userland wins into a dependable
 3. **Execute Tranche B (devman policy parsing + optional cleanup)** to strengthen `/dev` lifecycle safety.
 4. **Execute Tranche C (observability + manpages + utility smoke tests)** to lock in operational confidence around the larger default userland.
 5. **Tranche D (NFS) is deprioritized** — return to it after the base kernel/storage work has settled; the immediate blocker remains READDIR decode.
-6. **After storage/devman/observability:** return to the unified libc/POSIX portability tranche, Btrfs read-only, and devman hotplug/event lifecycle enhancements.
+6. **After storage/devman/observability:** broaden the new Btrfs backend (search/index efficiency, feature coverage, and validation), then return to the unified libc/POSIX portability tranche and devman hotplug/event lifecycle enhancements.
 
 ### Prepared Next Slice (2026-04-03)
 
@@ -222,6 +226,23 @@ The next prepared tranche after the newly landed libc identity/stdio work is:
 
 - Thread groundwork:
   - replace placeholder `pthread_*` typedef expectations with a real thread plan
+
+### Btrfs Tranche (Read-Only Follow-on)
+
+Current position:
+- Initial read-only support is in-tree and usable for single-device images.
+- Linux-host test-image plumbing exists for NVMe attach validation.
+
+Missing before the next milestone bump:
+- Compressed-extent read support.
+- Stronger malformed-metadata hardening and fail-closed validation.
+- Key-directed lookup/search path improvements to reduce broad tree scans.
+- Broader test coverage (mount/read/readdir/readlink negative and corruption cases).
+
+Definition of done for next bump:
+- Read-only mount/read paths remain stable across repeated NVMe boot/mount cycles.
+- At least one non-trivial compressed image reads successfully.
+- Lookup/read hot paths have measurable scan reduction versus the current baseline.
   - choose shared-address-space thread creation/join/TID semantics
   - make libc state ready for eventual TLS-backed thread correctness where needed
 - Residual portability cleanup:
@@ -537,6 +558,7 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 | File | Description |
 |------|-------------|
 | `kernel/fs/vfs_isofs.c` | ISO 9660 read-only filesystem with current VFS integration |
+| `kernel/fs/vfs_ufs2.c` | UFS2/FFS read-only filesystem with initial VFS integration |
 | `user/devman.c` | Device node manager utility with boot-time static scan mode (`devman -s`) |
 
 ---
