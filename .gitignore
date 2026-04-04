@@ -30,6 +30,7 @@ user/grep
 user/init
 user/netcat
 user/6get
+user/abrowse
 user/telnet
 user/runlevel
 user/telinit

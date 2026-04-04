@@ -10,6 +10,7 @@ Generated: 2026-04-03
 ## Tracking
 | Utility | Man Page | Last Updated | Source Audited | Notes |
 |---|---|---|---|---|
+| abrowse | targetfs/usr/share/man/abrowse.md | 2026-04-03 | user/abrowse.c | basic terminal HTTP browser (text/html/markdown/plain) |
 | 6get | targetfs/usr/share/man/6get.md | 2026-04-02 | user/6get.c | source-derived usage/options; see docs/6get-http-transfer-notes.md |
 | ahcitest | targetfs/usr/share/man/ahcitest.md | 2026-04-02 | user/ahcitest.c | AHCI regression binary |
 | arp | targetfs/usr/share/man/arp.md | 2026-04-01 | user/arp.c | source-derived usage/options |

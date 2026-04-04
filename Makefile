@@ -351,6 +351,9 @@ _netcat: $(USER_STAGE_DIR)/netcat
 _6get: user/6get
 	cp user/6get _6get
 
+_abrowse: user/abrowse
+	cp user/abrowse _abrowse
+
 _telnet: $(USER_STAGE_DIR)/telnet
 	cp $(USER_STAGE_DIR)/telnet _telnet
 
@@ -594,6 +597,7 @@ UPROGS=\
 	_netstat\
 	_netcat\
 	_6get\
+	_abrowse\
 	_telnet\
 	_runlevel\
 	_telinit\
@@ -704,6 +708,7 @@ clean:
 	user/ifconfig user/netstat user/route user/arp user/rarp user/ip \
 	user/dhcp user/v6dhcpd user/ntpd user/nslookup \
 	user/6get \
+	user/abrowse \
 	user/lsof user/which user/file \
 	user/server7 \
 	user/top \

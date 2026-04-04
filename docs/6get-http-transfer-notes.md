@@ -5,6 +5,7 @@ Date: 2026-04-02
 ## Scope
 
 This note documents current `6get` transfer behavior in auxv6 userland.
+The `abrowse` terminal browser currently relies on the same HTTP transport semantics and limits.
 
 ## URL and Protocol Support
 
