@@ -1,110 +1,113 @@
 # auxv6 User Stack Sizing and Growth Notes
 
-Date: 2026-04-02
+Date: 2026-04-04
 
-## Why this note exists
+## Scope
 
-We hit a real userland bug where `cp` produced empty output because a large
-stack allocation in `cp.c` exhausted the process stack budget.
+This document defines the current user-stack policy in auxv6, why it exists,
+and how the kernel behaves at growth and overflow boundaries.
 
-This note records the current behavior, how it differs from mainstream Unix,
-and what to implement next so we do not keep rediscovering the same issue.
+## Current Policy
 
-## Current auxv6 behavior
+### Constants (`include/param.h`)
 
-Current `exec` stack policy is:
+- `USER_STACK_GUARD_PAGES = 1`
+- `USER_STACK_PAGES = 4`
+- `USER_STACK_MAX_PAGES = 64`
 
-- Allocate `USER_STACK_GUARD_PAGES + USER_STACK_PAGES` after program image alignment.
-- Mark guard pages inaccessible.
-- Use the remaining pages as the initial user stack.
+With 4 KiB pages:
 
-In code:
+- Initial usable stack: 16 KiB.
+- Maximum usable stack: 256 KiB.
+- Reserved stack region including guard: 260 KiB.
 
-- `kernel/core/exec.c`: stack-region allocation loop using
-   `USER_STACK_GUARD_PAGES` and `USER_STACK_PAGES`.
-- `include/param.h`:
-   - `USER_STACK_GUARD_PAGES = 1`
-   - `USER_STACK_PAGES = 4`
-- `include/mmu.h`: `PGSIZE == 4096`.
+### `exec` behavior (`kernel/core/exec.c`)
 
-So current default user stack budget is 4 pages (16 KiB), minus argv/setup overhead.
+1. Kernel pre-allocates guard + max stack pages contiguously.
+2. Only initial `USER_STACK_PAGES` pages are user-accessible (`PTE_U`).
+3. Lower headroom pages are present but inaccessible (`clearpteu`).
+4. `struct proc` gets:
+   - `stack_top` (fixed at stack region top)
+   - `stack_bot` (lowest currently accessible page)
 
-## Comparison to mainstream Unix
+## Growth Behavior
 
-Mainstream Unix-like systems generally provide multi-megabyte default stacks
-for user processes/threads (often configurable via rlimit).
+### Page-fault path (`kernel/core/trap.c` + `kernel/core/proc.c`)
 
-auxv6 is intentionally leaner, but one-page stacks are much less forgiving for:
+On user `T_PGFLT`, kernel attempts stack growth via:
 
-- medium/large local arrays,
-- deep call chains,
-- recursive code,
-- feature growth over time.
+```c
+proc_try_grow_stack(p, fault_addr)
+```
 
-## What this means as auxv6 grows
+Growth succeeds only if:
 
-Without policy changes, stack-pressure bugs will recur in user utilities as we
-add functionality. They often appear as odd data-path behavior, not clean
-crashes, and can waste debugging time.
+- Fault is in current guard band: `[stack_bot - PGSIZE, stack_bot)`.
+- Used pages `< USER_STACK_MAX_PAGES`.
 
-## Recommended plan
+On success:
 
-### Phase 1 (implemented): larger fixed stack
+- Promote one page: `setpteu(pgdir, stack_guard)`.
+- Move `stack_bot` down one page.
+- Flush TLB with `switchuvm(p)`.
+- Retry faulting instruction.
 
-Keep current model, but increase stack pages at `exec` time.
+On failure:
 
-Implemented default:
+- No growth.
+- SIGSEGV delivery proceeds.
 
-- Guard page: 1 page.
-- User stack: 4 pages (16 KiB).
+## Overflow and Signal-Delivery Semantics
 
-Implementation notes:
+When stack is fully exhausted, a process may catch SIGSEGV. Signal delivery
+requires pushing a signal frame to user stack. If that frame setup fails
+(bounds/copyout), auxv6 now force-terminates as signaled:
 
-1. Constants live in `include/param.h` and can be tuned without changing `exec.c`.
-2. `kernel/core/exec.c` now allocates `(guard + stack)` pages and guards the low region.
-3. Initial `sp` remains at the top of the allocated stack region.
+- `xstatus = WSTATUS_SIG(signo)`
+- `killed = 1`
 
-Pros:
+This prevents false normal-exit status and aligns with expected Unix fallback
+behavior in the absence of alternate signal stacks.
 
-- Low complexity and low risk.
-- Immediate reduction in stack-related userland bugs.
+## Fork Semantics
 
-Tradeoff:
+`fork()` copies `stack_top` and `stack_bot`, so the child inherits the same
+current stack-growth position and remaining growth window.
 
-- Higher per-process memory footprint.
+## Memory Cost
 
-### Phase 2 (optional later): demand-growing stack
+Per process reserved stack region:
 
-Add page-fault-driven stack growth (downward) with strict bounds.
+$$
+(\text{USER\_STACK\_GUARD\_PAGES} + \text{USER\_STACK\_MAX\_PAGES}) \times \text{PGSIZE}
+= 65 \times 4096 = 266240\;\text{bytes}
+$$
 
-High-level requirements:
+That is 260 KiB per process.
 
-1. Track per-process stack bounds (top, current bottom, max depth).
-2. In page fault handling, allow growth only when fault address is within a
-   valid growth window below current stack bottom.
-3. Allocate one (or a few) new stack pages and keep at least one guard page.
-4. Kill process on invalid growth attempts.
+Worst case with `NPROC=128`:
 
-Pros:
+$$
+128 \times 260\;\text{KiB} = 33280\;\text{KiB} \approx 32.5\;\text{MiB}
+$$
 
-- Better memory efficiency.
-- More mainstream behavior.
+On a 512 MiB physical ceiling, this is about 6.4%.
 
-Tradeoff:
+## Regression Coverage
 
-- Significantly higher implementation and testing complexity.
+Primary test utility: `stackgrowtest`.
 
-## Engineering guidelines for userland (applies now)
+Validated cases:
 
-- Avoid multi-KiB local arrays on stack.
-- Prefer static buffers or heap allocations for large work buffers.
-- Avoid deep recursion in utilities.
-- Keep path/temp locals compact.
-- Consider compiler warnings for large stack frames during CI.
+1. Deep recursion grows stack incrementally beyond initial 16 KiB.
+2. Fork child inherits growth metadata and recurses successfully.
+3. Exceeding max stack yields SIGSEGV signaled termination (`sig=11`).
 
-## Minimal regression ideas
+Manual guest validation currently reports 3/3 passing.
 
-1. Add a small test utility that uses controlled local buffer sizes and checks
-   that expected sizes run safely.
-2. Add copy-style workload tests (`cp`, `cat > file`, cross-filesystem copies)
-   to catch data-path regressions quickly.
+## Operational Guidance for Userland
+
+- Avoid large stack-local buffers when heap/static storage is acceptable.
+- Keep recursion bounded unless intentional.
+- Prefer iterative algorithms in utilities when practical.
+- Use `stackgrowtest -d` to inspect depth/SP behavior when diagnosing growth.

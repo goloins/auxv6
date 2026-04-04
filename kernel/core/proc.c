@@ -290,6 +290,56 @@ proc_check_alarms(uint current_ticks)
   release(&ptable.lock);
 }
 
+// Attempt to grow the stack of process p downward to cover fault_addr.
+// Called from the page-fault handler before delivering SIGSEGV.
+// Returns 1 if the fault was in the guard band and a new page was made
+// accessible; returns 0 if the fault is not a stack-growth candidate or the
+// stack has already reached USER_STACK_MAX_PAGES.
+//
+// Implementation notes:
+//   - At exec time, (GUARD + MAX) pages are pre-allocated contiguously below
+//     the initial stack.  All but the initial USER_STACK_PAGES usable pages
+//     are marked !PTE_U.  Growth simply makes the current guard page user-
+//     accessible and slides the logical guard pointer one page lower.
+//   - No kalloc() is needed here; every page is already allocated.
+//   - After changing PTE flags, the TLB for this process is invalidated via
+//     switchuvm() so the next user instruction sees the updated mapping.
+int
+proc_try_grow_stack(struct proc *p, uint fault_addr)
+{
+  uint stack_guard;
+  uint pages_used;
+
+  if(p->stack_top == 0 || p->stack_bot == 0)
+    return 0;
+  if(p->stack_bot >= p->stack_top)
+    return 0;
+
+  stack_guard = p->stack_bot - PGSIZE;
+
+  // The fault must land in the current single-page guard zone.
+  if(fault_addr < stack_guard || fault_addr >= p->stack_bot)
+    return 0;
+
+  pages_used = (p->stack_top - p->stack_bot) / PGSIZE;
+  if(pages_used >= USER_STACK_MAX_PAGES) {
+    STACKDBG("stack: pid %d tried to grow beyond max (%d pages)\n",
+             p->pid, USER_STACK_MAX_PAGES);
+    return 0;  // Hard ceiling: deliver SIGSEGV
+  }
+
+  // Make the guard page user-accessible — it becomes the new bottom of stack.
+  setpteu(p->pgdir, (char*)stack_guard);
+  p->stack_bot = stack_guard;
+
+  STACKDBG("stack: pid %d grew stack to 0x%x (%d/%d pages used)\n",
+           p->pid, p->stack_bot, pages_used + 1, USER_STACK_MAX_PAGES);
+
+  // Flush the TLB so the newly writable page is visible to userspace.
+  switchuvm(p);
+  return 1;
+}
+
 void
 proc_apply_pending_signals(struct proc *p)
 {
@@ -465,7 +515,11 @@ proc_deliver_signal(struct proc *p)
 
   // Verify user stack is accessible (simple bounds check)
   if(sp < PGSIZE || sp > p->sz) {
-    cprintf("pid %d: signal delivery failed, bad stack 0x%x\n", p->pid, sp);
+    STACKDBG("stack: pid %d signal delivery failed, bad stack 0x%x\n",
+             p->pid, sp);
+    // Match Unix behavior: if we cannot construct a handler frame
+    // (e.g. exhausted stack and no alt stack), force default fatal action.
+    p->xstatus = WSTATUS_SIG(signo);
     p->killed = 1;
     return 0;
   }
@@ -475,7 +529,9 @@ proc_deliver_signal(struct proc *p)
 
   // Copy signal frame to user stack
   if(copyout(p->pgdir, sp, &sf, sizeof(sf)) < 0) {
-    cprintf("pid %d: signal delivery copyout failed\n", p->pid);
+    STACKDBG("stack: pid %d signal delivery copyout failed\n", p->pid);
+    // Handler delivery could not be set up; terminate as signaled.
+    p->xstatus = WSTATUS_SIG(signo);
     p->killed = 1;
     return 0;
   }
@@ -764,6 +820,8 @@ fork(void)
     return -1;
   }
   np->sz = curproc->sz;
+  np->stack_top = curproc->stack_top;
+  np->stack_bot = curproc->stack_bot;
   np->parent = curproc;
   np->ppid = curproc->pid;
   np->pgid = curproc->pgid;

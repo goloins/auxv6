@@ -245,6 +245,23 @@ trap(struct trapframe *tf)
     break;
 
   //PAGEBREAK: 13
+  case T_PGFLT:
+    // Page fault: before delivering SIGSEGV, try to grow the user stack.
+    // The faulting virtual address is in CR2.
+    if(myproc() && (tf->cs & 3) == DPL_USER){
+      uint fa = rcr2();
+      if(proc_try_grow_stack(myproc(), fa))
+        break;  // Stack grown; resume user instruction
+      // Not a growable stack fault — fall through to signal delivery.
+      myproc()->sig_pending |= SIGBIT(SIGSEGV);
+    } else {
+      // Kernel-mode page fault: always fatal.
+      cprintf("unexpected trap %d from cpu %d eip %x (cr2=0x%x)\n",
+              tf->trapno, cpuid(), tf->eip, rcr2());
+      panic("trap");
+    }
+    break;
+
   default:
     // Check for dynamically registered IRQ handlers
     if(tf->trapno >= T_IRQ0 && tf->trapno < T_IRQ0 + MAX_IRQ){

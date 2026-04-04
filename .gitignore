@@ -106,6 +106,7 @@ user/ftstest
 user/termdemo
 user/termcheck
 user/testdaemon
+user/stackgrowtest
 user/dmesg
 user/tail
 user/lsof

@@ -174,9 +174,12 @@ exec_internal(char *path, char **argv, int depth)
   ip = 0;
 
   // Allocate guard + stack pages at the next page boundary.
-  // Guard pages are made inaccessible; stack grows downward from sp=sz.
+  // Pre-allocate the full USER_STACK_MAX_PAGES to support demand-growth.
+  // All pages except the initial USER_STACK_PAGES usable pages at the top
+  // are marked inaccessible via clearpteu; the page-fault handler makes them
+  // accessible one at a time as the stack grows downward.
   {
-    uint stack_total = (USER_STACK_GUARD_PAGES + USER_STACK_PAGES) * PGSIZE;
+    uint stack_total = (USER_STACK_GUARD_PAGES + USER_STACK_MAX_PAGES) * PGSIZE;
     uint stack_base;
     int g;
 
@@ -185,11 +188,15 @@ exec_internal(char *path, char **argv, int depth)
       goto bad;
 
     stack_base = sz - stack_total;
-    for(g = 0; g < USER_STACK_GUARD_PAGES; g++)
+    // Guard page(s) plus the not-yet-usable headroom below the initial stack
+    // are all marked inaccessible.  They become user-accessible one page at a
+    // time as proc_try_grow_stack() services page faults.
+    for(g = 0; g < USER_STACK_GUARD_PAGES + (USER_STACK_MAX_PAGES - USER_STACK_PAGES); g++)
       clearpteu(pgdir, (char*)(stack_base + g * PGSIZE));
 
-    EXECDBG("exec: %s stack guard=%d pages stack=%d pages total=%d bytes\n",
-            path, USER_STACK_GUARD_PAGES, USER_STACK_PAGES, stack_total);
+    EXECDBG("exec: %s stack guard=%d pages stack=%d pages max=%d pages total=%d bytes\n",
+            path, USER_STACK_GUARD_PAGES, USER_STACK_PAGES,
+            USER_STACK_MAX_PAGES, stack_total);
   }
   sp = sz;
 
@@ -222,6 +229,8 @@ exec_internal(char *path, char **argv, int depth)
   oldpgdir = curproc->pgdir;
   curproc->pgdir = pgdir;
   curproc->sz = sz;
+  curproc->stack_top = sz;
+  curproc->stack_bot = sz - USER_STACK_PAGES * PGSIZE;
   curproc->tf->eip = elf.entry;  // main
   curproc->tf->esp = sp;
   switchuvm(curproc);

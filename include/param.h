@@ -14,8 +14,11 @@
 #define FSSIZE       3000  // size of file system in blocks
 
 // User stack policy for exec(): one guard region plus usable stack pages.
-#define USER_STACK_GUARD_PAGES 1
-#define USER_STACK_PAGES       4
+// USER_STACK_MAX_PAGES is the hard ceiling on demand growth; the initial
+// allocation is USER_STACK_PAGES usable pages with a single guard page below.
+#define USER_STACK_GUARD_PAGES  1
+#define USER_STACK_PAGES        4
+#define USER_STACK_MAX_PAGES   64
 
 #define NSOCKET 64              /* max open sockets system-wide */
 

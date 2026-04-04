@@ -90,6 +90,7 @@ Control filesystem and driver diagnostic output:
 | `DBG_EXT2` | Ext2 filesystem details | `AUXV6_DEBUG` |
 | `DBG_IDE` | IDE driver diagnostics | `AUXV6_DEBUG` |
 | `DBG_EXEC` | exec/load diagnostics (including stack allocation policy) | `AUXV6_DEBUG` |
+| `DBG_STACK` | On-demand stack growth: page-fault growth events and limit enforcement | `AUXV6_DEBUG` |
 | `DBG_AHCI` | AHCI controller diagnostics | 0 (always off) |
 | `DBG_NVME` | Deep NVMe bring-up tracing (reset/enable/identify/MSI disable) | 0 (always off) |
 | `DBG_VIRTIO_NET` | Verbose virtio-net queue/IRQ/poll diagnostics | 0 (always off) |
@@ -263,7 +264,18 @@ unchanged queue indices are suppressed to reduce log noise.
 
 | Message | When |
 |---------|------|
-| `exec: <path> stack guard=G pages stack=S pages total=B bytes` | On successful user stack region setup during `exec()` |
+| `exec: <path> stack guard=G pages stack=S pages max=M pages total=B bytes` | On successful user stack region setup during `exec()` |
+
+### Runtime: On-Demand Stack Growth and Overflow Fallback
+**Flag:** `DBG_STACK`  
+**Files:** `kernel/core/proc.c`
+
+| Message | When |
+|---------|------|
+| `stack: pid P grew stack to 0xADDR (U/MAX pages used)` | A guard-page fault successfully grows stack by one page |
+| `stack: pid P tried to grow beyond max (MAX pages)` | Growth attempt hits `USER_STACK_MAX_PAGES` ceiling |
+| `stack: pid P signal delivery failed, bad stack 0xADDR` | Signal-frame setup failed bounds check at exhausted stack |
+| `stack: pid P signal delivery copyout failed` | Signal-frame copyout failed; kernel falls back to fatal signaled terminate |
 
 ---
 

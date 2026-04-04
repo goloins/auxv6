@@ -166,6 +166,11 @@ void            pty_poll_events(struct file *f, int *rd, int *wr, int *err);
 #define DBG_VIRTIO_NET 0
 #endif
 
+// Stack demand-growth debug flag.
+#ifndef DBG_STACK
+#define DBG_STACK AUXV6_DEBUG
+#endif
+
 // Boot-time verbosity flag - gates PCI discovery, device enumeration details, etc.
 #ifndef AUXV6_BOOTINFO
 #define AUXV6_BOOTINFO AUXV6_DEBUG
@@ -179,6 +184,7 @@ void            pty_poll_events(struct file *f, int *rd, int *wr, int *err);
 #define AHCIDBG(...)  do { if(DBG_AHCI) cprintf(__VA_ARGS__); } while(0)
 #define NVMEDBG(...)  do { if(DBG_NVME) cprintf(__VA_ARGS__); } while(0)
 #define VNETDBG(...)  do { if(DBG_VIRTIO_NET) cprintf(__VA_ARGS__); } while(0)
+#define STACKDBG(...) do { if(DBG_STACK) cprintf(__VA_ARGS__); } while(0)
 
 // Boot information macro - for verbose discovery and enumeration details
 #define BOOTDBG(...)  do { if(AUXV6_BOOTINFO) cprintf(__VA_ARGS__); } while(0)
@@ -397,6 +403,7 @@ void            proc_apply_pending_signals(struct proc *p);
 void            proc_maybe_stop_current(void);
 void            proc_check_alarms(uint current_ticks);
 void            proc_set_alarm(struct proc *p, uint deadline_ticks);
+int             proc_try_grow_stack(struct proc *p, uint fault_addr);
 void            proc_tick_loadavg(void);
 void            proc_get_loadavg(uint *la1, uint *la5, uint *la15);
 void            proc_count_active(int *nrunning, int *ntotal);
@@ -526,6 +533,7 @@ void            switchkvm(void);
 int             copyout(pde_t*, uint, void*, uint);
 int             copyin(pde_t*, void*, uint, uint);
 void            clearpteu(pde_t *pgdir, char *uva);
+void            setpteu(pde_t *pgdir, char *uva);
 
 // socket.c
 void            socket_init(void);

@@ -81,6 +81,7 @@ cat /proc/net_dev   # raw interface counter dump, C-locale scaffolding, and corr
 - Btrfs gained an initial read-only backend (`mount ... btrfs ...`) integrated through VFS, with explicit first-tranche constraints documented in `docs/btrfs-driver.md`.
 - UFS2 gained an initial read-only backend (`mount ... ufs2 ...` and `mount ... ffs ...`) integrated through VFS, with first-tranche constraints documented in `docs/ufs2-driver.md`.
 - Linux-host Btrfs image tooling landed (`tools/stage-btrfs-root.sh`, `make nvme-btrfs.img`, `qemu-nvme-btrfs`, `qemu-nox-nvme-btrfs`, `btrfs-reset`) to support repeatable guest validation.
+- On-demand user stack growth (Area 5) is complete: exec pre-allocates `USER_STACK_MAX_PAGES`, page faults grow one page at a time, fork inherits stack bounds metadata, and overflow now terminates with correct SIGSEGV wait status; `stackgrowtest` currently passes 3/3 in guest.
 
 ---
 
@@ -230,7 +231,7 @@ Primary goal: consolidate recent kernel-core and userland wins into a dependable
 1. **Continue Track 0 (kernel-core performance follow-through)** before taking on another broad structural kernel rewrite.
 2. **Execute Tranche A (storage reliability hardening)** — NVMe correctness work is done; AHCI soak validation and virtio-blk diagnostics tightening remain.
 3. ✅ **Execute Tranche B (devman policy parsing + optional cleanup)** — COMPLETE (Tranche B done; `-d` daemon mode debugged, works correctly but has TBD issue in devman-specific logic, using `-s` mode for now).
-4. **Execute Area 5 (on-demand user stack growth)** — NEXT PRIORITY. Full design and implementation roadmap in `docs/user-stack-growth-phase5.md`. Enables processes to grow stacks up to configurable max, eliminates fixed-size overrun crashes.
+4. ✅ **Execute Area 5 (on-demand user stack growth)** — COMPLETE. Pre-allocates `USER_STACK_MAX_PAGES` (64 pages = 256 KiB) at exec time; `proc_try_grow_stack()` makes one page accessible per guard-page fault; SIGSEGV on ceiling exceeded; fork inherits bounds. Tested by `stackgrowtest`. See `docs/user-stack-growth-phase5.md` and `docs/user-stack-sizing-and-growth.md`.
 
 ### Prepared Next Slice (2026-04-04)
 

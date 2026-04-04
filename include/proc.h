@@ -100,6 +100,8 @@ struct proc {
   uint sig_actflags[NSIG];     // Per-signal flags set by sigaction
   uint alarm_ticks;            // Tick count when SIGALRM should fire (0=none)
   uint cticks;                 // Cumulative CPU ticks charged to this process
+  uint stack_top;              // VA of top of user stack region (const after exec)
+  uint stack_bot;              // VA of bottom of current accessible user stack
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
