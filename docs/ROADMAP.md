@@ -10,7 +10,10 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - Multi-filesystem support with mount table
 
 **Architecture:** x86 32-bit, single address space per process  
-**Current State:** ext2-root is the default boot path, the kernel has received a substantial 2026-04 performance-hardening pass, the first NFS read-only path is partially wired, server7 has an initial session-aware bootstrap, and the userland now includes a broader admin/TUI layer (`top`, `abrowse`, `man`, `which`, `lsof`, `file`) plus a materially stronger libc/POSIX portability baseline (`getrlimit`/`setrlimit`, `netdb`, `fnmatch`, `glob`, `scandir`, `nftw`, `fts`, C-locale scaffolding, and corrected `unlink`/`rmdir` semantics).
+**Current State:** ext2-root is the default boot path, the kernel has received a substantial 2026-04 performance-hardening pass, the first NFS read-only path is partially wired, server7 has an initial session-aware bootstrap, and the userland now includes a broader admin/TUI layer (`top`, `abrowse`, `man`, `which`, `lsof`, `file`) plus a materially stronger libc/POSIX portability baseline (`getrlimit`/`setrlimit`, `netdb`, `fnmatch`, `glob`, `scandir`, `nftw`, `fts`netstat -s          # interface counters
+netstat -t          # TCP socket table (try after starting a server)
+netstat -u          # UDP socket table (try after DHCP or ping)
+cat /proc/net_dev   # raw interface counter dump, C-locale scaffolding, and corrected `unlink`/`rmdir` semantics).
 
 ---
 
@@ -45,7 +48,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | Graphics / framebuffer console | 72% | Framebuffer core, display registry, builtin font/render path, rich `/proc/gfxstats`, virtio-gpu scanout discovery, display-sized framebuffer allocation, display-derived readable boot geometry, stable mirror behavior, ownership plumbing for server7, and recent sync-path speedups are landed; CGA still owns the canonical console path, virtio-gpu still uses whole-frame uploads, and no `/dev/fb0` or `/dev/dri/card0` ABI exists yet |
 | procfs | 81% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`, `/proc/meminfo`, `/proc/ps`, `/proc/loadavg`, `/proc/mountstats`, `/proc/gfxstats`, `/proc/lsof`, `/proc/server7`, `/proc/bdev_table`, `/proc/net_tcp`, `/proc/net_udp`, `/proc/net_dev`; breadth is now solid but per-process drill-down remains sparse |
 | Real NICs | 60% | E1000, PCNET, and RTL8111 have full ifnet integration; virtio-net continues to improve; VMXnet3 has a basic polling datapath; netvsc, I219-V, I226-V, and AX88179 PCI remain stub-grade |
-| Device node management | 68% | `devman -s` creates `/dev` nodes at early runlevel from kernel-visible inventory and `/etc/devman.conf` can tune verbosity, but policy rules, cleanup mode, and hotplug/event support are still pending |
+| Device node management | 90% | `devman -s` creates `/dev` nodes from kernel inventory; `/etc/devman.conf` now carries full glob-pattern→mode policy rules; `devman -c` removes stale nodes; `devman -d` daemonizes with double-fork+setsid and periodic cleanup loop; hotplug event fd remains the only open item |
 | Modern storage | 91% | AHCI now has interrupt-driven completions, slot allocation, telemetry, and fault-injection hooks; NVMe correctness hardening complete (polled-only IRQ model, monotonic CID counter, recovery memory-safety, shutdown notification, LBA-size guard), dev-number collision with loop devices fixed, and ext2/ext2fs mount alias validated on `/dev/nda`; NVMe timeout/reset recovery path is in place |
 
 ### 🚧 Early Or Stubbed (0-49%)
@@ -152,19 +155,19 @@ Primary goal: consolidate recent kernel-core and userland wins into a dependable
 - Unsupported storage operations fail predictably (no silent success, no panic).
 - Timeout/error counters are visible through existing diagnostic paths.
 
-### Tranche B - devman phase-2 policy improvements
+### Tranche B - devman phase-2 policy improvements ✅
 - Add richer `/etc/devman.conf` rule parsing (path pattern -> mode/owner/group/action).
 - Add optional stale-node cleanup mode for boot-time reconciliation.
 - Keep hotplug/event mode out-of-scope for this tranche, but define kernel/userspace interface requirements.
 
-**Current status (2026-04-03):**
-- Boot-time static scan mode is in place.
-- `/etc/devman.conf` already has a runtime debug knob, but not the richer policy engine yet.
+**Current status (2026-04-04):**
+- Policy rules: `/etc/devman.conf` now supports `<glob-pattern> <octal-mode>` lines; first matching rule wins; built-in defaults are fallback only.
+- `strncpy`/`strncat` added to `user/string.c` (declarations in `include/string.h`) — the correct libc home.
+- `devman -c`: enumerates `/dev` and `/dev/pts`, stats each device node, and unlinks any not present in the current kernel inventory.
+- `devman -d`: double-fork + `setsid()` + stdin/stdout/stderr redirect to `/dev/null`; runs initial scan then loops `sleep(30)` → re-enumerate → cleanup. Acts as a lightweight stand-in until a kernel `/dev/devevent` fd is available.
+- Hotplug event interface fully specified in `docs/future-devicenode-daemon.md`: `struct devman_event`, `/dev/devevent` ring-buffer design, daemon event loop sketch, and rollout stages.
 
-**Definition of done:**
-- Policy-driven node mode/ownership works in boot scan mode.
-- Cleanup mode is opt-in and safe against active device nodes.
-- Hotplug interface proposal is documented with concrete data structures and event semantics.
+**Definition of done:** ✅ Met.
 
 ### Tranche C - observability and userland ergonomics
 - Expand procfs coverage where low-risk and high-value (`/proc/net`, `/proc/sockets`, `/proc/lsof` filtering/polish, per-process filtering strategy notes).

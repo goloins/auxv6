@@ -2,42 +2,84 @@
 
 ## Context
 
-This document captures practical notes from dynamic PTY work in auxv6.
-A full mdev/devfs-style userspace daemon remains a separate project.
+This document captures practical notes from dynamic PTY work in auxv6 and
+the devman phase-2 implementation (policy rules + stale-node cleanup).
 
-## What Exists Today
+## What Exists Today (post-phase-2)
 
-- Kernel PTY allocator now supports multiple PTY pairs.
-- `/dev/ptmx` allocates the next free PTY master endpoint.
-- Slave PTYs are addressed as `/dev/pts/N`.
-- Current bootstrap path is static node creation in `init` for `/dev/pts/0..15`.
+- `devman -s`: kernel inventory scan → node creation via configurable policy rules
+  from `/etc/devman.conf` (glob-pattern + octal-mode format).
+- `devman -rr`: remove managed nodes then rescan.
+- `devman -c`: compare `/dev` contents against current inventory and unlink stale
+  nodes.
+- `/etc/devman.conf` ships policy rules for all standard auxv6 devices.
 
-## Why Static Node Creation Is Temporary
+## Why Static Scan Is Still Temporary
 
-- Fixed ranges are brittle and can drift from kernel limits.
-- Node ownership/mode policy is hard-coded in init.
-- There is no dynamic cleanup or policy-based re-creation.
+- `devman -s` runs once at boot; hardware attached after that point is invisible.
+- No mechanism to remove nodes when hardware is detached at runtime.
+- Rule set does not yet express `owner` / `group` policy (uid/gid fields).
 
 ## Recommendations For A Future Daemon
 
-- Add a small userspace tool (`mdev -s` style) that scans kernel device inventory and populates `/dev`.
-- Keep PTY policy centralized in config, not in `init` code.
-- Allow mode/owner/group rules per device pattern (for example `pts/[0-9]+`).
-- Reconcile desired state at boot and optionally on events.
+- Add a small userspace daemon that blocks on a kernel hotplug event fd.
+- On hotplug event: re-run enumeration + rule application for the affected device.
+- On hotunplug event: identify node(s) mapped to the removed (major, minor) tuple
+  and unlink them.
+- Keep node policy centralized in `/etc/devman.conf`; daemon inherits same rule
+  format and lookup path as `devman -s`.
 
-## Kernel Interfaces That Help
+## Hotplug Event Interface Proposal
 
-- `TIOCGPTN` is now available on a PTY master fd to resolve the slave number.
-- `ptsname()/ptsname_r()` can be used by userspace software to open the correct slave path.
+### Kernel side
 
-## Future Kernel Hooks Worth Adding
+Expose a character device `/dev/devevent` (major 1, minor 7) or a procfs node
+`/proc/devevents` that returns a stream of fixed-size records:
 
-- A lightweight procfs node for live PTY slot state (`allocated`, `master_refs`, `slave_refs`).
-- Optional kernel-exported device inventory endpoint for daemon discovery.
+```c
+/* Proposed ABI — not yet implemented */
+#define DEVEV_ADD    1
+#define DEVEV_REMOVE 2
+
+struct devman_event {
+  uint8_t  ev_type;   /* DEVEV_ADD or DEVEV_REMOVE       */
+  uint8_t  ev_class;  /* M_IFBLK or M_IFCHR              */
+  uint16_t ev_major;
+  uint16_t ev_minor;
+  char     ev_hint[32]; /* kernel-suggested node base name */
+};
+```
+
+`read()` on the fd blocks until an event is available, then returns one
+`struct devman_event`.  `poll()`/`select()` readability is set when events are
+queued.  Events are produced by the block-device and character-device layers on
+device attach/detach.
+
+### Userspace daemon sketch
+
+```
+loop:
+  read(evfd, &ev, sizeof ev)
+  if ev.ev_type == DEVEV_ADD:
+    devman_enumerate_all()        # rebuild full inventory
+    devman_scan_and_create()      # apply rules for new node
+  if ev.ev_type == DEVEV_REMOVE:
+    devman_enumerate_all()
+    devman_cleanup_stale()        # unlink node(s) no longer in inventory
+```
+
+### Kernel implementation notes
+
+- The event queue can be a simple ring buffer (e.g. 32 entries) in a kernel
+  global, protected by a spinlock.
+- `read()` sleeps on a `wakeup()` channel when the queue is empty.
+- Overflow: drop oldest events and set an overflow flag bit in the next record.
 
 ## Suggested Rollout
 
-1. Keep static `/dev/pts/0..15` bootstrap in `init` as a compatibility fallback.
-2. Implement daemon static-scan mode (`mdev -s`) and run it during init.
-3. Move node policy from code to `/etc/mdev.conf`.
-4. Remove hardcoded PTY node loop from init once daemon coverage is stable.
+1. ✅ Implement `devman -s` static-scan mode with configurable policy rules.
+2. ✅ Implement `devman -c` stale-node cleanup.
+3. Add `owner`/`group` fields to `devman_rule` and extend devman.conf format.
+4. Implement `/dev/devevent` kernel ring buffer.
+5. Implement `devman -d` daemon mode that blocks on `/dev/devevent`.
+6. Update `/etc/init` to launch `devman -d &` once devevent is available.

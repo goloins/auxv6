@@ -15,11 +15,14 @@
 #include "stat.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
+#include "string.h"
+#include "dirent.h"
 
 #define MAX_DEVICES 256
 #define MAX_LINE 256
 #define MAX_PATH 64
 #define CREATED_LINE_MAX 512
+#define MAX_RULES 32
 
 struct devman_device {
   char path[MAX_PATH];
@@ -28,8 +31,15 @@ struct devman_device {
   int type;  /* M_IFBLK or M_IFCHR */
 };
 
+struct devman_rule {
+  char pattern[64];
+  uint mode;
+};
+
 static struct devman_device devices[MAX_DEVICES];
 static int ndevices = 0;
+static struct devman_rule rules[MAX_RULES];
+static int nrules = 0;
 static int debug_mode = 0;
 
 static int
@@ -98,10 +108,66 @@ trim_right(char *s)
   }
 }
 
+static uint
+parse_octal(const char *s)
+{
+  uint v;
+
+  v = 0;
+  if(*s == '0')
+    s++;
+  while(*s >= '0' && *s <= '7'){
+    v = v * 8 + (uint)(*s - '0');
+    s++;
+  }
+  return v;
+}
+
+/* Simple glob: only '*' wildcard supported */
+static int
+glob_match(const char *pat, const char *str)
+{
+  while(*pat){
+    if(*pat == '*'){
+      pat++;
+      if(!*pat)
+        return 1;
+      while(*str){
+        if(glob_match(pat, str))
+          return 1;
+        str++;
+      }
+      return 0;
+    }
+    if(*pat != *str)
+      return 0;
+    pat++;
+    str++;
+  }
+  return *str == 0;
+}
+
+static int
+devman_match_rule(const char *path, uint *mode_out)
+{
+  int i;
+
+  for(i = 0; i < nrules; i++){
+    if(glob_match(rules[i].pattern, path)){
+      if(mode_out)
+        *mode_out = rules[i].mode;
+      return 1;
+    }
+  }
+  return 0;
+}
+
 static void
 maybe_parse_config_line(char *line)
 {
   char *p;
+  char pat[64];
+  int plen;
 
   p = trim_left(line);
   trim_right(p);
@@ -115,6 +181,23 @@ maybe_parse_config_line(char *line)
   if(strncmp(p, "debug ", 6) == 0) {
     debug_mode = atoi(p + 6) ? 1 : 0;
     return;
+  }
+
+  /* Try to parse a policy rule: <pattern> <octal-mode>
+   * e.g. "/dev/pts/0"  0620 or "/dev/null" 0666
+   */
+  plen = 0;
+  while(*p && !is_space(*p) && plen < (int)sizeof(pat) - 1)
+    pat[plen++] = *p++;
+  pat[plen] = 0;
+  while(*p && is_space(*p))
+    p++;
+
+  if(plen > 0 && *p >= '0' && *p <= '7' && nrules < MAX_RULES){
+    rules[nrules].mode = parse_octal(p);
+    strncpy(rules[nrules].pattern, pat, sizeof(rules[nrules].pattern) - 1);
+    rules[nrules].pattern[sizeof(rules[nrules].pattern) - 1] = 0;
+    nrules++;
   }
 }
 
@@ -533,6 +616,91 @@ devman_remove_managed_nodes(void)
   devman_remove_node("/dev/zero");
 }
 
+/*
+ * devman_cleanup_stale - remove /dev nodes not in the current device inventory.
+ *
+ * Enumerates /dev and /dev/pts, stat()s each device node, and unlinks any
+ * that are not present in the devices[] array populated by the enumerate
+ * functions.  Must be called after devman_enumerate_*() has been run.
+ */
+static void
+devman_cleanup_stale(void)
+{
+  DIR *dp;
+  struct dirent *ent;
+  struct stat st;
+  char path[MAX_PATH];
+  int i;
+  int found;
+
+  /* Scan /dev (flat entries only — /dev/pts handled separately) */
+  dp = opendir("/dev");
+  if(!dp)
+    return;
+  while((ent = readdir(dp)) != 0){
+    if(strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+      continue;
+    if(strcmp(ent->d_name, "pts") == 0)
+      continue;
+
+    /* Build full path safely */
+    strncpy(path, "/dev/", MAX_PATH - 1);
+    path[MAX_PATH - 1] = 0;
+    strncat(path, ent->d_name, MAX_PATH - 1 - 5);
+
+    if(stat(path, &st) < 0)
+      continue;
+    if(st.st_type != T_DEV)
+      continue;
+
+    found = 0;
+    for(i = 0; i < ndevices; i++){
+      if(strcmp(devices[i].path, path) == 0){
+        found = 1;
+        break;
+      }
+    }
+    if(!found){
+      if(debug_mode)
+        dprintf(1, "devman: removing stale node %s\n", path);
+      devman_remove_node(path);
+    }
+  }
+  closedir(dp);
+
+  /* Scan /dev/pts */
+  dp = opendir("/dev/pts");
+  if(!dp)
+    return;
+  while((ent = readdir(dp)) != 0){
+    if(strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+      continue;
+
+    strncpy(path, "/dev/pts/", MAX_PATH - 1);
+    path[MAX_PATH - 1] = 0;
+    strncat(path, ent->d_name, MAX_PATH - 1 - 9);
+
+    if(stat(path, &st) < 0)
+      continue;
+    if(st.st_type != T_DEV)
+      continue;
+
+    found = 0;
+    for(i = 0; i < ndevices; i++){
+      if(strcmp(devices[i].path, path) == 0){
+        found = 1;
+        break;
+      }
+    }
+    if(!found){
+      if(debug_mode)
+        dprintf(1, "devman: removing stale node %s\n", path);
+      devman_remove_node(path);
+    }
+  }
+  closedir(dp);
+}
+
 void
 devman_scan_and_create(void)
 {
@@ -565,22 +733,19 @@ devman_scan_and_create(void)
   for(i = 0; i < ndevices; i++) {
     dev = &devices[i];
     uint mode = 0660;  /* Default mode */
-    
-    /* Adjust mode based on device type */
-    if(dev->type == M_IFCHR) {
-      if(dev->major == 3) {  /* PTY devices */
-        if(dev->minor == 0) {
-          mode = 0666;  /* /dev/ptmx */
-        } else {
-          mode = 0620;  /* /dev/pts/N */
-        }
-      } else if(dev->major == 1) {  /* Console and char devices */
-        if(dev->minor == 1) {
-          mode = 0600;  /* /dev/console */
-        } else if(dev->minor == 3 || dev->minor == 5) {
-          mode = 0666;  /* /dev/null, /dev/zero */
-        } else {
-          mode = 0620;  /* /dev/tty* */
+
+    /* Config rules take priority; fall back to built-in defaults */
+    if(!devman_match_rule(dev->path, &mode)){
+      if(dev->type == M_IFCHR){
+        if(dev->major == 3){         /* PTY devices */
+          mode = (dev->minor == 0) ? 0666 : 0620;
+        } else if(dev->major == 1){  /* Console and char devices */
+          if(dev->minor == 1)
+            mode = 0600;             /* /dev/console */
+          else if(dev->minor == 3 || dev->minor == 5)
+            mode = 0666;             /* /dev/null, /dev/zero */
+          else
+            mode = 0620;             /* /dev/tty* */
         }
       }
     }
@@ -630,6 +795,8 @@ main(int argc, char *argv[])
 {
   int scan_mode = 0;
   int replace_mode = 0;
+  int cleanup_mode = 0;
+  int daemon_mode = 0;
 
   if(argc > 1) {
     if(strcmp(argv[1], "-s") == 0 || strcmp(argv[1], "--scan") == 0) {
@@ -637,10 +804,16 @@ main(int argc, char *argv[])
     } else if(strcmp(argv[1], "-rr") == 0) {
       scan_mode = 1;
       replace_mode = 1;
+    } else if(strcmp(argv[1], "-c") == 0) {
+      cleanup_mode = 1;
+    } else if(strcmp(argv[1], "-d") == 0) {
+      daemon_mode = 1;
     } else {
-      dprintf(2, "usage: %s [-s|--scan|-rr]\n", argv[0]);
+      dprintf(2, "usage: %s [-s|--scan|-rr|-c|-d]\n", argv[0]);
       dprintf(2, "  -s, --scan    Scan and create all device nodes\n");
       dprintf(2, "  -rr          Rescan and replace managed device nodes\n");
+      dprintf(2, "  -c           Remove stale /dev nodes not in kernel inventory\n");
+      dprintf(2, "  -d           Daemonize: scan, then loop cleaning stale nodes\n");
       exit(0);
     }
   }
@@ -655,6 +828,65 @@ main(int argc, char *argv[])
       devman_remove_managed_nodes();
     }
     devman_scan_and_create();
+  } else if(cleanup_mode) {
+    devman_load_config();
+    if(debug_mode)
+      dprintf(1, "devman: cleanup mode (debug=%d)\n", debug_mode);
+    devman_enumerate_block_devices();
+    devman_enumerate_pty_devices();
+    devman_cleanup_stale();
+  } else if(daemon_mode) {
+    int pid;
+
+    /* Double-fork to fully detach from the calling session */
+    pid = fork();
+    if(pid < 0){
+      dprintf(2, "devman: fork failed\n");
+      exit(1);
+    }
+    if(pid > 0)
+      exit(0);  /* parent: done */
+
+    setsid();
+
+    pid = fork();
+    if(pid < 0)
+      exit(1);
+    if(pid > 0)
+      exit(0);  /* first child: done */
+
+    /* Second child: redirect stdin/stdout/stderr to /dev/null */
+    {
+      int nullfd;
+
+      nullfd = open("/dev/null", O_RDONLY);
+      if(nullfd >= 0){
+        close(0);
+        dup(nullfd);
+        close(nullfd);
+      }
+      nullfd = open("/dev/null", O_WRONLY);
+      if(nullfd >= 0){
+        close(1);
+        dup(nullfd);
+        close(2);
+        dup(nullfd);
+        close(nullfd);
+      }
+    }
+
+    devman_load_config();
+    devman_scan_and_create();
+
+    /* Periodic cleanup loop: re-enumerate and clean stale nodes every 30s.
+     * This is a lightweight stand-in until a kernel hotplug event fd exists.
+     */
+    for(;;){
+      sleep(30);
+      devman_enumerate_block_devices();
+      devman_enumerate_pty_devices();
+      devman_cleanup_stale();
+    }
   } else {
     dprintf(2, "devman: no mode specified (try -s for scan mode)\n");
     exit(0);

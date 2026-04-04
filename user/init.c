@@ -79,13 +79,13 @@ run_runlevel_script(char target)
   script_path[13] = target;
   pid = fork();
   if(pid == 0){
-    dprintf(1, "init: running runlevel script %s\n", script_path);
+    dprintf(1, "init: child executing runlevel script %s\n", script_path);
     exec("/bin/dash", script_argv);
     dprintf(1, "init: runlevel script %s missing or failed\n", script_path);
     exit(0);
   }
   if(pid > 0)
-    wait();
+    waitpid(pid, 0, 0);
 }
 
 static void
@@ -174,7 +174,7 @@ main(void)
   }
   if(cpid > 0){
     dprintf(1, "init: waiting for rc script (pid %d)\n", cpid);
-    wait();
+    waitpid(cpid, 0, 0);
     dprintf(1, "init: rc script process exited\n");
   }
 
