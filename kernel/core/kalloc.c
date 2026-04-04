@@ -306,7 +306,9 @@ kalloc(void)
   // acquisition so we cannot migrate between CPUs mid-allocation.
   pushcli();
   c = mycpu();
-  if(c->kfree_cache_count < KALLOC_PCPU_LOW_WATER)
+  // Phase 2c: preemptive refill only once local cache reaches a lower
+  // trigger, reducing eager global-lock traffic under steady load.
+  if(c->kfree_cache_count <= KALLOC_PCPU_REFILL_TRIGGER)
     kalloc_refill_local(c);
   if(c->kfree_cache_count > 0){
     r = c->kfree_cache[--c->kfree_cache_count];

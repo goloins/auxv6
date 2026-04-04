@@ -373,6 +373,14 @@ Latest confirmed results are now best read as a phase timeline:
    - `fsperf -n 3`: `83/100` avg (min 81, max 85)
    - `/proc/vmstat` key counters: `cache_alloc_hits 7134`, `cache_alloc_misses 0`,
      `global_refill_batches 438`, `global_drain_batches 321`
+- Phase 2c validated (single-lever refill hysteresis):
+    - `kallocstress -n 3`: `84/100` avg (min 83, max 85)
+    - `schedperf -n 3`: `81/100` avg (min 81, max 81)
+    - `fsperf -n 3`: `86/100` avg (min 86, max 86)
+    - `/proc/vmstat` key counters: `cache_alloc_hits 6669`, `cache_alloc_misses 0`,
+       `global_refill_batches 405`, `global_drain_batches 288`
+    - Delta vs post-rollback checkpoint: `kallocstress +2`, `schedperf +0`,
+       `fsperf +3`, with lower refill/drain batch traffic.
 
 Scores show meaningful run-to-run variance (~5–10 pts) driven by host scheduler
 load rather than code changes.  Use `schedperf -n 3` / `fsperf -n 3` /

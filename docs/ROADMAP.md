@@ -155,7 +155,11 @@ Primary goal: consolidate recent kernel-core and userland wins into a dependable
 - Phase 2b retune landed and built clean, but triggered a login-path kernel panic in guest; the 2b policy delta was rolled back while retaining Phase 2 architecture.
 - Post-rollback guest validation is stable and passing: `kallocstress -n 3` `82/100` avg (82-83), `schedperf -n 3` `81/100` avg (80-82), `fsperf -n 3` `83/100` avg (81-85).
 - Post-rollback `/proc/vmstat` remains consistent with prior interpretation (`cache_alloc_hits 7134`, `cache_alloc_misses 0`, `global_refill_batches 438`, `global_drain_batches 321`).
-- Next immediate action: keep rollback state as safety baseline, then design a narrower Phase 2c retune with explicit guardrails before moving to Phase 3 COW groundwork.
+- Phase 2c is now guest-validated and promoted as the working baseline: single-lever refill hysteresis (`KALLOC_PCPU_REFILL_TRIGGER=4`) with unchanged watermarks and batch sizes.
+- Phase 2c validation snapshot: `kallocstress -n 3` `84/100` avg (83-85), `schedperf -n 3` `81/100` avg (81-81), `fsperf -n 3` `86/100` avg (86-86).
+- Delta vs rollback checkpoint (`82/81/83`): `kallocstress +2`, `schedperf +0`, `fsperf +3`, with no observed stability regressions.
+- `/proc/vmstat` also moved in the expected direction for this retune (`global_refill_batches 405` from `438`, `global_refill_pages 6480` from `7008`, `global_drain_batches 288` from `321`, `global_drain_pages 4608` from `5136`, misses still `0`).
+- Next immediate action: begin Phase 3 VM scaffolding for shared-page-safe teardown/refcount plumbing while keeping Phase 2c policy fixed.
 
 ### Tranche A - Storage reliability hardening
 - Virtio-blk: keep bounded retry policy but tighten transient-vs-fatal error accounting and operator-visible diagnostics.

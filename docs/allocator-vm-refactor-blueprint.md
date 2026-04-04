@@ -1,7 +1,7 @@
 # Allocator and VM Refactor Blueprint
 
 Date: 2026-04-04
-Status: Phase 1 validated; Phase 2 retained after 2b rollback with stable guest validation
+Status: Phase 1 validated; Phase 2c validated and promoted as working baseline
 Scope: kernel page allocator, VM fault path, fork semantics, kernel object allocation, process reaping bookkeeping, observability
 
 ## Why This Document Exists
@@ -481,6 +481,30 @@ Assessment update:
 	not yet the preferred long-term baseline for throughput.
 - Keep rollback state as the safe checkpoint while designing a narrower, safer
 	retune with explicit rollback guardrails.
+
+Phase 2c retune status (2026-04-04):
+- landed in-tree
+- build clean and guest validation complete
+- single-lever policy update applied:
+	- keep `KALLOC_PCPU_LOW_WATER`, `KALLOC_PCPU_HIGH_WATER`,
+	  `KALLOC_REFILL_BATCH`, and `KALLOC_DRAIN_BATCH` unchanged
+	- add `KALLOC_PCPU_REFILL_TRIGGER` and only do preemptive refill once local
+	  cache reaches that lower threshold
+- validation snapshot:
+	- `/proc/vmstat`: `cache_alloc_hits 6669`, `cache_alloc_misses 0`,
+	  `global_refill_batches 405`, `global_refill_pages 6480`,
+	  `global_drain_batches 288`, `global_drain_pages 4608`
+	- `kallocstress -n 3`: `84/100` avg (83-85)
+	- `schedperf -n 3`: `81/100` avg (81-81)
+	- `fsperf -n 3`: `86/100` avg (86-86)
+- delta vs rollback checkpoint (`82/81/83`):
+	- `kallocstress +2`
+	- `schedperf +0`
+	- `fsperf +3`
+	- refill/drain batch counters reduced in `/proc/vmstat`
+- decision:
+	- promote Phase 2c as the current safe performance baseline
+	- keep policy fixed while Phase 3 shared-page VM scaffolding is brought up
 
 ### Phase 3: VM scaffolding for shared pages
 

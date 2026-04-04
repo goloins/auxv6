@@ -5,6 +5,7 @@
 // Phase 2 allocator policy: explicit per-CPU watermarks + batched global moves.
 #define KALLOC_PCPU_LOW_WATER   8   // try to keep at least this many local pages
 #define KALLOC_PCPU_HIGH_WATER 28   // start draining when local cache reaches this
+#define KALLOC_PCPU_REFILL_TRIGGER 4 // preemptive refill threshold (Phase 2c)
 #define KALLOC_REFILL_BATCH    16   // pages pulled from global on local refill
 #define KALLOC_DRAIN_BATCH     16   // max pages returned to global per drain
 #define KALLOC_GLOBAL_RESERVE 256   // pages to leave globally available when possible
