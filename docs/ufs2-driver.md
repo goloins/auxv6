@@ -94,7 +94,7 @@ Inside auxv6 guest:
 Current status is intentionally documented to match the btrfs writeup style:
 
 - There is no in-tree host staging script yet (no `tools/stage-ufs2-root.sh`).
-- There is no dedicated make target yet (for example, no `make nvme-ufs2.img`).
+- Dedicated make targets now exist (`make nvme-ufs2.img`, `make qemu-nvme-ufs2`, `make qemu-nox-nvme-ufs2`) but image creation is currently a scaffold that exits with a clear tooling error.
 - On this macOS host, there is no guaranteed default UFS2 image-creation toolchain.
 
 Practical implication:
@@ -110,5 +110,5 @@ Planned follow-on (not in this tranche):
 
 - Add host tooling equivalent to the btrfs workflow:
 	- `tools/stage-ufs2-root.sh`
-	- `make nvme-ufs2.img`
-	- `make qemu-nvme-ufs2` / `make qemu-nox-nvme-ufs2`
+	- make `nvme-ufs2.img` generate real media instead of failing fast
+	- keep `qemu-nvme-ufs2` / `qemu-nox-nvme-ufs2` as the canonical runtime targets

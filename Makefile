@@ -700,6 +700,7 @@ clean:
 	nvme-ext2.img \
 	nvme-fat.img \
 	nvme-btrfs.img \
+	nvme-ufs2.img \
 	$(UPROGS) \
 	$(UPROGS_OLDINIT) \
 	.ext2root \
@@ -707,6 +708,7 @@ clean:
 	.ext2root-server7 \
 	.fatroot \
 	.btrfsroot \
+	.ufs2root \
 	targetfs/tmp/test.iso .isoroot \
 	kernel/**/*.o kernel/**/*.d kernel/**/*.asm \
 	user/*.o user/*.d user/*.asm user/cat user/echo \
@@ -774,6 +776,8 @@ FATIMG ?= test_fat.img
 FATROOT_STAGE ?= .fatroot
 BTRFSIMG ?= nvme-btrfs.img
 BTRFSROOT_STAGE ?= .btrfsroot
+UFS2IMG ?= nvme-ufs2.img
+UFS2ROOT_STAGE ?= .ufs2root
 # qemu* targets already depend on $(EXT2IMG), so always attach it as index=2.
 EXT2QEMU = -drive file=$(EXT2IMG)$(comma)index=2$(comma)media=disk$(comma)format=raw
 FATQEMU = -drive file=$(FATIMG)$(comma)index=3$(comma)media=disk$(comma)format=raw
@@ -822,6 +826,10 @@ fat-reset:
 btrfs-reset:
 	rm -f $(BTRFSIMG)
 	$(MAKE) $(BTRFSIMG)
+
+ufs2-reset:
+	rm -f $(UFS2IMG)
+	$(MAKE) $(UFS2IMG)
 
 # Virtio-blk test images (empty ext2 filesystems for testing virtio-blk operations)
 vblk0.img:
@@ -906,6 +914,14 @@ nvme-fat.img:
 #   mkdir /mnt/nvme && mount -t btrfs n0 /mnt/nvme
 nvme-btrfs.img: tools/stage-btrfs-root.sh
 	sh tools/stage-btrfs-root.sh $(BTRFSROOT_STAGE) $(BTRFSIMG)
+
+# NVMe UFS2 test image scaffold.
+# We currently do not ship an in-tree UFS2 image builder.
+# Use a prebuilt UFS2 image at $(UFS2IMG) for now.
+nvme-ufs2.img:
+	@echo "error: no in-tree UFS2 image builder yet for $@" >&2; \
+	echo "hint: place a prebuilt UFS2 image at $(UFS2IMG) and re-run your qemu target" >&2; \
+	exit 1
 
 vblk-reset:
 	rm -f vblk0.img vblk1.img
@@ -1036,6 +1052,25 @@ qemu-nox-nvme-btrfs: aux.bootkern $(EXT2IMG) nvme-btrfs.img
 		-drive file=aux.bootkern,index=0,media=disk,format=raw \
 		-drive file=$(EXT2IMG),index=2,media=disk,format=raw \
 		-drive file=nvme-btrfs.img,if=none,id=nvme0,format=raw \
+		-device nvme,drive=nvme0,serial=auxv6nvme0 \
+		$(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
+# NVMe UFS2 test: same config with a UFS2 test volume.
+# Inside the guest:
+#   mkdir /mnt/nvme && mount -t ufs2 n0 /mnt/nvme
+qemu-nvme-ufs2: aux.bootkern $(EXT2IMG) $(UFS2IMG)
+	$(QEMU) -serial mon:stdio \
+		-drive file=aux.bootkern,index=0,media=disk,format=raw \
+		-drive file=$(EXT2IMG),index=2,media=disk,format=raw \
+		-drive file=$(UFS2IMG),if=none,id=nvme0,format=raw \
+		-device nvme,drive=nvme0,serial=auxv6nvme0 \
+		$(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
+qemu-nox-nvme-ufs2: aux.bootkern $(EXT2IMG) $(UFS2IMG)
+	$(QEMU) -nographic \
+		-drive file=aux.bootkern,index=0,media=disk,format=raw \
+		-drive file=$(EXT2IMG),index=2,media=disk,format=raw \
+		-drive file=$(UFS2IMG),if=none,id=nvme0,format=raw \
 		-device nvme,drive=nvme0,serial=auxv6nvme0 \
 		$(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
@@ -1203,4 +1238,4 @@ tar:
 	cp dist/* config/.gdbinit.tmpl /tmp/xv6
 	(cd /tmp; tar cf - xv6) | gzip >xv6-rev10.tar.gz  # the next one will be 10 (9/17)
 
-.PHONY: dist-test dist ext2-reset fat-reset btrfs-reset ext2root qemu-ext2root qemu-nox-ext2root qemu-gdb-ext2root qemu-nox-gdb-ext2root qemu-fat qemu-nox-fat qemu-oldinit e1000 qemu-nvme-btrfs qemu-nox-nvme-btrfs
+.PHONY: dist-test dist ext2-reset fat-reset btrfs-reset ufs2-reset ext2root qemu-ext2root qemu-nox-ext2root qemu-gdb-ext2root qemu-nox-gdb-ext2root qemu-fat qemu-nox-fat qemu-oldinit e1000 qemu-nvme-btrfs qemu-nox-nvme-btrfs qemu-nvme-ufs2 qemu-nox-nvme-ufs2
