@@ -229,10 +229,8 @@ Primary goal: consolidate recent kernel-core and userland wins into a dependable
 
 1. **Continue Track 0 (kernel-core performance follow-through)** before taking on another broad structural kernel rewrite.
 2. **Execute Tranche A (storage reliability hardening)** — NVMe correctness work is done; AHCI soak validation and virtio-blk diagnostics tightening remain.
-3. **Execute Tranche B (devman policy parsing + optional cleanup)** to strengthen `/dev` lifecycle safety.
-3. **`/proc/net_tcp`, `/proc/net_udp`, `/proc/net_dev` landed** — TCP/UDP socket tables and per-interface I/O counters are now in procfs; `netstat -t/-u/-s` reads them. Per-interface stats are tracked in `struct ifnet` and incremented in the ethernet/IP layers. Socket PID tracking is a follow-on item.
-5. **Tranche D (NFS) is deprioritized** — return to it after the base kernel/storage work has settled; the immediate blocker remains READDIR decode.
-6. **After storage/devman/observability:** return to exFAT once a better host-side seeded-image workflow exists or a Linux-host validation path is documented, then harden metadata/read coverage before any write tranche; in parallel broaden the Btrfs backend (search/index efficiency, feature coverage, and validation), then return to the unified libc/POSIX portability tranche and devman hotplug/event lifecycle enhancements.
+3. ✅ **Execute Tranche B (devman policy parsing + optional cleanup)** — COMPLETE (Tranche B done; `-d` daemon mode debugged, works correctly but has TBD issue in devman-specific logic, using `-s` mode for now).
+4. **Execute Area 5 (on-demand user stack growth)** — NEXT PRIORITY. Full design and implementation roadmap in `docs/user-stack-growth-phase5.md`. Enables processes to grow stacks up to configurable max, eliminates fixed-size overrun crashes.
 
 ### Prepared Next Slice (2026-04-04)
 

@@ -16,8 +16,9 @@ main(void)
 {
   int pid;
   int i;
+  int logfd;
 
-  dprintf(1, "testdaemon: starting\n");
+  dprintf(1, "testdaemon: starting (pid %d, ppid %d)\n", getpid(), getppid());
 
   /* First fork */
   pid = fork();
@@ -30,14 +31,14 @@ main(void)
     exit(0);
   }
 
-  dprintf(1, "testdaemon: first child (pid %d)\n", getpid());
+  dprintf(1, "testdaemon: first child (pid %d, ppid %d)\n", getpid(), getppid());
 
   /* Create new session */
   if(setsid() < 0){
     dprintf(2, "testdaemon: setsid failed\n");
     exit(1);
   }
-  dprintf(1, "testdaemon: setsid ok, new sid\n");
+  dprintf(1, "testdaemon: setsid ok, new sid (pid %d, ppid %d)\n", getpid(), getppid());
 
   /* Second fork */
   pid = fork();
@@ -47,10 +48,13 @@ main(void)
   }
   if(pid > 0){
     dprintf(1, "testdaemon: intermediate child exiting (pid %d -> grandchild %d)\n", getpid(), pid);
-    exit(0);
+    exit(0);  /* This should trigger reparenting of grandchild to init */
   }
 
-  dprintf(1, "testdaemon: grandchild daemon (pid %d, ppid %d)\n", getpid(), getppid());
+  /* Give the system a moment for reparenting to complete */
+  sleep(1);
+
+  dprintf(1, "testdaemon: grandchild daemon (pid %d, ppid %d) - should be ppid 1!\n", getpid(), getppid());
 
   /* Redirect stdio to /dev/null */
   {
@@ -73,55 +77,86 @@ main(void)
   }
 
   /* Write to a log file instead since stdio is redirected */
-  {
-    int logfd;
+  logfd = open("/tmp/testdaemon.log", O_CREATE | O_WRONLY | O_APPEND);
+  if(logfd >= 0){
+    char msg[128];
+    int len;
 
-    logfd = open("/tmp/testdaemon.log", O_CREATE | O_WRONLY | O_APPEND);
-    if(logfd >= 0){
-      char msg[64];
-      int len;
+    /* Write startup message with final ppid */
+    len = 0;
+    msg[len++] = 't';
+    msg[len++] = 'e';
+    msg[len++] = 's';
+    msg[len++] = 't';
+    msg[len++] = 'd';
+    msg[len++] = 'a';
+    msg[len++] = 'e';
+    msg[len++] = 'm';
+    msg[len++] = 'o';
+    msg[len++] = 'n';
+    msg[len++] = ':';
+    msg[len++] = ' ';
+    msg[len++] = 'p';
+    msg[len++] = 'i';
+    msg[len++] = 'd';
+    msg[len++] = '=';
 
-      len = 0;
-      msg[len++] = 't';
-      msg[len++] = 'e';
-      msg[len++] = 's';
-      msg[len++] = 't';
-      msg[len++] = 'd';
-      msg[len++] = 'a';
-      msg[len++] = 'e';
-      msg[len++] = 'm';
-      msg[len++] = 'o';
-      msg[len++] = 'n';
-      msg[len++] = ':';
-      msg[len++] = ' ';
-      msg[len++] = 'd';
-      msg[len++] = 'a';
-      msg[len++] = 'e';
-      msg[len++] = 'm';
-      msg[len++] = 'o';
-      msg[len++] = 'n';
-      msg[len++] = ' ';
-      msg[len++] = 'r';
-      msg[len++] = 'u';
-      msg[len++] = 'n';
-      msg[len++] = 'n';
-      msg[len++] = 'i';
-      msg[len++] = 'n';
-      msg[len++] = 'g';
-      msg[len++] = '\n';
-      write(logfd, msg, len);
-
-      /* Run for 30 seconds, writing periodic status */
-      for(i = 0; i < 30; i++){
-        sleep(1);
-        write(logfd, ".", 1);
+    /* Convert pid to string */
+    {
+      int p = getpid();
+      int digits = 0;
+      int temp = p;
+      int start;
+      while(temp > 0){
+        digits++;
+        temp /= 10;
       }
-
-      msg[0] = '\n';
-      write(logfd, msg, 1);
-      write(logfd, "testdaemon: exiting normally\n", 30);
-      close(logfd);
+      start = len;
+      while(digits > 0){
+        msg[len + digits - 1] = '0' + (p % 10);
+        p /= 10;
+        digits--;
+      }
+      len += (digits > 0 ? digits : len - start);
     }
+
+    msg[len++] = ' ';
+    msg[len++] = 'p';
+    msg[len++] = 'p';
+    msg[len++] = 'i';
+    msg[len++] = 'd';
+    msg[len++] = '=';
+
+    /* Convert ppid to string */
+    {
+      int p = getppid();
+      int digits = 0;
+      int temp = p;
+      int start;
+      while(temp > 0){
+        digits++;
+        temp /= 10;
+      }
+      start = len;
+      while(digits > 0){
+        msg[len + digits - 1] = '0' + (p % 10);
+        p /= 10;
+        digits--;
+      }
+      len += (digits > 0 ? digits : len - start);
+    }
+
+    msg[len++] = '\n';
+    write(logfd, msg, len);
+
+    /* Run for 10 seconds, writing periodic status */
+    for(i = 0; i < 10; i++){
+      sleep(1);
+      write(logfd, ".", 1);
+    }
+
+    write(logfd, " done\n", 6);
+    close(logfd);
   }
 
   exit(0);
