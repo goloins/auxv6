@@ -242,7 +242,7 @@ tags: $(OBJS) kernel/boot/entryother.S user/_init
 kernel/core/vectors.S: tools/vectors.pl
 	./tools/vectors.pl > kernel/core/vectors.S
 
-LIBC_OBJS = user/ulib.o user/string.o user/errstr.o user/umalloc.o user/tty.o user/inet.o user/fmt.o user/dirent.o user/fnmatch.o user/glob.o user/ftw.o user/fts.o user/locale.o user/env.o user/conf.o user/path.o user/tempfile.o user/timecore.o user/resource.o user/netdb.o user/stdlib.o user/posix_fs.o user/posix.o user/stdio.o user/regex.o user/calloc.o user/libterm.o
+LIBC_OBJS = user/ulib.o user/string.o user/errstr.o user/umalloc.o user/tty.o user/inet.o user/fmt.o user/dirent.o user/fnmatch.o user/glob.o user/ftw.o user/fts.o user/locale.o user/pwdgrp.o user/env.o user/conf.o user/path.o user/tempfile.o user/timecore.o user/resource.o user/netdb.o user/stdlib.o user/posix_fs.o user/posix.o user/stdio.o user/regex.o user/calloc.o user/libterm.o
 LIBAUXV6_OBJS = user/crt0.o user/usys.o user/printf.o user/resolve.o
 ULIB = $(LIBC_OBJS) $(LIBAUXV6_OBJS)
 
@@ -759,7 +759,7 @@ TARGETFS_ETC ?= $(TARGETFS_DIR)/etc
 TARGETFS_SBIN ?= $(TARGETFS_DIR)/sbin
 TARGETFS_MAN_DIR ?= $(TARGETFS_DIR)/usr/share/man
 EXT2ROOT_FSTAB ?= $(TARGETFS_ETC)/fstab.ext2root
-ROOTFS_COMMON_FILES = README $(TARGETFS_ETC)/hosts $(EXT2ROOT_FSTAB) $(TARGETFS_ETC)/profile $(TARGETFS_ETC)/termcap $(TARGETFS_ETC)/passwd $(TARGETFS_ETC)/groups $(TARGETFS_ETC)/hostname $(TARGETFS_ETC)/motd $(TARGETFS_ETC)/resolv.conf $(TARGETFS_SBIN)/mount.ext2 $(TARGETFS_SBIN)/mount.msdosfs $(TARGETFS_SBIN)/mount.isofs $(TARGETFS_SBIN)/mount.xv6fs $(TARGETFS_DIR)/tmp/test.iso
+ROOTFS_COMMON_FILES = README $(TARGETFS_ETC)/hosts $(EXT2ROOT_FSTAB) $(TARGETFS_ETC)/profile $(TARGETFS_ETC)/termcap $(TARGETFS_ETC)/passwd $(TARGETFS_ETC)/group $(TARGETFS_ETC)/hostname $(TARGETFS_ETC)/motd $(TARGETFS_ETC)/resolv.conf $(TARGETFS_SBIN)/mount.ext2 $(TARGETFS_SBIN)/mount.msdosfs $(TARGETFS_SBIN)/mount.isofs $(TARGETFS_SBIN)/mount.xv6fs $(TARGETFS_DIR)/tmp/test.iso
 ROOTFS_RC_FILES = $(TARGETFS_ETC)/rc.S $(TARGETFS_ETC)/rc.0 $(TARGETFS_ETC)/rc.1 $(TARGETFS_ETC)/rc.2 $(TARGETFS_ETC)/rc.3 $(TARGETFS_ETC)/rc.6
 ROOTFS_RC_FILES_SERVER7 = $(filter-out $(TARGETFS_ETC)/rc.2,$(ROOTFS_RC_FILES)) $(TARGETFS_ETC)/rc.2.server7
 ROOTFS_MAN_FILES = $(wildcard $(TARGETFS_MAN_DIR)/*.md)

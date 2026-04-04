@@ -10,7 +10,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - Multi-filesystem support with mount table
 
 **Architecture:** x86 32-bit, single address space per process  
-**Current State:** ext2-root is the default boot path, the kernel has received a substantial 2026-04 performance-hardening pass, the first NFS read-only path is partially wired, server7 has an initial session-aware bootstrap, and the userland now includes a broader admin/TUI layer (`top`, `abrowse`, `man`, `which`, `lsof`, `file`) with expanding documentation.
+**Current State:** ext2-root is the default boot path, the kernel has received a substantial 2026-04 performance-hardening pass, the first NFS read-only path is partially wired, server7 has an initial session-aware bootstrap, and the userland now includes a broader admin/TUI layer (`top`, `abrowse`, `man`, `which`, `lsof`, `file`) plus a materially stronger libc/POSIX portability baseline (`getrlimit`/`setrlimit`, `netdb`, `fnmatch`, `glob`, `scandir`, `nftw`, `fts`, C-locale scaffolding, and corrected `unlink`/`rmdir` semantics).
 
 ---
 
@@ -40,7 +40,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | Subsystem | Status | Notes |
 |-----------|--------|-------|
 | Networking interfaces | 68% | BSD ifnet abstraction, loopback, virtio-net, routing, DHCP tooling, outbound packet path, and multiple working drivers; link-state polish and broader real-hardware parity still lag |
-| POSIX compatibility layer | 72% | Broader tty/ioctl compatibility, dynamic `openpty`/`ptsname_r` path, truthful time/stdio tranche work, and dash portability fixes are in-tree; shell/text/identity tranches are still open |
+| POSIX compatibility layer | 79% | Broader tty/ioctl compatibility, dynamic `openpty`/`ptsname_r` path, truthful time/stdio tranche work, `getrlimit`/`setrlimit`, minimal `netdb`, shell/text traversal helpers (`fnmatch`, `glob`, `scandir`, `nftw`, `fts`), C-locale scaffolding, and corrected `unlink`/`rmdir` semantics are in-tree; identity/account and stdio follow-on work remain |
 | Userland docs/manpages | 82% | `man` now renders richer markdown and the tree ships 90+ documented utilities, but coverage depth and maintenance discipline still need work |
 | Graphics / framebuffer console | 72% | Framebuffer core, display registry, builtin font/render path, rich `/proc/gfxstats`, virtio-gpu scanout discovery, display-sized framebuffer allocation, display-derived readable boot geometry, stable mirror behavior, ownership plumbing for server7, and recent sync-path speedups are landed; CGA still owns the canonical console path, virtio-gpu still uses whole-frame uploads, and no `/dev/fb0` or `/dev/dri/card0` ABI exists yet |
 | procfs | 78% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`, `/proc/meminfo`, `/proc/ps`, `/proc/loadavg`, `/proc/mountstats`, `/proc/gfxstats`, `/proc/lsof`, `/proc/server7`; breadth is now solid but per-process drill-down remains sparse |
@@ -86,13 +86,15 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 2. Tranche 2: time and stream correctness. Replace stub time surfaces and add
   stdio positioning, scanning, and basic truthful stream-buffering APIs that
   portable tools expect. This tranche is now basically closed and in-tree.
-3. Unified libc/POSIX portability tranche: treat the remaining non-thread
-  work as one coordinated batch so headers, libc helpers, light syscall
-  truthfulness, and porting surfaces can move together. Scope includes
-  `fnmatch`, `glob`, `scandir`/`alphasort`, one tree-walk API (`nftw` or
-  `fts`), minimal `locale.h` for C-locale-only behavior, `pwd.h`/`grp.h`
-  lookups, `getrlimit`/`setrlimit` syscall backing, `netdb.h`, and cleanup of
-  any declarations that still over-promise relative to the implementation.
+3. Unified libc/POSIX portability tranche: treat the remaining libc/runtime
+  portability work before kernel-backed pthread support as one coordinated
+  batch so headers, libc helpers, light syscall truthfulness, and porting
+  surfaces can move together. The tranche now includes the shell/text and
+  syscall-truthfulness slice (`fnmatch`, `glob`, `scandir`/`alphasort`, both
+  tree-walk APIs, minimal `locale.h`, `getrlimit`/`setrlimit`, minimal IPv4
+  `netdb.h`, corrected directory-removal semantics) plus the identity/stdio
+  follow-on slice (`pwd.h`/`grp.h`, `getpwnam`/`getpwuid`/`getgrnam`/
+  `getgrgid`, `fscanf`/`vfscanf`, and `tmpfile`).
 4. Parallel thread-enablement track: replace placeholder `pthread_*` types with
   a real shared-address-space thread model, TLS-ready libc state, and a
   minimal pthread subset once the kernel/runtime pieces exist.
@@ -222,25 +224,41 @@ Primary goal: consolidate recent kernel-core and userland wins into a dependable
 5. **Finish Tranche D (NFS read-only completion)** once the base kernel/storage path is quieter; the immediate blocker is READDIR usability, not transport plumbing.
 6. **After NFS read-only completion:** return to the unified libc/POSIX portability tranche, Btrfs read-only, and devman hotplug/event lifecycle enhancements.
 
+### Prepared Next Slice (2026-04-03)
+
+The next prepared tranche after the newly landed libc identity/stdio work is:
+
+- Thread groundwork:
+  - replace placeholder `pthread_*` typedef expectations with a real thread plan
+  - choose shared-address-space thread creation/join/TID semantics
+  - make libc state ready for eventual TLS-backed thread correctness where needed
+- Residual portability cleanup:
+  - writable `fmemopen` semantics only if a real caller requires them
+  - fuller `perror` parity
+  - broader address-family/name-service work only when backing is real
+- validation and truthfulness follow-through:
+  - focused probes for passwd/group lookup and formatted input
+  - doc/manpage refresh for the now-canonical `/etc/group` path and libc lookup behavior
+
 ---
 
 ## Remaining POSIX/Libc Gaps (Selected)
 
-- Missing syscalls: `mmap`, `getrlimit`/`setrlimit`; broader `ioctl` coverage for non-tty devices.
-- libc/POSIX portability tranche scope: shell/text/find surfaces (`fnmatch`, `glob`, `scandir`/`alphasort`, one tree-walk API), `pwd.h`/`grp.h` lookups, `fscanf`/`vfscanf`, `tmpfile`, writable `fmemopen` semantics, fuller `perror` parity, and truthful `netdb.h` exposure.
-- identity/user database: `pwd.h`/`grp.h` lookups and associated libc/runtime plumbing.
-- Headers: `netdb.h` plus fuller socket-family declarations and constants for larger ports.
+- Missing syscalls: `mmap`; broader `ioctl` coverage for non-tty devices.
+- libc/POSIX portability tranche scope now remaining: writable `fmemopen` semantics if required by real callers, fuller `perror` parity, and broader address-family/name-service work beyond the current truthful IPv4 `netdb` subset.
+- threads: real kernel/libc thread support remains to be designed and implemented; placeholder pthread typedefs are not runtime support.
+- Headers: fuller socket-family declarations/constants and any broader resolver interfaces only when their backing is real.
 
 ---
 
 ## Recommended Low-Level Continuations
 
 1. **Finish NFS READDIR decoding** so the existing read-only mount path reaches an actually usable `ls` milestone.
-2. **Back real `getrlimit`/`setrlimit` syscalls behind the current stubs** to remove an easy portability lie.
+2. **Start the thread groundwork slice** so the current portability baseline can grow into real pthread support instead of placeholder types.
 3. **Expand procfs with `/proc/net`, `/proc/sockets`, and filtered fd views** to make perf/network/storage debugging cheaper.
 4. **Finish NVMe timeout/reset recovery and expose counters comparable to AHCI** so storage reliability work is not lopsided.
 5. **Polish virtio-net link-state and diagnostics** now that poll/IRQ instrumentation exists.
-6. **Start the graphics performance pass with dirty-rect uploads and partial flush** before considering a broader framebuffer ABI.
+6. **Tighten the remaining stdio/runtime truthfulness edges (`fmemopen` writable semantics only if needed, `perror` parity)** before treating the portability tranche as stable.
 
 ---
 

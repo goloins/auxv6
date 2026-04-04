@@ -1,6 +1,7 @@
 // Shell.
 
 #include "types.h"
+#include "pwd.h"
 #include "stat.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
@@ -624,90 +625,20 @@ reset_child_signal_handlers(void)
 void
 load_passwd_defaults(void)
 {
-  int fd;
-  int n;
-  int i;
-  int j;
-  int line_start;
-  int uidval;
-  char buf[512];
   int uid;
+  struct passwd *pw;
 
   uid = getuid();
   if(uid >= 0)
     sh_uid = uid;
 
-  fd = open("/etc/passwd", O_RDONLY);
-  if(fd < 0)
-    return;
-
-  n = read(fd, buf, sizeof(buf) - 1);
-  close(fd);
-  if(n <= 0)
-    return;
-  buf[n] = 0;
-
-  line_start = 0;
-  for(i = 0; i <= n; i++) {
-    int fstart[8];
-    int flen[8];
-    int nf;
-
-    if(i < n && buf[i] != '\n' && buf[i] != '\r')
-      continue;
-
-    nf = 0;
-    fstart[0] = line_start;
-    for(j = line_start; j <= i; j++) {
-      if(j == i || buf[j] == ':') {
-        if(nf < 8) {
-          flen[nf] = j - fstart[nf];
-          nf++;
-        }
-        if(j < i && nf < 8)
-          fstart[nf] = j + 1;
-      }
+  pw = getpwuid((uid_t)sh_uid);
+  if(pw != 0) {
+    sh_copy(sh_user, pw->pw_name, sizeof(sh_user));
+    if(pw->pw_dir && pw->pw_dir[0]) {
+      sh_copy(sh_home, pw->pw_dir, sizeof(sh_home));
+      return;
     }
-
-    line_start = i + 1;
-    if(nf < 6)
-      continue;
-
-    uidval = 0;
-    for(j = 0; j < flen[2]; j++) {
-      char c;
-
-      c = buf[fstart[2] + j];
-      if(c < '0' || c > '9') {
-        uidval = -1;
-        break;
-      }
-      uidval = uidval * 10 + (c - '0');
-    }
-    if(uidval != sh_uid)
-      continue;
-
-    if(flen[0] > 0) {
-      int ncopy;
-
-      ncopy = flen[0];
-      if(ncopy >= USER_MAX)
-        ncopy = USER_MAX - 1;
-      memmove(sh_user, buf + fstart[0], ncopy);
-      sh_user[ncopy] = 0;
-    }
-
-    if(flen[5] > 0) {
-      int ncopy;
-
-      ncopy = flen[5];
-      if(ncopy >= CWD_MAX)
-        ncopy = CWD_MAX - 1;
-      memmove(sh_home, buf + fstart[5], ncopy);
-      sh_home[ncopy] = 0;
-    } else
-      sh_copy(sh_home, "/", sizeof(sh_home));
-    return;
   }
 
   sh_copy(sh_home, "/", sizeof(sh_home));

@@ -31,6 +31,7 @@ extern FILE *stderr;
 FILE *fopen(const char *path, const char *mode);
 FILE *fdopen(int fd, const char *mode);
 FILE *fmemopen(void *buf, size_t size, const char *mode);
+FILE *tmpfile(void);
 int fclose(FILE *fp);
 int fflush(FILE *fp);
 int setvbuf(FILE *fp, char *buf, int mode, size_t size);
@@ -71,6 +72,8 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
 int snprintf(char *buf, size_t size, const char *fmt, ...);
 int sprintf(char *buf, const char *fmt, ...);
 int vsprintf(char *buf, const char *fmt, va_list ap);
+int vfscanf(FILE *fp, const char *fmt, va_list ap);
+int fscanf(FILE *fp, const char *fmt, ...);
 int vsscanf(const char *s, const char *fmt, va_list ap);
 int sscanf(const char *s, const char *fmt, ...);
 

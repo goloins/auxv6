@@ -1,4 +1,6 @@
 #include "types.h"
+#include "grp.h"
+#include "pwd.h"
 #include "stat.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
@@ -213,50 +215,14 @@ print_entries_compact(struct ls_entry *ents, int n)
 static char*
 uid_to_name(int uid)
 {
-  static char buf[512];
   static char result[32];
-  static int loaded = 0;
-  int fd, n, i, j;
+  struct passwd *pw;
+  int j;
 
-  LSDBG("ls[dbg]: uid_to_name uid=%d loaded=%d\n", uid, loaded);
-  if(!loaded){
-    fd = open("/etc/passwd", O_RDONLY);
-    if(fd >= 0){
-      n = read(fd, buf, sizeof(buf) - 1);
-      close(fd);
-      if(n > 0) buf[n] = 0;
-      else buf[0] = 0;
-    } else {
-      buf[0] = 0;
-    }
-    loaded = 1;
-  }
-
-  i = 0;
-  n = strlen(buf);
-  while(i < n){
-    int fstart[4], flen[4], nf, uidval;
-    if(buf[i] == '#'){ while(i < n && buf[i] != '\n') i++; i++; continue; }
-    nf = 0; fstart[0] = i;
-    for(j = i; j <= n; j++){
-      if(j == n || buf[j] == '\n' || buf[j] == '\r' || buf[j] == ':'){
-        if(nf < 4){ flen[nf] = j - fstart[nf]; nf++; }
-        if(j == n || buf[j] != ':' || nf >= 4){ i = j + 1; break; }
-        if(nf < 4) fstart[nf] = j + 1;
-      }
-    }
-    if(nf < 3) continue;
-    uidval = 0;
-    for(j = 0; j < flen[2]; j++){
-      char c = buf[fstart[2] + j];
-      if(c < '0' || c > '9'){ uidval = -1; break; }
-      uidval = uidval * 10 + (c - '0');
-    }
-    if(uidval != uid) continue;
-    j = flen[0];
-    if(j >= (int)sizeof(result)) j = sizeof(result) - 1;
-    memmove(result, buf + fstart[0], j);
-    result[j] = 0;
+  LSDBG("ls[dbg]: uid_to_name uid=%d\n", uid);
+  pw = getpwuid((uid_t)uid);
+  if(pw != 0) {
+    snprintf(result, sizeof(result), "%s", pw->pw_name);
     LSDBG("ls[dbg]: uid_to_name hit uid=%d name=%s\n", uid, result);
     return result;
   }
@@ -278,50 +244,14 @@ uid_to_name(int uid)
 static char*
 gid_to_name(int gid)
 {
-  static char buf[512];
   static char result[32];
-  static int loaded = 0;
-  int fd, n, i, j;
+  struct group *gr;
+  int j;
 
-  LSDBG("ls[dbg]: gid_to_name gid=%d loaded=%d\n", gid, loaded);
-  if(!loaded){
-    fd = open("/etc/groups", O_RDONLY);
-    if(fd >= 0){
-      n = read(fd, buf, sizeof(buf) - 1);
-      close(fd);
-      if(n > 0) buf[n] = 0;
-      else buf[0] = 0;
-    } else {
-      buf[0] = 0;
-    }
-    loaded = 1;
-  }
-
-  i = 0;
-  n = strlen(buf);
-  while(i < n){
-    int fstart[2], flen[2], nf, gidval;
-    if(buf[i] == '#'){ while(i < n && buf[i] != '\n') i++; i++; continue; }
-    nf = 0; fstart[0] = i;
-    for(j = i; j <= n; j++){
-      if(j == n || buf[j] == '\n' || buf[j] == '\r' || buf[j] == ':'){
-        if(nf < 2){ flen[nf] = j - fstart[nf]; nf++; }
-        if(j == n || buf[j] != ':' || nf >= 2){ i = j + 1; break; }
-        if(nf < 2) fstart[nf] = j + 1;
-      }
-    }
-    if(nf < 2) continue;
-    gidval = 0;
-    for(j = 0; j < flen[1]; j++){
-      char c = buf[fstart[1] + j];
-      if(c < '0' || c > '9'){ gidval = -1; break; }
-      gidval = gidval * 10 + (c - '0');
-    }
-    if(gidval != gid) continue;
-    j = flen[0];
-    if(j >= (int)sizeof(result)) j = sizeof(result) - 1;
-    memmove(result, buf + fstart[0], j);
-    result[j] = 0;
+  LSDBG("ls[dbg]: gid_to_name gid=%d\n", gid);
+  gr = getgrgid((gid_t)gid);
+  if(gr != 0) {
+    snprintf(result, sizeof(result), "%s", gr->gr_name);
     LSDBG("ls[dbg]: gid_to_name hit gid=%d name=%s\n", gid, result);
     return result;
   }

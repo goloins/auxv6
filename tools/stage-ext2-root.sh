@@ -155,8 +155,8 @@ for src in "$@"; do
     etc/passwd)
       install -m 0644 "$src" "$rootdir/etc/passwd"
       ;;
-    etc/groups)
-      install -m 0644 "$src" "$rootdir/etc/groups"
+    etc/group)
+      install -m 0644 "$src" "$rootdir/etc/group"
       ;;
     etc/hostname)
       install -m 0644 "$src" "$rootdir/etc/hostname"

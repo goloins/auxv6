@@ -1,3 +1,4 @@
 # auxv6 fstab for ext2 root boot
+# /mnt is a plain rootfs directory reserved for explicit runtime mounts.
 /proc procfs rw
 /dev/hdb /mnt xv6fs rw

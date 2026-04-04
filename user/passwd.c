@@ -1,16 +1,11 @@
 #include "types.h"
+#include "pwd.h"
 #include "stat.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
 
 #define USER_MAX 32
 #define PASSWD_BUF_MAX 4096
-
-struct passwd_entry {
-  char user[USER_MAX];
-  char pass[USER_MAX];
-  int uid;
-};
 
 static void
 trim_trailing_ws(char *s)
@@ -22,20 +17,6 @@ trim_trailing_ws(char *s)
                   s[n - 1] == '\r' || s[n - 1] == '\n'))
     n--;
   s[n] = 0;
-}
-
-static void
-copy_field(char *dst, int dstsz, char *src, int len)
-{
-  int i;
-
-  if(dstsz <= 0)
-    return;
-  if(len >= dstsz)
-    len = dstsz - 1;
-  for(i = 0; i < len; i++)
-    dst[i] = src[i];
-  dst[len] = 0;
 }
 
 static int
@@ -55,142 +36,6 @@ read_passwd(char *buf, int bufsz, int *n_out)
   buf[n] = 0;
   *n_out = n;
   return 0;
-}
-
-static int
-lookup_user_by_name(const char *name, struct passwd_entry *entry)
-{
-  int i;
-  int n;
-  char buf[PASSWD_BUF_MAX];
-
-  if(read_passwd(buf, sizeof(buf), &n) < 0)
-    return -1;
-
-  i = 0;
-  while(i <= n) {
-    int j;
-    int fstart[8];
-    int flen[8];
-    int nf;
-    int uid;
-    int namelen;
-
-    if(i < n && (buf[i] == '\n' || buf[i] == '\r')) {
-      i++;
-      continue;
-    }
-
-    nf = 0;
-    fstart[0] = i;
-    for(j = i; j <= n; j++) {
-      if(j == n || buf[j] == '\n' || buf[j] == '\r' || buf[j] == ':') {
-        if(nf < 8) {
-          flen[nf] = j - fstart[nf];
-          nf++;
-        }
-        if(j == n || buf[j] == '\n' || buf[j] == '\r') {
-          i = j + 1;
-          break;
-        }
-        if(nf < 8)
-          fstart[nf] = j + 1;
-      }
-    }
-
-    if(nf < 3)
-      continue;
-
-    namelen = strlen(name);
-    if(flen[0] != namelen)
-      continue;
-    if(strncmp(name, buf + fstart[0], namelen) != 0)
-      continue;
-
-    uid = 0;
-    for(j = 0; j < flen[2]; j++) {
-      char c = buf[fstart[2] + j];
-      if(c < '0' || c > '9')
-        return -1;
-      uid = uid * 10 + (c - '0');
-    }
-
-    if(entry) {
-      copy_field(entry->user, sizeof(entry->user), buf + fstart[0], flen[0]);
-      copy_field(entry->pass, sizeof(entry->pass), buf + fstart[1], flen[1]);
-      entry->uid = uid;
-    }
-    return 0;
-  }
-
-  return -1;
-}
-
-static int
-lookup_user_by_uid(int uid, struct passwd_entry *entry)
-{
-  int i;
-  int n;
-  char buf[PASSWD_BUF_MAX];
-
-  if(read_passwd(buf, sizeof(buf), &n) < 0)
-    return -1;
-
-  i = 0;
-  while(i <= n) {
-    int j;
-    int fstart[8];
-    int flen[8];
-    int nf;
-    int uidval;
-
-    if(i < n && (buf[i] == '\n' || buf[i] == '\r')) {
-      i++;
-      continue;
-    }
-
-    nf = 0;
-    fstart[0] = i;
-    for(j = i; j <= n; j++) {
-      if(j == n || buf[j] == '\n' || buf[j] == '\r' || buf[j] == ':') {
-        if(nf < 8) {
-          flen[nf] = j - fstart[nf];
-          nf++;
-        }
-        if(j == n || buf[j] == '\n' || buf[j] == '\r') {
-          i = j + 1;
-          break;
-        }
-        if(nf < 8)
-          fstart[nf] = j + 1;
-      }
-    }
-
-    if(nf < 3)
-      continue;
-
-    uidval = 0;
-    for(j = 0; j < flen[2]; j++) {
-      char c = buf[fstart[2] + j];
-      if(c < '0' || c > '9') {
-        uidval = -1;
-        break;
-      }
-      uidval = uidval * 10 + (c - '0');
-    }
-
-    if(uidval != uid)
-      continue;
-
-    if(entry) {
-      copy_field(entry->user, sizeof(entry->user), buf + fstart[0], flen[0]);
-      copy_field(entry->pass, sizeof(entry->pass), buf + fstart[1], flen[1]);
-      entry->uid = uidval;
-    }
-    return 0;
-  }
-
-  return -1;
 }
 
 static int
@@ -308,8 +153,8 @@ int
 main(int argc, char *argv[])
 {
   int uid;
-  struct passwd_entry cur;
-  struct passwd_entry target;
+  struct passwd *cur;
+  struct passwd *target;
   char oldpw[USER_MAX];
   char newpw[USER_MAX];
   char confpw[USER_MAX];
@@ -324,18 +169,20 @@ main(int argc, char *argv[])
   if(uid < 0)
     uid = 0;
 
-  if(lookup_user_by_uid(uid, &cur) < 0) {
+  cur = getpwuid((uid_t)uid);
+  if(cur == 0) {
     dprintf(2, "passwd: cannot resolve current user\n");
     exit(0);
   }
 
-  target_name = (argc == 2) ? argv[1] : cur.user;
-  if(lookup_user_by_name(target_name, &target) < 0) {
+  target_name = (argc == 2) ? argv[1] : cur->pw_name;
+  target = getpwnam(target_name);
+  if(target == 0) {
     dprintf(2, "passwd: unknown user %s\n", target_name);
     exit(0);
   }
 
-  if(uid != 0 && strcmp(cur.user, target.user) != 0) {
+  if(uid != 0 && strcmp(cur->pw_name, target->pw_name) != 0) {
     dprintf(2, "passwd: permission denied\n");
     exit(0);
   }
@@ -347,7 +194,7 @@ main(int argc, char *argv[])
       exit(0);
     trim_trailing_ws(oldpw);
 
-    if(strcmp(oldpw, target.pass) != 0) {
+    if(strcmp(oldpw, target->pw_passwd) != 0) {
       dprintf(2, "passwd: authentication failed\n");
       exit(0);
     }
@@ -378,11 +225,11 @@ main(int argc, char *argv[])
     exit(0);
   }
 
-  if(update_password(target.user, newpw) < 0) {
+  if(update_password(target->pw_name, newpw) < 0) {
     dprintf(2, "passwd: failed to update /etc/passwd\n");
     exit(0);
   }
 
-  dprintf(1, "passwd: password updated for %s\n", target.user);
+  dprintf(1, "passwd: password updated for %s\n", target->pw_name);
   exit(0);
 }

@@ -17,7 +17,7 @@ None.
 ## Arguments
 - `group` — New group. Accepts either:
   - A numeric GID (digits only), or
-  - A group name looked up in `/etc/passwd` (uses the GID of the matching entry)
+  - A group name looked up in `/etc/group`
 - `file...` — One or more files to modify.
 
 ## Notes
@@ -32,4 +32,4 @@ chgrp users /home/user/file.txt
 
 ## Source Audit
 - Source file: user/chgrp.c
-- Last updated: 2026-04-02
+- Last updated: 2026-04-03

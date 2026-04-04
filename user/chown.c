@@ -1,9 +1,10 @@
 #include "types.h"
+#include "pwd.h"
+#include "grp.h"
 #include "stat.h"
 #include "fcntl.h"
 #include "auxv6/user.h"
 
-#define PASSWD_BUF_MAX 2048
 #define NAME_MAX 32
 
 static int
@@ -23,100 +24,73 @@ parse_decimal(const char *s)
   return value;
 }
 
-static int
-parse_decimal_prefix(const char *s, int len)
-{
-  int i;
-  int value;
-
-  if(len <= 0)
-    return -1;
-  value = 0;
-  for(i = 0; i < len; i++){
-    if(s[i] < '0' || s[i] > '9')
-      return -1;
-    value = value * 10 + (s[i] - '0');
-  }
-  return value;
-}
-
-static int
-lookup_user(const char *name, int *uid_out, int *gid_out)
-{
-  int fd;
-  int n;
-  int i;
-  char buf[PASSWD_BUF_MAX];
-
-  fd = open("/etc/passwd", O_RDONLY);
-  if(fd < 0)
-    return -1;
-  n = read(fd, buf, sizeof(buf) - 1);
-  close(fd);
-  if(n <= 0)
-    return -1;
-  buf[n] = 0;
-
-  i = 0;
-  while(i < n){
-    int j;
-    int fstart[8];
-    int flen[8];
-    int nf;
-    int uid;
-    int gid;
-
-    nf = 0;
-    fstart[0] = i;
-    for(j = i; j <= n; j++){
-      if(buf[j] == ':' || buf[j] == '\n' || buf[j] == 0){
-        if(nf < 8){
-          flen[nf] = j - fstart[nf];
-          nf++;
-        }
-        if(buf[j] == '\n' || buf[j] == 0){
-          i = j + 1;
-          break;
-        }
-        if(nf < 8)
-          fstart[nf] = j + 1;
-      }
-    }
-    if(nf < 4)
-      continue;
-    if(flen[0] != (int)strlen(name))
-      continue;
-    if(strncmp(name, buf + fstart[0], flen[0]) != 0)
-      continue;
-
-    uid = parse_decimal_prefix(buf + fstart[2], flen[2]);
-    gid = parse_decimal_prefix(buf + fstart[3], flen[3]);
-    if(uid < 0 || gid < 0)
-      return -1;
-    *uid_out = uid;
-    *gid_out = gid;
-    return 0;
-  }
-
-  return -1;
-}
-
 int
 main(int argc, char *argv[])
 {
   int i;
   int uid;
   int gid;
+  char *spec;
+  char *colon;
+  char ownerbuf[NAME_MAX];
+  int ownerlen;
+  struct passwd *pw;
+  struct group *gr;
 
   if(argc < 3){
-    dprintf(2, "usage: chown owner file...\n");
+    dprintf(2, "usage: chown [owner][:group] file...\n");
     exit(0);
   }
 
-  uid = parse_decimal(argv[1]);
+  spec = argv[1];
+  colon = strchr(spec, ':');
+  uid = -1;
   gid = -1;
-  if(uid < 0 && lookup_user(argv[1], &uid, &gid) < 0){
-    dprintf(2, "chown: unknown owner %s\n", argv[1]);
+
+  if(colon == 0) {
+    /* owner only — change uid, leave gid untouched */
+    uid = parse_decimal(spec);
+    if(uid < 0) {
+      pw = getpwnam(spec);
+      if(pw == 0) {
+        dprintf(2, "chown: unknown user %s\n", spec);
+        exit(0);
+      }
+      uid = (int)pw->pw_uid;
+    }
+  } else {
+    /* [owner]:group */
+    ownerlen = (int)(colon - spec);
+    if(ownerlen > 0) {
+      if(ownerlen >= NAME_MAX)
+        ownerlen = NAME_MAX - 1;
+      memmove(ownerbuf, spec, ownerlen);
+      ownerbuf[ownerlen] = 0;
+      uid = parse_decimal(ownerbuf);
+      if(uid < 0) {
+        pw = getpwnam(ownerbuf);
+        if(pw == 0) {
+          dprintf(2, "chown: unknown user %s\n", ownerbuf);
+          exit(0);
+        }
+        uid = (int)pw->pw_uid;
+      }
+    }
+    if(colon[1] != 0) {
+      gid = parse_decimal(colon + 1);
+      if(gid < 0) {
+        gr = getgrnam(colon + 1);
+        if(gr == 0) {
+          dprintf(2, "chown: unknown group %s\n", colon + 1);
+          exit(0);
+        }
+        gid = (int)gr->gr_gid;
+      }
+    }
+  }
+
+  if(uid < 0 && gid < 0) {
+    dprintf(2, "chown: no owner or group specified\n");
     exit(0);
   }
 

@@ -4,16 +4,17 @@ Date: 2026-04-03
 
 ## Purpose
 
-This document is the working inventory for the unified non-thread libc/POSIX
-portability tranche.
+This document is the working inventory for the unified libc/POSIX portability
+tranche that establishes the baseline ahead of real thread runtime support.
 
 It is intentionally narrower than "all of POSIX" and more concrete than the
 high-level roadmap. The goal is to record what auxv6 already has, what is
 missing, what is currently only stubbed or partially truthful, and a sane
 implementation order that keeps the public surface coherent.
 
-This tranche does **not** include pthread/runtime thread enablement. That
-remains a separate kernel-plus-libc track.
+This tranche does not itself implement pthread/runtime thread enablement, but
+it is part of the path to real thread support rather than a declaration that
+threads are out of scope.
 
 ## Target Band
 
@@ -31,7 +32,7 @@ remains a separate kernel-plus-libc track.
   - `limits.h`
   - `inttypes.h`
   - `setjmp.h`
-  - `sys/resource.h` (header exists, but `getrlimit`/`setrlimit` remain stubs)
+  - `sys/resource.h`
   - `time.h`
   - `sys/time.h`
   - `stdio.h`
@@ -59,12 +60,8 @@ remains a separate kernel-plus-libc track.
 These headers are not present in `include/` yet and should be added only with
 truthful declarations:
 
-- `fnmatch.h`
-- `glob.h`
-- `locale.h`
 - `pwd.h`
 - `grp.h`
-- `netdb.h`
 
 These remain outside the immediate target band and should not be added unless
 their surface becomes truthful enough to support real callers:
@@ -77,13 +74,6 @@ their surface becomes truthful enough to support real callers:
 
 The following APIs are not currently exposed or implemented:
 
-- Shell/text/find surfaces:
-  - `fnmatch`
-  - `glob`, `globfree`
-  - `scandir`, `alphasort`
-  - one directory-tree-walk API:
-    - `nftw`, or
-    - `fts`
 - Identity/account database surfaces:
   - `getpwnam`, `getpwuid`
   - `getgrnam`, `getgrgid`
@@ -96,9 +86,6 @@ The following APIs are not currently exposed or implemented:
 These items already appear in public headers or compatibility shims but still
 need real semantics before the tranche can be called complete.
 
-- `getrlimit`, `setrlimit`
-  - Current state: inline stubs in `include/sys/resource.h` that return `-1`.
-  - Required outcome: real syscall backing or a narrower truthful contract.
 - `fmemopen`
   - Current state: present and usable for read-oriented memory streams, but
     not yet a truthful writable POSIX-style implementation.
@@ -144,9 +131,8 @@ Good shape:
 
 Still missing or incomplete for the unified tranche:
 
-- No `fnmatch.h`, `glob.h`, `locale.h`, `pwd.h`, `grp.h`, or `netdb.h`.
-- `dirent.h` does not yet expose `scandir` or `alphasort`.
-- `stdio.h` does not yet expose `fscanf`, `vfscanf`, or `tmpfile`.
+- `pwd.h` and `grp.h` are now in-tree with `/etc`-backed lookup support.
+- `stdio.h` now exposes `fscanf`, `vfscanf`, and `tmpfile`.
 
 ### Libc Runtime Layer
 
@@ -158,11 +144,9 @@ Good shape:
 
 Still missing or incomplete for the unified tranche:
 
-- Pattern matching and globbing runtime does not exist.
-- No find-style tree walk helper exists.
 - No passwd/group database runtime exists.
-- `fscanf`/`vfscanf` are absent even though `sscanf`/`vsscanf` exist.
-- `tmpfile` is absent.
+- `fscanf`/`vfscanf` now share the same scan engine as `sscanf`/`vsscanf`.
+- `tmpfile` now rides the existing tempfile infrastructure.
 - `fmemopen` writable semantics are still incomplete.
 
 ### Syscall / Kernel Truthfulness Layer
@@ -175,7 +159,6 @@ Good shape:
 
 Still missing or incomplete for the unified tranche:
 
-- `getrlimit` / `setrlimit` need real kernel backing if they remain declared.
 - Broader non-tty `ioctl` coverage remains incomplete, though that is larger
   than this tranche by itself.
 
@@ -215,10 +198,10 @@ Land next because these unlock the widest set of ports.
 - `fnmatch`
 - `glob` / `globfree`
 - `scandir` / `alphasort`
-- one tree-walk API (`nftw` or `fts`)
+- `nftw` and `fts`
 - minimal `locale.h` with explicit C-locale-only semantics
 
-### Step 2 Status (2026-04-03, in progress)
+### Step 2 Status (2026-04-03, substantially landed)
 
 - `fnmatch` landed with a truthful minimal wildcard surface (`*`, `?`,
   bracket classes, escape handling, pathname/period/casefold flags).
@@ -235,11 +218,15 @@ Land next because these unlock the widest set of ports.
   - `_ftstest`
 - Minimal C-locale `locale.h` support is now in-tree via `setlocale` and
   `localeconv`.
+- The removal semantics around the new tree-walk tests are now fixed at the
+  root:
+  - `unlink` no longer removes directories
+  - `rmdir` has a real syscall-backed path
+  - test setup no longer depends on `-v`
 - Remaining Step 2 work in this tranche:
   - hardening and compatibility polish for the new tree-walk implementations
-  - file-removal API hardening: `rm` now uses POSIX stat wrappers and directory
-    removals route through a real `rmdir` syscall path; raw `unlink` no longer
-    removes directories
+  - keep an eye out for any userland still assuming legacy directory-unlink
+    behavior and correct it when found
   - locale follow-on APIs only if a real caller requires them
 
 ### Step 3. Identity And Account Lookup
@@ -249,8 +236,15 @@ one coherent pass.
 
 - `pwd.h` / `grp.h`
 - `getpwnam`, `getpwuid`, `getgrnam`, `getgrgid`
-- decide whether `/etc/passwd` and `/etc/groups` parsing lives in new focused
-  libc files or a small identity runtime unit
+- canonical `/etc/passwd` and `/etc/group` parsing in focused libc runtime code
+
+### Step 3 Status (2026-04-03, landed)
+
+- Canonical headers landed: `pwd.h`, `grp.h`.
+- Runtime landed: `/etc/passwd` and `/etc/group` parsing with static-entry
+  return model and compatibility fallback for older `/etc/groups` images.
+- Consumer wiring landed across the existing passwd/group users so the tree no
+  longer grows more ad hoc account parsers.
 
 ### Step 4. stdio Follow-On Completion Inside The Same Tranche
 
@@ -259,6 +253,13 @@ Close the lingering stdio portability gaps before calling the tranche done.
 - `fscanf`, `vfscanf`
 - `tmpfile`
 - writable `fmemopen` semantics, if still required by the target ports
+
+### Step 4 Status (2026-04-03, landed)
+
+- `fscanf`/`vfscanf` landed by extending the existing scan engine in
+  `user/stdio.c` instead of creating a parallel parser.
+- `tmpfile` landed using the existing tempfile/path libc infrastructure.
+- Writable `fmemopen` remains intentionally scoped to caller-proven need.
 
 ## Recommended Code Organization
 

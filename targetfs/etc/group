@@ -1,0 +1,8 @@
+# group:passwd:gid:members
+root:x:0:root
+daemon:x:1:
+bin:x:2:
+sys:x:3:
+adm:x:4:
+wheel:x:10:root,aux
+aux:x:1000:

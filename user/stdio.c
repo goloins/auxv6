@@ -22,6 +22,18 @@ enum scan_length {
   SCAN_LEN_INTMAX,
 };
 
+struct scan_input {
+  int (*getch)(void *ctx);
+  int (*ungetch)(int c, void *ctx);
+  void *ctx;
+  size_t count;
+};
+
+struct scan_string_ctx {
+  const char *s;
+  size_t pos;
+};
+
 static FILE g_stdin = {
   .fd = 0,
   .flags = F_CAN_READ,
@@ -75,6 +87,116 @@ mode_flags(const char *mode, int *open_flags, int *caps)
   default:
     return -1;
   }
+}
+
+static int
+scan_string_get(void *ctx)
+{
+  struct scan_string_ctx *sctx;
+
+  sctx = (struct scan_string_ctx*)ctx;
+  if(sctx->s[sctx->pos] == '\0')
+    return EOF;
+  return (uchar)sctx->s[sctx->pos++];
+}
+
+static int
+scan_string_unget(int c, void *ctx)
+{
+  struct scan_string_ctx *sctx;
+
+  sctx = (struct scan_string_ctx*)ctx;
+  if(c == EOF || sctx->pos == 0)
+    return EOF;
+  sctx->pos--;
+  return c;
+}
+
+static int
+scan_file_get(void *ctx)
+{
+  return fgetc((FILE*)ctx);
+}
+
+static int
+scan_file_unget(int c, void *ctx)
+{
+  return ungetc(c, (FILE*)ctx);
+}
+
+static int
+scan_input_get(struct scan_input *in)
+{
+  int c;
+
+  c = in->getch(in->ctx);
+  if(c != EOF)
+    in->count++;
+  return c;
+}
+
+static int
+scan_input_unget(struct scan_input *in, int c)
+{
+  if(c == EOF)
+    return EOF;
+  if(in->ungetch(c, in->ctx) == EOF)
+    return EOF;
+  if(in->count > 0)
+    in->count--;
+  return c;
+}
+
+static void
+scan_input_skip_space(struct scan_input *in)
+{
+  int c;
+
+  for(;;) {
+    c = scan_input_get(in);
+    if(c == EOF)
+      return;
+    if(!isspace((uchar)c)) {
+      scan_input_unget(in, c);
+      return;
+    }
+  }
+}
+
+static char *grow_line_buf(char *old, size_t copy_len, size_t new_cap);
+
+static int
+scan_append_char(char **buf, size_t *cap, int len, int ch)
+{
+  char *nbuf;
+  size_t new_cap;
+
+  if((size_t)(len + 1) < *cap) {
+    (*buf)[len] = (char)ch;
+    return 0;
+  }
+
+  new_cap = (*cap == 0) ? 32 : *cap;
+  while((size_t)(len + 1) >= new_cap)
+    new_cap *= 2;
+
+  nbuf = grow_line_buf(*buf, (size_t)len, new_cap);
+  if(nbuf == 0)
+    return -1;
+
+  *buf = nbuf;
+  *cap = new_cap;
+  (*buf)[len] = (char)ch;
+  return 0;
+}
+
+static void
+scan_pushback_bytes(struct scan_input *in, const char *buf, int start, int end)
+{
+  int i;
+
+  for(i = end - 1; i >= start; i--)
+    (void)scan_input_unget(in, (uchar)buf[i]);
 }
 
 static char *
@@ -481,6 +603,28 @@ fmemopen(void *buf, size_t size, const char *mode)
   fp->mem_size = size;
   fp->mem_pos = 0;
   fp->buf_mode = _IONBF;
+  return fp;
+}
+
+FILE *
+tmpfile(void)
+{
+  char template[] = "/tmp/tmpfile.XXXXXX";
+  int fd;
+  FILE *fp;
+
+  fd = mkstemp(template);
+  if(fd < 0)
+    return 0;
+
+  unlink(template);
+
+  fp = fdopen(fd, "w+");
+  if(fp == 0) {
+    close(fd);
+    return 0;
+  }
+
   return fp;
 }
 
@@ -1038,18 +1182,16 @@ printf(const char *fmt, ...)
   return n;
 }
 
-int
-vsscanf(const char *s, const char *fmt, va_list ap)
+static int
+scan_core(struct scan_input *in, const char *fmt, va_list ap, size_t *consumed_out)
 {
-  const char *input;
   const char *f;
   int assigned;
   int input_fail;
 
-  if(s == 0 || fmt == 0)
+  if(in == 0 || fmt == 0)
     return EOF;
 
-  input = s;
   f = fmt;
   assigned = 0;
   input_fail = 0;
@@ -1058,32 +1200,39 @@ vsscanf(const char *s, const char *fmt, va_list ap)
     if(isspace((uchar)*f)) {
       while(isspace((uchar)*f))
         f++;
-      while(isspace((uchar)*input))
-        input++;
+      scan_input_skip_space(in);
       continue;
     }
 
     if(*f != '%') {
-      if(*input == '\0') {
+      int c;
+
+      c = scan_input_get(in);
+      if(c == EOF) {
         input_fail = 1;
         break;
       }
-      if(*input != *f)
+      if(c != (uchar)*f) {
+        scan_input_unget(in, c);
         break;
-      input++;
+      }
       f++;
       continue;
     }
 
     f++;
     if(*f == '%') {
-      if(*input == '\0') {
+      int c;
+
+      c = scan_input_get(in);
+      if(c == EOF) {
         input_fail = 1;
         break;
       }
-      if(*input != '%')
+      if(c != '%') {
+        scan_input_unget(in, c);
         break;
-      input++;
+      }
       f++;
       continue;
     }
@@ -1149,6 +1298,11 @@ vsscanf(const char *s, const char *fmt, va_list ap)
       case 'x':
       case 'X':
       case 'p': {
+        char stackbuf[64];
+        char *tok;
+        size_t cap;
+        int toklen;
+        int c;
         int consumed;
         int rc;
         int base;
@@ -1158,13 +1312,11 @@ vsscanf(const char *s, const char *fmt, va_list ap)
 
         sval = 0;
         uval = 0;
+        tok = stackbuf;
+        cap = sizeof(stackbuf);
+        toklen = 0;
 
-        while(isspace((uchar)*input))
-          input++;
-        if(*input == '\0') {
-          input_fail = 1;
-          goto scan_done;
-        }
+        scan_input_skip_space(in);
 
         is_signed = (spec == 'd' || spec == 'i');
         if(spec == 'd')
@@ -1178,10 +1330,42 @@ vsscanf(const char *s, const char *fmt, va_list ap)
         else
           base = 16;
 
-        rc = scan_parse_integer(input, width, base, is_signed,
-                                &consumed, &sval, &uval);
-        if(rc <= 0)
+        for(;;) {
+          if(width >= 0 && toklen >= width)
+            break;
+
+          c = scan_input_get(in);
+          if(c == EOF) {
+            if(toklen == 0)
+              input_fail = 1;
+            break;
+          }
+          if(isspace((uchar)c)) {
+            scan_input_unget(in, c);
+            break;
+          }
+          if(scan_append_char(&tok, &cap, toklen, c) < 0) {
+            if(tok != stackbuf)
+              free(tok);
+            return EOF;
+          }
+          toklen++;
+        }
+
+        if(toklen == 0)
           goto scan_done;
+
+        tok[toklen] = '\0';
+        rc = scan_parse_integer(tok, toklen, base, is_signed,
+                                &consumed, &sval, &uval);
+        if(rc <= 0) {
+          scan_pushback_bytes(in, tok, 0, toklen);
+          if(tok != stackbuf)
+            free(tok);
+          goto scan_done;
+        }
+
+        scan_pushback_bytes(in, tok, consumed, toklen);
 
         if(!suppress) {
           if(spec == 'p')
@@ -1193,14 +1377,19 @@ vsscanf(const char *s, const char *fmt, va_list ap)
           assigned++;
         }
 
-        input += consumed;
+        if(tok != stackbuf)
+          free(tok);
         break;
       }
 
       case 'c': {
+        char stackbuf[16];
+        char *tmp;
+        size_t cap;
         char *out;
         int count;
         int i;
+        int c;
 
         if(len != SCAN_LEN_DEFAULT)
           goto scan_done;
@@ -1208,48 +1397,60 @@ vsscanf(const char *s, const char *fmt, va_list ap)
         count = (width < 0) ? 1 : width;
         if(count == 0)
           goto scan_done;
-        if(*input == '\0') {
-          input_fail = 1;
-          goto scan_done;
-        }
 
+        tmp = stackbuf;
+        cap = sizeof(stackbuf);
         out = suppress ? 0 : va_arg(ap, char*);
         for(i = 0; i < count; i++) {
-          if(input[i] == '\0') {
-            input_fail = 1;
+          c = scan_input_get(in);
+          if(c == EOF) {
+            if(i == 0)
+              input_fail = 1;
+            scan_pushback_bytes(in, tmp, 0, i);
+            if(tmp != stackbuf)
+              free(tmp);
             goto scan_done;
           }
-          if(out)
-            out[i] = input[i];
+          if(scan_append_char(&tmp, &cap, i, c) < 0) {
+            if(tmp != stackbuf)
+              free(tmp);
+            return EOF;
+          }
         }
-
-        input += count;
+        if(out)
+          memmove(out, tmp, count);
         if(!suppress)
           assigned++;
+        if(tmp != stackbuf)
+          free(tmp);
         break;
       }
 
       case 's': {
         char *out;
         int count;
+        int c;
 
         if(len != SCAN_LEN_DEFAULT)
           goto scan_done;
 
-        while(isspace((uchar)*input))
-          input++;
-        if(*input == '\0') {
-          input_fail = 1;
-          goto scan_done;
-        }
+        scan_input_skip_space(in);
 
         out = suppress ? 0 : va_arg(ap, char*);
         count = 0;
-        while(*input != '\0' && !isspace((uchar)*input) &&
-              (width < 0 || count < width)) {
+        while(width < 0 || count < width) {
+          c = scan_input_get(in);
+          if(c == EOF) {
+            if(count == 0)
+              input_fail = 1;
+            break;
+          }
+          if(isspace((uchar)c)) {
+            scan_input_unget(in, c);
+            break;
+          }
           if(out)
-            out[count] = *input;
-          input++;
+            out[count] = (char)c;
           count++;
         }
 
@@ -1267,6 +1468,7 @@ vsscanf(const char *s, const char *fmt, va_list ap)
         const char *set_end;
         char *out;
         int count;
+        int c;
 
         if(len != SCAN_LEN_DEFAULT)
           goto scan_done;
@@ -1286,17 +1488,23 @@ vsscanf(const char *s, const char *fmt, va_list ap)
         out = suppress ? 0 : va_arg(ap, char*);
         count = 0;
 
-        while(*input != '\0' && (width < 0 || count < width) &&
-              scan_scanset_match(set_start, set_end, (uchar)*input)) {
+        while(width < 0 || count < width) {
+          c = scan_input_get(in);
+          if(c == EOF) {
+            if(count == 0)
+              input_fail = 1;
+            break;
+          }
+          if(!scan_scanset_match(set_start, set_end, (uchar)c)) {
+            scan_input_unget(in, c);
+            break;
+          }
           if(out)
-            out[count] = *input;
-          input++;
+            out[count] = (char)c;
           count++;
         }
 
         if(count == 0) {
-          if(*input == '\0')
-            input_fail = 1;
           goto scan_done;
         }
         if(out)
@@ -1308,7 +1516,7 @@ vsscanf(const char *s, const char *fmt, va_list ap)
 
       case 'n':
         if(!suppress)
-          scan_store_count(&ap, len, (size_t)(input - s));
+          scan_store_count(&ap, len, in->count);
         break;
 
       default:
@@ -1318,9 +1526,56 @@ vsscanf(const char *s, const char *fmt, va_list ap)
   }
 
 scan_done:
+  if(consumed_out)
+    *consumed_out = in->count;
   if(assigned == 0 && input_fail)
     return EOF;
   return assigned;
+}
+
+int
+vfscanf(FILE *fp, const char *fmt, va_list ap)
+{
+  struct scan_input in;
+
+  if(fp == 0 || fmt == 0)
+    return EOF;
+
+  in.getch = scan_file_get;
+  in.ungetch = scan_file_unget;
+  in.ctx = fp;
+  in.count = 0;
+  return scan_core(&in, fmt, ap, 0);
+}
+
+int
+fscanf(FILE *fp, const char *fmt, ...)
+{
+  va_list ap;
+  int n;
+
+  va_start(ap, fmt);
+  n = vfscanf(fp, fmt, ap);
+  va_end(ap);
+  return n;
+}
+
+int
+vsscanf(const char *s, const char *fmt, va_list ap)
+{
+  struct scan_input in;
+  struct scan_string_ctx sctx;
+
+  if(s == 0 || fmt == 0)
+    return EOF;
+
+  sctx.s = s;
+  sctx.pos = 0;
+  in.getch = scan_string_get;
+  in.ungetch = scan_string_unget;
+  in.ctx = &sctx;
+  in.count = 0;
+  return scan_core(&in, fmt, ap, 0);
 }
 
 int

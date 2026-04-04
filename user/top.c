@@ -27,6 +27,7 @@
 #include "types.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
+#include "pwd.h"
 #include "signal.h"
 #include "stdio.h"
 #include "libterm.h"
@@ -385,43 +386,12 @@ fmt_lavg_x100(char *buf, unsigned int v)
 static void
 uid_to_name(int uid, char *out, int outlen)
 {
-  /* Quick path for known system UIDs */
-  if(uid == 0){ int i = 0; const char *r = "root"; while(*r && i < outlen-1) out[i++] = *r++; out[i] = '\0'; return; }
+  struct passwd *pw;
 
-  /* Try /etc/passwd: format is "name:x:uid:gid:..." */
-  static char pwbuf[1024];
-  static int  pwloaded;
-  const char *p;
-
-  if(!pwloaded){
-    read_file("/etc/passwd", pwbuf, sizeof(pwbuf));
-    pwloaded = 1;
-  }
-
-  for(p = pwbuf; *p; ){
-    /* parse username */
-    const char *name_start = p;
-    int nlen = 0;
-    while(*p && *p != ':') { p++; nlen++; }
-    if(*p == ':') p++;           /* skip ':' */
-    /* skip password field */
-    while(*p && *p != ':') p++;
-    if(*p == ':') p++;
-    /* UID field */
-    {
-      const char *q = p;
-      int fuid = (int)parse_uint(&q);
-      if(fuid == uid){
-        int i;
-        for(i = 0; i < nlen && i < outlen - 1; i++)
-          out[i] = name_start[i];
-        out[i] = '\0';
-        return;
-      }
-    }
-    /* advance to end of line */
-    while(*p && *p != '\n') p++;
-    if(*p == '\n') p++;
+  pw = getpwuid((uid_t)uid);
+  if(pw != 0) {
+    snprintf(out, outlen, "%s", pw->pw_name);
+    return;
   }
 
   snprintf(out, outlen, "%d", uid);

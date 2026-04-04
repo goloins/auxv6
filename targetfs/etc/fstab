@@ -2,5 +2,5 @@
 # Supported forms:
 #   <mountpoint> <fstype> <opts>
 #   <dev> <mountpoint> <fstype> <opts>
+# /mnt is a plain rootfs directory reserved for explicit runtime mounts.
 /proc procfs rw
-/dev/hdc /mnt ext2 rw

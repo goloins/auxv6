@@ -48,7 +48,7 @@ typedef int             sa_family_t;/* Address family */
 typedef unsigned int    nfds_t;     /* Number of fds in poll() */
 #endif
 
-/* Pthread types (placeholder - not yet implemented) */
+/* Temporary pthread stand-ins pending real kernel/libc thread support. */
 typedef unsigned int    pthread_t;
 typedef unsigned int    pthread_attr_t;
 typedef unsigned int    pthread_mutex_t;

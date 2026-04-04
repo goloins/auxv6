@@ -14,14 +14,14 @@ Phase 5 results are documented in `docs/libc-reorg-phase5.md`.
 - Runtime model: static linking, no dynamic loader requirement.
 - Portability rule: headers should only promise APIs that exist or are
   intentionally stubbed and documented.
-- Threading is an explicit requirement, but it is tracked as a parallel
-  kernel-plus-libc enablement stream rather than folded into the first
-  pure-userspace tranche.
+- Threading is an explicit requirement, and the current tranche should be read
+  as the portability baseline that thread support will build on rather than as
+  a rejection of pthread work.
 
 ## Planning Update (2026-04-03)
 
-Tranches 1 and 2 are now effectively landed, and the remaining non-thread
-libc/POSIX work is best treated as one coordinated portability tranche rather
+Tranches 1 and 2 are now effectively landed, and the remaining pre-thread
+libc/POSIX portability work is best treated as one coordinated tranche rather
 than several narrowly separated mini-phases.
 
 Reasoning:
@@ -315,8 +315,25 @@ Shell, Text, Identity, And Portability Completion
   APIs remain intentionally deferred.
 - Step 2 is now underway: `fnmatch`, `scandir`/`alphasort`, and
   `glob`/`globfree` are in-tree, both tree-walk surfaces (`nftw` and `fts`)
-  are available for compatibility, and minimal C-locale support (`locale.h`,
-  `setlocale`, `localeconv`) is landed.
+  are available for compatibility, minimal C-locale support (`locale.h`,
+  `setlocale`, `localeconv`) is landed, and the surrounding removal semantics
+  are now truthful (`unlink` no longer removes directories; `rmdir` has a real
+  syscall-backed path).
+
+## Prepared Next Slice (2026-04-03)
+
+The identity/account and stdio follow-on slice is now landed:
+
+- `pwd.h`, `grp.h`
+- `getpwnam`, `getpwuid`, `getgrnam`, `getgrgid`
+- small `/etc/passwd` and `/etc/group` parsing runtime with legacy `/etc/groups`
+  fallback for compatibility
+- `fscanf`, `vfscanf`
+- `tmpfile`
+
+The next prepared slice is the thread-groundwork track plus smaller remaining
+portability cleanup (`fmemopen` writable semantics only if required, fuller
+`perror`, and broader name-service work only when truthful).
 
 ### Exit Criteria
 
