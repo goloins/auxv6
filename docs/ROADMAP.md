@@ -19,7 +19,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 ### ✅ Mature Subsystems (75-95% complete)
 | Subsystem | Status | Notes |
 |-----------|--------|-------|
-| VFS Layer | 90% | Multi-backend, mount table, longest-prefix matching |
+| VFS Layer | 92% | Multi-backend dispatch (`xv6fs/ext2/msdosfs/exfat/btrfs/ufs2/isofs/tmpfs/nfs`), mount table, longest-prefix matching |
 | ext2 filesystem | 90% | Read/write, directory create/link/unlink/rename, inode/block allocation, rollback hardening, and default rootfs build target |
 | FAT/msdosfs | 90% | FAT16/32 backend in-tree with create/remove/mkdir/rename coverage, root-cause filename-limit fix landed, and the FAT32 NVMe regression pass is back green under `fatregress` |
 | TCP/IP stack | 82% | UDP works, DNS/resolver works, TCP handshake + data + retransmission + teardown work, and raw-socket tooling (`ping`, `traceroute`) is in place; flow control still basic |
@@ -43,7 +43,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | POSIX compatibility layer | 79% | Broader tty/ioctl compatibility, dynamic `openpty`/`ptsname_r` path, truthful time/stdio tranche work, `getrlimit`/`setrlimit`, minimal `netdb`, shell/text traversal helpers (`fnmatch`, `glob`, `scandir`, `nftw`, `fts`), C-locale scaffolding, and corrected `unlink`/`rmdir` semantics are in-tree; identity/account and stdio follow-on work remain |
 | Userland docs/manpages | 82% | `man` now renders richer markdown and the tree ships 90+ documented utilities, but coverage depth and maintenance discipline still need work |
 | Graphics / framebuffer console | 72% | Framebuffer core, display registry, builtin font/render path, rich `/proc/gfxstats`, virtio-gpu scanout discovery, display-sized framebuffer allocation, display-derived readable boot geometry, stable mirror behavior, ownership plumbing for server7, and recent sync-path speedups are landed; CGA still owns the canonical console path, virtio-gpu still uses whole-frame uploads, and no `/dev/fb0` or `/dev/dri/card0` ABI exists yet |
-| procfs | 80% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`, `/proc/meminfo`, `/proc/ps`, `/proc/loadavg`, `/proc/mountstats`, `/proc/gfxstats`, `/proc/lsof`, `/proc/server7`, `/proc/bdev_table`; breadth is now solid but per-process drill-down remains sparse |
+| procfs | 81% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`, `/proc/meminfo`, `/proc/ps`, `/proc/loadavg`, `/proc/mountstats`, `/proc/gfxstats`, `/proc/lsof`, `/proc/server7`, `/proc/bdev_table`; breadth is now solid but per-process drill-down remains sparse |
 | Real NICs | 60% | E1000, PCNET, and RTL8111 have full ifnet integration; virtio-net continues to improve; VMXnet3 has a basic polling datapath; netvsc, I219-V, I226-V, and AX88179 PCI remain stub-grade |
 | Device node management | 68% | `devman -s` creates `/dev` nodes at early runlevel from kernel-visible inventory and `/etc/devman.conf` can tune verbosity, but policy rules, cleanup mode, and hotplug/event support are still pending |
 | Modern storage | 91% | AHCI now has interrupt-driven completions, slot allocation, telemetry, and fault-injection hooks; NVMe correctness hardening complete (polled-only IRQ model, monotonic CID counter, recovery memory-safety, shutdown notification, LBA-size guard), dev-number collision with loop devices fixed, and ext2/ext2fs mount alias validated on `/dev/nda`; NVMe timeout/reset recovery path is in place |
@@ -52,7 +52,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | Subsystem | Status | Notes |
 |-----------|--------|-------|
 | NFS | 45% | XDR/RPC transport, MOUNT plumbing, read-only VFS wiring, and basic GETATTR/LOOKUP/READ paths landed; READDIR decode stub still in place; deprioritized pending other work |
-| exFAT | 42% | Initial read-only VFS backend landed (`exfat` mount type): boot-sector validation, directory set parsing (`0x85/0xC0/0xC1`), case-insensitive lookup, and regular-file read support across FAT-chained and contiguous streams; write/allocate/truncate/rename metadata paths and robust host-side seeded-image tooling still remain out of scope |
+| exFAT | 35% | Initial read-only backend parser is in-tree (boot-sector validation, entry-set traversal, case-insensitive lookup, regular-file reads), but the mount device-selection path still needs parity wiring in `sys_mount`; write/allocate/truncate/rename metadata paths and robust seeded-image tooling remain out of scope |
 | Btrfs | 35% | Initial read-only VFS backend landed (`btrfs` mount type): single-device volumes, metadata-tree traversal, directory lookup/readdir, regular-file reads, and symlink reads; write paths, compression/RAID/multi-device, and many advanced features remain out of scope |
 | UFS2/FFS | 28% | Initial read-only VFS backend landed (`ufs2`/`ffs` mount type): superblock probe, inode/directory traversal, direct/single-indirect file reads, and symlink reads with conservative format assumptions; write paths and broader on-disk compatibility hardening remain out of scope |
 | Device hotplug/eventing | None | Planned kernel event path for live node add/remove beyond boot-time `devman -s` |
@@ -72,7 +72,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - FAT32 NVMe workflow is now validated end to end (`qemu-nvme-fat32`): mount, short-name create/read/unlink, multi-block growth/truncate, long-filename create/read/unlink, and mkdir/rmdir all pass in guest.
 - The FAT long-filename failure was fixed at the root contract instead of only in the backend: the old 14-character directory-component limit was removed in favor of `NAME_MAX + 1`, and the `getdents`/`readdir` bridge plus shell path handling were updated to match.
 - FAT/msdosfs follow-up hardening landed after bringup: real FAT timestamps are now written and surfaced through `stat(2)`, VFAT unlink removes the full LFN chain, create rejects duplicate generated short-name aliases, and basic FAT rename support is now wired through the VFS rename hook.
-- exFAT first tranche landed as a read-only VFS backend (`mount ... exfat ...`), with NVMe image/tooling hooks (`nvme-exfat.img`, `qemu-nvme-exfat`, `qemu-nox-nvme-exfat`) and the initial on-disk parser aligned to the stream-extension/name-entry model; current follow-on work is constrained more by host-side image-population tooling than by kernel compile/integration status.
+- exFAT first tranche landed as a read-only backend parser with NVMe image/tooling hooks (`nvme-exfat.img`, `qemu-nvme-exfat`, `qemu-nox-nvme-exfat`); remaining integration parity includes `sys_mount` device-selection wiring plus better host-side seeded-image tooling.
 - The FAT32 follow-up regression sweep also repaired cross-layer fallout from the global dirent-size change: direct `getdents()` callers were resized to stay within the syscall page limit, `getcwd()` path reconstruction was fixed for the widened synthetic dirent ABI, and the first FAT directory-rename subtree check was rewritten to avoid a sleep-lock deadlock.
 - Current guest status on `qemu-nvme-fat32`: `fatregress -d /mnt/fat32` completes with `fatregress: all checks passed`.
 - Btrfs gained an initial read-only backend (`mount ... btrfs ...`) integrated through VFS, with explicit first-tranche constraints documented in `docs/btrfs-driver.md`.
@@ -134,7 +134,7 @@ Primary goal: consolidate recent kernel-core and userland wins into a dependable
 - AHCI: finish mount/unmount endurance loops with timeout/recover telemetry and no controller lockups.
 - NVMe: correctness hardening complete. Remaining gap: interrupt-driven completion path (currently polled).
 
-**Current status (2026-04-03):**
+**Current status (2026-04-04):**
 - Virtio-blk retry telemetry and stress tooling are in-tree.
 - AHCI recovery instrumentation, fault injection, and soak-oriented tuning hooks are in-tree.
 - NVMe: spurious-IRQ bug fixed (polled-only mode), recovery memory leak and admin queue state reset fixed, monotonic CID counter added, LBA>BSIZE guard added, shutdown notification (`nvme_shutdown`) added and called from `sys_halt`.
@@ -231,12 +231,21 @@ Primary goal: consolidate recent kernel-core and userland wins into a dependable
 5. **Tranche D (NFS) is deprioritized** — return to it after the base kernel/storage work has settled; the immediate blocker remains READDIR decode.
 6. **After storage/devman/observability:** return to exFAT once a better host-side seeded-image workflow exists or a Linux-host validation path is documented, then harden metadata/read coverage before any write tranche; in parallel broaden the Btrfs backend (search/index efficiency, feature coverage, and validation), then return to the unified libc/POSIX portability tranche and devman hotplug/event lifecycle enhancements.
 
-### Prepared Next Slice (2026-04-03)
+### Prepared Next Slice (2026-04-04)
 
 The next prepared tranche after the newly landed libc identity/stdio work is:
 
 - Thread groundwork:
   - replace placeholder `pthread_*` typedef expectations with a real thread plan
+  - choose shared-address-space thread creation/join/TID semantics
+  - make libc state ready for eventual TLS-backed thread correctness where needed
+- Residual portability cleanup:
+  - writable `fmemopen` semantics only if a real caller requires them
+  - fuller `perror` parity
+  - broader address-family/name-service work only when backing is real
+- Validation and truthfulness follow-through:
+  - focused probes for passwd/group lookup and formatted input
+  - doc/manpage refresh for the now-canonical `/etc/group` path and libc lookup behavior
 
 ### Btrfs Tranche (Read-Only Follow-on)
 
@@ -254,15 +263,6 @@ Definition of done for next bump:
 - Read-only mount/read paths remain stable across repeated NVMe boot/mount cycles.
 - At least one non-trivial compressed image reads successfully.
 - Lookup/read hot paths have measurable scan reduction versus the current baseline.
-  - choose shared-address-space thread creation/join/TID semantics
-  - make libc state ready for eventual TLS-backed thread correctness where needed
-- Residual portability cleanup:
-  - writable `fmemopen` semantics only if a real caller requires them
-  - fuller `perror` parity
-  - broader address-family/name-service work only when backing is real
-- validation and truthfulness follow-through:
-  - focused probes for passwd/group lookup and formatted input
-  - doc/manpage refresh for the now-canonical `/etc/group` path and libc lookup behavior
 
 ---
 
@@ -280,7 +280,7 @@ Definition of done for next bump:
 1. **Finish NVMe interrupt-driven completion path** — the polled model works but an IRQ handler would allow concurrent I/O without blocking the CPU; the `irq_register` infrastructure is already in place.
 2. **Start the thread groundwork slice** so the current portability baseline can grow into real pthread support instead of placeholder types.
 3. **Expand procfs with `/proc/net`, `/proc/sockets`, and filtered fd views** to make perf/network/storage debugging cheaper.
-4. **Finish NVMe interrupt-driven completions** to match AHCI's IRQ-driven model and reduce poll overhead.
+4. **Wire exFAT device selection parity in `sys_mount`** so `exfat` mounts use the same dev-override/default-device behavior as `msdosfs`/`btrfs`/`ufs2`.
 5. **Polish virtio-net link-state and diagnostics** now that poll/IRQ instrumentation exists.
 6. **Tighten the remaining stdio/runtime truthfulness edges (`fmemopen` writable semantics only if needed, `perror` parity)** before treating the portability tranche as stable.
 
