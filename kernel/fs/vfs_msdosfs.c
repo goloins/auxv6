@@ -4,6 +4,7 @@
 #include "stat.h"
 #include "spinlock.h"
 #include "sleeplock.h"
+#include "date.h"
 #include "fs.h"
 #include "file.h"
 #include "buf.h"
@@ -77,15 +78,14 @@ struct fat_bpb_fat32 {
   uchar reserved[12];
 } __attribute__((packed));
 
-/* FAT32 FSInfo sector structure (at BPB_FSInfo sector) */
 struct fat_fsinfo {
-  uint lead_sig;      /* 0x41615252 */
+  uint lead_sig;
   uchar reserved1[480];
-  uint struc_sig;     /* 0x61417272 */
-  uint free_count;    /* 0xFFFFFFFF = unknown */
-  uint next_free;     /* 0xFFFFFFFF = unknown */
+  uint struc_sig;
+  uint free_count;
+  uint next_free;
   uchar reserved2[12];
-  uint trail_sig;     /* 0xAA550000 */
+  uint trail_sig;
 } __attribute__((packed));
 
 /* VFAT Long Filename directory entry (same size as fat_dirent = 32 bytes) */
@@ -320,6 +320,150 @@ msdos_generate_shortname(const char *name, uchar out[11])
     out[8 + i] = (uchar)ext[i];
 
   return 0;
+}
+
+static int
+msdos_name_equals_ci(const char *a, const char *b)
+{
+  if(a == 0 || b == 0)
+    return 0;
+
+  while(*a && *b){
+    char ca;
+    char cb;
+
+    ca = *a;
+    cb = *b;
+    if(ca >= 'A' && ca <= 'Z')
+      ca += 'a' - 'A';
+    if(cb >= 'A' && cb <= 'Z')
+      cb += 'a' - 'A';
+    if(ca != cb)
+      return 0;
+    a++;
+    b++;
+  }
+
+  return *a == 0 && *b == 0;
+}
+
+static int
+msdos_is_leap_year(uint year)
+{
+  if((year % 4U) != 0U)
+    return 0;
+  if((year % 100U) != 0U)
+    return 1;
+  return (year % 400U) == 0U;
+}
+
+static void
+msdos_get_now_fat(ushort *date_out, ushort *time_out, uchar *tenth_out)
+{
+  struct rtcdate rtc;
+  ushort fat_date;
+  ushort fat_time;
+  uchar fat_tenth;
+  uint year;
+  uint sec2;
+
+  fat_date = 0;
+  fat_time = 0;
+  fat_tenth = 0;
+  cmostime(&rtc);
+
+  year = rtc.year;
+  if(year < 1980U)
+    year = 1980U;
+  if(year > 2107U)
+    year = 2107U;
+
+  sec2 = rtc.second;
+  if(sec2 > 59U)
+    sec2 = 59U;
+
+  fat_date = (ushort)(((year - 1980U) << 9) |
+                      ((rtc.month & 0x0FU) << 5) |
+                      (rtc.day & 0x1FU));
+  fat_time = (ushort)(((rtc.hour & 0x1FU) << 11) |
+                      ((rtc.minute & 0x3FU) << 5) |
+                      ((sec2 / 2U) & 0x1FU));
+  fat_tenth = (uchar)((sec2 & 1U) ? 100U : 0U);
+
+  if(date_out)
+    *date_out = fat_date;
+  if(time_out)
+    *time_out = fat_time;
+  if(tenth_out)
+    *tenth_out = fat_tenth;
+}
+
+static int
+msdos_fat_datetime_to_epoch(ushort fat_date, ushort fat_time)
+{
+  static const uchar mdays[2][12] = {
+    {31,28,31,30,31,30,31,31,30,31,30,31},
+    {31,29,31,30,31,30,31,31,30,31,30,31},
+  };
+  uint year;
+  uint month;
+  uint day;
+  uint hour;
+  uint minute;
+  uint second;
+  uint64_t days;
+  uint y;
+  uint m;
+
+  if(fat_date == 0)
+    return 0;
+
+  year = 1980U + ((uint)(fat_date >> 9) & 0x7FU);
+  month = ((uint)(fat_date >> 5) & 0x0FU);
+  day = (uint)(fat_date & 0x1FU);
+  hour = ((uint)(fat_time >> 11) & 0x1FU);
+  minute = ((uint)(fat_time >> 5) & 0x3FU);
+  second = ((uint)(fat_time & 0x1FU)) * 2U;
+
+  if(month < 1U || month > 12U)
+    return 0;
+  if(day < 1U || day > mdays[msdos_is_leap_year(year)][month - 1U])
+    return 0;
+  if(hour > 23U || minute > 59U || second > 59U)
+    return 0;
+
+  days = 0;
+  for(y = 1970U; y < year; y++)
+    days += msdos_is_leap_year(y) ? 366ULL : 365ULL;
+  for(m = 1U; m < month; m++)
+    days += (uint64_t)mdays[msdos_is_leap_year(year)][m - 1U];
+  days += (uint64_t)(day - 1U);
+
+  return (int)(days * 86400ULL +
+               (uint64_t)hour * 3600ULL +
+               (uint64_t)minute * 60ULL +
+               (uint64_t)second);
+}
+
+static void
+msdos_stamp_dirent(struct fat_dirent *de, int creating)
+{
+  ushort fat_date;
+  ushort fat_time;
+  uchar fat_tenth;
+
+  if(de == 0)
+    return;
+
+  msdos_get_now_fat(&fat_date, &fat_time, &fat_tenth);
+  if(creating){
+    de->crt_date = fat_date;
+    de->crt_time = fat_time;
+    de->crt_tenth = fat_tenth;
+  }
+  de->acc_date = fat_date;
+  de->wrt_date = fat_date;
+  de->wrt_time = fat_time;
 }
 
 /* Write n_segs LFN directory entries starting at (start_sec, start_off) followed
@@ -807,6 +951,74 @@ msdos_inode_dirent_location(struct msdos_mount_data *md, struct inode *ip,
 }
 
 static int
+msdos_prev_dirent_location(struct inode *dp, uint sec, uint off,
+                           uint *prev_sec, uint *prev_off)
+{
+  struct msdos_mount_data *md;
+
+  if(dp == 0 || prev_sec == 0 || prev_off == 0)
+    return -1;
+  md = msdos_data_for_dev(dp->dev);
+  if(md == 0)
+    return -1;
+
+  if(off >= sizeof(struct fat_dirent)){
+    *prev_sec = sec;
+    *prev_off = off - sizeof(struct fat_dirent);
+    return 0;
+  }
+
+  if(md->fat_type == 16 && dp->inum == ROOTINO && dp->addrs[2] == 1){
+    if(sec <= md->root_start)
+      return -1;
+    *prev_sec = sec - 1;
+    *prev_off = BSIZE - sizeof(struct fat_dirent);
+    return 0;
+  }
+
+  {
+    uint cluster;
+    uint prev_cluster;
+
+    cluster = dp->addrs[0];
+    prev_cluster = 0;
+    while(cluster >= 2){
+      uint csec;
+      uint s;
+
+      csec = msdos_cluster_first_sector(md, cluster);
+      if(csec == 0)
+        return -1;
+      for(s = 0; s < md->sectors_per_cluster; s++){
+        uint cur_sec;
+
+        cur_sec = csec + s;
+        if(cur_sec != sec)
+          continue;
+        if(s > 0){
+          *prev_sec = cur_sec - 1;
+          *prev_off = BSIZE - sizeof(struct fat_dirent);
+          return 0;
+        }
+        if(prev_cluster < 2)
+          return -1;
+        *prev_sec = msdos_cluster_first_sector(md, prev_cluster) +
+                    (md->sectors_per_cluster - 1);
+        *prev_off = BSIZE - sizeof(struct fat_dirent);
+        return 0;
+      }
+      prev_cluster = cluster;
+      if(msdos_next_cluster(md, cluster, &cluster) < 0)
+        return -1;
+      if(cluster == 0)
+        break;
+    }
+  }
+
+  return -1;
+}
+
+static int
 msdos_sync_inode_entry(struct inode *ip)
 {
   struct msdos_mount_data *md;
@@ -835,6 +1047,7 @@ msdos_sync_inode_entry(struct inode *ip)
   de.size = ip->size;
   de.clu_lo = ip->addrs[0] & 0xFFFF;
   de.clu_hi = (ip->addrs[0] >> 16) & 0xFFFF;
+  msdos_stamp_dirent(&de, 0);
   memmove(b->data + off, &de, sizeof(de));
   bwrite(b);
   brelse(b);
@@ -1144,14 +1357,16 @@ msdos_make_inode(uint dev, uint inum, struct fat_dirent *de, int is_root16)
 
 static int
 msdos_dir_scan_fat16_root(struct msdos_mount_data *md,
-                          int (*visit)(struct fat_dirent*, const char*, uint, uint, void*),
+                          int (*visit)(struct fat_dirent*, const char*, uint, uint, uint, int, uint, void*),
                           void *arg)
 {
   uint slot;
   struct fat_lfn_state lfn;
+  int lfn_slots;
   uint vis;
 
   memset(&lfn, 0, sizeof(lfn));
+  lfn_slots = 0;
   vis = 0;
 
   for(slot = 0; slot < md->root_dir_entries; slot++){
@@ -1176,24 +1391,28 @@ msdos_dir_scan_fat16_root(struct msdos_mount_data *md,
 
     if(de.name[0] == 0xE5){
       memset(&lfn, 0, sizeof(lfn));
+      lfn_slots = 0;
       continue;
     }
 
     if(de.attr == MSDOS_ATTR_LFN){
       msdos_accumulate_lfn(&lfn, (struct fat_lfn_entry*)&de);
+      lfn_slots++;
       continue;
     }
 
     if(de.attr & MSDOS_ATTR_VOLID){
       memset(&lfn, 0, sizeof(lfn));
+      lfn_slots = 0;
       continue;
     }
 
     {
       const char *lfn_name = lfn.valid ? lfn.name : 0;
       uint inum = MSDOS_ROOT16_INUM_BASE | slot;
-      int r = visit(&de, lfn_name, inum, vis, arg);
+      int r = visit(&de, lfn_name, inum, sec, sec_off, lfn_slots, vis, arg);
       memset(&lfn, 0, sizeof(lfn));
+      lfn_slots = 0;
       if(r != 0)
         return 1;
       vis++;
@@ -1205,17 +1424,19 @@ msdos_dir_scan_fat16_root(struct msdos_mount_data *md,
 
 static int
 msdos_dir_scan_cluster_chain(struct msdos_mount_data *md, uint first_cluster,
-                             int (*visit)(struct fat_dirent*, const char*, uint, uint, void*),
+                             int (*visit)(struct fat_dirent*, const char*, uint, uint, uint, int, uint, void*),
                              void *arg)
 {
   uint cluster;
   uint vis;
   struct fat_lfn_state lfn;
+  int lfn_slots;
 
   if(first_cluster < 2)
     return 0;
 
   memset(&lfn, 0, sizeof(lfn));
+  lfn_slots = 0;
   cluster = first_cluster;
   vis = 0;
 
@@ -1249,16 +1470,19 @@ msdos_dir_scan_cluster_chain(struct msdos_mount_data *md, uint first_cluster,
 
         if(de.name[0] == 0xE5){
           memset(&lfn, 0, sizeof(lfn));
+          lfn_slots = 0;
           continue;
         }
 
         if(de.attr == MSDOS_ATTR_LFN){
           msdos_accumulate_lfn(&lfn, (struct fat_lfn_entry*)&de);
+          lfn_slots++;
           continue;
         }
 
         if(de.attr & MSDOS_ATTR_VOLID){
           memset(&lfn, 0, sizeof(lfn));
+          lfn_slots = 0;
           continue;
         }
 
@@ -1270,8 +1494,9 @@ msdos_dir_scan_cluster_chain(struct msdos_mount_data *md, uint first_cluster,
 
         {
           const char *lfn_name = lfn.valid ? lfn.name : 0;
-          int r = visit(&de, lfn_name, inum, vis, arg);
+          int r = visit(&de, lfn_name, inum, csec + s, off, lfn_slots, vis, arg);
           memset(&lfn, 0, sizeof(lfn));
+          lfn_slots = 0;
           if(r != 0){
             brelse(b);
             return 1;
@@ -1294,7 +1519,7 @@ msdos_dir_scan_cluster_chain(struct msdos_mount_data *md, uint first_cluster,
 
 static int
 msdos_dir_scan(struct inode *dp,
-               int (*visit)(struct fat_dirent*, const char*, uint, uint, void*),
+               int (*visit)(struct fat_dirent*, const char*, uint, uint, uint, int, uint, void*),
                void *arg)
 {
   struct msdos_mount_data *md;
@@ -1318,48 +1543,122 @@ struct lookup_ctx {
   char *name;
   struct fat_dirent de;
   uint inum;
+  uint sec;
+  uint off;
+  int lfn_slots;
   int found;
 };
 
 static int
-msdos_lookup_visit(struct fat_dirent *de, const char *lfn, uint inum, uint visidx, void *arg)
+msdos_lookup_visit(struct fat_dirent *de, const char *lfn, uint inum,
+                   uint sec, uint off, int lfn_slots, uint visidx, void *arg)
 {
   struct lookup_ctx *ctx;
+  int matched;
+
   (void)visidx;
 
   ctx = (struct lookup_ctx*)arg;
+  matched = 0;
 
   /* Try 8.3 short name match first */
-  if(msdos_name_matches_83(ctx->name, de)){
-    memmove(&ctx->de, de, sizeof(*de));
-    ctx->inum = inum;
-    ctx->found = 1;
-    return 1;
-  }
+  if(msdos_name_matches_83(ctx->name, de))
+    matched = 1;
 
   /* Try long filename match (case-insensitive ASCII) */
-  if(lfn != 0){
-    const char *a = ctx->name;
-    const char *b = lfn;
-    while(*a && *b){
-      char ca = *a;
-      char cb = *b;
-      if(ca >= 'A' && ca <= 'Z') ca += ('a' - 'A');
-      if(cb >= 'A' && cb <= 'Z') cb += ('a' - 'A');
-      if(ca != cb)
-        break;
-      a++;
-      b++;
-    }
-    if(*a == 0 && *b == 0){
-      memmove(&ctx->de, de, sizeof(*de));
-      ctx->inum = inum;
-      ctx->found = 1;
-      return 1;
-    }
-  }
+  if(!matched && lfn != 0 && msdos_name_equals_ci(ctx->name, lfn))
+    matched = 1;
 
-  return 0;
+  if(!matched)
+    return 0;
+
+  memmove(&ctx->de, de, sizeof(*de));
+  ctx->inum = inum;
+  ctx->sec = sec;
+  ctx->off = off;
+  ctx->lfn_slots = lfn_slots;
+  ctx->found = 1;
+  return 1;
+}
+
+struct shortname_ctx {
+  uchar shortname[11];
+  int found;
+};
+
+static int
+msdos_shortname_visit(struct fat_dirent *de, const char *lfn, uint inum,
+                      uint sec, uint off, int lfn_slots, uint visidx, void *arg)
+{
+  struct shortname_ctx *ctx;
+
+  (void)lfn;
+  (void)inum;
+  (void)sec;
+  (void)off;
+  (void)lfn_slots;
+  (void)visidx;
+
+  ctx = (struct shortname_ctx*)arg;
+  if(memcmp(de->name, ctx->shortname, sizeof(ctx->shortname)) != 0)
+    return 0;
+  ctx->found = 1;
+  return 1;
+}
+
+static int
+msdos_shortname_exists(struct inode *dp, const uchar shortname[11])
+{
+  struct shortname_ctx ctx;
+
+  memset(&ctx, 0, sizeof(ctx));
+  memmove(ctx.shortname, shortname, sizeof(ctx.shortname));
+  if(msdos_dir_scan(dp, msdos_shortname_visit, &ctx) < 0)
+    return 0;
+  return ctx.found;
+}
+
+struct locate_ctx {
+  char *name;
+  struct fat_dirent de;
+  uint sec;
+  uint off;
+  int lfn_slots;
+  int found;
+};
+
+static int
+msdos_locate_visit(struct fat_dirent *de, const char *lfn, uint inum,
+                   uint sec, uint off, int lfn_slots, uint visidx, void *arg)
+{
+  struct locate_ctx *ctx;
+
+  (void)inum;
+  (void)visidx;
+
+  ctx = (struct locate_ctx*)arg;
+  if(!msdos_name_matches_83(ctx->name, de) &&
+     !(lfn != 0 && msdos_name_equals_ci(ctx->name, lfn)))
+    return 0;
+
+  memmove(&ctx->de, de, sizeof(ctx->de));
+  ctx->sec = sec;
+  ctx->off = off;
+  ctx->lfn_slots = lfn_slots;
+  ctx->found = 1;
+  return 1;
+}
+
+static int
+msdos_locate_entry(struct inode *dp, char *name, struct locate_ctx *ctx)
+{
+  if(dp == 0 || name == 0 || ctx == 0)
+    return -1;
+  memset(ctx, 0, sizeof(*ctx));
+  ctx->name = name;
+  if(msdos_dir_scan(dp, msdos_locate_visit, ctx) < 0)
+    return -1;
+  return ctx->found ? 0 : -1;
 }
 
 struct nth_ctx {
@@ -1372,9 +1671,14 @@ struct nth_ctx {
 };
 
 static int
-msdos_nth_visit(struct fat_dirent *de, const char *lfn, uint inum, uint visidx, void *arg)
+msdos_nth_visit(struct fat_dirent *de, const char *lfn, uint inum,
+                uint sec, uint off, int lfn_slots, uint visidx, void *arg)
 {
   struct nth_ctx *ctx;
+
+  (void)sec;
+  (void)off;
+  (void)lfn_slots;
   (void)visidx;
 
   ctx = (struct nth_ctx*)arg;
@@ -1936,6 +2240,12 @@ msdos_truncate(struct inode *ip)
 static int
 msdos_stat(struct inode *ip, struct stat *st)
 {
+  struct msdos_mount_data *md;
+  uint sec;
+  uint off;
+  struct buf *b;
+  struct fat_dirent de;
+
   if(ip == 0 || st == 0)
     return -1;
   st->st_type = ip->type;
@@ -1951,6 +2261,25 @@ msdos_stat(struct inode *ip, struct stat *st)
   st->st_atime = 0;
   st->st_mtime = 0;
   st->st_ctime = 0;
+
+  md = msdos_data_for_dev(ip->dev);
+  if(md == 0)
+    return 0;
+  if(msdos_inode_dirent_location(md, ip, &sec, &off) < 0)
+    return 0;
+  b = msdos_bread(md, sec);
+  if(b == 0)
+    return 0;
+  if(off + sizeof(de) > BSIZE){
+    brelse(b);
+    return 0;
+  }
+  memmove(&de, b->data + off, sizeof(de));
+  brelse(b);
+
+  st->st_atime = msdos_fat_datetime_to_epoch(de.acc_date, 0);
+  st->st_mtime = msdos_fat_datetime_to_epoch(de.wrt_date, de.wrt_time);
+  st->st_ctime = msdos_fat_datetime_to_epoch(de.crt_date, de.crt_time);
   return 0;
 }
 
@@ -2039,6 +2368,9 @@ msdos_create(struct inode *dp, char *name, short type, short major,
     return 0;
   }
 
+  if(msdos_shortname_exists(dp, shortname))
+    return 0;
+
   /* Determine whether LFN entries are needed */
   {
     uchar test83[11];
@@ -2084,6 +2416,7 @@ msdos_create(struct inode *dp, char *name, short type, short major,
 
   memset(&de, 0, sizeof(de));
   memmove(de.name, shortname, sizeof(de.name));
+  msdos_stamp_dirent(&de, 1);
 
   if(type == T_DIR){
     uint dir_cluster;
@@ -2165,13 +2498,261 @@ msdos_create(struct inode *dp, char *name, short type, short major,
 }
 
 static int
+msdos_delete_entry_chain(struct inode *dp, uint sec, uint off, int lfn_slots)
+{
+  struct msdos_mount_data *md;
+  struct buf *b;
+  int i;
+
+  if(dp == 0)
+    return -1;
+  md = msdos_data_for_dev(dp->dev);
+  if(md == 0)
+    return -1;
+
+  b = msdos_bread(md, sec);
+  if(b == 0)
+    return -1;
+  if(off + sizeof(struct fat_dirent) > BSIZE){
+    brelse(b);
+    return -1;
+  }
+  memset(b->data + off, 0, sizeof(struct fat_dirent));
+  b->data[off] = 0xE5;
+  bwrite(b);
+  brelse(b);
+
+  for(i = 0; i < lfn_slots; i++){
+    struct buf *lb;
+    struct fat_dirent lde;
+
+    if(msdos_prev_dirent_location(dp, sec, off, &sec, &off) < 0)
+      break;
+    lb = msdos_bread(md, sec);
+    if(lb == 0)
+      break;
+    if(off + sizeof(lde) > BSIZE){
+      brelse(lb);
+      break;
+    }
+    memmove(&lde, lb->data + off, sizeof(lde));
+    if(lde.attr != MSDOS_ATTR_LFN){
+      brelse(lb);
+      break;
+    }
+    memset(lb->data + off, 0, sizeof(lde));
+    lb->data[off] = 0xE5;
+    bwrite(lb);
+    brelse(lb);
+  }
+
+  return 0;
+}
+
+static int
+msdos_write_entry_chain(struct inode *dp, char *name, struct fat_dirent *srcde,
+                        uint *out_inum)
+{
+  struct msdos_mount_data *md;
+  struct fat_dirent de;
+  struct buf *b;
+  uchar shortname[11];
+  uint sec;
+  uint off;
+  uint inum;
+  int n_segs;
+
+  if(dp == 0 || name == 0 || srcde == 0)
+    return -1;
+  md = msdos_data_for_dev(dp->dev);
+  if(md == 0)
+    return -1;
+  if(msdos_generate_shortname(name, shortname) < 0)
+    return -1;
+
+  {
+    uchar test83[11];
+    n_segs = (msdos_component_to_83(name, test83) == 0) ? 0
+             : (int)((strlen(name) + 12) / 13);
+  }
+
+  if(n_segs > 0){
+    uint first_sec;
+    uint first_off;
+    uint last_inum;
+    uint abs_lfn;
+    uint abs_83;
+
+    if(msdos_find_free_run(dp, n_segs + 1, &first_sec, &first_off, &last_inum) < 0)
+      return -1;
+    if(msdos_write_lfn_entries(md, first_sec, first_off, name, n_segs, shortname) < 0)
+      return -1;
+
+    abs_lfn = first_sec * BSIZE + first_off;
+    abs_83 = abs_lfn + (uint)n_segs * sizeof(struct fat_dirent);
+    sec = abs_83 / BSIZE;
+    off = abs_83 % BSIZE;
+    inum = last_inum;
+  } else {
+    if(msdos_find_free_dirent(dp, &sec, &off, &inum) < 0)
+      return -1;
+  }
+
+  b = msdos_bread(md, sec);
+  if(b == 0)
+    return -1;
+  if(off + sizeof(de) > BSIZE){
+    brelse(b);
+    return -1;
+  }
+
+  memmove(&de, srcde, sizeof(de));
+  memmove(de.name, shortname, sizeof(de.name));
+  msdos_stamp_dirent(&de, 0);
+  memmove(b->data + off, &de, sizeof(de));
+  bwrite(b);
+  brelse(b);
+
+  if(out_inum)
+    *out_inum = inum;
+  return 0;
+}
+
+static uint
+msdos_parent_cluster(struct msdos_mount_data *md, struct inode *dp)
+{
+  if(md == 0 || dp == 0)
+    return 0;
+  if(md->fat_type == 16 && dp->inum == ROOTINO && dp->addrs[2] == 1)
+    return 0;
+  return dp->addrs[0];
+}
+
+static int
+msdos_rewrite_dotdot(struct inode *ip, struct inode *newdp)
+{
+  struct msdos_mount_data *md;
+  struct buf *b;
+  struct fat_dirent de;
+  uint parent_cluster;
+  uint csec;
+
+  if(ip == 0 || newdp == 0)
+    return -1;
+  md = msdos_data_for_dev(ip->dev);
+  if(md == 0)
+    return -1;
+  if(ip->type != T_DIR || ip->addrs[0] < 2)
+    return -1;
+
+  csec = msdos_cluster_first_sector(md, ip->addrs[0]);
+  if(csec == 0)
+    return -1;
+  b = msdos_bread(md, csec);
+  if(b == 0)
+    return -1;
+  if(sizeof(struct fat_dirent) * 2 > BSIZE){
+    brelse(b);
+    return -1;
+  }
+
+  memmove(&de, b->data + sizeof(struct fat_dirent), sizeof(de));
+  parent_cluster = msdos_parent_cluster(md, newdp);
+  de.clu_lo = (ushort)(parent_cluster & 0xFFFF);
+  de.clu_hi = (ushort)((parent_cluster >> 16) & 0xFFFF);
+  msdos_stamp_dirent(&de, 0);
+  memmove(b->data + sizeof(struct fat_dirent), &de, sizeof(de));
+  bwrite(b);
+  brelse(b);
+  return 0;
+}
+
+static int
+msdos_dir_is_ancestor(struct inode *ancestor, struct inode *dir)
+{
+  struct msdos_mount_data *md;
+  uint ancestor_cluster;
+  uint cur_cluster;
+  int ancestor_is_root;
+  int cur_is_root;
+
+  if(ancestor == 0 || dir == 0)
+    return 0;
+  if(ancestor->dev != dir->dev || ancestor->type != T_DIR || dir->type != T_DIR)
+    return 0;
+
+  md = msdos_data_for_dev(ancestor->dev);
+  if(md == 0)
+    return 0;
+
+  if(md->fat_type == 16){
+    ancestor_is_root = ((ancestor->inum == ROOTINO && ancestor->addrs[2] == 1) ||
+                        ancestor->addrs[0] == 0);
+    cur_is_root = ((dir->inum == ROOTINO && dir->addrs[2] == 1) ||
+                   dir->addrs[0] == 0);
+  } else {
+    ancestor_is_root = (ancestor->addrs[0] == md->root_cluster);
+    cur_is_root = (dir->addrs[0] == md->root_cluster);
+  }
+
+  ancestor_cluster = ancestor->addrs[0];
+  cur_cluster = dir->addrs[0];
+
+  for(;;){
+    if(ancestor_is_root){
+      if(cur_is_root)
+        return 1;
+    } else if(!cur_is_root && cur_cluster == ancestor_cluster){
+      return 1;
+    }
+
+    if(cur_is_root || cur_cluster < 2)
+      return 0;
+
+    {
+      struct buf *b;
+      struct fat_dirent de;
+      uint csec;
+      uint parent_cluster;
+      int parent_is_root;
+
+      csec = msdos_cluster_first_sector(md, cur_cluster);
+      if(csec == 0)
+        return 0;
+      b = msdos_bread(md, csec);
+      if(b == 0)
+        return 0;
+      if(sizeof(struct fat_dirent) * 2 > BSIZE){
+        brelse(b);
+        return 0;
+      }
+
+      memmove(&de, b->data + sizeof(struct fat_dirent), sizeof(de));
+      brelse(b);
+
+      parent_cluster = msdos_entry_cluster(&de);
+      if(md->fat_type == 16)
+        parent_is_root = (parent_cluster == 0);
+      else
+        parent_is_root = (parent_cluster == md->root_cluster);
+
+      if(parent_is_root == cur_is_root && parent_cluster == cur_cluster)
+        return 0;
+
+      cur_cluster = parent_cluster;
+      cur_is_root = parent_is_root;
+    }
+  }
+}
+
+static int
 msdos_remove(struct inode *dp, char *name)
 {
   struct msdos_mount_data *md;
   struct inode *ip;
+  struct locate_ctx loc;
   uint sec;
   uint off;
-  struct buf *b;
 
   if(dp == 0 || name == 0)
     return -1;
@@ -2180,6 +2761,9 @@ msdos_remove(struct inode *dp, char *name)
 
   md = msdos_data_for_dev(dp->dev);
   if(md == 0)
+    return -1;
+
+  if(msdos_locate_entry(dp, name, &loc) < 0)
     return -1;
 
   ip = msdos_dirlookup(dp, name, 0);
@@ -2222,31 +2806,107 @@ msdos_remove(struct inode *dp, char *name)
     iunlockput(ip);
     return -1;
   }
-  if(msdos_inode_dirent_location(md, ip, &sec, &off) < 0){
+  sec = loc.sec;
+  off = loc.off;
+  if(msdos_delete_entry_chain(dp, sec, off, loc.lfn_slots) < 0){
     iunlockput(ip);
     return -1;
   }
-
-  b = msdos_bread(md, sec);
-  if(b == 0){
-    iunlockput(ip);
-    return -1;
-  }
-  if(off + sizeof(struct fat_dirent) > BSIZE){
-    brelse(b);
-    iunlockput(ip);
-    return -1;
-  }
-
-  memset(b->data + off, 0, sizeof(struct fat_dirent));
-  b->data[off] = 0xE5;
-  bwrite(b);
-  brelse(b);
 
   ip->addrs[0] = 0;
   ip->size = 0;
   ip->nlink = 0;
   ip->valid = 0;
+  iunlockput(ip);
+  return 0;
+}
+
+static int
+msdos_rename(struct inode *olddp, char *oldname,
+             struct inode *newdp, char *newname)
+{
+  struct locate_ctx oldloc;
+  struct locate_ctx newloc;
+  struct inode *ip;
+  struct inode *exist;
+  uchar shortname[11];
+  uint new_inum;
+  int is_dir;
+
+  if(olddp == 0 || newdp == 0 || oldname == 0 || newname == 0)
+    return -1;
+  if(olddp->dev != newdp->dev)
+    return -1;
+  if(olddp->type != T_DIR || newdp->type != T_DIR)
+    return -1;
+  if(msdos_locate_entry(olddp, oldname, &oldloc) < 0)
+    return -1;
+  if(msdos_generate_shortname(newname, shortname) < 0)
+    return -1;
+
+  ip = msdos_dirlookup(olddp, oldname, 0);
+  if(ip == 0)
+    return -1;
+  ilock(ip);
+  is_dir = (ip->type == T_DIR);
+
+  if(is_dir && msdos_dir_is_ancestor(ip, newdp)){
+    iunlockput(ip);
+    return -1;
+  }
+
+  if(msdos_locate_entry(newdp, newname, &newloc) == 0){
+    if(olddp == newdp && oldloc.sec == newloc.sec && oldloc.off == newloc.off){
+      iunlockput(ip);
+      return 0;
+    }
+
+    exist = msdos_dirlookup(newdp, newname, 0);
+    if(exist == 0){
+      iunlockput(ip);
+      return -1;
+    }
+    ilock(exist);
+    if(exist->type == T_DIR || is_dir){
+      iunlockput(exist);
+      iunlockput(ip);
+      return -1;
+    }
+    iunlock(exist);
+    iput(exist);
+
+    if(msdos_remove(newdp, newname) < 0){
+      iunlockput(ip);
+      return -1;
+    }
+  }
+
+  if(msdos_shortname_exists(newdp, shortname) &&
+     !(olddp == newdp && memcmp(oldloc.de.name, shortname, sizeof(shortname)) == 0)){
+    iunlockput(ip);
+    return -1;
+  }
+
+  if(msdos_write_entry_chain(newdp, newname, &oldloc.de, &new_inum) < 0){
+    iunlockput(ip);
+    return -1;
+  }
+
+  if(is_dir && olddp != newdp){
+    if(msdos_rewrite_dotdot(ip, newdp) < 0){
+      if(msdos_locate_entry(newdp, newname, &newloc) == 0)
+        msdos_delete_entry_chain(newdp, newloc.sec, newloc.off, newloc.lfn_slots);
+      iunlockput(ip);
+      return -1;
+    }
+  }
+
+  if(msdos_delete_entry_chain(olddp, oldloc.sec, oldloc.off, oldloc.lfn_slots) < 0){
+    iunlockput(ip);
+    return -1;
+  }
+
+  (void)new_inum;
   iunlockput(ip);
   return 0;
 }
@@ -2259,7 +2919,7 @@ vfs_msdosfs_init(struct vfs *fs)
 
   safestrcpy(fs->name, "msdosfs", sizeof(fs->name));
   fs->caps = VFS_CAP_READ | VFS_CAP_WRITE | VFS_CAP_CREATE | VFS_CAP_REMOVE |
-             VFS_CAP_MKDIR;
+             VFS_CAP_MKDIR | VFS_CAP_RENAME;
   fs->fs_data = 0;
   fs->fs_destroy = 0;
   fs->mount_init = msdos_mount_init;
@@ -2275,5 +2935,6 @@ vfs_msdosfs_init(struct vfs *fs)
   fs->vnode_ops.access = msdos_access;
   fs->vnode_ops.dirlookup = msdos_dirlookup;
   fs->vnode_ops.remove = msdos_remove;
+  fs->vnode_ops.rename = msdos_rename;
   fs->vnode_ops.create = msdos_create;
 }

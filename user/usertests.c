@@ -297,7 +297,7 @@ rootdirtest(void)
   int fd;
   int nent;
   int i;
-  struct dirent des[16];
+  struct dirent des[8];
 
   dprintf(stdout, "rootdir test\n");
 
@@ -308,7 +308,7 @@ rootdirtest(void)
   }
 
   for(;;){
-    nent = getdents(fd, des, 16);
+    nent = getdents(fd, des, 8);
     if(nent < 0){
       dprintf(stdout, "getdents / failed\n");
       close(fd);

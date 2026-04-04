@@ -4,8 +4,8 @@
  * Provides POSIX opendir/readdir/closedir API on top of the auxv6
  * getdents() syscall. The implementation lives in user/posix.c.
  *
- * The kernel's struct dirent is {ushort inum; char name[14]} (16 bytes each).
- * DIR.dd_buf holds KDIRENT_BUF=16 of those (256 bytes).
+ * The kernel's getdents() ABI uses fixed-size dirent records with NAME_MAX
+ * bytes of payload plus a trailing NUL.
  */
 
 #ifndef AUXV6_DIRENT_H
@@ -17,6 +17,13 @@
 #define NAME_MAX 255
 #endif
 
+#define AUXV6_KDIRENT_BATCH 8
+
+struct __auxv6_kdirent {
+    unsigned short inum;
+    char           name[NAME_MAX + 1];
+};
+
 struct dirent {
     ino_t d_ino;
     char  d_name[NAME_MAX + 1];
@@ -26,7 +33,7 @@ typedef struct {
     int           dd_fd;
     int           dd_loc;
     int           dd_size;
-    char          dd_buf[256];
+    struct __auxv6_kdirent dd_buf[AUXV6_KDIRENT_BATCH];
     struct dirent dd_ent;
 } DIR;
 

@@ -118,6 +118,7 @@ include/rootfs_config.h
 .ext2root/
 .ext2root-server7/
 .fatroot/
+.fat32root/
 virtio_boot.log
 ports/dash-0.5.12/src/mksyntax
 ports/dash-0.5.12/src/mksignames

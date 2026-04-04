@@ -28,6 +28,7 @@ static int create_device_mode(int mode);
 static int inode_dir_read(struct inode *dp, struct dirent *de, uint off);
 static struct inode* inode_dir_lookup(struct inode *dp, char *name, uint *poff);
 static int child_name_in_parent(struct inode *parent, uint child_inum, char *name);
+static ushort visible_dirent_inum(uint inum);
 static int buildcwd(struct inode *cwd, char *buf, int size);
 static int inode_is_owner_or_root(struct inode *ip);
 static int inode_is_root_user(void);
@@ -121,17 +122,31 @@ inode_dir_lookup(struct inode *dp, char *name, uint *poff)
   return dirlookup(dp, name, poff);
 }
 
+static ushort
+visible_dirent_inum(uint inum)
+{
+  ushort vinum;
+
+  vinum = (ushort)(inum & 0xFFFF);
+  if(vinum == 0)
+    vinum = 1;
+  return vinum;
+}
+
 static int
 child_name_in_parent(struct inode *parent, uint child_inum, char *name)
 {
   uint off;
   int i;
   struct dirent de;
+  ushort want_inum;
+
+  want_inum = visible_dirent_inum(child_inum);
 
   for(off = 0; off < parent->size; off += sizeof(de)){
     if(inode_dir_read(parent, &de, off) != sizeof(de))
       return -1;
-    if(de.inum != child_inum)
+    if(de.inum != want_inum)
       continue;
     memmove(name, de.name, DIRSIZ);
     name[DIRSIZ] = 0;

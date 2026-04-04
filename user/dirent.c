@@ -9,13 +9,6 @@
 #include "stdlib.h"
 #include "auxv6/user.h"
 
-#define KDIRENT_BUF  16
-
-struct kdirent {
-  unsigned short inum;
-  char name[14];
-};
-
 DIR *
 opendir(const char *path)
 {
@@ -40,7 +33,7 @@ opendir(const char *path)
 struct dirent *
 readdir(DIR *dp)
 {
-  struct kdirent kbuf[KDIRENT_BUF];
+  struct __auxv6_kdirent kbuf[AUXV6_KDIRENT_BATCH];
   int n;
   int i;
 
@@ -49,23 +42,23 @@ readdir(DIR *dp)
 
   for(;;){
     while(dp->dd_loc < dp->dd_size){
-      struct kdirent *kd = (struct kdirent *)dp->dd_buf + dp->dd_loc;
+      struct __auxv6_kdirent *kd = dp->dd_buf + dp->dd_loc;
 
       dp->dd_loc++;
       if(kd->inum == 0)
         continue;
       dp->dd_ent.d_ino = (ino_t)kd->inum;
-      memmove(dp->dd_ent.d_name, kd->name, 14);
-      dp->dd_ent.d_name[14] = '\0';
+      memmove(dp->dd_ent.d_name, kd->name, sizeof(kd->name));
+      dp->dd_ent.d_name[NAME_MAX] = '\0';
       return &dp->dd_ent;
     }
 
-    n = getdents(dp->dd_fd, (struct dirent *)kbuf, KDIRENT_BUF);
+    n = getdents(dp->dd_fd, (struct dirent *)kbuf, AUXV6_KDIRENT_BATCH);
     if(n <= 0)
       return 0;
 
     for(i = 0; i < n; i++)
-      *((struct kdirent *)dp->dd_buf + i) = kbuf[i];
+      dp->dd_buf[i] = kbuf[i];
 
     dp->dd_loc = 0;
     dp->dd_size = n;

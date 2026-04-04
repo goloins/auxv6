@@ -680,7 +680,7 @@ list_topics(void)
   int fd;
   int nent;
   int i;
-  struct dirent des[16];
+  struct dirent des[8];
 
   fd = open(MAN_DIR, O_RDONLY);
   if(fd < 0) {
@@ -688,7 +688,7 @@ list_topics(void)
     return -1;
   }
 
-  while((nent = getdents(fd, des, 16)) > 0) {
+  while((nent = getdents(fd, des, 8)) > 0) {
     for(i = 0; i < nent; i++) {
       char name[DIRSIZ + 1];
       int j;

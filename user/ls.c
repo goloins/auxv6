@@ -16,6 +16,7 @@
 #define LSDBG(...) do { if(LS_DEBUG) dprintf(2, __VA_ARGS__); } while(0)
 
 #define NAME_MAX_LOCAL (DIRSIZ + 1)
+#define LS_DIRENT_BATCH 8
 
 struct ls_opts {
   int show_all;
@@ -534,7 +535,7 @@ static void
 list_directory(const char *path, int show_header)
 {
   int fd;
-  struct dirent des[32];
+  struct dirent des[LS_DIRENT_BATCH];
   struct ls_entry *ents;
   char fullpath[256];
   char childpath[256];
@@ -574,7 +575,7 @@ list_directory(const char *path, int show_header)
   for(;;) {
     int nent;
 
-    nent = getdents(fd, des, 32);
+    nent = getdents(fd, des, LS_DIRENT_BATCH);
     if(nent < 0) {
       dprintf(2, "ls: getdents failed %s\n", path);
       LSDBG("ls[dbg]: list_directory getdents failed path='%s'\n", path);

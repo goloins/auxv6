@@ -1,6 +1,8 @@
 // On-disk file system format.
 // Both the kernel and user programs use this header file.
 
+#include "limits.h"
+
 
 #define ROOTINO 1  // root i-number
 #define BSIZE 512  // block size
@@ -55,7 +57,8 @@ struct dinode {
 #define BBLOCK(b, sb) (b/BPB + sb.bmapstart)
 
 // Directory is a file containing a sequence of dirent structures.
-#define DIRSIZ 14
+// DIRSIZ is a buffer size, so it includes room for the trailing NUL.
+#define DIRSIZ (NAME_MAX + 1)
 
 struct dirent {
   ushort inum;

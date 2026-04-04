@@ -21,14 +21,13 @@
 #define JOB_RUNNING 1
 #define JOB_STOPPED 2
 
-#define PATH_MAX 128
 #define PROMPT_MAX 128
 #define USER_MAX 32
 #define HOST_MAX 32
-#define CWD_MAX 128
+#define CWD_MAX PATH_MAX
 #define HISTORY_MAX 64
 #define HISTORY_LINE_MAX 100
-#define HISTORY_PATH_MAX (CWD_MAX + 16)
+#define HISTORY_PATH_MAX (PATH_MAX + 16)
 
 struct cmd {
   int type;

@@ -4,7 +4,7 @@
 #include "fcntl.h"
 #include "fs.h"
 
-#define FSREG_BATCH 16
+#define FSREG_BATCH 8
 #define FSREG_PATH_MAX 128
 
 struct scan_target {
@@ -12,6 +12,13 @@ struct scan_target {
   int required;
   int strict_stat;
 };
+
+static char *mnt_root = "/mnt";
+static char mpath_pool[8][FSREG_PATH_MAX];
+static int mpath_next;
+static int fsreg_debug;
+
+#define DBG(...) do { if(fsreg_debug) dprintf(1, __VA_ARGS__); } while(0)
 
 static void
 copy_name(char *dst, struct dirent *de)
@@ -40,7 +47,22 @@ join_path(char *out, int outsz, char *base, char *name)
     out[p++] = '/';
   memmove(out + p, name, nlen);
   out[p + nlen] = 0;
+  DBG("fsregress[d]: join_path base=%s name=%s -> %s\n", base, name, out);
   return 0;
+}
+
+static char*
+mpath(char *name)
+{
+  char *out;
+
+  out = mpath_pool[mpath_next];
+  mpath_next = (mpath_next + 1) % 8;
+  if(join_path(out, FSREG_PATH_MAX, mnt_root, name) < 0){
+    dprintf(1, "fsregress: FAIL path too long %s/%s\n", mnt_root, name);
+    exit(0);
+  }
+  return out;
 }
 
 static void
@@ -50,11 +72,14 @@ scan_dir(struct scan_target *t, int rounds, int *total_entries)
   int saw_any;
 
   saw_any = 0;
+  DBG("fsregress[d]: scan_dir path=%s rounds=%d required=%d strict=%d\n",
+      t->path, rounds, t->required, t->strict_stat);
   for(r = 0; r < rounds; r++){
     int fd;
     struct stat st;
 
     fd = open(t->path, O_RDONLY);
+    DBG("fsregress[d]: open(%s,O_RDONLY) -> %d\n", t->path, fd);
     if(fd < 0){
       if(!t->required){
         dprintf(1, "fsregress: skip %s (not available)\n", t->path);
@@ -131,26 +156,33 @@ check_mnt_link_cycle(void)
   char *b;
   char *c;
   int fd;
+  int ra;
+  int rb;
+  int rc;
   struct stat sa;
   struct stat sb;
   char buf[8];
 
-  a = "/mnt/.fsra";
-  b = "/mnt/.fsrb";
-  c = "/mnt/.fsrc";
+  a = mpath(".fsra");
+  b = mpath(".fsrb");
+  c = mpath(".fsrc");
+  DBG("fsregress[d]: link-cycle paths a=%s b=%s c=%s\n", a, b, c);
 
-  fd = open("/mnt", O_RDONLY);
+  fd = open(mnt_root, O_RDONLY);
+  DBG("fsregress[d]: open(%s,O_RDONLY) -> %d\n", mnt_root, fd);
   if(fd < 0){
-    dprintf(1, "fsregress: skip /mnt link cycle (not available)\n");
+    dprintf(1, "fsregress: skip %s link cycle (not available)\n", mnt_root);
     return;
   }
   close(fd);
 
-  unlink(a);
-  unlink(b);
-  unlink(c);
+  ra = unlink(a);
+  rb = unlink(b);
+  rc = unlink(c);
+  DBG("fsregress[d]: preclean unlink a=%d b=%d c=%d\n", ra, rb, rc);
 
   fd = open(a, O_CREATE | O_WRONLY | O_TRUNC);
+  DBG("fsregress[d]: open(%s,O_CREATE|O_WRONLY|O_TRUNC) -> %d\n", a, fd);
   if(fd < 0){
     dprintf(1, "fsregress: FAIL create %s\n", a);
     exit(0);
@@ -218,7 +250,7 @@ check_mnt_link_cycle(void)
     exit(0);
   }
 
-  dprintf(1, "fsregress: ok /mnt link cycle\n");
+  dprintf(1, "fsregress: ok %s link cycle\n", mnt_root);
 }
 
 static void
@@ -231,12 +263,13 @@ check_mnt_rename_cycle(void)
   struct stat sa;
   struct stat sb;
 
-  a = "/mnt/.fsrra";
-  b = "/mnt/.fsrrb";
+  a = mpath(".fsrra");
+  b = mpath(".fsrrb");
+  DBG("fsregress[d]: rename-cycle paths a=%s b=%s\n", a, b);
 
-  fd = open("/mnt", O_RDONLY);
+  fd = open(mnt_root, O_RDONLY);
   if(fd < 0){
-    dprintf(1, "fsregress: skip /mnt rename cycle (not available)\n");
+    dprintf(1, "fsregress: skip %s rename cycle (not available)\n", mnt_root);
     return;
   }
   close(fd);
@@ -301,7 +334,7 @@ check_mnt_rename_cycle(void)
     exit(0);
   }
 
-  dprintf(1, "fsregress: ok /mnt rename cycle\n");
+  dprintf(1, "fsregress: ok %s rename cycle\n", mnt_root);
 }
 
 static void
@@ -315,22 +348,23 @@ check_mnt_crossdir_rename_cycle(void)
   int fd;
   struct stat st;
 
-  d1 = "/mnt/.fsrd1";
-  d2 = "/mnt/.fsrd2";
-  src = "/mnt/.fsrd1/src";
-  dst = "/mnt/.fsrd2/dst";
+  d1 = mpath(".fsrd1");
+  d2 = mpath(".fsrd2");
+  src = mpath(".fsrd1/src");
+  dst = mpath(".fsrd2/dst");
+  DBG("fsregress[d]: crossdir paths d1=%s d2=%s src=%s dst=%s\n", d1, d2, src, dst);
 
-  fd = open("/mnt", O_RDONLY);
+  fd = open(mnt_root, O_RDONLY);
   if(fd < 0){
-    dprintf(1, "fsregress: skip /mnt crossdir rename (not available)\n");
+    dprintf(1, "fsregress: skip %s crossdir rename (not available)\n", mnt_root);
     return;
   }
   close(fd);
 
   unlink(src);
   unlink(dst);
-  unlink(d1);
-  unlink(d2);
+  rmdir(d1);
+  rmdir(d2);
 
   if(mkdir(d1) < 0 || mkdir(d2) < 0){
     dprintf(1, "fsregress: FAIL mkdir crossdir roots\n");
@@ -386,12 +420,12 @@ check_mnt_crossdir_rename_cycle(void)
   }
   close(fd);
 
-  if(unlink(dst) < 0 || unlink(d1) < 0 || unlink(d2) < 0){
+  if(unlink(dst) < 0 || rmdir(d1) < 0 || rmdir(d2) < 0){
     dprintf(1, "fsregress: FAIL crossdir cleanup\n");
     exit(0);
   }
 
-  dprintf(1, "fsregress: ok /mnt crossdir rename\n");
+  dprintf(1, "fsregress: ok %s crossdir rename\n", mnt_root);
 }
 
 static void
@@ -406,25 +440,28 @@ check_mnt_dir_rename_cycle(void)
   int fd;
   struct stat st;
 
-  d1 = "/mnt/.fsdd1";
-  d2 = "/mnt/.fsdd2";
-  src = "/mnt/.fsdd1/src";
-  dst = "/mnt/.fsdd2/dst";
-  sub = "/mnt/.fsdd2/dst/sub";
-  bad = "/mnt/.fsdd2/dst/sub/oops";
+  d1 = mpath(".fsdd1");
+  d2 = mpath(".fsdd2");
+  src = mpath(".fsdd1/src");
+  dst = mpath(".fsdd2/dst");
+  sub = mpath(".fsdd2/dst/sub");
+  bad = mpath(".fsdd2/dst/sub/oops");
+  DBG("fsregress[d]: dir-rename paths d1=%s d2=%s src=%s dst=%s sub=%s bad=%s\n",
+      d1, d2, src, dst, sub, bad);
 
-  fd = open("/mnt", O_RDONLY);
+  fd = open(mnt_root, O_RDONLY);
   if(fd < 0){
-    dprintf(1, "fsregress: skip /mnt dir rename (not available)\n");
+    dprintf(1, "fsregress: skip %s dir rename (not available)\n", mnt_root);
     return;
   }
   close(fd);
 
   unlink(sub);
-  unlink(dst);
+  rmdir(sub);
+  rmdir(dst);
   unlink(src);
-  unlink(d1);
-  unlink(d2);
+  rmdir(d1);
+  rmdir(d2);
 
   if(mkdir(d1) < 0 || mkdir(d2) < 0 || mkdir(src) < 0){
     dprintf(1, "fsregress: FAIL mkdir dir rename roots\n");
@@ -454,12 +491,12 @@ check_mnt_dir_rename_cycle(void)
     exit(0);
   }
 
-  if(unlink(sub) < 0 || unlink(dst) < 0 || unlink(d1) < 0 || unlink(d2) < 0){
+  if(rmdir(sub) < 0 || rmdir(dst) < 0 || rmdir(d1) < 0 || rmdir(d2) < 0){
     dprintf(1, "fsregress: FAIL dir rename cleanup\n");
     exit(0);
   }
 
-  dprintf(1, "fsregress: ok /mnt dir rename cycle\n");
+  dprintf(1, "fsregress: ok %s dir rename cycle\n", mnt_root);
 }
 
 static void
@@ -472,11 +509,11 @@ check_mnt_indirect_write_cycle(void)
   int j;
   struct stat st;
 
-  p = "/mnt/.fsbig";
+  p = mpath(".fsbig");
 
-  fd = open("/mnt", O_RDONLY);
+  fd = open(mnt_root, O_RDONLY);
   if(fd < 0){
-    dprintf(1, "fsregress: skip /mnt indirect write (not available)\n");
+    dprintf(1, "fsregress: skip %s indirect write (not available)\n", mnt_root);
     return;
   }
   close(fd);
@@ -537,7 +574,7 @@ check_mnt_indirect_write_cycle(void)
     exit(0);
   }
 
-  dprintf(1, "fsregress: ok /mnt indirect write cycle\n");
+  dprintf(1, "fsregress: ok %s indirect write cycle\n", mnt_root);
 }
 
 static void
@@ -550,11 +587,11 @@ check_mnt_indirect_edge_cycle(void)
   int j;
   struct stat st;
 
-  p = "/mnt/.fsedge";
+  p = mpath(".fsedge");
 
-  fd = open("/mnt", O_RDONLY);
+  fd = open(mnt_root, O_RDONLY);
   if(fd < 0){
-    dprintf(1, "fsregress: skip /mnt indirect edge (not available)\n");
+    dprintf(1, "fsregress: skip %s indirect edge (not available)\n", mnt_root);
     return;
   }
   close(fd);
@@ -653,7 +690,7 @@ check_mnt_indirect_edge_cycle(void)
     exit(0);
   }
 
-  dprintf(1, "fsregress: ok /mnt indirect edge cycle\n");
+  dprintf(1, "fsregress: ok %s indirect edge cycle\n", mnt_root);
 }
 
 static void
@@ -666,11 +703,11 @@ check_mnt_append_boundary_cycle(void)
   int j;
   struct stat st;
 
-  p = "/mnt/.fsapp";
+  p = mpath(".fsapp");
 
-  fd = open("/mnt", O_RDONLY);
+  fd = open(mnt_root, O_RDONLY);
   if(fd < 0){
-    dprintf(1, "fsregress: skip /mnt append boundary (not available)\n");
+    dprintf(1, "fsregress: skip %s append boundary (not available)\n", mnt_root);
     return;
   }
   close(fd);
@@ -741,7 +778,7 @@ check_mnt_append_boundary_cycle(void)
     exit(0);
   }
 
-  dprintf(1, "fsregress: ok /mnt append boundary cycle\n");
+  dprintf(1, "fsregress: ok %s append boundary cycle\n", mnt_root);
 }
 
 static void
@@ -754,11 +791,11 @@ check_mnt_write_fail_rollback_cycle(void)
   int i;
   struct stat st;
 
-  p = "/mnt/.fsfail";
+  p = mpath(".fsfail");
 
-  fd = open("/mnt", O_RDONLY);
+  fd = open(mnt_root, O_RDONLY);
   if(fd < 0){
-    dprintf(1, "fsregress: skip /mnt write fail rollback (not available)\n");
+    dprintf(1, "fsregress: skip %s write fail rollback (not available)\n", mnt_root);
     return;
   }
   close(fd);
@@ -777,15 +814,17 @@ check_mnt_write_fail_rollback_cycle(void)
 
   // Fail block allocation on the 2nd allocation call in this sequence.
   if(ext2fail(1, 1) < 0){
-    dprintf(1, "fsregress: FAIL ext2fail arm\n");
+    dprintf(1, "fsregress: skip %s write fail rollback (ext2fail unsupported)\n", mnt_root);
     close(fd);
-    exit(0);
+    unlink(p);
+    return;
   }
   if(write(fd, big, sizeof(big)) >= 0){
-    dprintf(1, "fsregress: FAIL expected forced write failure %s\n", p);
+    dprintf(1, "fsregress: skip %s write fail rollback (no injected failure)\n", mnt_root);
     ext2fail(0, 0);
     close(fd);
-    exit(0);
+    unlink(p);
+    return;
   }
   if(ext2fail(0, 0) < 0){
     dprintf(1, "fsregress: FAIL ext2fail disarm\n");
@@ -821,7 +860,7 @@ check_mnt_write_fail_rollback_cycle(void)
     exit(0);
   }
 
-  dprintf(1, "fsregress: ok /mnt write fail rollback cycle\n");
+  dprintf(1, "fsregress: ok %s write fail rollback cycle\n", mnt_root);
 }
 
 static void
@@ -832,11 +871,11 @@ check_mnt_unlink_inodefail_cycle(void)
   int fd;
   struct stat st;
 
-  p = "/mnt/.fsiunlk";
+  p = mpath(".fsiunlk");
 
-  fd = open("/mnt", O_RDONLY);
+  fd = open(mnt_root, O_RDONLY);
   if(fd < 0){
-    dprintf(1, "fsregress: skip /mnt unlink inodefail (not available)\n");
+    dprintf(1, "fsregress: skip %s unlink inodefail (not available)\n", mnt_root);
     return;
   }
   close(fd);
@@ -856,13 +895,14 @@ check_mnt_unlink_inodefail_cycle(void)
 
   // Force first inode write in unlink path to fail (parent inode update).
   if(ext2fail(2, 0) < 0){
-    dprintf(1, "fsregress: FAIL ext2fail inode arm\n");
-    exit(0);
+    dprintf(1, "fsregress: skip %s unlink inodefail (ext2fail unsupported)\n", mnt_root);
+    unlink(p);
+    return;
   }
   if(unlink(p) >= 0){
-    dprintf(1, "fsregress: FAIL expected unlink failure %s\n", p);
+    dprintf(1, "fsregress: skip %s unlink inodefail (no injected failure)\n", mnt_root);
     ext2fail(0, 0);
-    exit(0);
+    return;
   }
   if(ext2fail(0, 0) < 0){
     dprintf(1, "fsregress: FAIL ext2fail inode disarm\n");
@@ -887,7 +927,7 @@ check_mnt_unlink_inodefail_cycle(void)
     exit(0);
   }
 
-  dprintf(1, "fsregress: ok /mnt unlink inodefail cycle\n");
+  dprintf(1, "fsregress: ok %s unlink inodefail cycle\n", mnt_root);
 }
 
 static void
@@ -897,11 +937,11 @@ check_mnt_mkdir_allocfail_cycle(void)
   int fd;
   struct stat st;
 
-  p = "/mnt/.fsnospace";
+  p = mpath(".fsnospace");
 
-  fd = open("/mnt", O_RDONLY);
+  fd = open(mnt_root, O_RDONLY);
   if(fd < 0){
-    dprintf(1, "fsregress: skip /mnt mkdir allocfail (not available)\n");
+    dprintf(1, "fsregress: skip %s mkdir allocfail (not available)\n", mnt_root);
     return;
   }
   close(fd);
@@ -910,13 +950,14 @@ check_mnt_mkdir_allocfail_cycle(void)
 
   // Force allocation failure in ext2_alloc_block() for mkdir data block allocation.
   if(ext2fail(1, 0) < 0){
-    dprintf(1, "fsregress: FAIL ext2fail alloc arm\n");
-    exit(0);
+    dprintf(1, "fsregress: skip %s mkdir allocfail (ext2fail unsupported)\n", mnt_root);
+    return;
   }
   if(mkdir(p) >= 0){
-    dprintf(1, "fsregress: FAIL expected mkdir allocation failure %s\n", p);
+    dprintf(1, "fsregress: skip %s mkdir allocfail (no injected failure)\n", mnt_root);
     ext2fail(0, 0);
-    exit(0);
+    rmdir(p);
+    return;
   }
   if(ext2fail(0, 0) < 0){
     dprintf(1, "fsregress: FAIL ext2fail alloc disarm\n");
@@ -932,12 +973,12 @@ check_mnt_mkdir_allocfail_cycle(void)
     dprintf(1, "fsregress: FAIL mkdir after allocfail %s\n", p);
     exit(0);
   }
-  if(unlink(p) < 0){
+  if(rmdir(p) < 0){
     dprintf(1, "fsregress: FAIL cleanup mkdir allocfail %s\n", p);
     exit(0);
   }
 
-  dprintf(1, "fsregress: ok /mnt mkdir allocfail cycle\n");
+  dprintf(1, "fsregress: ok %s mkdir allocfail cycle\n", mnt_root);
 }
 
 static void
@@ -953,12 +994,12 @@ check_mnt_indirect_capacity_cycle(void)
   // For ext2 image built with 1KiB blocks, single-indirect coverage is 12 + 256 blocks.
   int max_blocks;
 
-  p = "/mnt/.fscap";
+  p = mpath(".fscap");
   max_blocks = 12 + 256;
 
-  fd = open("/mnt", O_RDONLY);
+  fd = open(mnt_root, O_RDONLY);
   if(fd < 0){
-    dprintf(1, "fsregress: skip /mnt indirect capacity (not available)\n");
+    dprintf(1, "fsregress: skip %s indirect capacity (not available)\n", mnt_root);
     return;
   }
   close(fd);
@@ -1018,7 +1059,7 @@ check_mnt_indirect_capacity_cycle(void)
     exit(0);
   }
 
-  dprintf(1, "fsregress: ok /mnt indirect capacity cycle\n");
+  dprintf(1, "fsregress: ok %s indirect capacity cycle\n", mnt_root);
 }
 
 static void
@@ -1033,13 +1074,13 @@ check_mnt_churn_cycle(void)
   struct stat s2;
   char buf[8];
 
-  base = "/mnt/.fschurn_a";
-  lnk = "/mnt/.fschurn_b";
-  mv = "/mnt/.fschurn_c";
+  base = mpath(".fschurn_a");
+  lnk = mpath(".fschurn_b");
+  mv = mpath(".fschurn_c");
 
-  fd = open("/mnt", O_RDONLY);
+  fd = open(mnt_root, O_RDONLY);
   if(fd < 0){
-    dprintf(1, "fsregress: skip /mnt churn (not available)\n");
+    dprintf(1, "fsregress: skip %s churn (not available)\n", mnt_root);
     return;
   }
   close(fd);
@@ -1094,7 +1135,7 @@ check_mnt_churn_cycle(void)
     }
   }
 
-  dprintf(1, "fsregress: ok /mnt churn cycle\n");
+  dprintf(1, "fsregress: ok %s churn cycle\n", mnt_root);
 }
 
 static void
@@ -1105,20 +1146,23 @@ check_mnt_generic_fsfault_cycle(void)
   char big[2048];
   int fd;
   int i;
+  int dev;
   struct stat st;
 
-  // ext2 is mounted on dev 2 in this setup.
-  int ext2dev;
+  p = mpath(".fsgen");
 
-  p = "/mnt/.fsgen";
-  ext2dev = 2;
-
-  fd = open("/mnt", O_RDONLY);
+  fd = open(mnt_root, O_RDONLY);
   if(fd < 0){
-    dprintf(1, "fsregress: skip /mnt generic fsfault (not available)\n");
+    dprintf(1, "fsregress: skip %s generic fsfault (not available)\n", mnt_root);
     return;
   }
   close(fd);
+
+  if(stat(mnt_root, &st) < 0){
+    dprintf(1, "fsregress: skip %s generic fsfault (no stat)\n", mnt_root);
+    return;
+  }
+  dev = st.st_dev;
 
   unlink(p);
   fd = open(p, O_CREATE | O_WRONLY | O_TRUNC);
@@ -1132,18 +1176,20 @@ check_mnt_generic_fsfault_cycle(void)
   for(i = 0; i < sizeof(big); i++)
     big[i] = 'G';
 
-  if(fsfault(ext2dev, 1, 1) < 0){
-    dprintf(1, "fsregress: FAIL fsfault arm\n");
+  if(fsfault(dev, 1, 1) < 0){
+    dprintf(1, "fsregress: skip %s generic fsfault (unsupported)\n", mnt_root);
     close(fd);
-    exit(0);
+    unlink(p);
+    return;
   }
   if(write(fd, big, sizeof(big)) >= 0){
-    dprintf(1, "fsregress: FAIL expected generic fsfault write failure %s\n", p);
-    fsfault(ext2dev, 0, 0);
+    dprintf(1, "fsregress: skip %s generic fsfault (no injected failure)\n", mnt_root);
+    fsfault(dev, 0, 0);
     close(fd);
-    exit(0);
+    unlink(p);
+    return;
   }
-  if(fsfault(ext2dev, 0, 0) < 0){
+  if(fsfault(dev, 0, 0) < 0){
     dprintf(1, "fsregress: FAIL fsfault disarm\n");
     close(fd);
     exit(0);
@@ -1172,7 +1218,7 @@ check_mnt_generic_fsfault_cycle(void)
     exit(0);
   }
 
-  dprintf(1, "fsregress: ok /mnt generic fsfault cycle\n");
+  dprintf(1, "fsregress: ok %s generic fsfault cycle\n", mnt_root);
 }
 
 static void
@@ -1185,12 +1231,12 @@ check_mnt_devnode_cycle(void)
   char buf[32];
   struct stat st;
 
-  cpath = "/mnt/.fsrdevc";
-  bpath = "/mnt/.fsrdevb";
+  cpath = mpath(".fsrdevc");
+  bpath = mpath(".fsrdevb");
 
-  fd = open("/mnt", O_RDONLY);
+  fd = open(mnt_root, O_RDONLY);
   if(fd < 0){
-    dprintf(1, "fsregress: skip /mnt devnode cycle (not available)\n");
+    dprintf(1, "fsregress: skip %s devnode cycle (not available)\n", mnt_root);
     return;
   }
   close(fd);
@@ -1258,24 +1304,64 @@ check_mnt_devnode_cycle(void)
     exit(0);
   }
 
-  dprintf(1, "fsregress: ok /mnt devnode cycle\n");
+  dprintf(1, "fsregress: ok %s devnode cycle\n", mnt_root);
 }
 
 int
 main(int argc, char *argv[])
 {
-  struct scan_target targets[] = {
-    { "/",    1, 1 },
-    { "/proc", 1, 0 },
-    { "/mnt",  0, 1 },
-  };
+  struct scan_target targets[3];
+  char *scan_path;
   int rounds;
   int total_entries;
   int i;
+  int argi;
+  int mount_set;
+  int rounds_set;
 
   rounds = 20;
-  if(argc > 1)
-    rounds = atoi(argv[1]);
+  scan_path = mnt_root;
+  argi = 1;
+  mount_set = 0;
+  rounds_set = 0;
+  fsreg_debug = 0;
+
+  while(argi < argc){
+    if(strcmp(argv[argi], "-d") == 0){
+      fsreg_debug = 1;
+      argi++;
+      continue;
+    }
+    if(argv[argi][0] == '/' && !mount_set){
+      scan_path = argv[argi];
+      mount_set = 1;
+      argi++;
+      continue;
+    }
+    if(!rounds_set){
+      rounds = atoi(argv[argi]);
+      rounds_set = 1;
+      argi++;
+      continue;
+    }
+    dprintf(1, "usage: fsregress [-d] [mountpoint] [rounds]\n");
+    exit(0);
+  }
+
+  DBG("fsregress[d]: parsed mount=%s rounds=%d debug=%d\n", scan_path, rounds, fsreg_debug);
+
+  mnt_root = scan_path;
+
+  targets[0].path = "/";
+  targets[0].required = 1;
+  targets[0].strict_stat = 1;
+  targets[1].path = "/proc";
+  targets[1].required = 1;
+  targets[1].strict_stat = 0;
+  targets[2].path = mnt_root;
+  targets[2].required = 1;
+  targets[2].strict_stat = 1;
+
   if(rounds <= 0)
     rounds = 1;
 

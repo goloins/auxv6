@@ -699,6 +699,7 @@ clean:
 	ahci-stress.img \
 	nvme-ext2.img \
 	nvme-fat.img \
+	nvme-fat32.img \
 	nvme-btrfs.img \
 	nvme-ufs2.img \
 	$(UPROGS) \
@@ -707,6 +708,7 @@ clean:
 	.ext2root-oldinit \
 	.ext2root-server7 \
 	.fatroot \
+	.fat32root \
 	.btrfsroot \
 	.ufs2root \
 	targetfs/tmp/test.iso .isoroot \
@@ -732,7 +734,7 @@ clean:
 	user/server7 \
 	user/top \
 	user/date user/time user/killall user/halt \
-	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/dmesg user/tail user/lspci user/v6init
+	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/dmesg user/tail user/lspci user/v6init \
 	user/schedperf user/fsperf user/kallocstress
 
 # make a printout
@@ -774,6 +776,8 @@ ROOTFS_MAN_FILES = $(wildcard $(TARGETFS_MAN_DIR)/*.md)
 ROOTFS_TARGETFS_FILES = $(shell find $(TARGETFS_DIR) -type f -o -type l 2>/dev/null)
 FATIMG ?= test_fat.img
 FATROOT_STAGE ?= .fatroot
+FAT32IMG ?= nvme-fat32.img
+FAT32ROOT_STAGE ?= .fat32root
 BTRFSIMG ?= nvme-btrfs.img
 BTRFSROOT_STAGE ?= .btrfsroot
 UFS2IMG ?= nvme-ufs2.img
@@ -883,6 +887,17 @@ nvme-ext2.img:
 		echo "error: mke2fs not found; unable to create NVMe ext2 test image" >&2; \
 		exit 1; \
 	fi
+
+# NVMe FAT32 test image: 128 MB FAT32 volume for NVMe + msdosfs FAT32 driver validation.
+# Includes both short (8.3) and long filename entries.
+# Inside the guest:
+#   mkdir /mnt/nvme && mount -t msdosfs n0 /mnt/nvme
+nvme-fat32.img: tools/stage-fat32-root.sh
+	sh tools/stage-fat32-root.sh $(FAT32ROOT_STAGE) $(FAT32IMG)
+
+fat32-reset:
+	rm -f $(FAT32IMG)
+	$(MAKE) $(FAT32IMG)
 
 # NVMe FAT test image: 16 MB FAT16 volume for NVMe + msdosfs driver validation.
 # Mount inside the guest with: mount -t msdosfs n0 /mnt/nvme
@@ -1024,6 +1039,25 @@ qemu-nox-nvme: aux.bootkern $(EXT2IMG) nvme-ext2.img
 
 qemu-nox-nvme-dbg:
 	$(MAKE) EXTRA_CFLAGS="$(EXTRA_CFLAGS) -DDBG_NVME=1" qemu-nox-nvme
+
+# NVMe FAT32 test: 128 MB FAT32 volume via NVMe.
+# Inside the guest:
+#   mkdir /mnt/nvme && mount -t msdosfs n0 /mnt/nvme
+qemu-nvme-fat32: aux.bootkern $(EXT2IMG) nvme-fat32.img
+	$(QEMU) -serial mon:stdio \
+		-drive file=aux.bootkern,index=0,media=disk,format=raw \
+		-drive file=$(EXT2IMG),index=2,media=disk,format=raw \
+		-drive file=nvme-fat32.img,if=none,id=nvme0,format=raw \
+		-device nvme,drive=nvme0,serial=auxv6nvme0 \
+		$(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
+qemu-nox-nvme-fat32: aux.bootkern $(EXT2IMG) nvme-fat32.img
+	$(QEMU) -nographic \
+		-drive file=aux.bootkern,index=0,media=disk,format=raw \
+		-drive file=$(EXT2IMG),index=2,media=disk,format=raw \
+		-drive file=nvme-fat32.img,if=none,id=nvme0,format=raw \
+		-device nvme,drive=nvme0,serial=auxv6nvme0 \
+		$(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 # NVMe FAT test: same config but with a FAT16 volume.
 # Inside the guest:
@@ -1238,4 +1272,4 @@ tar:
 	cp dist/* config/.gdbinit.tmpl /tmp/xv6
 	(cd /tmp; tar cf - xv6) | gzip >xv6-rev10.tar.gz  # the next one will be 10 (9/17)
 
-.PHONY: dist-test dist ext2-reset fat-reset btrfs-reset ufs2-reset ext2root qemu-ext2root qemu-nox-ext2root qemu-gdb-ext2root qemu-nox-gdb-ext2root qemu-fat qemu-nox-fat qemu-oldinit e1000 qemu-nvme-btrfs qemu-nox-nvme-btrfs qemu-nvme-ufs2 qemu-nox-nvme-ufs2
+.PHONY: dist-test dist ext2-reset fat-reset fat32-reset btrfs-reset ufs2-reset ext2root qemu-ext2root qemu-nox-ext2root qemu-gdb-ext2root qemu-nox-gdb-ext2root qemu-fat qemu-nox-fat qemu-oldinit e1000 qemu-nvme-btrfs qemu-nox-nvme-btrfs qemu-nvme-ufs2 qemu-nox-nvme-ufs2 qemu-nvme-fat32 qemu-nox-nvme-fat32
