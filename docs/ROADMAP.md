@@ -52,6 +52,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | Subsystem | Status | Notes |
 |-----------|--------|-------|
 | NFS | 45% | XDR/RPC transport, MOUNT plumbing, read-only VFS wiring, and basic GETATTR/LOOKUP/READ paths landed; READDIR decode stub still in place; deprioritized pending other work |
+| exFAT | 42% | Initial read-only VFS backend landed (`exfat` mount type): boot-sector validation, directory set parsing (`0x85/0xC0/0xC1`), case-insensitive lookup, and regular-file read support across FAT-chained and contiguous streams; write/allocate/truncate/rename metadata paths and robust host-side seeded-image tooling still remain out of scope |
 | Btrfs | 35% | Initial read-only VFS backend landed (`btrfs` mount type): single-device volumes, metadata-tree traversal, directory lookup/readdir, regular-file reads, and symlink reads; write paths, compression/RAID/multi-device, and many advanced features remain out of scope |
 | UFS2/FFS | 28% | Initial read-only VFS backend landed (`ufs2`/`ffs` mount type): superblock probe, inode/directory traversal, direct/single-indirect file reads, and symlink reads with conservative format assumptions; write paths and broader on-disk compatibility hardening remain out of scope |
 | Device hotplug/eventing | None | Planned kernel event path for live node add/remove beyond boot-time `devman -s` |
@@ -71,6 +72,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - FAT32 NVMe workflow is now validated end to end (`qemu-nvme-fat32`): mount, short-name create/read/unlink, multi-block growth/truncate, long-filename create/read/unlink, and mkdir/rmdir all pass in guest.
 - The FAT long-filename failure was fixed at the root contract instead of only in the backend: the old 14-character directory-component limit was removed in favor of `NAME_MAX + 1`, and the `getdents`/`readdir` bridge plus shell path handling were updated to match.
 - FAT/msdosfs follow-up hardening landed after bringup: real FAT timestamps are now written and surfaced through `stat(2)`, VFAT unlink removes the full LFN chain, create rejects duplicate generated short-name aliases, and basic FAT rename support is now wired through the VFS rename hook.
+- exFAT first tranche landed as a read-only VFS backend (`mount ... exfat ...`), with NVMe image/tooling hooks (`nvme-exfat.img`, `qemu-nvme-exfat`, `qemu-nox-nvme-exfat`) and the initial on-disk parser aligned to the stream-extension/name-entry model; current follow-on work is constrained more by host-side image-population tooling than by kernel compile/integration status.
 - The FAT32 follow-up regression sweep also repaired cross-layer fallout from the global dirent-size change: direct `getdents()` callers were resized to stay within the syscall page limit, `getcwd()` path reconstruction was fixed for the widened synthetic dirent ABI, and the first FAT directory-rename subtree check was rewritten to avoid a sleep-lock deadlock.
 - Current guest status on `qemu-nvme-fat32`: `fatregress -d /mnt/fat32` completes with `fatregress: all checks passed`.
 - Btrfs gained an initial read-only backend (`mount ... btrfs ...`) integrated through VFS, with explicit first-tranche constraints documented in `docs/btrfs-driver.md`.
@@ -143,6 +145,7 @@ Primary goal: consolidate recent kernel-core and userland wins into a dependable
 - FAT32 NVMe workflow validated under `sudo make qemu-nvme-fat32`; verified guest-side mount plus short-name, LFN, growth/truncate, and mkdir/rmdir regression coverage.
 - FAT32 NVMe workflow now revalidated after rename and ABI fallout fixes; overwrite rename, cross-directory file rename, and directory subtree rejection are covered by `fatregress` and currently passing.
 - Remaining FAT/msdosfs gaps are now mostly parity/polish items: link/symlink support, richer metadata semantics beyond native FAT attributes, Unicode LFN fidelity, and less host-tool-dependent seeded-image staging.
+- exFAT now has an initial read-only baseline and host formatting path; remaining gaps are write paths, allocation bitmap/Upcase-table validation hardening, richer timestamp/attribute parity, and regression coverage beyond blank-image mount/lookup/read smoke. On the current macOS workflow, seeded-image validation is not yet as repeatable as the FAT32/Btrfs paths.
 
 **Definition of done:**
 - `lsblk`/mount behavior remains stable across repeated attach/mount/unmount cycles on virtio-blk, AHCI, and NVMe.
@@ -226,7 +229,7 @@ Primary goal: consolidate recent kernel-core and userland wins into a dependable
 3. **Execute Tranche B (devman policy parsing + optional cleanup)** to strengthen `/dev` lifecycle safety.
 4. **Execute Tranche C (observability + manpages + utility smoke tests)** to lock in operational confidence around the larger default userland.
 5. **Tranche D (NFS) is deprioritized** — return to it after the base kernel/storage work has settled; the immediate blocker remains READDIR decode.
-6. **After storage/devman/observability:** broaden the new Btrfs backend (search/index efficiency, feature coverage, and validation), then return to the unified libc/POSIX portability tranche and devman hotplug/event lifecycle enhancements.
+6. **After storage/devman/observability:** return to exFAT once a better host-side seeded-image workflow exists or a Linux-host validation path is documented, then harden metadata/read coverage before any write tranche; in parallel broaden the Btrfs backend (search/index efficiency, feature coverage, and validation), then return to the unified libc/POSIX portability tranche and devman hotplug/event lifecycle enhancements.
 
 ### Prepared Next Slice (2026-04-03)
 

@@ -11,6 +11,7 @@ OBJS = \
 	kernel/fs/procfs.o\
 	kernel/fs/vfs_ext2.o\
 	kernel/fs/vfs_msdosfs.o\
+	kernel/fs/vfs_exfat.o\
 	kernel/fs/vfs_btrfs.o\
 	kernel/fs/vfs_ufs2.o\
 	kernel/fs/vfs_isofs.o\
@@ -700,6 +701,7 @@ clean:
 	nvme-ext2.img \
 	nvme-fat.img \
 	nvme-fat32.img \
+	nvme-exfat.img \
 	nvme-btrfs.img \
 	nvme-ufs2.img \
 	$(UPROGS) \
@@ -709,6 +711,7 @@ clean:
 	.ext2root-server7 \
 	.fatroot \
 	.fat32root \
+	.exfatroot \
 	.btrfsroot \
 	.ufs2root \
 	targetfs/tmp/test.iso .isoroot \
@@ -769,7 +772,7 @@ TARGETFS_ETC ?= $(TARGETFS_DIR)/etc
 TARGETFS_SBIN ?= $(TARGETFS_DIR)/sbin
 TARGETFS_MAN_DIR ?= $(TARGETFS_DIR)/usr/share/man
 EXT2ROOT_FSTAB ?= $(TARGETFS_ETC)/fstab.ext2root
-ROOTFS_COMMON_FILES = README $(TARGETFS_ETC)/hosts $(EXT2ROOT_FSTAB) $(TARGETFS_ETC)/profile $(TARGETFS_ETC)/termcap $(TARGETFS_ETC)/passwd $(TARGETFS_ETC)/group $(TARGETFS_ETC)/hostname $(TARGETFS_ETC)/motd $(TARGETFS_ETC)/resolv.conf $(TARGETFS_SBIN)/mount.ext2 $(TARGETFS_SBIN)/mount.msdosfs $(TARGETFS_SBIN)/mount.isofs $(TARGETFS_SBIN)/mount.xv6fs $(TARGETFS_DIR)/tmp/test.iso
+ROOTFS_COMMON_FILES = README $(TARGETFS_ETC)/hosts $(EXT2ROOT_FSTAB) $(TARGETFS_ETC)/profile $(TARGETFS_ETC)/termcap $(TARGETFS_ETC)/passwd $(TARGETFS_ETC)/group $(TARGETFS_ETC)/hostname $(TARGETFS_ETC)/motd $(TARGETFS_ETC)/resolv.conf $(TARGETFS_SBIN)/mount.ext2 $(TARGETFS_SBIN)/mount.msdosfs $(TARGETFS_SBIN)/mount.exfat $(TARGETFS_SBIN)/mount.isofs $(TARGETFS_SBIN)/mount.xv6fs $(TARGETFS_DIR)/tmp/test.iso
 ROOTFS_RC_FILES = $(TARGETFS_ETC)/rc.S $(TARGETFS_ETC)/rc.0 $(TARGETFS_ETC)/rc.1 $(TARGETFS_ETC)/rc.2 $(TARGETFS_ETC)/rc.3 $(TARGETFS_ETC)/rc.6
 ROOTFS_RC_FILES_SERVER7 = $(filter-out $(TARGETFS_ETC)/rc.2,$(ROOTFS_RC_FILES)) $(TARGETFS_ETC)/rc.2.server7
 ROOTFS_MAN_FILES = $(wildcard $(TARGETFS_MAN_DIR)/*.md)
@@ -778,6 +781,8 @@ FATIMG ?= test_fat.img
 FATROOT_STAGE ?= .fatroot
 FAT32IMG ?= nvme-fat32.img
 FAT32ROOT_STAGE ?= .fat32root
+EXFATIMG ?= nvme-exfat.img
+EXFATROOT_STAGE ?= .exfatroot
 BTRFSIMG ?= nvme-btrfs.img
 BTRFSROOT_STAGE ?= .btrfsroot
 UFS2IMG ?= nvme-ufs2.img
@@ -895,9 +900,17 @@ nvme-ext2.img:
 nvme-fat32.img: tools/stage-fat32-root.sh
 	sh tools/stage-fat32-root.sh $(FAT32ROOT_STAGE) $(FAT32IMG)
 
+# NVMe exFAT test image: 128 MB exFAT volume for NVMe + exfat driver validation.
+nvme-exfat.img: tools/stage-exfat-root.sh
+	sh tools/stage-exfat-root.sh $(EXFATROOT_STAGE) $(EXFATIMG)
+
 fat32-reset:
 	rm -f $(FAT32IMG)
 	$(MAKE) $(FAT32IMG)
+
+exfat-reset:
+	rm -f $(EXFATIMG)
+	$(MAKE) $(EXFATIMG)
 
 # NVMe FAT test image: 16 MB FAT16 volume for NVMe + msdosfs driver validation.
 # Mount inside the guest with: mount -t msdosfs n0 /mnt/nvme
@@ -1070,6 +1083,25 @@ qemu-nvme-fat: aux.bootkern $(EXT2IMG) nvme-fat.img
 		-device nvme,drive=nvme0,serial=auxv6nvme0 \
 		$(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
+# NVMe exFAT test: same config with an exFAT volume.
+# Inside the guest:
+#   mkdir /mnt/exfat && mount -t exfat n0 /mnt/exfat
+qemu-nvme-exfat: aux.bootkern $(EXT2IMG) $(EXFATIMG)
+	$(QEMU) -serial mon:stdio \
+		-drive file=aux.bootkern,index=0,media=disk,format=raw \
+		-drive file=$(EXT2IMG),index=2,media=disk,format=raw \
+		-drive file=$(EXFATIMG),if=none,id=nvme0,format=raw \
+		-device nvme,drive=nvme0,serial=auxv6nvme0 \
+		$(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
+qemu-nox-nvme-exfat: aux.bootkern $(EXT2IMG) $(EXFATIMG)
+	$(QEMU) -nographic \
+		-drive file=aux.bootkern,index=0,media=disk,format=raw \
+		-drive file=$(EXT2IMG),index=2,media=disk,format=raw \
+		-drive file=$(EXFATIMG),if=none,id=nvme0,format=raw \
+		-device nvme,drive=nvme0,serial=auxv6nvme0 \
+		$(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
 # NVMe Btrfs test: same config with a Btrfs test volume.
 # Inside the guest:
 #   mkdir /mnt/nvme && mount -t btrfs n0 /mnt/nvme
@@ -1234,7 +1266,7 @@ test-termcap-smoke: aux.bootkern $(EXT2IMG)
 # check in that version.
 
 EXTRA=\
-	tools/mkfs.c tools/stage-fat-root.sh tools/stage-btrfs-root.sh user/ulib.c include/user.h user/cat.c user/echo.c user/fatregress.c user/grep.c user/kill.c\
+	tools/mkfs.c tools/stage-fat-root.sh tools/stage-exfat-root.sh tools/stage-btrfs-root.sh user/ulib.c include/user.h user/cat.c user/echo.c user/fatregress.c user/grep.c user/kill.c\
 	user/stdio.c user/regex.c user/calloc.c\
 	user/date.c user/time.c user/killall.c user/halt.c\
 	user/lsof.c user/which.c user/file.c\
@@ -1272,4 +1304,4 @@ tar:
 	cp dist/* config/.gdbinit.tmpl /tmp/xv6
 	(cd /tmp; tar cf - xv6) | gzip >xv6-rev10.tar.gz  # the next one will be 10 (9/17)
 
-.PHONY: dist-test dist ext2-reset fat-reset fat32-reset btrfs-reset ufs2-reset ext2root qemu-ext2root qemu-nox-ext2root qemu-gdb-ext2root qemu-nox-gdb-ext2root qemu-fat qemu-nox-fat qemu-oldinit e1000 qemu-nvme-btrfs qemu-nox-nvme-btrfs qemu-nvme-ufs2 qemu-nox-nvme-ufs2 qemu-nvme-fat32 qemu-nox-nvme-fat32
+.PHONY: dist-test dist ext2-reset fat-reset fat32-reset exfat-reset btrfs-reset ufs2-reset ext2root qemu-ext2root qemu-nox-ext2root qemu-gdb-ext2root qemu-nox-gdb-ext2root qemu-fat qemu-nox-fat qemu-oldinit e1000 qemu-nvme-btrfs qemu-nox-nvme-btrfs qemu-nvme-ufs2 qemu-nox-nvme-ufs2 qemu-nvme-fat32 qemu-nox-nvme-fat32 qemu-nvme-exfat qemu-nox-nvme-exfat

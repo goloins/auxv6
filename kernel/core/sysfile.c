@@ -1454,6 +1454,8 @@ sys_mount(void)
   } else if(memcmp(fstype_buf, "msdosfs", 8) == 0 ||
             memcmp(fstype_buf, "fat", 4) == 0) {
     vfs_msdosfs_init(fs);
+  } else if(memcmp(fstype_buf, "exfat", 6) == 0) {
+    vfs_exfat_init(fs);
   } else if(memcmp(fstype_buf, "btrfs", 6) == 0) {
     vfs_btrfs_init(fs);
   } else if(memcmp(fstype_buf, "ufs2", 5) == 0 ||
