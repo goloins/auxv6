@@ -21,7 +21,19 @@
 #define MSDOS_ATTR_ARCHIVE 0x20
 #define MSDOS_EOC16 0xFFF8
 #define MSDOS_EOC32 0x0FFFFFF8
-#define MSDOS_ROOT16_INUM_BASE 0x10000000U
+
+/* Inode number encoding for FAT cluster-chain entries.
+ * bits 31:     FAT16 root region flag (1 = FAT16 root slot)
+ * bits 30..11: cluster number (20 bits, max ~1M clusters / ~512 MB at 512B/cluster)
+ * bits 10..0:  slot within cluster (11 bits, max 2048 entries/cluster)
+ */
+#define MSDOS_ROOT16_INUM_BASE  0x80000000U   /* OR'd with slot index */
+#define MSDOS_CINUM_SLOT_BITS   11
+#define MSDOS_CINUM_SLOT_MASK   ((1U << MSDOS_CINUM_SLOT_BITS) - 1)
+
+/* Maximum LFN length (255 characters per VFAT spec) */
+#define MSDOS_LFN_MAX_CHARS  255
+#define MSDOS_LFN_MAX_SEGS   20     /* ceil(255/13) */
 
 struct fat_dirent {
   uchar name[11];
@@ -65,6 +77,37 @@ struct fat_bpb_fat32 {
   uchar reserved[12];
 } __attribute__((packed));
 
+/* FAT32 FSInfo sector structure (at BPB_FSInfo sector) */
+struct fat_fsinfo {
+  uint lead_sig;      /* 0x41615252 */
+  uchar reserved1[480];
+  uint struc_sig;     /* 0x61417272 */
+  uint free_count;    /* 0xFFFFFFFF = unknown */
+  uint next_free;     /* 0xFFFFFFFF = unknown */
+  uchar reserved2[12];
+  uint trail_sig;     /* 0xAA550000 */
+} __attribute__((packed));
+
+/* VFAT Long Filename directory entry (same size as fat_dirent = 32 bytes) */
+struct fat_lfn_entry {
+  uchar  ord;         /* sequence (1-based) | 0x40 on last (highest-numbered) */
+  uchar  name1[10];   /* UTF-16LE codepoints 0-4  (5 chars) */
+  uchar  attr;        /* 0x0F = MSDOS_ATTR_LFN */
+  uchar  type;        /* 0 */
+  uchar  chksum;      /* checksum of 8.3 short name */
+  uchar  name2[12];   /* UTF-16LE codepoints 5-10 (6 chars) */
+  ushort fclus;       /* 0 */
+  uchar  name3[4];    /* UTF-16LE codepoints 11-12 (2 chars) */
+} __attribute__((packed));
+
+/* Accumulated LFN state while scanning a directory */
+struct fat_lfn_state {
+  char  name[MSDOS_LFN_MAX_CHARS + 1];
+  int   len;
+  uchar chksum;
+  int   valid;
+};
+
 struct msdos_mount_data {
   int dev;
   int fat_type;     // 16 or 32
@@ -80,6 +123,8 @@ struct msdos_mount_data {
   uint fat_start;
   uint data_start;
   uint total_clusters;
+  uint fsinfo_sector;     /* FAT32: FSInfo sector number (0 = none) */
+  uint free_cluster_count; /* FAT32: free cluster count hint (0xFFFFFFFF = unknown) */
 };
 
 static uint msdos_active_dev;
@@ -92,6 +137,8 @@ static uint msdos_cluster_first_sector(struct msdos_mount_data *md, uint cluster
 static int msdos_fat_set(struct msdos_mount_data *md, uint cluster, uint value);
 static int msdos_alloc_cluster(struct msdos_mount_data *md, uint *out);
 static int msdos_next_cluster(struct msdos_mount_data *md, uint cluster, uint *next);
+static void msdos_update_fsinfo(struct msdos_mount_data *md);
+static int msdos_component_to_83(char *name, uchar out[11]);
 
 static struct buf*
 msdos_bread(struct msdos_mount_data *md, uint sec)
@@ -130,20 +177,256 @@ msdos_free_cluster_chain(struct msdos_mount_data *md, uint first_cluster)
       return -1;
     if(msdos_fat_set(md, cluster, 0) < 0)
       return -1;
+    if(md->fat_type == 32 && md->free_cluster_count != 0xFFFFFFFF)
+      md->free_cluster_count++;
     if(next == 0)
       break;
     cluster = next;
   }
 
+  msdos_update_fsinfo(md);
   return 0;
 }
 
+/* Compute the LFN checksum from an 8.3 short name (11 bytes, space-padded). */
+static uchar
+msdos_lfn_checksum(const uchar *shortname)
+{
+  uchar sum;
+  int i;
+
+  sum = 0;
+  for(i = 11; i--; )
+    sum = ((sum & 1) << 7) + (sum >> 1) + *shortname++;
+  return sum;
+}
+
+/* Accumulate one LFN directory entry into a fat_lfn_state buffer.
+ * LFN entries are stored in the directory in REVERSE sequence order
+ * (highest sequence first), so each entry's characters go at position
+ * (seq-1)*13 in our buffer regardless of read order.
+ */
+static void
+msdos_accumulate_lfn(struct fat_lfn_state *st, struct fat_lfn_entry *le)
+{
+  int i;
+  int seq;
+  int base_pos;
+  uchar pairs[26];
+
+  if(st == 0 || le == 0)
+    return;
+  if(le->attr != MSDOS_ATTR_LFN)
+    return;
+
+  seq = le->ord & 0x1F;   /* 1-based sequence number */
+  if(seq < 1 || seq > MSDOS_LFN_MAX_SEGS)
+    return;
+
+  if(le->ord & 0x40)      /* last LFN entry (highest seq) recorded first */
+    st->chksum = le->chksum;
+
+  /* Extract the 13 UTF-16LE characters from the three name fields */
+  memmove(pairs,      le->name1, 10);
+  memmove(pairs + 10, le->name2, 12);
+  memmove(pairs + 22, le->name3,  4);
+
+  base_pos = (seq - 1) * 13;
+  for(i = 0; i < 13; i++){
+    ushort c;
+    int pos;
+
+    c = (ushort)pairs[i * 2] | ((ushort)pairs[i * 2 + 1] << 8);
+    if(c == 0x0000 || c == 0xFFFF)
+      break;
+    pos = base_pos + i;
+    if(pos < MSDOS_LFN_MAX_CHARS){
+      st->name[pos] = (c >= 0x0020 && c <= 0x007E) ? (char)c : '?';
+      if(pos + 1 > st->len)
+        st->len = pos + 1;
+    }
+  }
+  st->name[st->len] = '\0';
+  st->valid = 1;
+}
+
+/* Generate a basic 8.3 short name from a long name.
+ * For names that already fit in 8.3, returns the converted form.
+ * For longer names, produces a truncated name with ~1 appended.
+ * Returns 0 on success, -1 if shortname cannot be derived.
+ */
 static int
-msdos_find_free_dirent(struct inode *dp, uint *sec, uint *off, uint *inum)
+msdos_generate_shortname(const char *name, uchar out[11])
+{
+  int i;
+  int j;
+  int k;
+  int dot_pos;
+  int name_len;
+  char base[9];
+  char ext[4];
+
+  if(name == 0 || name[0] == 0)
+    return -1;
+
+  /* Try to fit as-is in 8.3 (reuse existing converter for compliant names) */
+  if(msdos_component_to_83((char*)name, out) == 0)
+    return 0;
+
+  /* Build base and extension from the long name */
+  name_len = strlen(name);
+  dot_pos = -1;
+  for(i = name_len - 1; i >= 0; i--){
+    if(name[i] == '.'){
+      dot_pos = i;
+      break;
+    }
+  }
+
+  memset(base, 0, sizeof(base));
+  memset(ext, 0, sizeof(ext));
+  j = 0;
+  for(i = 0; i < (dot_pos >= 0 ? dot_pos : name_len) && j < 6; i++){
+    char c = name[i];
+    if(c == ' ' || c == '.' || c == '/' || c == '\\' || c == ':' ||
+       c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|')
+      continue;
+    if(c >= 'a' && c <= 'z')
+      c -= ('a' - 'A');
+    base[j++] = c;
+  }
+  if(j == 0)
+    return -1;
+
+  /* Append ~1 */
+  base[j] = '~';
+  base[j + 1] = '1';
+
+  k = 0;
+  if(dot_pos >= 0){
+    for(i = dot_pos + 1; i < name_len && k < 3; i++){
+      char c = name[i];
+      if(c >= 'a' && c <= 'z')
+        c -= ('a' - 'A');
+      ext[k++] = c;
+    }
+  }
+
+  for(i = 0; i < 11; i++)
+    out[i] = ' ';
+  for(i = 0; i < 8 && base[i]; i++)
+    out[i] = (uchar)base[i];
+  for(i = 0; i < 3 && ext[i]; i++)
+    out[8 + i] = (uchar)ext[i];
+
+  return 0;
+}
+
+/* Write n_segs LFN directory entries starting at (start_sec, start_off) followed
+ * by the 8.3 entry at (entry_sec, entry_off).  Entries are written in the
+ * decreasing-sequence order required by the VFAT spec.
+ */
+static int
+msdos_write_lfn_entries(struct msdos_mount_data *md,
+                        uint start_sec, uint start_off,
+                        const char *lfn_name, int n_segs,
+                        const uchar shortname[11])
+{
+  uchar chksum;
+  int   seg;
+  uint  sec;
+  uint  off;
+  int   name_len;
+  int   total_slots;
+
+  if(md == 0 || lfn_name == 0 || n_segs < 1)
+    return -1;
+
+  chksum   = msdos_lfn_checksum(shortname);
+  name_len = strlen(lfn_name);
+  total_slots = n_segs + 1;  /* LFN entries + the 8.3 entry */
+
+  sec = start_sec;
+  off = start_off;
+
+  /* Write LFN entries highest-seq first (decreasing order) */
+  for(seg = n_segs; seg >= 1; seg--){
+    struct fat_lfn_entry le;
+    struct buf *b;
+    int chars_start;
+    int i;
+    uchar pairs[26];
+
+    memset(&le, 0, sizeof(le));
+    le.ord    = (uchar)seg;
+    if(seg == n_segs)
+      le.ord |= 0x40;          /* mark as the last LFN entry */
+    le.attr   = MSDOS_ATTR_LFN;
+    le.type   = 0;
+    le.chksum = chksum;
+    le.fclus  = 0;
+
+    chars_start = (seg - 1) * 13;
+    memset(pairs, 0xFF, sizeof(pairs)); /* pad with 0xFFFF */
+
+    for(i = 0; i < 13; i++){
+      int pos = chars_start + i;
+      ushort c;
+
+      if(pos < name_len)
+        c = (ushort)(uchar)lfn_name[pos];
+      else if(pos == name_len)
+        c = 0x0000;             /* NUL terminator */
+      else
+        c = 0xFFFF;             /* unused slots */
+
+      pairs[i * 2]     = (uchar)(c & 0xFF);
+      pairs[i * 2 + 1] = (uchar)(c >> 8);
+    }
+
+    memmove(le.name1, pairs,      10);
+    memmove(le.name2, pairs + 10, 12);
+    memmove(le.name3, pairs + 22,  4);
+
+    b = msdos_bread(md, sec);
+    if(b == 0)
+      return -1;
+    if(off + sizeof(le) > BSIZE){
+      brelse(b);
+      return -1;
+    }
+    memmove(b->data + off, &le, sizeof(le));
+    bwrite(b);
+    brelse(b);
+
+    /* Advance to next slot */
+    off += sizeof(struct fat_dirent);
+    if(off >= BSIZE){
+      off = 0;
+      sec++;
+    }
+  }
+
+  (void)total_slots;
+  return 0;
+}
+
+/*
+ * Find a run of n_needed consecutive free (0x00) or deleted (0xE5) directory
+ * entries in the directory dp.  On success, sets first_sec+first_off to the
+ * first entry of the run and last_inum to the inum of the LAST entry in the
+ * run (which will become the 8.3 short-name slot).
+ *
+ * For the FAT16 fixed-root region this tries to grow the run across sectors.
+ * For cluster-chain directories it may allocate a new cluster if needed.
+ */
+static int
+msdos_find_free_run(struct inode *dp, int n_needed,
+                    uint *first_sec, uint *first_off, uint *last_inum)
 {
   struct msdos_mount_data *md;
 
-  if(dp == 0 || sec == 0 || off == 0 || inum == 0)
+  if(dp == 0 || first_sec == 0 || first_off == 0 || last_inum == 0 || n_needed < 1)
     return -1;
   if(dp->type != T_DIR)
     return -1;
@@ -152,39 +435,68 @@ msdos_find_free_dirent(struct inode *dp, uint *sec, uint *off, uint *inum)
   if(md == 0)
     return -1;
 
+  /* FAT16 fixed root directory */
   if(md->fat_type == 16 && dp->inum == ROOTINO && dp->addrs[2] == 1){
     uint slot;
+    int run;
+    uint run_start;
 
+    run = 0;
+    run_start = 0;
     for(slot = 0; slot < md->root_dir_entries; slot++){
       uint byte_off;
+      uint sec;
+      uint sec_off;
       struct buf *b;
+      uchar first_byte;
 
       byte_off = slot * sizeof(struct fat_dirent);
-      *sec = md->root_start + (byte_off / BSIZE);
-      *off = byte_off % BSIZE;
+      sec      = md->root_start + (byte_off / BSIZE);
+      sec_off  = byte_off % BSIZE;
 
-      b = msdos_bread(md, *sec);
+      b = msdos_bread(md, sec);
       if(b == 0)
         return -1;
-      if(b->data[*off] == 0x00 || b->data[*off] == 0xE5){
-        brelse(b);
-        *inum = MSDOS_ROOT16_INUM_BASE + slot;
-        return 0;
-      }
+      first_byte = b->data[sec_off];
       brelse(b);
+
+      if(first_byte == 0x00 || first_byte == 0xE5){
+        if(run == 0)
+          run_start = slot;
+        run++;
+        if(run == n_needed){
+          uint fs_byte;
+          fs_byte     = run_start * sizeof(struct fat_dirent);
+          *first_sec  = md->root_start + (fs_byte / BSIZE);
+          *first_off  = fs_byte % BSIZE;
+          byte_off    = slot * sizeof(struct fat_dirent);
+          *last_inum  = MSDOS_ROOT16_INUM_BASE | slot;
+          return 0;
+        }
+      } else {
+        run = 0;
+      }
     }
     return -1;
   }
 
+  /* Cluster-chain directory (FAT16 subdir or FAT32 any dir) */
   if(dp->addrs[0] < 2)
     return -1;
 
   {
     uint cluster;
     uint last_cluster;
+    int  run;
+    uint run_start_sec;
+    uint run_start_off;
 
-    cluster = dp->addrs[0];
+    cluster      = dp->addrs[0];
     last_cluster = cluster;
+    run          = 0;
+    run_start_sec = 0;
+    run_start_off = 0;
+
     while(cluster >= 2){
       uint csec;
       uint s;
@@ -200,16 +512,36 @@ msdos_find_free_dirent(struct inode *dp, uint *sec, uint *off, uint *inum)
         b = msdos_bread(md, csec + s);
         if(b == 0)
           return -1;
-        for(entry_off = 0; entry_off + sizeof(struct fat_dirent) <= BSIZE; entry_off += sizeof(struct fat_dirent)){
-          if(b->data[entry_off] == 0x00 || b->data[entry_off] == 0xE5){
-            brelse(b);
-            *sec = csec + s;
-            *off = entry_off;
-            *inum = ((cluster & 0xFFFFU) << 16) |
-                    (((s * BSIZE + entry_off) / sizeof(struct fat_dirent)) & 0xFFFFU);
-            if(*inum == ROOTINO)
-              (*inum)++;
-            return 0;
+        for(entry_off = 0;
+            entry_off + sizeof(struct fat_dirent) <= BSIZE;
+            entry_off += sizeof(struct fat_dirent)){
+          uchar fb;
+
+          fb = b->data[entry_off];
+          if(fb == 0x00 || fb == 0xE5){
+            if(run == 0){
+              run_start_sec = csec + s;
+              run_start_off = entry_off;
+            }
+            run++;
+            if(run == n_needed){
+              uint slot_in_cluster;
+              uint inum;
+
+              brelse(b);
+              *first_sec   = run_start_sec;
+              *first_off   = run_start_off;
+              slot_in_cluster =
+                (s * BSIZE + entry_off) / sizeof(struct fat_dirent);
+              inum = (cluster << MSDOS_CINUM_SLOT_BITS) |
+                     (slot_in_cluster & MSDOS_CINUM_SLOT_MASK);
+              if(inum == ROOTINO || (inum & MSDOS_ROOT16_INUM_BASE))
+                inum ^= 0x1;        /* avoid collisions */
+              *last_inum = inum;
+              return 0;
+            }
+          } else {
+            run = 0;
           }
         }
         brelse(b);
@@ -222,18 +554,34 @@ msdos_find_free_dirent(struct inode *dp, uint *sec, uint *off, uint *inum)
         break;
     }
 
-    if(msdos_alloc_cluster(md, &cluster) < 0)
-      return -1;
-    if(msdos_fat_set(md, last_cluster, cluster) < 0)
-      return -1;
+    /* Allocate a new cluster to extend the directory */
+    {
+      uint newc;
+      uint inum;
 
-    *sec = msdos_cluster_first_sector(md, cluster);
-    *off = 0;
-    *inum = (cluster & 0xFFFFU) << 16;
-    if(*inum == ROOTINO)
-      (*inum)++;
-    return 0;
+      if(msdos_alloc_cluster(md, &newc) < 0)
+        return -1;
+      if(msdos_fat_set(md, last_cluster, newc) < 0)
+        return -1;
+
+      *first_sec  = msdos_cluster_first_sector(md, newc);
+      *first_off  = 0;
+      inum = (newc << MSDOS_CINUM_SLOT_BITS) |
+             ((md->sectors_per_cluster * BSIZE / sizeof(struct fat_dirent) - 1)
+              & MSDOS_CINUM_SLOT_MASK);
+      if(inum == ROOTINO || (inum & MSDOS_ROOT16_INUM_BASE))
+        inum ^= 0x1;
+      *last_inum = inum;
+      return 0;
+    }
   }
+}
+
+/* Convenience wrapper: find a single free directory entry slot. */
+static int
+msdos_find_free_dirent(struct inode *dp, uint *sec, uint *off, uint *inum)
+{
+  return msdos_find_free_run(dp, 1, sec, off, inum);
 }
 
 static uint
@@ -378,12 +726,19 @@ msdos_alloc_cluster(struct msdos_mount_data *md, uint *out)
 {
   uint c;
   uint maxc;
+  uint start;
 
   if(md == 0 || out == 0)
     return -1;
 
+  /* Use free-cluster hint from FSInfo if plausible */
+  start = 2;
+  if(md->fat_type == 32 && md->free_cluster_count != 0xFFFFFFFF &&
+     md->free_cluster_count == 0)
+    return -1;  /* FSInfo says no free clusters */
+
   maxc = md->total_clusters + 1;
-  for(c = 2; c <= maxc; c++){
+  for(c = start; c <= maxc; c++){
     uint v;
 
     if(msdos_fat_get(md, c, &v) < 0)
@@ -395,6 +750,9 @@ msdos_alloc_cluster(struct msdos_mount_data *md, uint *out)
       return -1;
     if(msdos_zero_cluster(md, c) < 0)
       return -1;
+    if(md->fat_type == 32 && md->free_cluster_count != 0xFFFFFFFF)
+      md->free_cluster_count--;
+    msdos_update_fsinfo(md);
     *out = c;
     return 0;
   }
@@ -414,11 +772,12 @@ msdos_inode_dirent_location(struct msdos_mount_data *md, struct inode *ip,
   if(inum == ROOTINO)
     return -1;
 
-  if((inum & 0xF0000000U) == MSDOS_ROOT16_INUM_BASE){
+  /* FAT16 fixed-root slots: high bit set */
+  if(inum & MSDOS_ROOT16_INUM_BASE){
     uint slot;
     uint byte_off;
 
-    slot = inum - MSDOS_ROOT16_INUM_BASE;
+    slot     = inum & ~MSDOS_ROOT16_INUM_BASE;
     byte_off = slot * sizeof(struct fat_dirent);
     *sec = md->root_start + (byte_off / BSIZE);
     *off = byte_off % BSIZE;
@@ -427,16 +786,16 @@ msdos_inode_dirent_location(struct msdos_mount_data *md, struct inode *ip,
 
   {
     uint dir_cluster;
-    uint slot;
+    uint slot_in_cluster;
     uint byte_off;
     uint csec;
 
-    dir_cluster = (inum >> 16) & 0xFFFF;
-    slot = inum & 0xFFFF;
+    dir_cluster     = inum >> MSDOS_CINUM_SLOT_BITS;
+    slot_in_cluster = inum & MSDOS_CINUM_SLOT_MASK;
     if(dir_cluster < 2)
       return -1;
 
-    byte_off = slot * sizeof(struct fat_dirent);
+    byte_off = slot_in_cluster * sizeof(struct fat_dirent);
     csec = msdos_cluster_first_sector(md, dir_cluster);
     if(csec == 0)
       return -1;
@@ -533,26 +892,6 @@ static uint
 msdos_entry_cluster(struct fat_dirent *de)
 {
   return (((uint)de->clu_hi) << 16) | de->clu_lo;
-}
-
-static int
-msdos_entry_valid(struct fat_dirent *de, int *end)
-{
-  if(end)
-    *end = 0;
-
-  if(de->name[0] == 0x00){
-    if(end)
-      *end = 1;
-    return 0;
-  }
-  if(de->name[0] == 0xE5)
-    return 0;
-  if(de->attr == MSDOS_ATTR_LFN)
-    return 0;
-  if(de->attr & MSDOS_ATTR_VOLID)
-    return 0;
-  return 1;
 }
 
 static void
@@ -805,10 +1144,15 @@ msdos_make_inode(uint dev, uint inum, struct fat_dirent *de, int is_root16)
 
 static int
 msdos_dir_scan_fat16_root(struct msdos_mount_data *md,
-                          int (*visit)(struct fat_dirent*, uint, uint, void*),
+                          int (*visit)(struct fat_dirent*, const char*, uint, uint, void*),
                           void *arg)
 {
   uint slot;
+  struct fat_lfn_state lfn;
+  uint vis;
+
+  memset(&lfn, 0, sizeof(lfn));
+  vis = 0;
 
   for(slot = 0; slot < md->root_dir_entries; slot++){
     uint byte_off;
@@ -816,11 +1160,10 @@ msdos_dir_scan_fat16_root(struct msdos_mount_data *md,
     uint sec_off;
     struct buf *b;
     struct fat_dirent de;
-    int end;
 
     byte_off = slot * sizeof(struct fat_dirent);
-    sec = md->root_start + (byte_off / BSIZE);
-    sec_off = byte_off % BSIZE;
+    sec      = md->root_start + (byte_off / BSIZE);
+    sec_off  = byte_off % BSIZE;
 
     b = msdos_bread(md, sec);
     if(b == 0)
@@ -828,14 +1171,33 @@ msdos_dir_scan_fat16_root(struct msdos_mount_data *md,
     memmove(&de, b->data + sec_off, sizeof(de));
     brelse(b);
 
-    if(!msdos_entry_valid(&de, &end)){
-      if(end)
-        return 0;
+    if(de.name[0] == 0x00)
+      return 0;   /* end of directory */
+
+    if(de.name[0] == 0xE5){
+      memset(&lfn, 0, sizeof(lfn));
       continue;
     }
 
-    if(visit(&de, 0x10000000U + slot, slot, arg) != 0)
-      return 1;
+    if(de.attr == MSDOS_ATTR_LFN){
+      msdos_accumulate_lfn(&lfn, (struct fat_lfn_entry*)&de);
+      continue;
+    }
+
+    if(de.attr & MSDOS_ATTR_VOLID){
+      memset(&lfn, 0, sizeof(lfn));
+      continue;
+    }
+
+    {
+      const char *lfn_name = lfn.valid ? lfn.name : 0;
+      uint inum = MSDOS_ROOT16_INUM_BASE | slot;
+      int r = visit(&de, lfn_name, inum, vis, arg);
+      memset(&lfn, 0, sizeof(lfn));
+      if(r != 0)
+        return 1;
+      vis++;
+    }
   }
 
   return 0;
@@ -843,17 +1205,20 @@ msdos_dir_scan_fat16_root(struct msdos_mount_data *md,
 
 static int
 msdos_dir_scan_cluster_chain(struct msdos_mount_data *md, uint first_cluster,
-                             int (*visit)(struct fat_dirent*, uint, uint, void*),
+                             int (*visit)(struct fat_dirent*, const char*, uint, uint, void*),
                              void *arg)
 {
   uint cluster;
   uint vis;
+  struct fat_lfn_state lfn;
 
   if(first_cluster < 2)
     return 0;
 
+  memset(&lfn, 0, sizeof(lfn));
   cluster = first_cluster;
   vis = 0;
+
   while(cluster >= 2){
     uint csec;
     uint s;
@@ -874,25 +1239,43 @@ msdos_dir_scan_cluster_chain(struct msdos_mount_data *md, uint first_cluster,
         struct fat_dirent de;
         uint slot_in_cluster;
         uint inum;
-        int end;
 
         memmove(&de, b->data + off, sizeof(de));
-        if(!msdos_entry_valid(&de, &end)){
-          if(end){
-            brelse(b);
-            return 0;
-          }
+
+        if(de.name[0] == 0x00){
+          brelse(b);
+          return 0;  /* end of directory */
+        }
+
+        if(de.name[0] == 0xE5){
+          memset(&lfn, 0, sizeof(lfn));
+          continue;
+        }
+
+        if(de.attr == MSDOS_ATTR_LFN){
+          msdos_accumulate_lfn(&lfn, (struct fat_lfn_entry*)&de);
+          continue;
+        }
+
+        if(de.attr & MSDOS_ATTR_VOLID){
+          memset(&lfn, 0, sizeof(lfn));
           continue;
         }
 
         slot_in_cluster = (s * BSIZE + off) / sizeof(struct fat_dirent);
-        inum = ((cluster & 0xFFFFU) << 16) | (slot_in_cluster & 0xFFFFU);
-        if(inum == ROOTINO)
-          inum++;
+        inum = (cluster << MSDOS_CINUM_SLOT_BITS) |
+               (slot_in_cluster & MSDOS_CINUM_SLOT_MASK);
+        if(inum == ROOTINO || (inum & MSDOS_ROOT16_INUM_BASE))
+          inum ^= 0x1;
 
-        if(visit(&de, inum, vis, arg) != 0){
-          brelse(b);
-          return 1;
+        {
+          const char *lfn_name = lfn.valid ? lfn.name : 0;
+          int r = visit(&de, lfn_name, inum, vis, arg);
+          memset(&lfn, 0, sizeof(lfn));
+          if(r != 0){
+            brelse(b);
+            return 1;
+          }
         }
         vis++;
       }
@@ -911,7 +1294,7 @@ msdos_dir_scan_cluster_chain(struct msdos_mount_data *md, uint first_cluster,
 
 static int
 msdos_dir_scan(struct inode *dp,
-               int (*visit)(struct fat_dirent*, uint, uint, void*),
+               int (*visit)(struct fat_dirent*, const char*, uint, uint, void*),
                void *arg)
 {
   struct msdos_mount_data *md;
@@ -939,18 +1322,43 @@ struct lookup_ctx {
 };
 
 static int
-msdos_lookup_visit(struct fat_dirent *de, uint inum, uint visidx, void *arg)
+msdos_lookup_visit(struct fat_dirent *de, const char *lfn, uint inum, uint visidx, void *arg)
 {
   struct lookup_ctx *ctx;
   (void)visidx;
 
   ctx = (struct lookup_ctx*)arg;
+
+  /* Try 8.3 short name match first */
   if(msdos_name_matches_83(ctx->name, de)){
     memmove(&ctx->de, de, sizeof(*de));
     ctx->inum = inum;
     ctx->found = 1;
     return 1;
   }
+
+  /* Try long filename match (case-insensitive ASCII) */
+  if(lfn != 0){
+    const char *a = ctx->name;
+    const char *b = lfn;
+    while(*a && *b){
+      char ca = *a;
+      char cb = *b;
+      if(ca >= 'A' && ca <= 'Z') ca += ('a' - 'A');
+      if(cb >= 'A' && cb <= 'Z') cb += ('a' - 'A');
+      if(ca != cb)
+        break;
+      a++;
+      b++;
+    }
+    if(*a == 0 && *b == 0){
+      memmove(&ctx->de, de, sizeof(*de));
+      ctx->inum = inum;
+      ctx->found = 1;
+      return 1;
+    }
+  }
+
   return 0;
 }
 
@@ -958,12 +1366,13 @@ struct nth_ctx {
   uint want;
   uint cur;
   struct fat_dirent de;
+  char lfn_name[MSDOS_LFN_MAX_CHARS + 1];
   uint inum;
   int found;
 };
 
 static int
-msdos_nth_visit(struct fat_dirent *de, uint inum, uint visidx, void *arg)
+msdos_nth_visit(struct fat_dirent *de, const char *lfn, uint inum, uint visidx, void *arg)
 {
   struct nth_ctx *ctx;
   (void)visidx;
@@ -971,6 +1380,10 @@ msdos_nth_visit(struct fat_dirent *de, uint inum, uint visidx, void *arg)
   ctx = (struct nth_ctx*)arg;
   if(ctx->cur == ctx->want){
     memmove(&ctx->de, de, sizeof(*de));
+    if(lfn != 0)
+      safestrcpy(ctx->lfn_name, lfn, sizeof(ctx->lfn_name));
+    else
+      ctx->lfn_name[0] = '\0';
     ctx->inum = inum;
     ctx->found = 1;
     return 1;
@@ -1077,6 +1490,36 @@ msdos_valid_signature(struct buf *b)
   return sig == MSDOS_BOOT_SIG;
 }
 
+/* Update the FAT32 FSInfo sector with the current free cluster count.
+ * Silently no-ops on FAT16 or when no FSInfo sector is configured.
+ */
+static void
+msdos_update_fsinfo(struct msdos_mount_data *md)
+{
+  struct fat_fsinfo *fi;
+  struct buf *b;
+
+  if(md == 0 || md->fat_type != 32 || md->fsinfo_sector == 0)
+    return;
+
+  b = msdos_bread(md, md->fsinfo_sector);
+  if(b == 0)
+    return;
+
+  fi = (struct fat_fsinfo*)b->data;
+  if(fi->lead_sig  != 0x41615252U ||
+     fi->struc_sig != 0x61417272U ||
+     fi->trail_sig != 0xAA550000U){
+    brelse(b);
+    return;
+  }
+
+  fi->free_count = md->free_cluster_count;
+  fi->next_free  = 0xFFFFFFFF;   /* hint not tracked */
+  bwrite(b);
+  brelse(b);
+}
+
 static int
 msdos_mount_init(struct mount *m)
 {
@@ -1172,12 +1615,31 @@ msdos_mount_init(struct mount *m)
   clusters = datasz / md->sectors_per_cluster;
   md->total_clusters = clusters;
 
+  md->fsinfo_sector = 0;
+  md->free_cluster_count = 0xFFFFFFFF;
+
   if(clusters < 65525){
     md->fat_type = 16;
     md->root_cluster = 0;
   } else {
     md->fat_type = 32;
     md->root_cluster = bpb32->root_clus;
+    /* Load FSInfo free cluster count */
+    if(bpb32->fs_info != 0 && bpb32->fs_info < totsec){
+      struct fat_fsinfo *fi;
+      struct buf *fib;
+
+      md->fsinfo_sector = bpb32->fs_info;
+      fib = msdos_bread(md, md->fsinfo_sector);
+      if(fib != 0){
+        fi = (struct fat_fsinfo*)fib->data;
+        if(fi->lead_sig == 0x41615252U && fi->struc_sig == 0x61417272U &&
+           fi->trail_sig == 0xAA550000U){
+          md->free_cluster_count = fi->free_count;
+        }
+        brelse(fib);
+      }
+    }
   }
 
   brelse(b);
@@ -1241,7 +1703,8 @@ msdos_read(struct inode *ip, char *dst, uint off, uint n)
 {
   struct nth_ctx ctx;
   struct dirent de;
-  char nm[16];
+  const char *nm;
+  char nm83[16];
   uint dinum;
   uint cpy;
 
@@ -1262,12 +1725,20 @@ msdos_read(struct inode *ip, char *dst, uint off, uint n)
       return 0;
 
     memset(&de, 0, sizeof(de));
-    dinum = ctx.inum & 0xFFFF;
+    dinum = ctx.inum & (uint)~MSDOS_ROOT16_INUM_BASE;
+    dinum &= 0xFFFF;
     if(dinum == 0)
       dinum = 1;
     de.inum = (ushort)dinum;
-    memset(nm, 0, sizeof(nm));
-    msdos_entry_name(&ctx.de, nm, sizeof(nm));
+
+    /* Prefer LFN name when available */
+    if(ctx.lfn_name[0] != '\0'){
+      nm = ctx.lfn_name;
+    } else {
+      memset(nm83, 0, sizeof(nm83));
+      msdos_entry_name(&ctx.de, nm83, sizeof(nm83));
+      nm = nm83;
+    }
     cpy = strlen(nm);
     if(cpy > DIRSIZ)
       cpy = DIRSIZ;
@@ -1361,18 +1832,18 @@ msdos_write_file_data(struct inode *ip, char *src, uint off, uint n)
   if(need_clusters > 0 && cluster < 2)
     return -1;
 
-  skip = off / cluster_bytes;
+  skip  = off / cluster_bytes;
   within = off % cluster_bytes;
+  done  = 0;                      /* initialize before the skip loop */
 
   while(skip > 0){
     if(msdos_next_cluster(md, cluster, &cluster) < 0)
       return -1;
     if(cluster == 0)
-      return (done == 0) ? -1 : (int)done;
+      return -1;
     skip--;
   }
 
-  done = 0;
   while(done < n && cluster >= 2){
     uint csec;
     uint need;
@@ -1537,6 +2008,7 @@ msdos_create(struct inode *dp, char *name, short type, short major,
   uint sec;
   uint off;
   uint inum;
+  int n_segs;    /* number of LFN entries needed before the 8.3 slot */
 
   (void)major;
   (void)minor;
@@ -1546,7 +2018,9 @@ msdos_create(struct inode *dp, char *name, short type, short major,
 
   if(dp == 0 || name == 0)
     return 0;
-  if(dp->type != T_DIR || type != T_FILE)
+  if(dp->type != T_DIR)
+    return 0;
+  if(type != T_FILE && type != T_DIR)
     return 0;
   if(iaccess(dp, IACC_WRITE | IACC_EXEC) < 0)
     return 0;
@@ -1554,16 +2028,52 @@ msdos_create(struct inode *dp, char *name, short type, short major,
   md = msdos_data_for_dev(dp->dev);
   if(md == 0)
     return 0;
-  if(msdos_component_to_83(name, shortname) < 0)
+
+  /* Generate 8.3 short name (or truncated ~1 form for long names) */
+  if(msdos_generate_shortname(name, shortname) < 0)
     return 0;
+
   existing = msdos_dirlookup(dp, name, 0);
   if(existing != 0){
     iput(existing);
     return 0;
   }
-  if(msdos_find_free_dirent(dp, &sec, &off, &inum) < 0)
-    return 0;
 
+  /* Determine whether LFN entries are needed */
+  {
+    uchar test83[11];
+    n_segs = (msdos_component_to_83(name, test83) == 0) ? 0
+             : (int)((strlen(name) + 12) / 13);
+  }
+
+  if(n_segs > 0){
+    /* Locate a run of n_segs+1 consecutive free slots; write LFN entries
+     * and record the sector/offset of the final 8.3 slot.
+     */
+    uint first_sec;
+    uint first_off;
+    uint last_inum;
+    uint abs_lfn;
+    uint abs_83;
+
+    if(msdos_find_free_run(dp, n_segs + 1, &first_sec, &first_off, &last_inum) < 0)
+      return 0;
+
+    if(msdos_write_lfn_entries(md, first_sec, first_off, name, n_segs, shortname) < 0)
+      return 0;
+
+    /* The 8.3 entry sits immediately after the LFN entries */
+    abs_lfn = first_sec * BSIZE + first_off;
+    abs_83  = abs_lfn + (uint)n_segs * sizeof(struct fat_dirent);
+    sec  = abs_83 / BSIZE;
+    off  = abs_83 % BSIZE;
+    inum = last_inum;
+  } else {
+    if(msdos_find_free_dirent(dp, &sec, &off, &inum) < 0)
+      return 0;
+  }
+
+  /* Write the 8.3 directory entry */
   b = msdos_bread(md, sec);
   if(b == 0)
     return 0;
@@ -1574,6 +2084,74 @@ msdos_create(struct inode *dp, char *name, short type, short major,
 
   memset(&de, 0, sizeof(de));
   memmove(de.name, shortname, sizeof(de.name));
+
+  if(type == T_DIR){
+    uint dir_cluster;
+
+    /* Allocate a cluster for the new directory */
+    if(msdos_alloc_cluster(md, &dir_cluster) < 0){
+      brelse(b);
+      return 0;
+    }
+
+    de.attr   = MSDOS_ATTR_DIR;
+    de.clu_lo = (ushort)(dir_cluster & 0xFFFF);
+    de.clu_hi = (ushort)((dir_cluster >> 16) & 0xFFFF);
+    de.size   = 0;
+
+    memmove(b->data + off, &de, sizeof(de));
+    bwrite(b);
+    brelse(b);
+
+    ip = msdos_make_inode(dp->dev, inum, &de, 0);
+    if(ip == 0)
+      return 0;
+    ilock(ip);
+
+    /* Write . and .. entries in the new directory cluster */
+    {
+      uint csec;
+      struct buf *cb;
+      struct fat_dirent dot;
+      struct fat_dirent dotdot;
+      uint parent_cluster;
+
+      csec = msdos_cluster_first_sector(md, dir_cluster);
+      cb = msdos_bread(md, csec);
+      if(cb == 0){
+        iunlockput(ip);
+        return 0;
+      }
+
+      /* "." entry → points to the directory itself */
+      memset(&dot, 0, sizeof(dot));
+      memmove(dot.name, ".          ", 11);
+      dot.attr   = MSDOS_ATTR_DIR;
+      dot.clu_lo = de.clu_lo;
+      dot.clu_hi = de.clu_hi;
+
+      /* ".." entry → points to parent directory */
+      parent_cluster = dp->addrs[0];
+      /* For FAT16 root, parent cluster = 0 */
+      if(md->fat_type == 16 && dp->inum == ROOTINO && dp->addrs[2] == 1)
+        parent_cluster = 0;
+
+      memset(&dotdot, 0, sizeof(dotdot));
+      memmove(dotdot.name, "..         ", 11);
+      dotdot.attr   = MSDOS_ATTR_DIR;
+      dotdot.clu_lo = (ushort)(parent_cluster & 0xFFFF);
+      dotdot.clu_hi = (ushort)((parent_cluster >> 16) & 0xFFFF);
+
+      memmove(cb->data + 0,                    &dot,    sizeof(dot));
+      memmove(cb->data + sizeof(struct fat_dirent), &dotdot, sizeof(dotdot));
+      bwrite(cb);
+      brelse(cb);
+    }
+
+    return ip;
+  }
+
+  /* Regular file */
   de.attr = MSDOS_ATTR_ARCHIVE;
   memmove(b->data + off, &de, sizeof(de));
   bwrite(b);
@@ -1608,10 +2186,38 @@ msdos_remove(struct inode *dp, char *name)
   if(ip == 0)
     return -1;
   ilock(ip);
-  if(ip->type != T_FILE){
+
+  /* For directories, verify the dir is empty (only . and ..) */
+  if(ip->type == T_DIR){
+    struct nth_ctx ctx;
+    int i;
+    int has_other;
+
+    has_other = 0;
+    for(i = 0; i < 64; i++){
+      char nm83[12];
+      memset(&ctx, 0, sizeof(ctx));
+      ctx.want = (uint)i;
+      if(msdos_dir_scan(ip, msdos_nth_visit, &ctx) < 0)
+        break;
+      if(!ctx.found)
+        break;
+      msdos_entry_name(&ctx.de, nm83, sizeof(nm83));
+      if(nm83[0] == '.' && (nm83[1] == '\0' ||
+         (nm83[1] == '.' && nm83[2] == '\0')))
+        continue;
+      has_other = 1;
+      break;
+    }
+    if(has_other){
+      iunlockput(ip);
+      return -1;   /* directory not empty */
+    }
+  } else if(ip->type != T_FILE){
     iunlockput(ip);
     return -1;
   }
+
   if(msdos_free_cluster_chain(md, ip->addrs[0]) < 0){
     iunlockput(ip);
     return -1;
@@ -1652,7 +2258,8 @@ vfs_msdosfs_init(struct vfs *fs)
     return;
 
   safestrcpy(fs->name, "msdosfs", sizeof(fs->name));
-  fs->caps = VFS_CAP_READ | VFS_CAP_WRITE | VFS_CAP_CREATE | VFS_CAP_REMOVE;
+  fs->caps = VFS_CAP_READ | VFS_CAP_WRITE | VFS_CAP_CREATE | VFS_CAP_REMOVE |
+             VFS_CAP_MKDIR;
   fs->fs_data = 0;
   fs->fs_destroy = 0;
   fs->mount_init = msdos_mount_init;
