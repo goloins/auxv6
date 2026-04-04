@@ -280,3 +280,60 @@ Added to `include/socket.h`:
 #define MSG_WAITALL   0x100
 #define MSG_NOSIGNAL  0x4000
 ```
+
+---
+
+## `/proc/net_tcp`, `/proc/net_udp`, `/proc/net_dev` — Network Observability
+
+**Files:** `kernel/fs/procfs.c`, `kernel/net/socket.c`, `kernel/net/ethernet.c`,
+`kernel/net/ip.c`, `include/net.h`, `include/socket.h`, `include/param.h`,
+`user/netstat.c`
+
+### Per-interface traffic counters (`struct ifnet`)
+
+Six counters added to `struct ifnet` in `include/net.h`:
+
+| Field | Description |
+|-------|-------------|
+| `if_ipackets` | Inbound packets accepted past the address filter |
+| `if_opackets` | Outbound packets successfully sent to driver |
+| `if_ibytes` | Inbound bytes (measured after ethernet header strip) |
+| `if_obytes` | Outbound bytes (measured after ethernet header prepend) |
+| `if_ierrors` | Inbound errors: malformed IP packets dropped in `ip_input()` |
+| `if_oerrors` | Outbound errors: driver `if_output()` failures in `ether_output()` |
+
+Counters are incremented in `ether_input()`, `ether_output()`, and `ip_input()`.
+
+### Socket snapshot: `socket_get_table()`
+
+`socket_get_table(struct socket_info_k *out, int max)` in `kernel/net/socket.c`
+takes `socket_lock`, copies a flat snapshot of all non-closed sockets into
+`out[]`, and returns the count. The `struct socket_info_k` type (defined in
+`include/socket.h`) captures: family, type, socket state, TCP state,
+local/remote address+port, rx/tx buffer lengths, and an owning PID field
+(currently `-1`; populated in a follow-on when pid tracking is added).
+
+`NSOCKET` (64) moved from `socket.c` to `include/param.h` alongside `NPROC`,
+`NFILE`, etc.
+
+### New procfs nodes
+
+Added to `kernel/fs/procfs.c`:
+
+| Node | INO | Description |
+|------|-----|-------------|
+| `/proc/net_tcp` | 17 | TCP socket table (local addr, remote addr, TCP state, buf sizes) |
+| `/proc/net_udp` | 18 | UDP socket table (local addr, remote addr, buf sizes) |
+| `/proc/net_dev` | 19 | Per-interface counters (packets, bytes, errors for RX and TX) |
+
+Both net socket nodes use a static `procfs_net_outbuf[4096]` scratch buffer
+(not the stack) to avoid overflow when many sockets are open. The snapshot
+array `procfs_net_sockets[NSOCKET]` is similarly static.
+
+### `netstat` new flags
+
+| Flag | Description |
+|------|-------------|
+| `-t` | Print `/proc/net_tcp` TCP socket table |
+| `-u` | Print `/proc/net_udp` UDP socket table |
+| `-s` | Print `/proc/net_dev` interface statistics |
