@@ -163,7 +163,8 @@ Primary goal: consolidate recent kernel-core and userland wins into a dependable
 - Phase 3 scope guard remains intact: no COW fork enablement yet, no user-visible fork semantic changes.
 - Phase 3 tranche-1 guest validation (post-scaffolding) is clean: `kallocstress -n 3` `85/100` avg (85-85), `schedperf -n 3` `81/100` avg (81-82), `fsperf -n 3` `85/100` avg (85-86), all pass/no panic.
 - `/proc/vmstat` remained stable and consistent with Phase 2c behavior (`cache_alloc_hits 6669`, `cache_alloc_misses 0`, `global_refill_batches 405`, `global_drain_batches 288`).
-- Next immediate action: start Phase 3 tranche-2 by applying teardown/transition invariants to remaining VM call sites, while keeping fork behavior unchanged until those paths are fully verified.
+- Phase 3 tranche-2 is now landed (build clean): added helperized PTE user-transition APIs (`pte_is_user`, `pte_mark_user`), added VM PTE invariant checks, and routed remaining user-PTE transition call sites through helpers without enabling COW fork behavior.
+- Next immediate action: guest-validate tranche-2 with vmstat + perf suite and panic check before touching any COW map/install semantics.
 
 ### Tranche A - Storage reliability hardening
 - Virtio-blk: keep bounded retry policy but tighten transient-vs-fatal error accounting and operator-visible diagnostics.

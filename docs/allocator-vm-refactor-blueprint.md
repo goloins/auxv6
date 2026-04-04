@@ -542,6 +542,19 @@ Implementation status (2026-04-04, tranche 1):
 - tranche-1 decision: accepted; proceed to tranche-2 invariants before enabling
 	any COW fork mapping semantics
 
+Implementation status (2026-04-04, tranche 2):
+- landed in-tree
+- build clean on host (`sudo make aux.kern`)
+- helperized additional transition paths and invariants:
+	- added `pte_is_user()` and `pte_mark_user()` helpers
+	- added PTE sanity checks to guard illegal writable+COW combinations in
+	  transition-sensitive VM paths
+	- routed `clearpteu()`, `setpteu()`, `user_page_state()`, and `uva2ka()`
+	  through helper/invariant-aware flow
+	- added invariant checks in `copyuvm()` to keep current dense-fork path
+	  clean while COW is still disabled
+- explicit scope guard: COW fork install/map semantics are still not enabled
+
 ### Phase 4: copy-on-write fork
 
 Purpose:

@@ -560,8 +560,10 @@ void            setpteu(pde_t *pgdir, char *uva);
 int             user_page_state(pde_t *pgdir, char *uva);
 int             pte_is_cow(uint pte);
 int             pte_is_writable(uint pte);
+int             pte_is_user(uint pte);
 void            pte_mark_cow(uint *pte);
 void            pte_mark_writable(uint *pte);
+void            pte_mark_user(uint *pte, int enabled);
 int             uvm_release_pte(uint *pte);
 
 // socket.c

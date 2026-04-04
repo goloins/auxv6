@@ -56,6 +56,14 @@ walkpgdir(pde_t *pgdir, const void *va, int alloc)
   return &pgtab[PTX(va)];
 }
 
+static void
+pte_assert_sane(uint pte)
+{
+  // Forward-compat invariant: present mappings cannot be both writable and COW.
+  if((pte & PTE_P) && pte_is_cow(pte) && pte_is_writable(pte))
+    panic("pte sane");
+}
+
 // Create PTEs for virtual addresses starting at va that refer to
 // physical addresses starting at pa. va and size might not
 // be page-aligned.
@@ -312,7 +320,8 @@ clearpteu(pde_t *pgdir, char *uva)
   pte = walkpgdir(pgdir, uva, 0);
   if(pte == 0)
     panic("clearpteu");
-  *pte &= ~PTE_U;
+  pte_assert_sane(*pte);
+  pte_mark_user((uint*)pte, 0);
 }
 
 // Set PTE_U on a page.  Used to make a pre-allocated, inaccessible
@@ -325,7 +334,8 @@ setpteu(pde_t *pgdir, char *uva)
   pte = walkpgdir(pgdir, uva, 0);
   if(pte == 0)
     panic("setpteu");
-  *pte |= PTE_U;
+  pte_assert_sane(*pte);
+  pte_mark_user((uint*)pte, 1);
 }
 
 // Return mapping state for a user VA in the given page table:
@@ -338,7 +348,8 @@ user_page_state(pde_t *pgdir, char *uva)
   pte = walkpgdir(pgdir, uva, 0);
   if(pte == 0 || ((*pte & PTE_P) == 0))
     return 0;
-  if(*pte & PTE_U)
+  pte_assert_sane(*pte);
+  if(pte_is_user(*pte))
     return 2;
   return 1;
 }
@@ -353,6 +364,12 @@ int
 pte_is_writable(uint pte)
 {
   return (pte & PTE_W) != 0;
+}
+
+int
+pte_is_user(uint pte)
+{
+  return (pte & PTE_U) != 0;
 }
 
 void
@@ -371,6 +388,17 @@ pte_mark_writable(uint *pte)
     panic("pte_mark_writable");
   *pte |= PTE_W;
   *pte &= ~PTE_COW;
+}
+
+void
+pte_mark_user(uint *pte, int enabled)
+{
+  if(pte == 0)
+    panic("pte_mark_user");
+  if(enabled)
+    *pte |= PTE_U;
+  else
+    *pte &= ~PTE_U;
 }
 
 int
@@ -410,6 +438,7 @@ copyuvm(pde_t *pgdir, uint sz)
     pte = walkpgdir(pgdir, (void *)i, 0);
     if(pte == 0 || ((*pte & PTE_P) == 0))
       continue;
+    pte_assert_sane(*pte);
     pa = PTE_ADDR(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
@@ -435,9 +464,12 @@ uva2ka(pde_t *pgdir, char *uva)
   pte_t *pte;
 
   pte = walkpgdir(pgdir, uva, 0);
+  if(pte == 0)
+    return 0;
+  pte_assert_sane(*pte);
   if((*pte & PTE_P) == 0)
     return 0;
-  if((*pte & PTE_U) == 0)
+  if(!pte_is_user(*pte))
     return 0;
   return (char*)P2V(PTE_ADDR(*pte));
 }
