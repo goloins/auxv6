@@ -9,6 +9,10 @@
 #include "file.h"
 #include "stat.h"
 #include "buf.h"
+#include "stdint.h"
+
+typedef uint64_t uint64;
+typedef uint32_t uint32;
 
 #define UFS2_SUPERBLOCK_OFFSET 65536U
 #define UFS2_SUPERBLOCK_READ   8192U
