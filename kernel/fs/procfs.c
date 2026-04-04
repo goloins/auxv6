@@ -34,6 +34,8 @@
 #define PROCFS_NET_TCP_INO    17   /* /proc/net_tcp  — TCP socket table */
 #define PROCFS_NET_UDP_INO    18   /* /proc/net_udp  — UDP socket table */
 #define PROCFS_NET_DEV_INO    19   /* /proc/net_dev  — interface counters */
+#define PROCFS_SCHEDSTAT_INO  20   /* /proc/schedstat — scheduler counters */
+#define PROCFS_VMSTAT_INO     21   /* /proc/vmstat — allocator/vm counters */
 #define PROCFS_VERSION_STR  "a/ux86 aux86 i686\n"
 
 struct procfs_inode {
@@ -61,6 +63,8 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_NET_TCP_INO, "net_tcp", 4096 },
   { PROCFS_NET_UDP_INO, "net_udp", 4096 },
   { PROCFS_NET_DEV_INO, "net_dev", 1024 },
+  { PROCFS_SCHEDSTAT_INO, "schedstat", 256 },
+  { PROCFS_VMSTAT_INO, "vmstat", 512 },
   { 0, 0, 0 }
 };
 
@@ -261,6 +265,10 @@ procfs_fill_inode(struct inode *ip, uint inum)
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IWUSR | M_IRGRP | M_IROTH;
     ip->size = 2048;
+  } else if(inum == PROCFS_MEMINFO_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
+    ip->size = 256;
   } else if(inum == PROCFS_LOGO_INO){
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IWUSR | M_IRGRP | M_IROTH;
@@ -289,6 +297,14 @@ procfs_fill_inode(struct inode *ip, uint inum)
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
     ip->size = 4096;
+  } else if(inum == PROCFS_SCHEDSTAT_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
+    ip->size = 256;
+  } else if(inum == PROCFS_VMSTAT_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
+    ip->size = 512;
   } else {
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
@@ -453,6 +469,7 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
   char buf[2048];
   struct procinfo_k *pinfo;
   struct vfs_mount_info *mins;
+  struct kalloc_stats_k kstats;
   uint total_pages;
   uint free_pages;
   uint total_blocks;
@@ -471,7 +488,7 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     return -1;
   if(ip->inum == PROCFS_ROOT_INO){
     // Note: . and .. are synthesized by VFS for mount roots
-    struct dirent more_entries[18];
+    struct dirent more_entries[20];
     memset(more_entries, 0, sizeof(more_entries));
     more_entries[0].inum = PROCFS_UPTIME_INO;
     safestrcpy(more_entries[0].name, "uptime", DIRSIZ);
@@ -509,6 +526,10 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     safestrcpy(more_entries[16].name, "net_udp", DIRSIZ);
     more_entries[17].inum = PROCFS_NET_DEV_INO;
     safestrcpy(more_entries[17].name, "net_dev", DIRSIZ);
+    more_entries[18].inum = PROCFS_SCHEDSTAT_INO;
+    safestrcpy(more_entries[18].name, "schedstat", DIRSIZ);
+    more_entries[19].inum = PROCFS_VMSTAT_INO;
+    safestrcpy(more_entries[19].name, "vmstat", DIRSIZ);
     return procfs_copy_data(dst, off, n, (char*)more_entries, sizeof(more_entries));
   }
   if(ip->inum == PROCFS_VERSION_INO)
@@ -638,6 +659,7 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     total_pages = 0;
     free_pages = 0;
     kalloc_meminfo(&total_pages, &free_pages);
+    kalloc_stats(&kstats);
 
     len = 0;
     if(procfs_buf_puts(buf, sizeof(buf), &len, "MemTotal: ") < 0)
@@ -651,6 +673,60 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     if(procfs_buf_putu(buf, sizeof(buf), &len, free_pages * (PGSIZE / 1024)) < 0)
       return -1;
     if(procfs_buf_puts(buf, sizeof(buf), &len, " kB\n") < 0)
+      return -1;
+    if(procfs_buf_puts(buf, sizeof(buf), &len, "PagesTotal: ") < 0)
+      return -1;
+    if(procfs_buf_putu(buf, sizeof(buf), &len, kstats.total_pages) < 0)
+      return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+      return -1;
+    if(procfs_buf_puts(buf, sizeof(buf), &len, "PagesFree: ") < 0)
+      return -1;
+    if(procfs_buf_putu(buf, sizeof(buf), &len, kstats.free_pages) < 0)
+      return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+      return -1;
+    if(procfs_buf_puts(buf, sizeof(buf), &len, "PagesAlloc: ") < 0)
+      return -1;
+    if(procfs_buf_putu(buf, sizeof(buf), &len, kstats.allocated_pages) < 0)
+      return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+      return -1;
+    return procfs_copy_data(dst, off, n, buf, len);
+  }
+  if(ip->inum == PROCFS_VMSTAT_INO){
+    kalloc_stats(&kstats);
+
+    len = 0;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "pages_total ", kstats.total_pages) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "pages_free ", kstats.free_pages) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "pages_allocated ", kstats.allocated_pages) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "pages_shared ", kstats.shared_pages) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "alloc_calls ", kstats.alloc_calls) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "free_calls ", kstats.free_calls) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "cache_alloc_hits ", kstats.cache_alloc_hits) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "cache_alloc_misses ", kstats.cache_alloc_misses) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "cache_free_inserts ", kstats.cache_free_inserts) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "global_refill_batches ", kstats.global_refill_batches) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "global_refill_pages ", kstats.global_refill_pages) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "global_drain_batches ", kstats.global_drain_batches) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "global_drain_pages ", kstats.global_drain_pages) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "ref_increments ", kstats.ref_increments) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "deferred_frees ", kstats.deferred_frees) < 0)
       return -1;
     return procfs_copy_data(dst, off, n, buf, len);
   }
@@ -1030,6 +1106,22 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
     if(r < 0)
       return -1;
     return procfs_copy_data(dst, off, n, buf, (uint)r);
+  }
+  if(ip->inum == PROCFS_SCHEDSTAT_INO){
+    uint passes;
+    uint idle_halts;
+    uint picks;
+
+    proc_get_sched_stats(&passes, &idle_halts, &picks);
+
+    len = 0;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "passes ", passes) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "idle_halts ", idle_halts) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "picks ", picks) < 0)
+      return -1;
+    return procfs_copy_data(dst, off, n, buf, len);
   }
   if(ip->inum != PROCFS_UPTIME_INO)
     return -1;

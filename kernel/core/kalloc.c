@@ -18,13 +18,157 @@ struct run {
   struct run *next;
 };
 
+struct kpage_meta {
+  uint refcount;
+  uint flags;
+};
+
+#define KPAGE_MANAGED 0x0001
+#define KPAGE_FREE    0x0002
+
+static struct kpage_meta kpage_meta[PHYSTOP / PGSIZE];
+
+static inline struct kpage_meta*
+kpage_meta_pa(uint pa)
+{
+  if(pa >= PHYSTOP)
+    return 0;
+  return &kpage_meta[pa / PGSIZE];
+}
+
+static void
+kpage_mark_managed(uint pa)
+{
+  struct kpage_meta *meta;
+
+  meta = kpage_meta_pa(pa);
+  if(meta == 0)
+    panic("kpage_mark_managed");
+  meta->flags = KPAGE_MANAGED;
+  meta->refcount = 1;
+}
+
+static uint
+kpage_drop_ref(uint pa)
+{
+  struct kpage_meta *meta;
+
+  meta = kpage_meta_pa(pa);
+  if(meta == 0 || (meta->flags & KPAGE_MANAGED) == 0)
+    panic("kpage_drop_ref");
+  if(meta->refcount == 0)
+    panic("kpage_drop_ref underflow");
+  meta->refcount--;
+  return meta->refcount;
+}
+
 struct {
   struct spinlock lock;
   int use_lock;
   struct run *freelist;
   uint total_pages;
   uint free_pages;
+  uint alloc_calls;
+  uint free_calls;
+  uint cache_alloc_hits;
+  uint cache_alloc_misses;
+  uint cache_free_inserts;
+  uint global_refill_batches;
+  uint global_refill_pages;
+  uint global_drain_batches;
+  uint global_drain_pages;
+  uint ref_increments;
+  uint deferred_frees;
 } kmem;
+
+static int
+kalloc_pick_refill_goal(int local_count)
+{
+  int goal;
+
+  goal = KALLOC_REFILL_BATCH;
+  if(local_count < KALLOC_PCPU_LOW_WATER){
+    int need = KALLOC_PCPU_LOW_WATER - local_count;
+    if(goal < need)
+      goal = need;
+  }
+  if(goal < 1)
+    goal = 1;
+  if(goal > (KALLOC_CPU_CACHE - local_count))
+    goal = KALLOC_CPU_CACHE - local_count;
+  if(goal < 1)
+    goal = 1;
+  return goal;
+}
+
+static int
+kalloc_refill_local(struct cpu *c)
+{
+  struct run *batch[KALLOC_CPU_CACHE];
+  struct run *r;
+  int n;
+  int i;
+  int goal;
+  int can_take;
+
+  if(c->kfree_cache_count >= KALLOC_PCPU_LOW_WATER)
+    return 0;
+
+  goal = kalloc_pick_refill_goal(c->kfree_cache_count);
+
+  acquire(&kmem.lock);
+  can_take = (int)kmem.free_pages - KALLOC_GLOBAL_RESERVE;
+  if(can_take < 1)
+    can_take = 1;
+  if(goal > can_take)
+    goal = can_take;
+
+  n = 0;
+  while(kmem.freelist && n < goal){
+    r = kmem.freelist;
+    kmem.freelist = r->next;
+    batch[n++] = r;
+  }
+
+  if(n > 0){
+    kmem.global_refill_batches++;
+    kmem.global_refill_pages += n;
+  }
+  release(&kmem.lock);
+
+  // Preserve global freelist pop order despite local LIFO cache.
+  for(i = n - 1; i >= 0; i--)
+    c->kfree_cache[c->kfree_cache_count++] = batch[i];
+
+  return n;
+}
+
+static void
+kalloc_drain_local(struct cpu *c)
+{
+  struct run *p;
+  int drain;
+  int i;
+
+  if(c->kfree_cache_count < KALLOC_PCPU_HIGH_WATER)
+    return;
+
+  drain = c->kfree_cache_count - KALLOC_PCPU_LOW_WATER;
+  if(drain > KALLOC_DRAIN_BATCH)
+    drain = KALLOC_DRAIN_BATCH;
+  if(drain < 1)
+    return;
+
+  acquire(&kmem.lock);
+  for(i = 0; i < drain && c->kfree_cache_count > 0; i++){
+    p = c->kfree_cache[--c->kfree_cache_count];
+    p->next = kmem.freelist;
+    kmem.freelist = p;
+  }
+  kmem.global_drain_batches++;
+  kmem.global_drain_pages += i;
+  release(&kmem.lock);
+}
 
 // Initialization happens in two phases.
 // 1. main() calls kinit1() while still using entrypgdir to place just
@@ -52,6 +196,7 @@ freerange(void *vstart, void *vend)
   char *p;
   p = (char*)PGROUNDUP((uint)vstart);
   for(; p + PGSIZE <= (char*)vend; p += PGSIZE){
+    kpage_mark_managed(V2P(p));
     kmem.total_pages++;
     kfree(p);
   }
@@ -66,11 +211,25 @@ kfree(char *v)
 {
   struct run *r;
   struct cpu *c;
-  int flush;
-  int i;
+  uint pa;
+  struct kpage_meta *meta;
+  uint refs;
 
   if((uint)v % PGSIZE || v < end || V2P(v) >= PHYSTOP)
     panic("kfree");
+
+  pa = V2P(v);
+  meta = kpage_meta_pa(pa);
+  if(meta == 0 || (meta->flags & KPAGE_MANAGED) == 0)
+    panic("kfree unmanaged");
+
+  kmem.free_calls++;
+  refs = kpage_drop_ref(pa);
+  if(refs > 0){
+    kmem.deferred_frees++;
+    return;
+  }
+  meta->flags |= KPAGE_FREE;
 
 #ifdef KDEBUG_KFREE_POISON
   // Fill with junk to catch dangling refs.  Compile with
@@ -93,21 +252,24 @@ kfree(char *v)
   // choice so we cannot migrate and touch two CPU caches in one kfree().
   pushcli();
   c = mycpu();
-  if(c->kfree_cache_count < KALLOC_CPU_CACHE){
-    c->kfree_cache[c->kfree_cache_count++] = r;
-    popcli();
-    return;
+  kalloc_drain_local(c);
+  if(c->kfree_cache_count >= KALLOC_CPU_CACHE){
+    // Emergency fallback: move one page out under lock and proceed.
+    acquire(&kmem.lock);
+    if(c->kfree_cache_count > 0){
+      struct run *p = c->kfree_cache[--c->kfree_cache_count];
+      p->next = kmem.freelist;
+      kmem.freelist = p;
+      kmem.global_drain_batches++;
+      kmem.global_drain_pages++;
+    }
+    release(&kmem.lock);
   }
-
-  acquire(&kmem.lock);
-  flush = KALLOC_CPU_CACHE / 2;
-  for(i = 0; i < flush && c->kfree_cache_count > 0; i++){
-    struct run *p = c->kfree_cache[--c->kfree_cache_count];
-    p->next = kmem.freelist;
-    kmem.freelist = p;
-  }
+  if(c->kfree_cache_count >= KALLOC_CPU_CACHE)
+    panic("kfree local overflow");
   c->kfree_cache[c->kfree_cache_count++] = r;
-  release(&kmem.lock);
+  kmem.cache_free_inserts++;
+  __sync_fetch_and_add(&kmem.free_pages, 1);
   popcli();
 }
 
@@ -118,18 +280,24 @@ char*
 kalloc(void)
 {
   struct run *r;
-  struct run *batch[KALLOC_CPU_CACHE];
   struct cpu *c;
-  int n;
-  int i;
+  uint pa;
+  struct kpage_meta *meta;
 
   // Early boot: single CPU, no locking, no per-CPU caches.
+  kmem.alloc_calls++;
   if(!kmem.use_lock){
     r = kmem.freelist;
     if(r){
       kmem.freelist = r->next;
       if(kmem.free_pages > 0)
         kmem.free_pages--;
+      pa = V2P((char*)r);
+      meta = kpage_meta_pa(pa);
+      if(meta == 0 || (meta->flags & KPAGE_MANAGED) == 0)
+        panic("kalloc early unmanaged");
+      meta->flags &= ~KPAGE_FREE;
+      meta->refcount = 1;
     }
     return (char*)r;
   }
@@ -138,29 +306,36 @@ kalloc(void)
   // acquisition so we cannot migrate between CPUs mid-allocation.
   pushcli();
   c = mycpu();
+  if(c->kfree_cache_count < KALLOC_PCPU_LOW_WATER)
+    kalloc_refill_local(c);
   if(c->kfree_cache_count > 0){
     r = c->kfree_cache[--c->kfree_cache_count];
+    kmem.cache_alloc_hits++;
+    __sync_fetch_and_sub(&kmem.free_pages, 1);
+    pa = V2P((char*)r);
+    meta = kpage_meta_pa(pa);
+    if(meta == 0 || (meta->flags & KPAGE_MANAGED) == 0)
+      panic("kalloc cache unmanaged");
+    meta->flags &= ~KPAGE_FREE;
+    meta->refcount = 1;
     popcli();
     return (char*)r;
   }
 
-  acquire(&kmem.lock);
-  n = 0;
-  while(kmem.freelist && n < KALLOC_CPU_CACHE){
-    r = kmem.freelist;
-    kmem.freelist = r->next;
-    batch[n++] = r;
-  }
+  kmem.cache_alloc_misses++;
 
-  // Preserve global freelist pop order despite local LIFO cache.
-  for(i = n - 1; i >= 0; i--)
-    c->kfree_cache[c->kfree_cache_count++] = batch[i];
-
-  if(c->kfree_cache_count > 0)
+  if(kalloc_refill_local(c) > 0 && c->kfree_cache_count > 0){
     r = c->kfree_cache[--c->kfree_cache_count];
-  else
+    __sync_fetch_and_sub(&kmem.free_pages, 1);
+    pa = V2P((char*)r);
+    meta = kpage_meta_pa(pa);
+    if(meta == 0 || (meta->flags & KPAGE_MANAGED) == 0)
+      panic("kalloc refill unmanaged");
+    meta->flags &= ~KPAGE_FREE;
+    meta->refcount = 1;
+  } else {
     r = 0;
-  release(&kmem.lock);
+  }
   popcli();
 
   return (char*)r;
@@ -169,26 +344,84 @@ kalloc(void)
 void
 kalloc_meminfo(uint *total_pages, uint *free_pages)
 {
-  uint n;
-  struct run *r;
-  int i;
-
-  if(kmem.use_lock)
-    acquire(&kmem.lock);
-
   if(total_pages)
     *total_pages = kmem.total_pages;
-  if(free_pages){
-    n = 0;
-    for(r = kmem.freelist; r; r = r->next)
-      n++;
-    // Approximate: per-CPU counts may change concurrently.
-    for(i = 0; i < ncpu; i++)
-      n += cpus[i].kfree_cache_count;
-    *free_pages = n;
+  if(free_pages)
+    *free_pages = kmem.free_pages;
+}
+
+void
+kalloc_stats(struct kalloc_stats_k *out)
+{
+  uint i;
+  uint shared_pages;
+  uint total_pages;
+  uint free_pages;
+
+  if(out == 0)
+    return;
+
+  total_pages = kmem.total_pages;
+  free_pages = kmem.free_pages;
+  shared_pages = 0;
+  for(i = 0; i < PHYSTOP / PGSIZE; i++){
+    if((kpage_meta[i].flags & KPAGE_MANAGED) == 0)
+      continue;
+    if(kpage_meta[i].refcount > 1)
+      shared_pages++;
   }
 
-  if(kmem.use_lock)
-    release(&kmem.lock);
+  out->total_pages = total_pages;
+  out->free_pages = free_pages;
+  out->allocated_pages = (total_pages >= free_pages) ? (total_pages - free_pages) : 0;
+  out->shared_pages = shared_pages;
+  out->alloc_calls = kmem.alloc_calls;
+  out->free_calls = kmem.free_calls;
+  out->cache_alloc_hits = kmem.cache_alloc_hits;
+  out->cache_alloc_misses = kmem.cache_alloc_misses;
+  out->cache_free_inserts = kmem.cache_free_inserts;
+  out->global_refill_batches = kmem.global_refill_batches;
+  out->global_refill_pages = kmem.global_refill_pages;
+  out->global_drain_batches = kmem.global_drain_batches;
+  out->global_drain_pages = kmem.global_drain_pages;
+  out->ref_increments = kmem.ref_increments;
+  out->deferred_frees = kmem.deferred_frees;
+}
+
+void
+kpage_incref(uint pa)
+{
+  struct kpage_meta *meta;
+
+  meta = kpage_meta_pa(pa);
+  if(meta == 0 || (meta->flags & KPAGE_MANAGED) == 0)
+    panic("kpage_incref");
+  if(meta->refcount == 0)
+    panic("kpage_incref free");
+  __sync_fetch_and_add(&meta->refcount, 1);
+  meta->flags &= ~KPAGE_FREE;
+  __sync_fetch_and_add(&kmem.ref_increments, 1);
+}
+
+uint
+kpage_refcount(uint pa)
+{
+  struct kpage_meta *meta;
+
+  meta = kpage_meta_pa(pa);
+  if(meta == 0 || (meta->flags & KPAGE_MANAGED) == 0)
+    return 0;
+  return meta->refcount;
+}
+
+int
+kpage_is_managed(uint pa)
+{
+  struct kpage_meta *meta;
+
+  meta = kpage_meta_pa(pa);
+  if(meta == 0)
+    return 0;
+  return (meta->flags & KPAGE_MANAGED) != 0;
 }
 

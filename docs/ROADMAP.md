@@ -46,7 +46,7 @@ cat /proc/net_dev   # raw interface counter dump, C-locale scaffolding, and corr
 | POSIX compatibility layer | 79% | Broader tty/ioctl compatibility, dynamic `openpty`/`ptsname_r` path, truthful time/stdio tranche work, `getrlimit`/`setrlimit`, minimal `netdb`, shell/text traversal helpers (`fnmatch`, `glob`, `scandir`, `nftw`, `fts`), C-locale scaffolding, and corrected `unlink`/`rmdir` semantics are in-tree; identity/account and stdio follow-on work remain |
 | Userland docs/manpages | 82% | `man` now renders richer markdown and the tree ships 90+ documented utilities, but coverage depth and maintenance discipline still need work |
 | Graphics / framebuffer console | 72% | Framebuffer core, display registry, builtin font/render path, rich `/proc/gfxstats`, virtio-gpu scanout discovery, display-sized framebuffer allocation, display-derived readable boot geometry, stable mirror behavior, ownership plumbing for server7, and recent sync-path speedups are landed; CGA still owns the canonical console path, virtio-gpu still uses whole-frame uploads, and no `/dev/fb0` or `/dev/dri/card0` ABI exists yet |
-| procfs | 81% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`, `/proc/meminfo`, `/proc/ps`, `/proc/loadavg`, `/proc/mountstats`, `/proc/gfxstats`, `/proc/lsof`, `/proc/server7`, `/proc/bdev_table`, `/proc/net_tcp`, `/proc/net_udp`, `/proc/net_dev`; breadth is now solid but per-process drill-down remains sparse |
+| procfs | 82% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`, `/proc/meminfo`, `/proc/ps`, `/proc/loadavg`, `/proc/schedstat`, `/proc/mountstats`, `/proc/gfxstats`, `/proc/lsof`, `/proc/server7`, `/proc/bdev_table`, `/proc/net_tcp`, `/proc/net_udp`, `/proc/net_dev`; breadth is now solid and now includes low-cost scheduler counters, but per-process drill-down remains sparse |
 | Real NICs | 60% | E1000, PCNET, and RTL8111 have full ifnet integration; virtio-net continues to improve; VMXnet3 has a basic polling datapath; netvsc, I219-V, I226-V, and AX88179 PCI remain stub-grade |
 | Device node management | 90% | `devman -s` creates `/dev` nodes from kernel inventory; `/etc/devman.conf` now carries full glob-pattern→mode policy rules; `devman -c` removes stale nodes; `devman -d` daemonizes with double-fork+setsid and periodic cleanup loop; hotplug event fd remains the only open item |
 | Modern storage | 91% | AHCI now has interrupt-driven completions, slot allocation, telemetry, and fault-injection hooks; NVMe correctness hardening complete (polled-only IRQ model, monotonic CID counter, recovery memory-safety, shutdown notification, LBA-size guard), dev-number collision with loop devices fixed, and ext2/ext2fs mount alias validated on `/dev/nda`; NVMe timeout/reset recovery path is in place |
@@ -66,6 +66,7 @@ cat /proc/net_dev   # raw interface counter dump, C-locale scaffolding, and corr
 
 - Kernel-core performance hardening landed: larger core limits, O(1) cache lookups for buffers/inodes, per-CPU allocator caching, faster `mycpu()`, scheduler idle `hlt`, and syscall-return signal fast paths.
 - `top(1)` and `libterm` landed, backed by new `/proc/loadavg` support and per-process `cticks` accounting.
+- Added `/proc/schedstat` with scheduler pass/idle-halt/pick counters to support Track 0 performance follow-through without introducing high-risk scheduler redesign.
 - `abrowse(1)` landed as a text-mode browser layered on the existing HTTP client path.
 - Server7 now has a dedicated boot profile, `/proc/server7` ownership control, and session-aware startup policy scaffolding.
 - Documentation/manpage coverage expanded substantially, with markdown-aware `man(1)` support and a much broader default userland.
@@ -132,6 +133,29 @@ Primary goal: consolidate recent kernel-core and userland wins into a dependable
 - Repeated perf runs stay stable without reintroducing login/procfs regressions.
 - At least one additional low-risk hot-path improvement is either landed or explicitly deferred with data.
 - The current perf utilities remain good enough to compare changes across builds.
+
+**Current status (2026-04-04, redesign reset):**
+- Historical best on this branch before the sparse-fork experiment: `schedperf -n 3` `83/100`, `kallocstress -n 3` `88/100`, `fsperf -n 5` `85-86/100`.
+- Sparse fork (`copyuvm` skip `!PTE_U` pages) was applied, benchmarked, and **reverted** after severe regressions: kallocstress `88→6`, schedperf `83→72`, fsperf `85→78`.
+- Post-revert retest still shows allocator/fork path well below target: `kallocstress` now observed at `31/100` (`fork-copyuvm 69/s`, `pipe-page-churn 65 round/s`, `allocator-reclaim 62 fork/s`).
+- Interpretation: the remaining bottleneck is architectural, not a single regression.  The current allocator is still a single global page freelist with small per-CPU caches, and `fork()` still pays eager full-page copy cost via `copyuvm()`.
+- Focused tmpfs modernization (per-directory hash index, path-walk refactor) remains retained and useful; current weak fsperf subtests stay concentrated in `parallel-writers` and `inode-limit-rate`.
+- **Track 0 direction changes here:** stop chasing allocator/fork speed with local tweaks.  The next step is a real redesign of the page allocator and fork path, staged as:
+  1. per-CPU page magazines/lists with batched refill/drain,
+  2. physical-page refcounts and copy-on-write fork,
+  3. child-list based wait/reap bookkeeping to remove repeated full-table scans,
+  4. only then retune scheduler fairness/scatter if benchmark data still demands it.
+- A full production-kernel-style allocator/VM refactor map is now recorded in `docs/kernel-perf-hardening.md`, covering Linux/FreeBSD/NetBSD-derived design patterns, the auxv6 file-by-file impact surface, and a phased landing plan.
+- Durable anti-context-collapse reference: `docs/allocator-vm-refactor-blueprint.md` now carries the complete subsystem blueprint, invariants, affected files, phase gates, and rollback rules.
+- Phase 1 is now landed and guest-validated: PFN-indexed page metadata, refcount groundwork in `kfree()`, allocator counters, `/proc/vmstat`, and expanded `/proc/meminfo` page-count lines.
+- Validation snapshot for the landed Phase 1 baseline: `kallocstress -n 3` `88/100`, `schedperf -n 3` `83/100`, `fsperf -n 3` `86/100`.
+- Opinion: keep this tranche as the new baseline. The counters are sane, the zero-valued sharing fields are expected before COW, and the system is back in the historical best band.
+- Phase 2 is landed and guest-validated, but currently regresses vs Phase 1 baseline: `kallocstress -n 3` `83/100` (from `88`), `schedperf -n 3` `81/100` (from `83`), `fsperf -n 3` `84/100` (from `86`).
+- Phase 2 interpretation: architecture is correct, policy tuning is not. `cache_alloc_misses=0` with high refill batch activity suggests over-eager refill lock traffic.
+- Phase 2b retune landed and built clean, but triggered a login-path kernel panic in guest; the 2b policy delta was rolled back while retaining Phase 2 architecture.
+- Post-rollback guest validation is stable and passing: `kallocstress -n 3` `82/100` avg (82-83), `schedperf -n 3` `81/100` avg (80-82), `fsperf -n 3` `83/100` avg (81-85).
+- Post-rollback `/proc/vmstat` remains consistent with prior interpretation (`cache_alloc_hits 7134`, `cache_alloc_misses 0`, `global_refill_batches 438`, `global_drain_batches 321`).
+- Next immediate action: keep rollback state as safety baseline, then design a narrower Phase 2c retune with explicit guardrails before moving to Phase 3 COW groundwork.
 
 ### Tranche A - Storage reliability hardening
 - Virtio-blk: keep bounded retry policy but tighten transient-vs-fatal error accounting and operator-visible diagnostics.

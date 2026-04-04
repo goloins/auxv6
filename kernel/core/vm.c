@@ -332,6 +332,21 @@ setpteu(pde_t *pgdir, char *uva)
   *pte |= PTE_U;
 }
 
+// Return mapping state for a user VA in the given page table:
+// 0 = not present, 1 = present but !PTE_U, 2 = present and PTE_U.
+int
+user_page_state(pde_t *pgdir, char *uva)
+{
+  pte_t *pte;
+
+  pte = walkpgdir(pgdir, uva, 0);
+  if(pte == 0 || ((*pte & PTE_P) == 0))
+    return 0;
+  if(*pte & PTE_U)
+    return 2;
+  return 1;
+}
+
 // Given a parent process's page table, create a copy
 // of it for a child.
 pde_t*
@@ -345,10 +360,9 @@ copyuvm(pde_t *pgdir, uint sz)
   if((d = setupkvm()) == 0)
     return 0;
   for(i = 0; i < sz; i += PGSIZE){
-    if((pte = walkpgdir(pgdir, (void *) i, 0)) == 0)
-      panic("copyuvm: pte should exist");
-    if(!(*pte & PTE_P))
-      panic("copyuvm: page not present");
+    pte = walkpgdir(pgdir, (void *)i, 0);
+    if(pte == 0 || ((*pte & PTE_P) == 0))
+      continue;
     pa = PTE_ADDR(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)

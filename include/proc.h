@@ -14,6 +14,9 @@ struct cpu {
   int intena;                  // Were interrupts enabled before pushcli?
   struct proc *proc;           // The process running on this cpu or null
   int sched_last;              // Index hint: start next scheduler scan here
+  uint sched_passes;           // Number of scheduler outer-loop passes
+  uint sched_idle_halts;       // Number of idle hlt transitions
+  uint sched_picks;            // Number of RUNNABLE selections dispatched
   struct run *kfree_cache[KALLOC_CPU_CACHE]; // Per-CPU free-page stash
   int kfree_cache_count;       // Number of pages in kfree_cache
 };

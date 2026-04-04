@@ -2,6 +2,12 @@
 #define KSTACKSIZE 4096  // size of per-process kernel stack
 #define NCPU          8  // maximum number of CPUs
 #define KALLOC_CPU_CACHE 32  // per-CPU cached free pages before global flush
+// Phase 2 allocator policy: explicit per-CPU watermarks + batched global moves.
+#define KALLOC_PCPU_LOW_WATER   8   // try to keep at least this many local pages
+#define KALLOC_PCPU_HIGH_WATER 28   // start draining when local cache reaches this
+#define KALLOC_REFILL_BATCH    16   // pages pulled from global on local refill
+#define KALLOC_DRAIN_BATCH     16   // max pages returned to global per drain
+#define KALLOC_GLOBAL_RESERVE 256   // pages to leave globally available when possible
 #define NOFILE       32  // open files per process
 #define NFILE       256  // open files per system
 #define NINODE      200  // maximum number of active i-nodes

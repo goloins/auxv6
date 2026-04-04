@@ -74,6 +74,13 @@ behavior in the absence of alternate signal stacks.
 `fork()` copies `stack_top` and `stack_bot`, so the child inherits the same
 current stack-growth position and remaining growth window.
 
+Fork behavior (modernized):
+
+- Child address spaces are now copied sparsely: `copyuvm()` skips non-user
+   (`!PTE_U`) mappings, including stack reserve/guard pages.
+- Stack-growth faults in children allocate one page on demand when the next
+   guard-band page is absent, preserving one-page-at-a-time growth semantics.
+
 ## Memory Cost
 
 Per process reserved stack region:

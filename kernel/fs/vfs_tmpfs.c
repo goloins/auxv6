@@ -10,11 +10,13 @@
 
 #define TMPFS_PAGE_SIZE 4096
 #define TMPFS_NAME_MAX DIRSIZ
+#define TMPFS_DHASH_SIZE 32
 
 struct tmpfs_dirent {
   char name[TMPFS_NAME_MAX + 1];
   struct tmpfs_node *node;
   struct tmpfs_dirent *next;
+  struct tmpfs_dirent *hash_next;
 };
 
 struct tmpfs_node {
@@ -29,6 +31,7 @@ struct tmpfs_node {
   uint size;
   struct tmpfs_node *parent;
   struct tmpfs_dirent *children;
+  struct tmpfs_dirent *child_hash[TMPFS_DHASH_SIZE];
   struct tmpfs_page *pages;
   char *symlink;
   uint symlink_len;
@@ -66,6 +69,7 @@ static int tmpfs_parse_size(const char *data, uint *out);
 static struct tmpfs_page* tmpfs_page_lookup(struct tmpfs_node *node, uint index);
 static int tmpfs_page_get(struct tmpfs_node *node, uint index, struct tmpfs_page **out);
 static struct tmpfs_node* tmpfs_find_node(struct tmpfs_node *node, uint inum);
+static uint tmpfs_name_hash(char *name);
 
 static struct tmpfs_mount_data*
 tmpfs_data_for_dev(uint dev)
@@ -189,14 +193,30 @@ static struct tmpfs_dirent*
 tmpfs_dirent_lookup(struct tmpfs_node *dir, char *name)
 {
   struct tmpfs_dirent *de;
+  uint h;
 
   if(dir == 0 || name == 0)
     return 0;
-  for(de = dir->children; de; de = de->next){
+  h = tmpfs_name_hash(name) & (TMPFS_DHASH_SIZE - 1);
+  for(de = dir->child_hash[h]; de; de = de->hash_next){
     if(strncmp(de->name, name, TMPFS_NAME_MAX + 1) == 0)
       return de;
   }
   return 0;
+}
+
+static uint
+tmpfs_name_hash(char *name)
+{
+  uint h;
+  int i;
+
+  h = 2166136261u;
+  for(i = 0; name && name[i]; i++){
+    h ^= (uint)(uchar)name[i];
+    h *= 16777619u;
+  }
+  return h;
 }
 
 static int
@@ -204,6 +224,7 @@ tmpfs_dirent_add(struct tmpfs_node *dir, char *name, struct tmpfs_node *node)
 {
   struct tmpfs_dirent *de;
   int nlen;
+  uint h;
 
   if(dir == 0 || name == 0 || node == 0)
     return -1;
@@ -219,6 +240,9 @@ tmpfs_dirent_add(struct tmpfs_node *dir, char *name, struct tmpfs_node *node)
   memset(de, 0, sizeof(*de));
   safestrcpy(de->name, name, sizeof(de->name));
   de->node = node;
+  h = tmpfs_name_hash(name) & (TMPFS_DHASH_SIZE - 1);
+  de->hash_next = dir->child_hash[h];
+  dir->child_hash[h] = de;
   de->next = dir->children;
   dir->children = de;
   return 0;
@@ -229,6 +253,9 @@ tmpfs_dirent_remove(struct tmpfs_node *dir, char *name, struct tmpfs_node **out)
 {
   struct tmpfs_dirent *prev;
   struct tmpfs_dirent *de;
+  struct tmpfs_dirent *hprev;
+  struct tmpfs_dirent *hde;
+  uint h;
 
   if(out)
     *out = 0;
@@ -236,12 +263,26 @@ tmpfs_dirent_remove(struct tmpfs_node *dir, char *name, struct tmpfs_node **out)
     return -1;
 
   prev = 0;
+  h = tmpfs_name_hash(name) & (TMPFS_DHASH_SIZE - 1);
+  hprev = 0;
+  for(hde = dir->child_hash[h]; hde; hde = hde->hash_next){
+    if(strncmp(hde->name, name, TMPFS_NAME_MAX + 1) == 0)
+      break;
+    hprev = hde;
+  }
+  if(hde == 0)
+    return -1;
+
   for(de = dir->children; de; de = de->next){
     if(strncmp(de->name, name, TMPFS_NAME_MAX + 1) == 0){
       if(prev)
         prev->next = de->next;
       else
         dir->children = de->next;
+      if(hprev)
+        hprev->hash_next = hde->hash_next;
+      else
+        dir->child_hash[h] = hde->hash_next;
       if(out)
         *out = de->node;
       kfree((char*)de);
@@ -497,7 +538,6 @@ tmpfs_walk(struct vfs *fs, char *path, int nameiparent, char *name)
 {
   struct tmpfs_mount_data *md;
   struct tmpfs_node *node;
-  struct inode *ip;
   int i;
 
   if(fs == 0 || path == 0)
@@ -508,9 +548,6 @@ tmpfs_walk(struct vfs *fs, char *path, int nameiparent, char *name)
     return 0;
 
   node = md->root;
-  ip = tmpfs_make_inode(md, node);
-  if(ip == 0)
-    return 0;
 
   if(path[0] == '/')
     path++;
@@ -518,7 +555,7 @@ tmpfs_walk(struct vfs *fs, char *path, int nameiparent, char *name)
   while(*path){
     char elem[TMPFS_NAME_MAX + 1];
     struct tmpfs_dirent *de;
-    struct inode *next;
+    char *rest;
 
     while(*path == '/')
       path++;
@@ -528,19 +565,23 @@ tmpfs_walk(struct vfs *fs, char *path, int nameiparent, char *name)
     for(i = 0; i < TMPFS_NAME_MAX && path[i] && path[i] != '/'; i++)
       elem[i] = path[i];
     if(path[i] && path[i] != '/'){
-      iput(ip);
       return 0;
     }
     elem[i] = 0;
 
     while(path[i] && path[i] != '/')
       i++;
+    rest = path + i;
     path += i;
 
-    if(nameiparent && *path == 0){
-      if(name)
-        safestrcpy(name, elem, TMPFS_NAME_MAX + 1);
-      return ip;
+    if(nameiparent){
+      while(*rest == '/')
+        rest++;
+      if(*rest == 0){
+        if(name)
+          safestrcpy(name, elem, TMPFS_NAME_MAX + 1);
+        return tmpfs_make_inode(md, node);
+      }
     }
 
     if(strcmp(elem, ".") == 0)
@@ -548,38 +589,26 @@ tmpfs_walk(struct vfs *fs, char *path, int nameiparent, char *name)
     if(strcmp(elem, "..") == 0){
       if(node->parent)
         node = node->parent;
-      iput(ip);
-      ip = tmpfs_make_inode(md, node);
-      if(ip == 0)
-        return 0;
       continue;
     }
 
-    if(node->type != T_DIR){
-      iput(ip);
+    if(node->type != T_DIR)
       return 0;
-    }
 
     de = tmpfs_dirent_lookup(node, elem);
-    if(de == 0){
-      iput(ip);
+    if(de == 0)
       return 0;
-    }
 
-    next = tmpfs_make_inode(md, de->node);
-    iput(ip);
-    ip = next;
     node = de->node;
-    if(ip == 0)
-      return 0;
   }
 
   if(nameiparent){
-    iput(ip);
+    if(name)
+      name[0] = 0;
     return 0;
   }
 
-  return ip;
+  return tmpfs_make_inode(md, node);
 }
 
 static struct inode*

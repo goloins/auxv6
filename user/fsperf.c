@@ -25,6 +25,117 @@ static int perf_score_max = 0;
 
 #define FSPERF_PROFILE "2026-04-03-r2"
 
+#define MOUNTSTATS_BUF 8192
+
+static int
+path_is_mount_prefix_len(const char *mountp, int mlen, const char *target)
+{
+  int i;
+
+  if(mountp == 0 || target == 0 || mlen <= 0)
+    return 0;
+
+  if(mlen == 1 && mountp[0] == '/')
+    return target[0] == '/';
+
+  for(i = 0; i < mlen; i++){
+    if(target[i] != mountp[i])
+      return 0;
+  }
+
+  return target[mlen] == '\0' || target[mlen] == '/';
+}
+
+static int
+copy_token(char *dst, int dsz, const char *src, int len)
+{
+  int i;
+
+  if(dsz <= 0)
+    return -1;
+  if(len >= dsz)
+    len = dsz - 1;
+  for(i = 0; i < len; i++)
+    dst[i] = src[i];
+  dst[len] = '\0';
+  return len;
+}
+
+/* Best-effort parse of /proc/mountstats. Returns 0 on success. */
+static int
+detect_tmp_backend(char *fstype, int fstype_sz)
+{
+  char buf[MOUNTSTATS_BUF + 1];
+  int fd;
+  int n;
+  int i;
+  int best_len;
+
+  if(fstype == 0 || fstype_sz <= 0)
+    return -1;
+  fstype[0] = '\0';
+
+  fd = open("/proc/mountstats", O_RDONLY);
+  if(fd < 0)
+    return -1;
+  n = read(fd, buf, MOUNTSTATS_BUF);
+  close(fd);
+  if(n <= 0)
+    return -1;
+  if(n > MOUNTSTATS_BUF)
+    n = MOUNTSTATS_BUF;
+  buf[n] = '\0';
+
+  i = 0;
+  best_len = -1;
+  while(i < n){
+    int ls = i;
+    int le;
+    int tok = 0;
+    int j;
+    int in_tok;
+    int p_s = -1, p_e = -1;
+    int t_s = -1, t_e = -1;
+
+    while(i < n && buf[i] != '\n')
+      i++;
+    le = i;
+    if(i < n && buf[i] == '\n')
+      i++;
+
+    in_tok = 0;
+    for(j = ls; j < le; j++){
+      char c = buf[j];
+      if(c == ' ' || c == '\t'){
+        in_tok = 0;
+        continue;
+      }
+      if(!in_tok){
+        tok++;
+        in_tok = 1;
+        if(tok == 2)
+          p_s = j;
+        else if(tok == 3)
+          t_s = j;
+      }
+      if(tok == 2)
+        p_e = j + 1;
+      else if(tok == 3)
+        t_e = j + 1;
+    }
+
+    if(p_s >= 0 && p_e > p_s && t_s >= 0 && t_e > t_s){
+      int plen = p_e - p_s;
+      if(path_is_mount_prefix_len(&buf[p_s], plen, "/tmp") && plen > best_len){
+        best_len = plen;
+        copy_token(fstype, fstype_sz, &buf[t_s], t_e - t_s);
+      }
+    }
+  }
+
+  return best_len >= 0 ? 0 : -1;
+}
+
 static int
 ops_per_sec(int ops, uint start_ticks, uint end_ticks)
 {
@@ -642,11 +753,20 @@ main(int argc, char *argv[])
 
   int run_scores[MAX_RUNS];
   int total_passed = 0, total_failed_runs = 0;
+  char tmpfs_type[32];
 
   dprintf(1, "fsperf: inode-cache and buffer-cache stress\n");
   dprintf(1, "  NINODE=%d NFILE=%d NOFILE=%d NBUF=%d\n",
           NINODE, NFILE, NOFILE, NBUF);
   dprintf(1, "  profile=%s\n", FSPERF_PROFILE);
+
+  if(detect_tmp_backend(tmpfs_type, sizeof(tmpfs_type)) == 0){
+    dprintf(1, "  /tmp backend=%s\n", tmpfs_type);
+    if(strcmp(tmpfs_type, "tmpfs") != 0)
+      dprintf(1, "  note: profile targets assume /tmp on tmpfs; backend mismatch may reduce throughput\n");
+  } else {
+    dprintf(1, "  /tmp backend=unknown (could not parse /proc/mountstats)\n");
+  }
 
   // Ensure /tmp exists (tmpfs or similar)
   mkdir("/tmp");

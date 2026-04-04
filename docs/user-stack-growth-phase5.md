@@ -38,6 +38,15 @@ At exec time, the kernel pre-allocates the full stack region:
 - Only the top `USER_STACK_PAGES` pages are user-accessible (`PTE_U`).
 - Guard + headroom pages are mapped but inaccessible (`clearpteu`).
 
+Fork follow-up modernization:
+
+- `copyuvm()` now copies only user-accessible (`PTE_U`) pages.
+- Non-user stack reserve/guard mappings are skipped in the child so forked
+	address spaces stay sparse.
+- `proc_try_grow_stack()` now handles both cases:
+	- pre-mapped reserve page (`!PTE_U`) -> promote with `setpteu()`
+	- sparse absent page -> allocate/map one page on fault
+
 This keeps page-fault growth simple and deterministic (no `kalloc()` in fault
 path).
 

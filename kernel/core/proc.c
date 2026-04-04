@@ -127,6 +127,30 @@ proc_count_active(int *nrunning, int *ntotal)
   *ntotal   = t;
 }
 
+/* Return best-effort scheduler activity totals across all CPUs.
+ * Values are monotonic and sampled locklessly for low overhead. */
+void
+proc_get_sched_stats(uint *passes, uint *idle_halts, uint *picks)
+{
+  int i;
+  uint p;
+  uint h;
+  uint k;
+
+  p = 0;
+  h = 0;
+  k = 0;
+  for(i = 0; i < ncpu; i++){
+    p += cpus[i].sched_passes;
+    h += cpus[i].sched_idle_halts;
+    k += cpus[i].sched_picks;
+  }
+
+  *passes = p;
+  *idle_halts = h;
+  *picks = k;
+}
+
 static int
 valid_signo(int signo)
 {
@@ -297,11 +321,9 @@ proc_check_alarms(uint current_ticks)
 // stack has already reached USER_STACK_MAX_PAGES.
 //
 // Implementation notes:
-//   - At exec time, (GUARD + MAX) pages are pre-allocated contiguously below
-//     the initial stack.  All but the initial USER_STACK_PAGES usable pages
-//     are marked !PTE_U.  Growth simply makes the current guard page user-
-//     accessible and slides the logical guard pointer one page lower.
-//   - No kalloc() is needed here; every page is already allocated.
+//   - For pre-mapped reserve pages, growth flips !PTE_U -> PTE_U.
+//   - For sparse mappings (e.g. fork child where reserve pages were skipped),
+//     growth allocates/maps the next page on demand.
 //   - After changing PTE flags, the TLB for this process is invalidated via
 //     switchuvm() so the next user instruction sees the updated mapping.
 int
@@ -309,6 +331,7 @@ proc_try_grow_stack(struct proc *p, uint fault_addr)
 {
   uint stack_guard;
   uint pages_used;
+  int pst;
 
   if(p->stack_top == 0 || p->stack_bot == 0)
     return 0;
@@ -328,8 +351,19 @@ proc_try_grow_stack(struct proc *p, uint fault_addr)
     return 0;  // Hard ceiling: deliver SIGSEGV
   }
 
-  // Make the guard page user-accessible — it becomes the new bottom of stack.
-  setpteu(p->pgdir, (char*)stack_guard);
+  pst = user_page_state(p->pgdir, (char*)stack_guard);
+  if(pst == 1){
+    // Pre-mapped but inaccessible reserve page.
+    setpteu(p->pgdir, (char*)stack_guard);
+  } else if(pst == 0){
+    // Sparse child mapping: allocate one stack page on demand.
+    if(allocuvm(p->pgdir, stack_guard, stack_guard + PGSIZE) == 0)
+      return 0;
+  } else {
+    // Already user-accessible: not a growth fault candidate.
+    return 0;
+  }
+
   p->stack_bot = stack_guard;
 
   STACKDBG("stack: pid %d grew stack to 0x%x (%d/%d pages used)\n",
@@ -1368,10 +1402,14 @@ scheduler(void)
   int i, start, found;
   c->proc = 0;
   c->sched_last = 0;
+  c->sched_passes = 0;
+  c->sched_idle_halts = 0;
+  c->sched_picks = 0;
   
   for(;;){
     // Enable interrupts on this processor.
     sti();
+    c->sched_passes++;
 
     found = 0;
 
@@ -1388,6 +1426,7 @@ scheduler(void)
 
       // Advance hint past this process so the next trip starts after it.
       c->sched_last = ((start + i + 1) % NPROC);
+      c->sched_picks++;
 
       c->proc = p;
       switchuvm(p);
@@ -1411,6 +1450,7 @@ scheduler(void)
       release(&ptable.lock);
       // sti was called above; hlt suspends the CPU until the next
       // interrupt, at which point the outer loop resumes.
+      c->sched_idle_halts++;
       asm volatile("hlt");
     } else {
       release(&ptable.lock);

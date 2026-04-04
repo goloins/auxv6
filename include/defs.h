@@ -31,6 +31,24 @@ struct mount;
 struct vfs_mount_info;
 struct vnode;
 
+struct kalloc_stats_k {
+	uint total_pages;
+	uint free_pages;
+	uint allocated_pages;
+	uint shared_pages;
+	uint alloc_calls;
+	uint free_calls;
+	uint cache_alloc_hits;
+	uint cache_alloc_misses;
+	uint cache_free_inserts;
+	uint global_refill_batches;
+	uint global_refill_pages;
+	uint global_drain_batches;
+	uint global_drain_pages;
+	uint ref_increments;
+	uint deferred_frees;
+};
+
 // bio.c
 void            binit(void);
 struct buf*     bread(uint, uint);
@@ -328,6 +346,10 @@ void            kfree(char*);
 void            kinit1(void*, void*);
 void            kinit2(void*, void*);
 void            kalloc_meminfo(uint *total_pages, uint *free_pages);
+void            kalloc_stats(struct kalloc_stats_k *out);
+void            kpage_incref(uint pa);
+uint            kpage_refcount(uint pa);
+int             kpage_is_managed(uint pa);
 
 // kbd.c
 void            kbdintr(void);
@@ -407,6 +429,7 @@ int             proc_try_grow_stack(struct proc *p, uint fault_addr);
 void            proc_tick_loadavg(void);
 void            proc_get_loadavg(uint *la1, uint *la5, uint *la15);
 void            proc_count_active(int *nrunning, int *ntotal);
+void            proc_get_sched_stats(uint *passes, uint *idle_halts, uint *picks);
 int             proc_deliver_signal(struct proc *p);
 void            proc_handle_signals_on_return(struct proc *p);
 struct cpu*     mycpu(void);
@@ -534,6 +557,7 @@ int             copyout(pde_t*, uint, void*, uint);
 int             copyin(pde_t*, void*, uint, uint);
 void            clearpteu(pde_t *pgdir, char *uva);
 void            setpteu(pde_t *pgdir, char *uva);
+int             user_page_state(pde_t *pgdir, char *uva);
 
 // socket.c
 void            socket_init(void);

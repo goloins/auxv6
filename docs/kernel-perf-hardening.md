@@ -347,22 +347,44 @@ For every performance-target iteration, update all three in the same commit:
 
 This prevents score drift where binaries, docs, and expected outcomes diverge.
 
-### Current Baseline Snapshot (2026-04-03)
+### Current Baseline Snapshot (2026-04-04)
 
-Best confirmed run (stable host):
-- `schedperf`: `89/100`, `8 passed`, `0 failed`
-- `fsperf`: `85/100`, `8 passed`, `0 failed`
-- `kallocstress`: `90/100`, `3 passed`, `0 failed`
+Latest confirmed results are now best read as a phase timeline:
+
+- Historical best before sparse-fork experiment:
+   - `schedperf -n 3`: `83/100` avg, `24 passed`, `0 failed`
+   - `fsperf -n 5`: `86/100` avg (min 86, max 87), `40 passed`, `0 failed`
+   - `kallocstress -n 3`: `88/100` avg, `9 passed`, `0 failed`
+- Sparse-fork experiment (reverted):
+   - Severe regressions (`kallocstress 88->6`, `schedperf 83->72`, `fsperf 85->78`)
+- Phase 1 allocator groundwork baseline:
+   - `kallocstress -n 3`: `88/100` avg
+   - `schedperf -n 3`: `83/100` avg
+   - `fsperf -n 3`: `86/100` avg
+- Phase 2 first policy:
+   - `kallocstress -n 3`: `83/100` avg
+   - `schedperf -n 3`: `81/100` avg
+   - `fsperf -n 3`: `84/100` avg
+- Phase 2b retune outcome:
+   - Build clean but caused a login-path panic in guest; rolled back.
+- Current stable post-rollback checkpoint:
+   - `kallocstress -n 3`: `82/100` avg (min 82, max 83)
+   - `schedperf -n 3`: `81/100` avg (min 80, max 82)
+   - `fsperf -n 3`: `83/100` avg (min 81, max 85)
+   - `/proc/vmstat` key counters: `cache_alloc_hits 7134`, `cache_alloc_misses 0`,
+     `global_refill_batches 438`, `global_drain_batches 321`
 
 Scores show meaningful run-to-run variance (~5–10 pts) driven by host scheduler
 load rather than code changes.  Use `schedperf -n 3` / `fsperf -n 3` /
 `kallocstress -n 3` to get an averaged result before drawing conclusions (see
 § Test Binaries below).  The threshold target for all three tools is `>= 75/100`.
 
-Known weak-but-passing areas to track for future tightening:
-- `fork-storm` (schedperf): 300 fork/s vs 600 target — O(NPROC) `wakeup` scan
-- `parallel-writers` throughput (fsperf)
-- `inode-limit-rate` throughput (fsperf)
+Known weak areas to track for future tightening:
+- `fork-storm` (schedperf): ~165-184 fork/s vs 600 target
+- `sched-spread` (schedperf): ~1523-1600 yield/s vs 2200 target
+- `parallel-writers` throughput (fsperf): ~152-188 KB/s vs 900 target
+- `inode-limit-rate` throughput (fsperf): ~136-139 open/s vs 600 target
+- `pipe-page-churn` (kallocstress): ~165-172 round/s vs 320 target
 
 Recorded experimental result (flush burst=4, reverted):
 - `kallocstress`: 93/100 (+3), `schedperf`: 90/100 (+1), `fsperf`: 55/100 (−30)
@@ -376,6 +398,14 @@ Stability note from this iteration:
 - A follow-up regression in `/proc/mountstats` generation (incorrect buffer-size
    accounting after refactor) was fixed; `cat /proc/mountstats` now reads
    correctly and login MOTD token expansion reports valid free-mem/free-disk data.
+
+Track 0 follow-through update:
+- Added `/proc/schedstat` to expose low-overhead scheduler activity counters:
+   - `passes`: scheduler outer-loop iterations across all CPUs
+   - `idle_halts`: number of idle `hlt` transitions across all CPUs
+   - `picks`: RUNNABLE selections dispatched by the scheduler
+- Counters are maintained per-CPU in `struct cpu` and aggregated locklessly for
+   read-side observability, keeping runtime overhead minimal.
 
 ---
 
@@ -407,6 +437,363 @@ $ fsperf
 $ kallocstress
 ```
 Each prints `[PASS]` / `[FAIL]` per sub-test and a final summary.
+
+`fsperf` now also prints the detected `/tmp` backend from `/proc/mountstats`
+and emits a note when it is not `tmpfs`, because its profile targets assume
+an in-memory tmpfs workload.
+
+Follow-up fix: backend detection now parses mount-path tokens by explicit
+token length (instead of relying on accidental null termination), which fixes
+false `backend=unknown` reports when `/proc/mountstats` lines are space-delimited.
+
+Validation note: post-fix guest runs now report `/tmp backend=tmpfs` as expected.
+
+Focused fsperf follow-up (2026-04-04):
+- tmpfs directory entry lookup now uses a per-directory hash index
+   (`TMPFS_DHASH_SIZE=32`) in addition to the existing linked list used for
+   directory iteration order.
+- `tmpfs_dirent_lookup()` is now hash-chain based instead of linear scans over
+   all children; `tmpfs_dirent_add()`/`tmpfs_dirent_remove()` now maintain both
+   list and hash links.
+- tmpfs pathname walk now traverses in-memory tmpfs nodes directly and creates
+   an inode object only for the final resolved node/parent result, avoiding
+   per-component `tmpfs_make_inode()`/`iput()` churn on hot open/create paths.
+- Goal: reduce create/open name-lookup cost in write-heavy and open-scaling
+   tests (`parallel-writers`, `inode-limit-rate`) without changing scheduler or
+   allocator behavior.
+
+Fork/VM regression and revert (2026-04-04, post-run):
+
+Sparse `copyuvm()` (skip `!PTE_U` guard/reserve pages) was applied and
+rebuilt.  Guest benchmark run revealed severe regressions:
+   - kallocstress:  88/100 → 6/100  (fork-copyuvm 16/s, pipe-page-churn 15/s)
+   - schedperf:     83/100 → 72/100 (fork-storm 71/s was ~390/s)
+   - fsperf:        85/100 → 78/100
+
+Root cause: with sparse fork, child processes lack pre-mapped guard/reserve
+stack pages.  During child execution (libc exit path, atexit handlers, stdio
+flush), deeper stack frames trigger repeated page-fault → allocuvm cycles in
+the trap handler, with a full switchuvm()/TLB flush per fault.  This per-fault
+allocuvm path is ~10× slower than flipping a pre-mapped PTE.
+
+Action: reverted `copyuvm()` to dense (copy all PTE_P pages).  Dense fork
+keeps all guard/reserve pages pre-allocated so stack growth stays on the fast
+setpteu path.  `proc_try_grow_stack()` dual-mode is retained as a defensive
+fallback; the `pst==0` branch is now dead code under normal operation.
+
+**Next correct step for fork speedup: copy-on-write fork.**  COW eliminates
+all page-copy work at fork time; children share physical pages read-only until
+they write (copy-on-write fault).  That is the real path to Linux/BSD parity
+here, not sparse pre-alloc skipping.
+
+Allocator/fork redesign reset (2026-04-04, post-revert retest):
+
+After reverting sparse fork, `kallocstress` improved from `6/100` to `31/100`,
+but this is still far below target and confirms that the remaining problem is
+structural rather than a single leaked-page bug or one bad branch in `copyuvm()`.
+
+What the current numbers mean:
+- `fork-copyuvm 69/s`: eager address-space duplication is still too expensive.
+- `pipe-page-churn 65 round/s`: page allocation/free is still globally
+   serialized enough to dominate a pipe-heavy loop.
+- `allocator-reclaim 62 fork/s`: reclaim correctness is intact, but the free
+   path is too expensive under repeated fork/exit churn.
+
+Current allocator architecture limitations:
+- `kernel/core/kalloc.c` still uses one global freelist protected by
+   `kmem.lock`.
+- The per-CPU cache is only a small fixed stash (`KALLOC_CPU_CACHE=32`), not a
+   true per-CPU allocator; empty-cache refill and flush still funnel through the
+   single global list.
+- `fork()` in `kernel/core/proc.c` still calls dense `copyuvm()` and pays the
+   full copy cost before the child even runs.
+
+Reset plan for modernity:
+1. Replace the single global free-page list with real per-CPU page magazines or
+    per-CPU free lists, using batched steal/rebalance only when a CPU-local pool
+    crosses low/high watermarks.
+2. Add physical-page reference counts so page-table entries can safely share
+    backing pages across address spaces.
+3. Convert `fork()` from eager `copyuvm()` to copy-on-write mappings plus a
+    write-fault slow path.
+4. Rework child wait/reap bookkeeping around per-parent child lists so fork
+    storms stop paying repeated full `ptable.proc[]` scans.
+5. Re-benchmark only after those structural changes land; do not spend more
+    time on micro-tuning cache flush batch sizes or sparse pre-allocation tricks.
+
+Production-kernel allocator/VM refactor map (2026-04-04):
+
+Primary durable reference: see `docs/allocator-vm-refactor-blueprint.md` for the
+complete phase plan, invariants, risk model, validation matrix, and file-by-file
+impact map.  This section remains the condensed summary; the blueprint document
+is the anti-context-collapse source of truth.
+
+Phase 1 landing status (2026-04-04):
+- landed in-tree
+- kernel build clean
+- guest perf validation passed:
+   - `kallocstress -n 3`: `88/100` avg (min 88, max 89)
+   - `schedperf -n 3`: `83/100` avg
+   - `fsperf -n 3`: `86/100` avg (min 86, max 87)
+- scope landed:
+   - PFN-indexed page metadata in `kernel/core/kalloc.c`
+   - managed-page refcount groundwork (`kfree()` only returns pages to free lists
+      at refcount zero)
+   - allocator counters for alloc/free, per-CPU cache hits/misses, and batch
+      refill/drain activity
+   - `kalloc_stats()` helper plus page-refcount helper API
+   - new `/proc/vmstat`
+   - expanded `/proc/meminfo` with page-count lines
+- scope not yet landed:
+   - copy-on-write fork
+   - lazy heap allocation
+   - typed object allocator
+   - child-list wait/reap conversion
+
+Phase 1 opinion:
+- This tranche is a success and is worth keeping exactly as the new baseline.
+- It restored `kallocstress` from the degraded post-revert state back to the
+   historical best band without harming `schedperf` or `fsperf`.
+- The counters are already informative and internally consistent.
+
+Observed first `/proc/vmstat` sample interpretation:
+- `pages_shared 0`, `ref_increments 0`, and `deferred_frees 0` are expected in a
+   pre-COW, pre-shared-page kernel.
+- `cache_alloc_hits 6449` vs `cache_alloc_misses 201` indicates the common
+   single-page path is already mostly local after boot.
+- `free_calls` greatly exceeding `alloc_calls` is expected because the counter
+   includes initial `freerange()` population and subsequent release traffic.
+- The important outcome is that the counters look sane and the benchmark suite
+   returned to the expected score band.
+
+Phase 2 launch status (2026-04-04):
+- landed in-tree, build clean, guest validation complete with regression
+- scope landed:
+   - explicit per-CPU allocator policy knobs in `include/param.h`
+      (`KALLOC_PCPU_LOW_WATER`, `KALLOC_PCPU_HIGH_WATER`,
+      `KALLOC_REFILL_BATCH`, `KALLOC_DRAIN_BATCH`, `KALLOC_GLOBAL_RESERVE`)
+   - explicit local refill/drain helpers in `kernel/core/kalloc.c`
+   - batched local<->global page movement on watermark thresholds
+   - external allocator API unchanged (`kalloc`, `kfree`)
+- expected immediate observable effects in `/proc/vmstat` after load:
+   - lower `cache_alloc_misses` ratio
+   - fewer but larger `global_refill_pages`/`global_drain_pages` movements
+   - stable `pages_free` accounting under stress loops
+
+First Phase 2 validation results (2026-04-04):
+- `/proc/vmstat` sample:
+   - `cache_alloc_hits 6666`
+   - `cache_alloc_misses 0`
+   - `global_refill_batches 411`
+   - `global_refill_pages 6576`
+   - `global_drain_batches 294`
+   - `global_drain_pages 4704`
+- Benchmarks vs Phase 1 baseline:
+   - `kallocstress -n 3`: `83/100` (was `88/100`)
+   - `schedperf -n 3`: `81/100` (was `83/100`)
+   - `fsperf -n 3`: `84/100` (was `86/100`)
+
+Interpretation:
+- The current refill policy appears too aggressive: it avoids misses almost
+   entirely (`cache_alloc_misses=0`) but likely buys that by taking the global
+   allocator lock too often while local cache still has enough pages.
+- Result: all tests still pass thresholds, but with a measurable across-the-board
+   throughput drop.
+
+Action before Phase 3:
+- Retune Phase 2 low/high water and refill trigger policy; keep the architecture
+   and observability, but reduce eager refill lock traffic.
+
+Phase 2b retune (2026-04-04) now in-tree:
+- build clean
+- guest validation pending
+- exact retune applied:
+   - demand-driven refill (only when local cache depletes)
+   - reduced `KALLOC_REFILL_BATCH` and `KALLOC_DRAIN_BATCH`
+   - reduced `KALLOC_PCPU_LOW_WATER`
+   - adjusted `KALLOC_PCPU_HIGH_WATER`
+
+This section summarizes the public design patterns used by modern production
+Unix kernels and translates them into a concrete auxv6 refactor map.  The goal
+is not to clone Linux, FreeBSD, NetBSD, or OpenBSD internals verbatim; it is to
+adopt the architectural common denominators they all converged on.
+
+Public reference points reviewed for this reset:
+- Linux MM docs: physical memory, page tables, page-table helper semantics.
+- FreeBSD VM handbook and UMA(9): vm_page-backed VM plus slab/zone allocator.
+- NetBSD UVM(9): page database, fault path, pagedaemon, copy-on-write aware VM.
+
+Common production patterns across those systems:
+
+1. **A real page database exists.**
+    Each physical page has metadata (`struct page`, `vm_page_t`, etc.) tracking
+    refcount, state, queue membership, and allocator/fault bookkeeping.
+
+2. **The page allocator fast path is per-CPU; the global allocator is batched.**
+    Frequent single-page alloc/free operations hit per-CPU caches or page lists.
+    Interaction with the shared allocator happens in refill/drain batches, not on
+    every allocation.
+
+3. **Kernel object allocation is not the same thing as page allocation.**
+    Production kernels separate raw page management from typed object allocators
+    (slab/SLUB/SLOB/UMA pools/zones).  Small kernel objects do not each consume a
+    full physical page.
+
+4. **`fork()` does not eagerly copy all user pages.**
+    It installs shared read-only mappings and relies on a copy-on-write fault path
+    to allocate a private page only when a writer actually modifies data.
+
+5. **Page faults are first-class VM operations.**
+    Fault handling distinguishes demand-zero, copy-on-write, protection faults,
+    and invalid accesses rather than treating all faults as hard failures with a
+    tiny stack-growth exception.
+
+6. **Memory pressure has reserves, watermarks, and reclaim policy.**
+    Modern kernels preserve a minimum free-page reserve for critical paths and use
+    reclaim or trimming mechanisms before the system falls into allocator collapse.
+
+7. **Observability is part of the subsystem contract.**
+    They export counters for faults, COW events, page allocations, reclaim, cache
+    occupancy, and allocator misses because tuning without that visibility is
+    guesswork.
+
+What this means for auxv6 specifically:
+
+Current architecture:
+- `kernel/core/kalloc.c` is one global free-page list plus a small per-CPU page
+   stash (`KALLOC_CPU_CACHE=32`).
+- `kernel/core/vm.c` treats physical pages as anonymous raw memory with no page
+   metadata beyond page-table presence bits.
+- `kernel/core/proc.c` forks by dense `copyuvm()`, so cost scales with mapped
+   address space size before the child even runs.
+- `kernel/core/pipe.c` allocates one full 4 KiB page for each 512-byte pipe
+   buffer object because there is no typed object allocator.
+- `proc_waitpid()` still rescans `ptable.proc[]` for child discovery and reap.
+
+Target architecture for auxv6:
+
+Layer 1: physical page allocator
+- Introduce a physical-page metadata array indexed by PFN.
+- Track at least: refcount, flags, owning queue/cache state, and optional zeroed
+   state.
+- Replace the single freelist with per-CPU page caches backed by a global page
+   allocator that moves pages in batches.
+- Preserve a small reserve for kernel-critical contexts.
+
+Layer 2: VM fault and mapping model
+- Add PTE helper wrappers for present/write/user/COW transitions instead of open-
+   coding raw bit twiddling in many call sites.
+- Convert `fork()` to write-protect shared user mappings and increment page
+   refcounts instead of allocating/copying eagerly.
+- Extend the trap page-fault path to distinguish:
+   - stack growth
+   - demand-zero / lazy allocation
+   - copy-on-write write faults
+   - invalid protection faults
+- Invalidate TLBs only for modified mappings/pages, not whole-address-space style
+   operations wherever avoidable.
+
+Layer 3: typed kernel object allocator
+- Add a small slab/zone allocator for frequently allocated fixed-size kernel
+   objects.
+- First candidates: `struct pipe`, `struct file`, small VFS helper objects,
+   networking control objects, and eventually buffer/inode adjunct structures.
+- Back the slabs from the page allocator instead of calling `kalloc()` for each
+   object instance.
+
+Layer 4: process/VM bookkeeping
+- Add per-parent child lists to `struct proc` so `wait()/waitpid()` stop doing
+   repeated full table scans.
+- Separate address-space lifetime from process-table slot lifetime more cleanly:
+   a process should own a VM object/context rather than just a raw `pgdir` and
+   scalar `sz`.
+
+Layer 5: reclaim and observability
+- Add allocator counters for per-CPU hit/miss, global refill, global drain,
+   reserve usage, and allocation failure.
+- Add VM counters for page faults by class, COW copies, zero-fill faults, and
+   TLB-invalidating mapping updates.
+- Export these through procfs before aggressive tuning.
+
+Required codebase changes by area:
+
+- `include/proc.h`
+   - add child-list linkage and eventually a VM context pointer/structure
+- `include/defs.h`
+   - add page allocator, page metadata, and COW helper interfaces
+- `include/mmu.h`
+   - add explicit software-defined PTE bit usage/helpers for COW/ref tracking
+- `include/param.h`
+   - replace fixed tiny cache assumptions with tunables/watermarks for page caches
+- `kernel/core/kalloc.c`
+   - split into page allocator core plus per-CPU cache management; stop using raw
+      freelist nodes as the only metadata
+- `kernel/core/vm.c`
+   - add page refcount operations, COW mapping install, COW fault resolution,
+      zero-page/lazy-allocation support, and tighter TLB invalidation helpers
+- `kernel/core/proc.c`
+   - rework `fork()`, `exit()`, `wait()/waitpid()`, child bookkeeping, and VM
+      lifetime transitions
+- `kernel/core/trap.c`
+   - page fault dispatcher must become VM-aware instead of stack-growth-special-case
+- `kernel/core/exec.c`
+   - build initial address-space objects compatible with lazy/COW semantics
+- `kernel/core/sysproc.c`
+   - `sbrk()` / `growproc()` should evolve toward lazy heap growth rather than
+      eager physical allocation on every expansion
+- `kernel/core/pipe.c`
+   - migrate pipe object allocation to a typed cache/zone allocator
+- `kernel/fs/*`, `kernel/net/*`
+   - audit for kernel objects currently over-allocating full pages and move those
+      to typed caches where appropriate
+- `kernel/fs/procfs.c`
+   - expose allocator/VM counters so regressions are diagnosable
+
+Refactor sequence to minimize regression risk:
+
+Phase 1: page metadata without behavior change
+- Add a PFN-indexed page metadata table.
+- Convert `kalloc()` / `kfree()` to maintain refcount/flags, but keep current API.
+- Add procfs counters for allocations/frees/per-CPU cache hits/misses.
+
+Phase 2: real per-CPU page allocator
+- Replace the ad hoc stash with batched per-CPU page lists/magazines.
+- Keep single-page allocation API stable for callers.
+- Re-benchmark `kallocstress` before any VM semantic changes.
+
+Phase 3: VM COW groundwork
+- Introduce PTE helpers and page refcount helpers.
+- Teach `freevm()` / `deallocuvm()` to drop refs instead of blindly freeing pages.
+- Make no user-visible semantic changes yet beyond correctness scaffolding.
+
+Phase 4: copy-on-write fork
+- Switch `fork()` from dense `copyuvm()` to shared read-only mappings plus COW
+   fault handling.
+- Validate with `schedperf`, `kallocstress`, `stackgrowtest`, and userland smoke.
+
+Phase 5: child-list wait/reap and lazy heap
+- Remove repeated full process-table scans from parent/child bookkeeping.
+- Consider lazy heap population for `sbrk()` only after COW fork is stable.
+
+Phase 6: typed kernel object caches
+- Move `pipe`, then other hot fixed-size objects, off raw page allocation.
+- This should directly improve `pipe-page-churn` and reduce allocator pressure.
+
+Non-goals for the first tranche:
+- NUMA support, huge pages, memory compaction, swap, or full BSD-style VM object
+   shadow chains.
+- Replacing the direct-map kernel address model.
+- Tuning secondary heuristics before primary architecture changes land.
+
+Success criteria for the refactor:
+- `kallocstress` returns to and then exceeds the historical best without special-
+   case benchmark hacks.
+- `schedperf` fork-storm and `fsperf` process-heavy subtests rise together rather
+   than trading regressions.
+- `pipe-page-churn` improves materially once pipe objects stop consuming a full
+   page each.
+- New counters make allocator and VM regressions attributable within one guest
+   run, not after archaeology.
 
 All three support `-n <runs>` to repeat and average over multiple runs, which
 helps account for host-load variance:
