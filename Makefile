@@ -489,6 +489,9 @@ _schedperf: user/schedperf
 _fsperf: user/fsperf
 	cp user/fsperf _fsperf
 
+_gfxperf: user/gfxperf
+	cp user/gfxperf _gfxperf
+
 _kallocstress: user/kallocstress
 	cp user/kallocstress _kallocstress
 
@@ -649,6 +652,7 @@ UPROGS=\
 	_stressfs\
 	_schedperf\
 	_fsperf\
+	_gfxperf\
 	_kallocstress\
 	_sigtest\
 	_stackgrowtest\
@@ -763,7 +767,7 @@ clean:
 	user/top \
 	user/date user/time user/killall user/halt \
 	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/stackgrowtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/dmesg user/tail user/lspci user/v6init user/testdaemon \
-	user/schedperf user/fsperf user/kallocstress
+	user/schedperf user/fsperf user/gfxperf user/kallocstress
 
 # make a printout
 FILES = $(shell grep -v '^\#' tools/runoff.list)

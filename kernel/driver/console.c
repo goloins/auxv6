@@ -172,6 +172,9 @@ struct console_tty_state {
   struct console_ansi_state ansi;
   ushort screen[CONSOLE_MAX_CELLS];
   int cursor;
+  int dirty_rows_valid;
+  int dirty_row_top;
+  int dirty_row_bottom;
 };
 
 #define CONSOLE_NTTY 1
@@ -622,6 +625,53 @@ console_hw_cursor_from_tty(struct console_tty_state *t)
 }
 
 static void
+console_tty_mark_dirty_range_locked(struct console_tty_state *t, int from, int to)
+{
+  int cols;
+  int cells;
+  int top;
+  int bottom;
+
+  if(!t)
+    return;
+
+  cols = console_tty_cols(t);
+  cells = console_tty_cells(t);
+  if(cols <= 0 || cells <= 0)
+    return;
+
+  if(from < 0)
+    from = 0;
+  if(to > cells)
+    to = cells;
+  if(from >= to)
+    return;
+
+  top = from / cols;
+  bottom = (to - 1) / cols;
+
+  if(!t->dirty_rows_valid) {
+    t->dirty_rows_valid = 1;
+    t->dirty_row_top = top;
+    t->dirty_row_bottom = bottom;
+    return;
+  }
+
+  if(top < t->dirty_row_top)
+    t->dirty_row_top = top;
+  if(bottom > t->dirty_row_bottom)
+    t->dirty_row_bottom = bottom;
+}
+
+static void
+console_tty_mark_dirty_all_locked(struct console_tty_state *t)
+{
+  if(!t)
+    return;
+  console_tty_mark_dirty_range_locked(t, 0, console_tty_cells(t));
+}
+
+static void
 console_tty_fill_locked(struct console_tty_state *t, int from, int to, uchar a)
 {
   ushort blank;
@@ -645,6 +695,7 @@ console_tty_fill_locked(struct console_tty_state *t, int from, int to, uchar a)
   blank = (ushort)(' ' | ((ushort)a << 8));
   for(i = from; i < to; i++)
     t->screen[i] = blank;
+  console_tty_mark_dirty_range_locked(t, from, to);
 }
 
 static void
@@ -669,6 +720,7 @@ console_tty_scroll_up_locked(struct console_tty_state *t, int top, int bot, int 
           t->screen + (top + n) * cols,
           (lines - n) * cols * sizeof(ushort));
   console_tty_fill_locked(t, (bot + 1 - n) * cols, (bot + 1) * cols, a);
+  console_tty_mark_dirty_range_locked(t, top * cols, (bot + 1) * cols);
 }
 
 static void
@@ -695,6 +747,7 @@ console_tty_scroll_down_locked(struct console_tty_state *t, int top, int bot, in
             t->screen + (i - n) * cols,
             cols * sizeof(ushort));
   console_tty_fill_locked(t, top * cols, (top + n) * cols, a);
+  console_tty_mark_dirty_range_locked(t, top * cols, (bot + 1) * cols);
 }
 
 static void
@@ -721,6 +774,7 @@ console_copy_hw_to_tty_locked(struct console_tty_state *t)
         t->screen[row * tty_cols + col] = blank;
     }
   }
+  console_tty_mark_dirty_all_locked(t);
 }
 
 static void
@@ -1049,6 +1103,7 @@ console_stamp_logo_textmode_locked(struct console_tty_state *t)
   col0 = cols > 6 ? cols - 6 : 0;
   for(i = 0; i < 6; i++)
     t->screen[col0 + i] = (ushort)(text[i] | ((ushort)attr[i] << 8));
+  console_tty_mark_dirty_range_locked(t, col0, col0 + 6);
 
   if(t == console_tty_by_index(console_active_tty)) {
     for(i = 0; i < 6; i++)
@@ -1333,6 +1388,8 @@ console_gfx_ensure_locked(struct console_tty_state *t)
     if(clear_full)
       fb_fill_rect(console_gfx_fb, 0, 0, console_gfx_fb->width, console_gfx_fb->height,
                    0x00000000);
+    if(clear_full)
+      console_tty_mark_dirty_all_locked(t);
     return 1;
   }
 
@@ -1351,6 +1408,8 @@ console_gfx_ensure_locked(struct console_tty_state *t)
   if(clear_full)
     fb_fill_rect(console_gfx_fb, 0, 0, console_gfx_fb->width, console_gfx_fb->height,
                  0x00000000);
+  if(clear_full)
+    console_tty_mark_dirty_all_locked(t);
 
   if(!console_gfx_announced) {
     const char *msg = "console: gfx mirror enabled\n";
@@ -1368,7 +1427,11 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
 {
   int cols;
   int rows;
-  int cells;
+  int row0;
+  int row1;
+  int row;
+  int row_start;
+  int row_end;
   int i;
   int changed;
   int changed_cells;
@@ -1389,7 +1452,6 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
 
   cols = console_tty_cols(t);
   rows = console_tty_rows(t);
-  cells = cols * rows;
 
   console_gfx_stat_sync_calls++;
 
@@ -1404,27 +1466,46 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
   old_cursor_x = console_gfx_vts->cursor_x;
   old_cursor_y = console_gfx_vts->cursor_y;
 
-  for(i = 0; i < cells; i++) {
-    ushort s = t->screen[i];
-    struct text_cell tc;
-    struct text_cell *dst;
-    tc.codepoint = (uint)(s & 0x00FF);
-    tc.attr = 0;
-    tc.fg_color = (uchar)((s >> 8) & 0x0F);
-    tc.bg_color = (uchar)(((s >> 12) & 0x0F));
-    tc.width = 1;
+  if(t->dirty_rows_valid) {
+    row0 = t->dirty_row_top;
+    row1 = t->dirty_row_bottom;
+  } else {
+    row0 = rows;
+    row1 = -1;
+  }
 
-    dst = &console_gfx_vts->cells[i];
-    if(dst->codepoint != tc.codepoint ||
-       dst->attr != tc.attr ||
-       dst->fg_color != tc.fg_color ||
-       dst->bg_color != tc.bg_color ||
-       dst->width != tc.width) {
-      *dst = tc;
-      if(console_gfx_vts->dirty)
-        console_gfx_vts->dirty[i] = 1;
-      changed = 1;
-      changed_cells++;
+  if(row0 < 0)
+    row0 = 0;
+  if(row1 >= rows)
+    row1 = rows - 1;
+
+  if(row0 <= row1) {
+    for(row = row0; row <= row1; row++) {
+      row_start = row * cols;
+      row_end = row_start + cols;
+      for(i = row_start; i < row_end; i++) {
+        ushort s = t->screen[i];
+        struct text_cell tc;
+        struct text_cell *dst;
+        tc.codepoint = (uint)(s & 0x00FF);
+        tc.attr = 0;
+        tc.fg_color = (uchar)((s >> 8) & 0x0F);
+        tc.bg_color = (uchar)(((s >> 12) & 0x0F));
+        tc.width = 1;
+
+        dst = &console_gfx_vts->cells[i];
+        if(dst->codepoint != tc.codepoint ||
+           dst->attr != tc.attr ||
+           dst->fg_color != tc.fg_color ||
+           dst->bg_color != tc.bg_color ||
+           dst->width != tc.width) {
+          *dst = tc;
+          if(console_gfx_vts->dirty)
+            console_gfx_vts->dirty[i] = 1;
+          changed = 1;
+          changed_cells++;
+        }
+      }
     }
   }
 
@@ -1446,6 +1527,7 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
   console_gfx_vts->cursor_y = new_cursor_y;
   if(changed)
     console_gfx_vts->any_dirty = 1;
+  t->dirty_rows_valid = 0;
   release(&console_gfx_vts->lock);
 
   if(!changed)
@@ -1878,6 +1960,7 @@ ansi_leave_alt_screen(struct console_tty_state *t)
     return;
   cells = console_tty_cells(t);
   memmove(t->screen, t->ansi.alt_buf, cells * sizeof(ushort));
+  console_tty_mark_dirty_all_locked(t);
   t->cursor = console_clamp_tty_cursor(t, t->ansi.alt_saved_cursor);
   t->ansi.attr = t->ansi.alt_saved_attr;
   t->ansi.alt_active = 0;
@@ -2444,6 +2527,7 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
       if(pos > 0) {
         pos--;
         screen[pos] = (ushort)(' ' | ((ushort)a << 8));
+        console_tty_mark_dirty_range_locked(t, pos, pos + 1);
         t->cursor = console_clamp_tty_cursor(t, pos);
       }
       return;
@@ -2463,7 +2547,10 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
       t->ansi.last_glyph = c;
       if(t->ansi.insert_mode && col < last_col)
         memmove(screen + pos + 1, screen + pos, (last_col - col) * sizeof(ushort));
+      if(t->ansi.insert_mode && col < last_col)
+        console_tty_mark_dirty_range_locked(t, row * cols + col, row * cols + cols);
       screen[pos] = (ushort)((c & 0xff) | ((ushort)a << 8));
+      console_tty_mark_dirty_range_locked(t, pos, pos + 1);
       if(col == last_col) {
         if(t->ansi.wraparound) {
           if(row == t->ansi.scroll_bot) {
@@ -2606,6 +2693,7 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
     case 'P': {
       int av=cols-col; n=p1?p1:1; if(n>av)n=av;
       memmove(screen+pos, screen+pos+n, (av-n)*sizeof(ushort));
+      console_tty_mark_dirty_range_locked(t, row * cols + col, row * cols + cols);
       console_tty_fill_locked(t, pos+av-n, pos+av, a); break; }
     case 'X': {
       int av=cols-col; n=p1?p1:1; if(n>av)n=av;
@@ -2621,6 +2709,7 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
     case '@': {
       int av=cols-col; int i2; n=p1?p1:1; if(n>av)n=av;
       for(i2=av-1; i2>=n; i2--) screen[pos+i2]=screen[pos+i2-n];
+      console_tty_mark_dirty_range_locked(t, row * cols + col, row * cols + cols);
       console_tty_fill_locked(t, pos, pos+n, a); break; }
     case 'S': n=p1?p1:1; console_tty_scroll_up_locked(t, t->ansi.scroll_top,  t->ansi.scroll_bot, n, a); break;
     case 'T': n=p1?p1:1; console_tty_scroll_down_locked(t, t->ansi.scroll_top, t->ansi.scroll_bot, n, a); break;
@@ -3013,6 +3102,7 @@ console_ioctl(int fd, int request, uint arg)
     t->winsize.ws_col = (ushort)console_clamp_cols((int)t->winsize.ws_col);
     t->cursor = console_clamp_tty_cursor(t, t->cursor);
     t->ansi.scroll_bot = console_tty_rows(t) - 1;
+    console_tty_mark_dirty_all_locked(t);
     if(t == console_tty_by_index(console_active_tty))
       console_flush_tty_locked(t);
     pgid = t->fg_pgid;
@@ -3485,6 +3575,9 @@ consoleinit(void)
     cttys[i].winsize.ws_col = init_cols;
     cttys[i].ansi.scroll_bot = init_rows > 0 ? init_rows - 1 : 0;
     cttys[i].cursor = 0;
+    cttys[i].dirty_rows_valid = 1;
+    cttys[i].dirty_row_top = 0;
+    cttys[i].dirty_row_bottom = init_rows > 0 ? init_rows - 1 : 0;
     memset(cttys[i].screen, 0, sizeof(cttys[i].screen));
     for(int j = 0; j < CONSOLE_MAX_CELLS; j++)
       cttys[i].screen[j] = blank;

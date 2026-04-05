@@ -70,6 +70,7 @@ cat /proc/net_dev   # raw interface counter dump, C-locale scaffolding, and corr
 - `abrowse(1)` landed as a text-mode browser layered on the existing HTTP client path.
 - Server7 now has a dedicated boot profile, `/proc/server7` ownership control, and session-aware startup policy scaffolding.
 - Documentation/manpage coverage expanded substantially, with markdown-aware `man(1)` support and a much broader default userland.
+- Framebuffer console sync now uses tty dirty-row bounds (instead of unconditional full-grid comparison), and `gfxperf(1)` was added to compute `/proc/gfxstats`-based flush and render efficiency metrics from workload deltas.
 - NVMe/loop device-number collision was fixed by moving loop base to dev 44, restoring stable `nda` visibility in `lsblk` and successful NVMe ext2 mounting.
 - Storage diagnostics improved with `/proc/bdev_table` and `lsblk -v`, making block-device registration/capacity state directly inspectable.
 - `qemu-nvme-fat` image generation now uses dosfstools (`mkfs.fat`/`mkdosfs`) and produces a deterministic FAT16 image containing a known `README.TXT` marker for quick validation.
@@ -694,3 +695,4 @@ linked cleanly against the full kernel tree.
 - `make e1000` and `make qemu-server7` boot profiles were added for more targeted bring-up and validation.
 - virtio-net runtime diagnostics/polling resilience improved, alongside follow-on fixes in `telnet`, `sh`, and DHCP tooling.
 - Framebuffer console sync-path speedups landed, reducing full-refresh overhead without changing the current ownership model.
+- Framebuffer sync follow-up landed: tty dirty-row tracking now bounds compare work per flush, and `gfxperf` provides a binary guest probe for `pixels_per_flush`, `cells_per_sync`, and `render_efficiency` from `/proc/gfxstats` deltas.

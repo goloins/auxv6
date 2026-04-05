@@ -72,6 +72,16 @@ What S1 does not solve yet:
 - The display core now prefers dirty-region presents when a backend provides `flush_region`, and the console write path batches active-tty flushes so one write call can produce one framebuffer present instead of per-character presents.
 - **Manual runtime impact (2026-04-03):** immediate interactive testing reported a dramatic responsiveness improvement in the framebuffer console after these two changes, with visibly lower redraw churn during normal shell output.
 
+### Console Dirty-Row Sync + Metrics Probe (2026-04-04)
+
+- Console tty state now tracks dirty row bounds and framebuffer sync only compares those rows instead of rescanning the full tty grid on every flush.
+- Dirty ranges are now propagated through fill, scroll, direct glyph writes, delete/insert-char CSI operations, logo stamping, and alternate-screen restore paths.
+- Added `gfxperf(1)` as a guest-side binary probe that runs a deterministic output workload, samples `/proc/gfxstats` deltas, and reports:
+	- `pixels_per_flush = flush_pixels / flush_calls`
+	- `cells_per_sync = cells_changed / sync_calls`
+	- `render_efficiency = cells_rendered / cells_changed`
+- `gfxperf` prints pass/fail checks and returns non-zero if counters fail to advance or if render-overhead exceeds a conservative bound.
+
 ### What This Means Right Now
 
 - auxv6 does have a live virtio-gpu-backed framebuffer path.

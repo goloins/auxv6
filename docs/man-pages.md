@@ -1,6 +1,6 @@
 # auxv6 Man Pages
 
-Generated: 2026-04-03
+Generated: 2026-04-04
 
 ## Scope
 - Enriched all utility man pages using source-derived usage and option extraction from user/*.c.
@@ -31,6 +31,7 @@ Generated: 2026-04-03
 | forktest | targetfs/usr/share/man/forktest.md | 2026-04-01 | user/forktest.c | source-derived usage/options |
 | free | targetfs/usr/share/man/free.md | 2026-04-01 | user/free.c | source-derived usage/options |
 | fsperf | targetfs/usr/share/man/fsperf.md | 2026-04-03 | user/fsperf.c | kernel fs/inode/bcache perf score utility |
+| gfxperf | targetfs/usr/share/man/gfxperf.md | 2026-04-04 | user/gfxperf.c | framebuffer console perf probe using /proc/gfxstats deltas |
 | fsregress | targetfs/usr/share/man/fsregress.md | 2026-04-01 | user/fsregress.c | source-derived usage/options |
 | getty | targetfs/usr/share/man/getty.md | 2026-04-01 | user/getty.c | source-derived usage/options |
 | grep | targetfs/usr/share/man/grep.md | 2026-04-01 | user/grep.c | source-derived usage/options |
