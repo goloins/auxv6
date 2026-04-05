@@ -11,8 +11,11 @@
 
 #include "types.h"
 #include "stat.h"
+#include "stdio.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
+
+#define GFXPERF_HZ 100U
 
 #define GFXSTATS_BUF 4096
 
@@ -24,10 +27,19 @@ struct gfxstats_snapshot {
   uint flush_pixels;
 };
 
+static volatile int g_stop;
+
+static void
+gfxperf_sigint(int signo)
+{
+  if(signo == SIGINT)
+    g_stop = 1;
+}
+
 static void
 usage(void)
 {
-  dprintf(2, "usage: gfxperf [-l lines] [-r rounds] [-w width]\n");
+  dprintf(2, "usage: gfxperf [-l lines] [-r rounds] [-w width] [-q|-Q] [-P progress_lines]\n");
 }
 
 static int
@@ -156,10 +168,49 @@ print_fixed_2(int fd, uint x100)
 }
 
 static void
-emit_workload(int lines, int rounds, int width)
+print_snapshot_delta(const char *tag,
+                     const struct gfxstats_snapshot *before,
+                     const struct gfxstats_snapshot *after)
+{
+  uint d_sync;
+  uint d_changed;
+  uint d_rendered;
+  uint d_flush;
+  uint d_pixels;
+  uint pixels_per_flush_x100;
+  uint cells_per_sync_x100;
+  uint render_eff_x100;
+
+  d_sync = delta_u(after->sync_calls, before->sync_calls);
+  d_changed = delta_u(after->cells_changed, before->cells_changed);
+  d_rendered = delta_u(after->cells_rendered, before->cells_rendered);
+  d_flush = delta_u(after->flush_calls, before->flush_calls);
+  d_pixels = delta_u(after->flush_pixels, before->flush_pixels);
+
+  pixels_per_flush_x100 = ratio_x100(d_pixels, d_flush ? d_flush : 1);
+  cells_per_sync_x100 = ratio_x100(d_changed, d_sync ? d_sync : 1);
+  render_eff_x100 = ratio_x100(d_rendered, d_changed ? d_changed : 1);
+
+  dprintf(1, "%s: delta sync_calls=%u cells_changed=%u cells_rendered=%u flush_calls=%u flush_pixels=%u\n",
+          tag, d_sync, d_changed, d_rendered, d_flush, d_pixels);
+  dprintf(1, "%s: pixels_per_flush=", tag);
+  print_fixed_2(1, pixels_per_flush_x100);
+  dprintf(1, " cells_per_sync=");
+  print_fixed_2(1, cells_per_sync_x100);
+  dprintf(1, " render_efficiency=");
+  print_fixed_2(1, render_eff_x100);
+  dprintf(1, "\n");
+}
+
+static void
+emit_workload(int lines, int rounds, int width, int progress_lines,
+              struct gfxstats_snapshot *base, int *lines_done_out)
 {
   int r;
   int i;
+  int lines_done;
+  int lines_since_progress;
+  char linebuf[256];
 
   if(lines < 1)
     lines = 1;
@@ -168,17 +219,67 @@ emit_workload(int lines, int rounds, int width)
   if(width < 8)
     width = 8;
 
+  lines_done = 0;
+  lines_since_progress = 0;
+
   for(r = 0; r < rounds; r++) {
     for(i = 0; i < lines; i++) {
+      int n;
       int pad;
+      int off;
+      int rc;
+
+      if(g_stop)
+        goto done;
+
       /* Alternate SGR to exercise parser + render path under realistic output. */
-      dprintf(1, "\033[3%dm[gfxperf] round=%d line=%d ", (i % 7) + 1, r + 1, i + 1);
+      n = snprintf(linebuf, sizeof(linebuf), "\033[3%dm[gfxperf] round=%d line=%d ",
+                   (i % 7) + 1, r + 1, i + 1);
+      if(n < 0)
+        n = 0;
+      if(n > (int)sizeof(linebuf) - 1)
+        n = (int)sizeof(linebuf) - 1;
+
       pad = width - 24;
-      while(pad-- > 0)
-        dprintf(1, "%c", 'a' + (i % 26));
-      dprintf(1, "\033[0m\n");
+      if(pad < 0)
+        pad = 0;
+      while(pad-- > 0 && n < (int)sizeof(linebuf) - 5)
+        linebuf[n++] = (char)('a' + (i % 26));
+
+      if(n < (int)sizeof(linebuf) - 4) {
+        linebuf[n++] = ' ';
+      }
+      if(n >= (int)sizeof(linebuf) - 4)
+        n = (int)sizeof(linebuf) - 4;
+      linebuf[n++] = 0x1b;
+      linebuf[n++] = '[';
+      linebuf[n++] = '0';
+      linebuf[n++] = 'm';
+      if(n < (int)sizeof(linebuf) - 1)
+        linebuf[n++] = '\n';
+
+      off = 0;
+      while(off < n) {
+        rc = write(1, linebuf + off, (size_t)(n - off));
+        if(rc <= 0)
+          break;
+        off += rc;
+      }
+
+      lines_done++;
+      lines_since_progress++;
+      if(progress_lines > 0 && lines_since_progress >= progress_lines && base) {
+        struct gfxstats_snapshot now;
+        if(read_gfxstats(&now) == 0)
+          print_snapshot_delta("gfxperf-progress", base, &now);
+        lines_since_progress = 0;
+      }
     }
   }
+
+done:
+  if(lines_done_out)
+    *lines_done_out = lines_done;
 }
 
 int
@@ -188,7 +289,13 @@ main(int argc, char **argv)
   int lines;
   int rounds;
   int width;
+  int progress_lines;
+  int lines_done;
   int pass;
+  uint t0;
+  uint t1;
+  uint dt;
+  uint lines_per_sec_x100;
   struct gfxstats_snapshot before;
   struct gfxstats_snapshot after;
   uint d_sync;
@@ -203,6 +310,15 @@ main(int argc, char **argv)
   lines = 600;
   rounds = 1;
   width = 72;
+  progress_lines = 0;
+  lines_done = 0;
+
+  {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = gfxperf_sigint;
+    sigaction(SIGINT, &sa, 0);
+  }
 
   for(i = 1; i < argc; i++) {
     if(strcmp(argv[i], "-l") == 0) {
@@ -226,6 +342,20 @@ main(int argc, char **argv)
     } else if(strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
       usage();
       return 0;
+    } else if(strcmp(argv[i], "-P") == 0 || strcmp(argv[i], "--progress") == 0) {
+      if(i + 1 >= argc) {
+        usage();
+        return 1;
+      }
+      progress_lines = atoi(argv[++i]);
+    } else if(strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--quick") == 0) {
+      lines = 120;
+      rounds = 1;
+      width = 64;
+    } else if(strcmp(argv[i], "-Q") == 0 || strcmp(argv[i], "--smoke") == 0) {
+      lines = 60;
+      rounds = 1;
+      width = 48;
     } else {
       usage();
       return 1;
@@ -237,7 +367,11 @@ main(int argc, char **argv)
     return 1;
   }
 
-  emit_workload(lines, rounds, width);
+  t0 = uptime();
+  emit_workload(lines, rounds, width, progress_lines, &before, &lines_done);
+  t1 = uptime();
+  dt = (t1 > t0) ? (t1 - t0) : 1;
+  lines_per_sec_x100 = (uint)lines_done * GFXPERF_HZ * 100U / dt;
 
   if(read_gfxstats(&after) < 0) {
     dprintf(2, "gfxperf: failed to read /proc/gfxstats (after)\n");
@@ -254,7 +388,7 @@ main(int argc, char **argv)
   cells_per_sync_x100 = ratio_x100(d_changed, d_sync ? d_sync : 1);
   render_eff_x100 = ratio_x100(d_rendered, d_changed ? d_changed : 1);
 
-  dprintf(1, "gfxperf: delta sync_calls=%d cells_changed=%d cells_rendered=%d flush_calls=%d flush_pixels=%d\n",
+  dprintf(1, "gfxperf: delta sync_calls=%u cells_changed=%u cells_rendered=%u flush_calls=%u flush_pixels=%u\n",
           d_sync, d_changed, d_rendered, d_flush, d_pixels);
 
   dprintf(1, "gfxperf: pixels_per_flush=");
@@ -264,6 +398,13 @@ main(int argc, char **argv)
   dprintf(1, " render_efficiency=");
   print_fixed_2(1, render_eff_x100);
   dprintf(1, "\n");
+
+  dprintf(1, "gfxperf: lines_done=%d elapsed_ticks=%u lines_per_sec=", lines_done, dt);
+  print_fixed_2(1, lines_per_sec_x100);
+  dprintf(1, "\n");
+
+  if(g_stop)
+    dprintf(1, "gfxperf: interrupted by SIGINT, reporting partial results\n");
 
   pass = 1;
   if(d_sync == 0 || d_flush == 0) {

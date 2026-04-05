@@ -343,6 +343,111 @@ kalloc(void)
   return (char*)r;
 }
 
+char*
+kalloc_contiguous(uint npages)
+{
+  struct run *r;
+  struct run *prev;
+  struct run *run_head;
+  struct run *run_prev;
+  struct run *run_tail;
+  struct run *after;
+  struct run *next;
+  uint run_len;
+  uint last_pa;
+  uint pa;
+  struct kpage_meta *meta;
+  char *base;
+  uint marked;
+
+  if(npages == 0)
+    return 0;
+
+  if(npages == 1)
+    return kalloc();
+
+  kmem.alloc_calls++;
+
+  if(!kmem.use_lock){
+    return 0;
+  }
+
+  acquire(&kmem.lock);
+  prev = 0;
+  run_head = 0;
+  run_prev = 0;
+  run_tail = 0;
+  run_len = 0;
+  last_pa = 0;
+
+  for(r = kmem.freelist; r; prev = r, r = r->next){
+    pa = V2P((char *)r);
+    meta = kpage_meta_pa(pa);
+    if(meta && (meta->flags & KPAGE_MANAGED) && (meta->flags & KPAGE_FREE)) {
+      if(run_len == 0) {
+        run_head = r;
+        run_prev = prev;
+        run_tail = r;
+        run_len = 1;
+        last_pa = pa;
+      } else if(pa + PGSIZE == last_pa) {
+        run_tail = r;
+        run_len++;
+        last_pa = pa;
+      } else {
+        run_head = r;
+        run_prev = prev;
+        run_tail = r;
+        run_len = 1;
+        last_pa = pa;
+      }
+
+      if(run_len == npages)
+        break;
+    } else {
+      run_len = 0;
+      run_head = 0;
+      run_prev = 0;
+      run_tail = 0;
+      last_pa = 0;
+    }
+  }
+
+  if(run_len != npages || run_head == 0 || run_tail == 0){
+    release(&kmem.lock);
+    return 0;
+  }
+
+  after = run_tail->next;
+  if(run_prev)
+    run_prev->next = after;
+  else
+    kmem.freelist = after;
+
+  marked = 0;
+  for(r = run_head; r != after && marked < npages; r = next, marked++) {
+    next = r->next;
+    pa = V2P((char *)r);
+    meta = kpage_meta_pa(pa);
+    if(meta == 0 || (meta->flags & KPAGE_MANAGED) == 0)
+      panic("kalloc_contiguous meta");
+    meta->flags &= ~KPAGE_FREE;
+    meta->refcount = 1;
+  }
+  if(marked != npages)
+    panic("kalloc_contiguous count");
+
+  if(kmem.free_pages >= marked)
+    kmem.free_pages -= marked;
+  else
+    kmem.free_pages = 0;
+  release(&kmem.lock);
+
+  base = (char *)run_tail;
+  memset(base, 0, npages * PGSIZE);
+  return base;
+}
+
 void
 kalloc_meminfo(uint *total_pages, uint *free_pages)
 {

@@ -72,6 +72,7 @@ cat /proc/net_dev   # raw interface counter dump, C-locale scaffolding, and corr
 - Documentation/manpage coverage expanded substantially, with markdown-aware `man(1)` support and a much broader default userland.
 - `gfxperf(1)` landed to compute `/proc/gfxstats`-based flush and render efficiency metrics from workload deltas; its counter math now handles 32-bit wrap safely for long-running sessions.
 - A dirty-row bounded framebuffer-sync prototype was attempted but rolled back after a login-path stability regression; the console currently remains on the known-good full-surface compare path.
+- Bounded dirty-rect framebuffer scaffolding (`FB_MAX_DIRTY_RECTS=8`) is present, but runtime still uses the conservative single-bounding-rect flush path for stability while follow-on tuning continues.
 - NVMe/loop device-number collision was fixed by moving loop base to dev 44, restoring stable `nda` visibility in `lsblk` and successful NVMe ext2 mounting.
 - Storage diagnostics improved with `/proc/bdev_table` and `lsblk -v`, making block-device registration/capacity state directly inspectable.
 - `qemu-nvme-fat` image generation now uses dosfstools (`mkfs.fat`/`mkdosfs`) and produces a deterministic FAT16 image containing a known `README.TXT` marker for quick validation.
@@ -698,3 +699,4 @@ linked cleanly against the full kernel tree.
 - Framebuffer console sync-path speedups landed, reducing full-refresh overhead without changing the current ownership model.
 - Framebuffer sync follow-up currently keeps the known-good full-surface compare path for stability, while `gfxperf` provides a binary guest probe for `pixels_per_flush`, `cells_per_sync`, and `render_efficiency` from `/proc/gfxstats` deltas.
 - `gfxperf` delta accounting now uses wrap-safe unsigned subtraction so `flush_pixels` and other counters remain meaningful in long runs.
+- Latest framebuffer slowdown fix stops redrawing the decorative logo on every console sync, preventing the single dirty bounding box from stretching from the top-right logo region down to the active cursor row during normal text output.

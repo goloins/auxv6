@@ -68,51 +68,16 @@ dma_free_region_pages(char *base, uint size)
 static void *
 dma_alloc_contiguous_pages(uint size, uint *phys_out)
 {
-    char *first;
-    char *page;
-    char *run_low;
-    char *run_high;
     char *base;
     uint pages;
-    uint allocated;
 
     pages = PGROUNDUP(size) / PGSIZE;
     if(pages == 0)
         return 0;
 
-    first = kalloc();
-    if(!first)
+    base = kalloc_contiguous(pages);
+    if(!base)
         return 0;
-
-    run_low = first;
-    run_high = first;
-    allocated = 1;
-
-    while(allocated < pages) {
-        page = kalloc();
-        if(!page) {
-            dma_free_region_pages(run_low, allocated * PGSIZE);
-            return 0;
-        }
-
-        if(page + PGSIZE == run_low) {
-            run_low = page;
-            allocated++;
-            continue;
-        }
-        if(run_high + PGSIZE == page) {
-            run_high = page;
-            allocated++;
-            continue;
-        }
-
-        kfree(page);
-        dma_free_region_pages(run_low, allocated * PGSIZE);
-        return 0;
-    }
-
-    base = run_low;
-    memset(base, 0, pages * PGSIZE);
     if(phys_out)
         *phys_out = V2P(base);
     return base;

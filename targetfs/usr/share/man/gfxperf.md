@@ -4,7 +4,7 @@
 `gfxperf` - framebuffer console performance probe using `/proc/gfxstats`
 
 ## Synopsis
-`gfxperf [-l lines] [-r rounds] [-w width]`
+`gfxperf [-l lines] [-r rounds] [-w width] [-q|-Q] [-P progress_lines]`
 
 ## Description
 `gfxperf` runs a deterministic terminal-output workload, samples `/proc/gfxstats`
@@ -21,6 +21,9 @@ The tool emits `[PASS]` or `[FAIL]` checks and returns non-zero on failure.
 - `-l lines`: output lines per round (default: `600`)
 - `-r rounds`: number of rounds (default: `1`)
 - `-w width`: payload width per line (default: `72`)
+- `-q`, `--quick`: quick preset (`-l 120 -r 1 -w 64`)
+- `-Q`, `--smoke`: smoke preset (`-l 60 -r 1 -w 48`)
+- `-P`, `--progress`: print interim metrics every N emitted lines
 - `-h`, `--help`: show usage
 
 ## Exit Status
@@ -34,6 +37,18 @@ Run a short probe:
 gfxperf -l 300 -r 1 -w 64
 ```
 
+Fast iterative probe:
+
+```sh
+gfxperf -q
+```
+
+Probe with interim snapshots every 25 lines:
+
+```sh
+gfxperf -q -P 25
+```
+
 Heavier ANSI-heavy workload:
 
 ```sh
@@ -45,3 +60,4 @@ gfxperf -l 1200 -r 2 -w 96
   runs with the same workload options.
 - Use this together with manual framebuffer observation when tuning console
   rendering behavior.
+- Press `Ctrl-C` to stop early and still print partial metrics collected so far.

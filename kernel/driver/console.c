@@ -258,7 +258,10 @@ static struct render_context *console_gfx_ctx;
 static struct vt_surface *console_gfx_vts;
 static int console_gfx_announced;
 static int console_gfx_warned;
+static int console_gfx_fb_create_warned;
+static int console_gfx_logo_drawn;
 static int console_gfx_boot_ready;
+static uint console_gfx_fb_retry_after_ticks;
 static int console_logo_enabled = 1;
 static uint console_gfx_stat_sync_calls;
 static uint console_gfx_stat_cells_changed;
@@ -270,6 +273,7 @@ static uint console_input_event_count;
 
 #define CONSOLE_GFX_FALLBACK_WIDTH 640
 #define CONSOLE_GFX_FALLBACK_HEIGHT 400
+#define CONSOLE_GFX_FB_RETRY_TICKS 100U
 
 static void
 console_gfx_note(const char *msg)
@@ -280,6 +284,28 @@ console_gfx_note(const char *msg)
     return;
   for(p = msg; *p; p++)
     uartputc(*p);
+}
+
+static int
+console_gfx_retry_ready(void)
+{
+  uint now;
+  int ready;
+
+  acquire(&tickslock);
+  now = ticks;
+  ready = (console_gfx_fb_retry_after_ticks == 0 ||
+           (int)(now - console_gfx_fb_retry_after_ticks) >= 0);
+  release(&tickslock);
+  return ready;
+}
+
+static void
+console_gfx_schedule_retry(void)
+{
+  acquire(&tickslock);
+  console_gfx_fb_retry_after_ticks = ticks + CONSOLE_GFX_FB_RETRY_TICKS;
+  release(&tickslock);
 }
 
 static int
@@ -795,6 +821,74 @@ console_gfx_pick_framebuffer_size(uint *width_out, uint *height_out)
     *height_out = height;
 }
 
+static struct framebuffer *
+console_gfx_try_create_framebuffer(uint req_w, uint req_h, uint *used_w, uint *used_h)
+{
+  struct framebuffer *fb;
+  uint w;
+  uint h;
+  int step;
+
+  if(req_w < CONSOLE_GFX_FALLBACK_WIDTH)
+    req_w = CONSOLE_GFX_FALLBACK_WIDTH;
+  if(req_h < CONSOLE_GFX_FALLBACK_HEIGHT)
+    req_h = CONSOLE_GFX_FALLBACK_HEIGHT;
+
+  w = req_w;
+  h = req_h;
+
+  for(step = 0; step < 6; step++) {
+    fb = display_create_framebuffer(console_gfx_dev, w, h, PIXFMT_XRGB8888);
+    if(fb) {
+      if(used_w)
+        *used_w = w;
+      if(used_h)
+        *used_h = h;
+      return fb;
+    }
+
+    if(w <= CONSOLE_GFX_FALLBACK_WIDTH && h <= CONSOLE_GFX_FALLBACK_HEIGHT)
+      break;
+
+    w = (w * 3U) / 4U;
+    h = (h * 3U) / 4U;
+    if(w < CONSOLE_GFX_FALLBACK_WIDTH)
+      w = CONSOLE_GFX_FALLBACK_WIDTH;
+    if(h < CONSOLE_GFX_FALLBACK_HEIGHT)
+      h = CONSOLE_GFX_FALLBACK_HEIGHT;
+  }
+
+  /* Last-resort small modes when contiguous DMA is heavily fragmented. */
+  fb = display_create_framebuffer(console_gfx_dev, 512, 320, PIXFMT_XRGB8888);
+  if(fb) {
+    if(used_w)
+      *used_w = 512;
+    if(used_h)
+      *used_h = 320;
+    return fb;
+  }
+
+  fb = display_create_framebuffer(console_gfx_dev, 480, 300, PIXFMT_XRGB8888);
+  if(fb) {
+    if(used_w)
+      *used_w = 480;
+    if(used_h)
+      *used_h = 300;
+    return fb;
+  }
+
+  fb = display_create_framebuffer(console_gfx_dev, 400, 250, PIXFMT_XRGB8888);
+  if(fb) {
+    if(used_w)
+      *used_w = 400;
+    if(used_h)
+      *used_h = 250;
+    return fb;
+  }
+
+  return 0;
+}
+
 static void
 console_gfx_pick_origin(int cols, int rows, int *x_out, int *y_out)
 {
@@ -833,7 +927,11 @@ console_logo_get_enabled(void)
 int
 console_logo_set_enabled(int enabled)
 {
+  acquire(&cons.lock);
   console_logo_enabled = enabled ? 1 : 0;
+  if(console_logo_enabled)
+    console_gfx_logo_drawn = 0;
+  release(&cons.lock);
   return 0;
 }
 
@@ -1216,6 +1314,51 @@ console_gfx_logo_overlaps_text_locked(int x, int y, int width, int height,
 }
 
 static void
+console_gfx_logo_rect_locked(int *x_out, int *y_out, int *w_out, int *h_out)
+{
+  int scale;
+  int char_w;
+  int char_h;
+  int spacing;
+  int total_w;
+  int x;
+  int y;
+  int logo_h;
+
+  if(x_out)
+    *x_out = 0;
+  if(y_out)
+    *y_out = 0;
+  if(w_out)
+    *w_out = 0;
+  if(h_out)
+    *h_out = 0;
+
+  if(!console_gfx_fb)
+    return;
+
+  scale = 2;
+  char_w = 5 * scale;
+  char_h = 7 * scale;
+  spacing = scale;
+  total_w = 6 * char_w + 5 * spacing;
+  logo_h = char_h + 6;
+  x = (int)console_gfx_fb->width - total_w - 8;
+  y = 6;
+  if(x < 0)
+    x = 0;
+
+  if(x_out)
+    *x_out = x - 4;
+  if(y_out)
+    *y_out = y - 3;
+  if(w_out)
+    *w_out = total_w + 8;
+  if(h_out)
+    *h_out = logo_h;
+}
+
+static void
 console_gfx_draw_logo_locked(void)
 {
   static const char text[] = "A/UXV6";
@@ -1238,10 +1381,16 @@ console_gfx_draw_logo_locked(void)
   int cell_w;
   int cell_h;
   int logo_h;
+  int bg_x;
+  int bg_y;
+  int bg_w;
+  int bg_h;
 
   if(!console_gfx_fb)
     return;
   if(!console_logo_enabled)
+    return;
+  if(console_gfx_logo_drawn)
     return;
 
   scale = 2;
@@ -1264,7 +1413,8 @@ console_gfx_draw_logo_locked(void)
       return;
   }
 
-  fb_fill_rect(console_gfx_fb, x - 4, y - 3, total_w + 8, logo_h, 0x00000000);
+  console_gfx_logo_rect_locked(&bg_x, &bg_y, &bg_w, &bg_h);
+  fb_fill_rect(console_gfx_fb, bg_x, bg_y, bg_w, bg_h, 0x00000000);
   for(i = 0; i < 6; i++)
     console_gfx_draw_logo_char(console_gfx_fb,
                                x + i * (char_w + spacing),
@@ -1272,6 +1422,7 @@ console_gfx_draw_logo_locked(void)
                                scale,
                                rainbow[i],
                                text[i]);
+  console_gfx_logo_drawn = 1;
 }
 
 static int
@@ -1317,13 +1468,30 @@ console_gfx_ensure_locked(struct console_tty_state *t)
   }
 
   if(!console_gfx_fb) {
+    uint used_w;
+    uint used_h;
+
+    if(!console_gfx_retry_ready())
+      return 0;
+
     console_gfx_pick_framebuffer_size(&fb_width, &fb_height);
-    console_gfx_fb = display_create_framebuffer(console_gfx_dev, fb_width, fb_height,
-                                                PIXFMT_XRGB8888);
+    used_w = fb_width;
+    used_h = fb_height;
+    console_gfx_fb = console_gfx_try_create_framebuffer(fb_width, fb_height,
+                                                        &used_w, &used_h);
     if(!console_gfx_fb) {
-      console_gfx_note("console: gfx framebuffer create failed\n");
+      console_gfx_schedule_retry();
+      if(!console_gfx_fb_create_warned) {
+        console_gfx_note("console: gfx framebuffer create failed\n");
+        console_gfx_fb_create_warned = 1;
+      }
       return 0;
     }
+    console_gfx_fb_retry_after_ticks = 0;
+    console_gfx_fb_create_warned = 0;
+    if(used_w != fb_width || used_h != fb_height)
+      console_gfx_note("console: gfx framebuffer downscaled due allocation pressure\n");
+    console_gfx_logo_drawn = 0;
     clear_full = 1;
   }
 
@@ -1353,6 +1521,8 @@ console_gfx_ensure_locked(struct console_tty_state *t)
       clear_full = 1;
     }
     if(clear_full)
+      console_gfx_logo_drawn = 0;
+    if(clear_full)
       fb_fill_rect(console_gfx_fb, 0, 0, console_gfx_fb->width, console_gfx_fb->height,
                    0x00000000);
     if(clear_full)
@@ -1372,6 +1542,8 @@ console_gfx_ensure_locked(struct console_tty_state *t)
   console_gfx_vts->fb_x = origin_x;
   console_gfx_vts->fb_y = origin_y;
 
+  if(clear_full)
+    console_gfx_logo_drawn = 0;
   if(clear_full)
     fb_fill_rect(console_gfx_fb, 0, 0, console_gfx_fb->width, console_gfx_fb->height,
                  0x00000000);
@@ -1407,6 +1579,8 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
   int new_cursor_x;
   int new_cursor_y;
   int rendered;
+  int dirty_count;
+  int di;
   struct dirty_rect rect;
   uint area;
   int cell_w;
@@ -1506,9 +1680,19 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
 
   area = 0;
   if(fb_is_dirty(console_gfx_fb)) {
-    fb_get_dirty_rect(console_gfx_fb, &rect);
-    if(rect.right >= rect.left && rect.bottom >= rect.top)
-      area = (uint)(rect.right - rect.left + 1) * (uint)(rect.bottom - rect.top + 1);
+    dirty_count = fb_get_dirty_rect_count(console_gfx_fb);
+    if(dirty_count > 0) {
+      for(di = 0; di < dirty_count; di++) {
+        if(fb_get_dirty_rect_at(console_gfx_fb, di, &rect) < 0)
+          continue;
+        if(rect.right >= rect.left && rect.bottom >= rect.top)
+          area += (uint)(rect.right - rect.left + 1) * (uint)(rect.bottom - rect.top + 1);
+      }
+    } else {
+      fb_get_dirty_rect(console_gfx_fb, &rect);
+      if(rect.right >= rect.left && rect.bottom >= rect.top)
+        area = (uint)(rect.right - rect.left + 1) * (uint)(rect.bottom - rect.top + 1);
+    }
   }
 
   if(area == 0 && rendered > 0) {

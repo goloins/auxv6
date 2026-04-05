@@ -133,6 +133,11 @@ int             console_ioctl(int fd, int request, uint arg);
 int             console_kmsg_read(char *dst, int max);
 void            panic(char*) __attribute__((noreturn));
 
+// kalloc.c
+char*           kalloc(void);
+void            kfree(char*);
+char*           kalloc_contiguous(uint npages);
+
 // pty.c
 void            ptyinit(void);
 int             pty_open(struct file *f, int minor);

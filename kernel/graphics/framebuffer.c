@@ -94,6 +94,7 @@ fb_alloc(uint width, uint height, uint pixfmt)
     fb->dirty_left = 0;
     fb->dirty_bottom = height - 1;
     fb->dirty_right = width - 1;
+    fb->dirty_rect_count = 0;
     
     initlock(&fb->lock, "framebuffer");
 
@@ -255,7 +256,35 @@ fb_clear_dirty(struct framebuffer *fb)
     fb->dirty_left = 0;
     fb->dirty_bottom = 0;
     fb->dirty_right = 0;
+    fb->dirty_rect_count = 0;
     release(&fb->lock);
+}
+
+int
+fb_get_dirty_rect_count(struct framebuffer *fb)
+{
+    if(!fb)
+        return 0;
+
+    /* Runtime currently uses single bounding dirty rect for stability. */
+    return 0;
+}
+
+int
+fb_get_dirty_rect_at(struct framebuffer *fb, int index, struct dirty_rect *out)
+{
+    int ok;
+
+    if(!fb || !out)
+        return -1;
+
+    acquire(&fb->lock);
+    ok = fb->dirty && index >= 0 && index < fb->dirty_rect_count;
+    if(ok)
+        *out = fb->dirty_rects[index];
+    release(&fb->lock);
+
+    return ok ? 0 : -1;
 }
 
 /*

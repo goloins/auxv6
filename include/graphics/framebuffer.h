@@ -28,6 +28,8 @@ struct dirty_rect {
     int right;
 };
 
+#define FB_MAX_DIRTY_RECTS 8
+
 /* Framebuffer structure - represents a drawable pixel region */
 struct framebuffer {
     /* Buffer metadata */
@@ -46,6 +48,8 @@ struct framebuffer {
     int dirty_bottom;
     int dirty_right;
     int dirty;              /* 0 if clean, 1 if any dirty pixels */
+    struct dirty_rect dirty_rects[FB_MAX_DIRTY_RECTS];
+    int dirty_rect_count;
     
     /* Ownership */
     int is_dma_coherent;    /* 1 if CPU/GPU coherent, 0 if needs sync */
@@ -99,6 +103,8 @@ void fb_mark_dirty_rect(struct framebuffer *fb, struct dirty_rect *rect);
 void fb_clear_dirty(struct framebuffer *fb);
 int fb_is_dirty(struct framebuffer *fb);
 void fb_get_dirty_rect(struct framebuffer *fb, struct dirty_rect *out);
+int fb_get_dirty_rect_count(struct framebuffer *fb);
+int fb_get_dirty_rect_at(struct framebuffer *fb, int index, struct dirty_rect *out);
 
 /* Low-level pixel operations */
 void fb_set_pixel(struct framebuffer *fb, int x, int y, uint pixel);

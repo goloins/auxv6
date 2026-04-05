@@ -338,11 +338,82 @@ int
 display_flush(struct display_device *dev, struct framebuffer *fb)
 {
     struct dirty_rect rect;
+    struct dirty_rect u;
+    int count;
+    int i;
+    int valid_count;
+    uint sum_area;
+    uint union_area;
+    int use_union;
 
     if(!dev || !fb)
         return -1;
 
     if(dev->ops && dev->ops->flush_region && fb_is_dirty(fb)) {
+        count = fb_get_dirty_rect_count(fb);
+        if(count > 0) {
+            valid_count = 0;
+            sum_area = 0;
+            memset(&u, 0, sizeof(u));
+
+            for(i = 0; i < count; i++) {
+                if(fb_get_dirty_rect_at(fb, i, &rect) < 0)
+                    continue;
+                if(rect.right < rect.left || rect.bottom < rect.top)
+                    continue;
+
+                if(valid_count == 0) {
+                    u = rect;
+                } else {
+                    if(rect.top < u.top)
+                        u.top = rect.top;
+                    if(rect.left < u.left)
+                        u.left = rect.left;
+                    if(rect.bottom > u.bottom)
+                        u.bottom = rect.bottom;
+                    if(rect.right > u.right)
+                        u.right = rect.right;
+                }
+
+                sum_area += (uint)(rect.right - rect.left + 1) *
+                            (uint)(rect.bottom - rect.top + 1);
+                valid_count++;
+            }
+
+            if(valid_count <= 0) {
+                fb_clear_dirty(fb);
+                return 0;
+            }
+
+            union_area = (uint)(u.right - u.left + 1) *
+                         (uint)(u.bottom - u.top + 1);
+
+            /* Heuristic: prefer one larger transfer when command overhead would dominate. */
+            use_union = 0;
+            if(valid_count > 2)
+                use_union = 1;
+            if(union_area > 0 && sum_area > (union_area * 3U) / 4U)
+                use_union = 1;
+
+            if(use_union) {
+                if(dev->ops->flush_region(dev, fb, &u) < 0)
+                    return -1;
+                fb_clear_dirty(fb);
+                return 0;
+            }
+
+            for(i = 0; i < count; i++) {
+                if(fb_get_dirty_rect_at(fb, i, &rect) < 0)
+                    continue;
+                if(rect.right < rect.left || rect.bottom < rect.top)
+                    continue;
+                if(dev->ops->flush_region(dev, fb, &rect) < 0)
+                    return -1;
+            }
+            fb_clear_dirty(fb);
+            return 0;
+        }
+
         fb_get_dirty_rect(fb, &rect);
         if(rect.right >= rect.left && rect.bottom >= rect.top) {
             if(dev->ops->flush_region(dev, fb, &rect) < 0)

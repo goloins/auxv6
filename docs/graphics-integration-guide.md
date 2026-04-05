@@ -82,6 +82,14 @@ What S1 does not solve yet:
 - `gfxperf` prints pass/fail checks and returns non-zero if counters fail to advance or if render-overhead exceeds a conservative bound.
 - Dirty-row bounded tty compare was prototyped, but it triggered a login-path stability regression (trap in the `read`/VFS path) and is currently rolled back to the known-good full-surface compare path.
 
+### Multi-Rect Dirty Flush Tranche (2026-04-04)
+
+- Framebuffer dirty tracking now keeps a bounded list of dirty rectangles (`FB_MAX_DIRTY_RECTS=8`) instead of only one global bounding box.
+- Dirty rectangles are merged on overlap/touch; when the list saturates, tracking safely collapses to one conservative bounding rect.
+- Display flush now iterates all tracked dirty rectangles when the backend supports `flush_region`, then clears dirty state.
+- `/proc/gfxstats` `flush_pixels` accounting now sums tracked dirty-rect areas (with existing conservative fallbacks), which makes `gfxperf` `pixels_per_flush` far more representative under sparse updates.
+- Stability posture remains unchanged from the rollback above: tty->VT comparison is still full-surface for correctness while dirty flushing is now multi-rect.
+
 ### What This Means Right Now
 
 - auxv6 does have a live virtio-gpu-backed framebuffer path.

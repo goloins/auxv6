@@ -37,6 +37,8 @@ The key architectural rule is: **treat this as a terminal architecture migration
 - Canonical erase display and control-character echo now stay aligned with the framebuffer-visible console state, and active interactive refresh is now framebuffer-first once the graphics path is live.
 - The framebuffer console is visibly faster after the sync-clear fix because stable pixels are preserved between dirty updates instead of being erased every frame.
 - The latest flush batching plus dirty-region present path (2026-04-03) produced an immediate, high-confidence manual responsiveness improvement in normal shell interaction, making this one of the strongest performance wins so far in the mirror phase.
+- Follow-on flush work (2026-04-04) now tracks a bounded list of dirty rectangles in the framebuffer core and emits per-rect flushes in the display layer, which reduces inflated upload area on sparse updates while keeping conservative fallback behavior when dirty tracking saturates.
+- Stability note: an attempted dirty-row bounded tty-compare optimization was rolled back after a login-path trap regression; framebuffer flush remains improved via multi-rect dirty tracking while tty->VT compare remains on the known-good full-surface path.
 
 ## What Must Stay Stable During The Migration
 
