@@ -39,6 +39,9 @@ exit.  The process exits 0 if all tests pass, 1 otherwise.
 | 11 | `rlimit` | `getrlimit`/`setrlimit(RLIMIT_NOFILE)` soft-lower and hard-ceiling checks |
 | 12 | `hwm_open` | Open 64 fds simultaneously (well within `NOFILE_DEFAULT`) |
 | 13 | `fdtable_expand` | Open 48 fds, exceeding the initial capacity of 32, triggering a table grow |
+| 14 | `lseek` | `lseek(2)` with `SEEK_SET`, `SEEK_CUR`, and `SEEK_END` on a regular file |
+| 15 | `lseek64` | `_llseek(2)` 5-arg 64-bit seek and `lseek64()` wrapper |
+| 16 | `cloexec_exec` | `FD_CLOEXEC` flag survives `fork`, visible in child before exec |
 
 ## Notes
 - Creates and removes `/tmp/fdtest.tmp` during the run.
@@ -54,7 +57,7 @@ fdtest -v
 ```
 
 ## See Also
-fcntl(2), dup(2), dup2(2), pipe(2), select(2), poll(2), getrlimit(2)
+fcntl(2), dup(2), dup2(2), pipe(2), select(2), poll(2), getrlimit(2), lseek(2), _llseek(2)
 
 ## Source Audit
 - Source file: user/fdtest.c

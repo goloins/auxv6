@@ -57,9 +57,9 @@ enum procstate { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, STOPPED, ZOMBIE };
 // Per-process file descriptor table (Phase 1A: dynamic replacement for fixed ofile[NOFILE])
 struct fdtable {
   struct file **entries;       // Dynamic array of file pointers
+  uint8_t     *fdflags;        // Per-fd flags (FD_CLOEXEC etc.), indexed by fd
   int capacity;                // Total allocated slots
   int nfds;                    // Number of valid fd entries (high water mark)
-  // TODO Phase 1B: struct rw_spinlock lock;  // Per-process RW lock for future parallelism
 };
 
 struct procinfo_k {

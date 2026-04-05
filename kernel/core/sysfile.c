@@ -65,8 +65,12 @@ fdtable_init(struct fdtable *ft)
 {
   ft->entries = (struct file**)kalloc();
   if(ft->entries == 0)
-    panic("fdtable_init: kalloc failed");
+    panic("fdtable_init: kalloc entries failed");
   memset(ft->entries, 0, PGSIZE);
+  ft->fdflags = (uint8_t*)kalloc();
+  if(ft->fdflags == 0)
+    panic("fdtable_init: kalloc fdflags failed");
+  memset(ft->fdflags, 0, PGSIZE);
   ft->capacity = FDTABLE_INIT_CAPACITY;
   ft->nfds = 0;
 }
@@ -79,24 +83,36 @@ fdtable_expand(struct fdtable *ft)
   int new_capacity;
   uint new_bytes;
   struct file **new_entries;
+  uint8_t *new_fdflags;
 
   new_capacity = (ft->capacity > 256) ? (ft->capacity * 2) : (ft->capacity + 256);
 
   new_bytes = (uint)new_capacity * sizeof(struct file *);
   if(new_bytes > PGSIZE)
     return -1;
+  if((uint)new_capacity > PGSIZE)  // fdflags is 1 byte per slot
+    return -1;
 
   new_entries = (struct file**)kalloc();
   if(new_entries == 0)
     return -1;
+  new_fdflags = (uint8_t*)kalloc();
+  if(new_fdflags == 0){
+    kfree((char*)new_entries);
+    return -1;
+  }
 
-  // Copy existing entries
+  // Copy existing entries and flags
   memmove(new_entries, ft->entries, ft->capacity * sizeof(struct file *));
   memset(&new_entries[ft->capacity], 0,
          (new_capacity - ft->capacity) * sizeof(struct file *));
+  memmove(new_fdflags, ft->fdflags, (uint)ft->capacity);
+  memset(&new_fdflags[ft->capacity], 0, (uint)(new_capacity - ft->capacity));
 
   kfree((char*)ft->entries);
-  ft->entries = new_entries;
+  kfree((char*)ft->fdflags);
+  ft->entries  = new_entries;
+  ft->fdflags  = new_fdflags;
   ft->capacity = new_capacity;
   return 0;
 }
@@ -134,6 +150,7 @@ fdtable_free(struct fdtable *ft)
   }
 
   kfree((char*)ft->entries);
+  kfree((char*)ft->fdflags);
   kfree((char*)ft);
 }
 
@@ -160,10 +177,11 @@ fdtable_dup(struct fdtable *parent_ft, struct fdtable *child_ft)
   child_ft->capacity = parent_ft->capacity;
   child_ft->nfds = parent_ft->nfds;
 
-  // Duplicate file references
+  // Duplicate file references and copy flags (FD_CLOEXEC survives fork; exec clears)
   for(i = 0; i < parent_ft->nfds; i++){
     if(parent_ft->entries[i]){
       child_ft->entries[i] = filedup(parent_ft->entries[i]);
+      child_ft->fdflags[i] = parent_ft->fdflags[i];
     }
   }
 
@@ -216,6 +234,7 @@ fd_clear(int fd)
     return;
 
   curproc->fdtable->entries[fd] = 0;
+  curproc->fdtable->fdflags[fd] = 0;
 
   // Keep nfds as a high-water mark without trailing holes.
   while(curproc->fdtable->nfds > 0 &&
@@ -2089,21 +2108,28 @@ sys_select(void)
 }
 
 // lseek - reposition read/write file offset
-// Returns the new offset on success, -1 on failure.
-// NOTE: 'offset' is a 32-bit int matching the current 32-bit syscall ABI on
-// i386.  This limits a single seek call to ±2 GB relative movement, matching
-// the Linux 32-bit lseek(2) limitation.  sys_lseek64 / _llseek (two 32-bit
-// halves) will be added for full-range 64-bit seeks.
+// On i386 the syscall ABI pushes arguments as 32-bit words.  Since off_t is
+// int64_t (8 bytes), the compiler pushes it as two consecutive 32-bit words:
+//   arg0: fd          (esp+4)
+//   arg1: offset_lo   (esp+8)   — low  32 bits of the 64-bit offset
+//   arg2: offset_hi   (esp+12)  — high 32 bits of the 64-bit offset
+//   arg3: whence      (esp+16)
+// Returns the new offset (truncated to 32 bits for ABI compatibility); callers
+// needing the full 64-bit result should use _llseek (sys_lseek64).
 int
 sys_lseek(void)
 {
   struct file *f;
-  int offset;
+  int offset_lo, offset_hi;
   int whence;
-  int64_t newoff;  /* 64-bit internally; promotes SEEK_END on large files */
+  int64_t offset;
+  int64_t newoff;
 
-  if(argfd(0, 0, &f) < 0 || argint(1, &offset) < 0 || argint(2, &whence) < 0)
+  if(argfd(0, 0, &f) < 0 || argint(1, &offset_lo) < 0 ||
+     argint(2, &offset_hi) < 0 || argint(3, &whence) < 0)
     return -1;
+
+  offset = ((int64_t)(uint)offset_hi << 32) | (uint)offset_lo;
 
   // Cannot seek on pipes or sockets
   if(f->type == FD_PIPE || f->type == FD_SOCKET)
@@ -2129,7 +2155,6 @@ sys_lseek(void)
     return -1;
   }
 
-  // Check for negative offset
   if(newoff < 0){
     iunlock(f->ip);
     return -1;
@@ -2137,7 +2162,63 @@ sys_lseek(void)
 
   f->off = newoff;
   iunlock(f->ip);
-  return newoff;
+  // Return low 32 bits; use _llseek for full 64-bit result
+  return (int)(newoff & 0x7fffffff);
+}
+
+// _llseek / lseek64 — 64-bit seek with Linux-compatible 5-arg ABI:
+//   arg0: fd
+//   arg1: offset_high  (high 32 bits of 64-bit offset)
+//   arg2: offset_low   (low  32 bits of 64-bit offset)
+//   arg3: result       (userspace loff_t* to receive the new position)
+//   arg4: whence
+// Returns 0 on success (result written), -1 on failure.
+int
+sys_lseek64(void)
+{
+  struct file *f;
+  int offset_hi, offset_lo;
+  int whence;
+  int result_addr;
+  int64_t offset, newoff;
+
+  if(argfd(0, 0, &f) < 0 || argint(1, &offset_hi) < 0 ||
+     argint(2, &offset_lo) < 0 || argint(3, &result_addr) < 0 ||
+     argint(4, &whence) < 0)
+    return -1;
+
+  offset = ((int64_t)(uint)offset_hi << 32) | (uint)offset_lo;
+
+  if(f->type == FD_PIPE || f->type == FD_SOCKET)
+    return -1;
+  if(f->type != FD_INODE)
+    return -1;
+
+  ilock(f->ip);
+
+  switch(whence){
+  case 0: newoff = offset;                         break; // SEEK_SET
+  case 1: newoff = (int64_t)f->off + offset;       break; // SEEK_CUR
+  case 2: newoff = (int64_t)f->ip->size + offset;  break; // SEEK_END
+  default:
+    iunlock(f->ip);
+    return -1;
+  }
+
+  if(newoff < 0){
+    iunlock(f->ip);
+    return -1;
+  }
+
+  f->off = newoff;
+  iunlock(f->ip);
+
+  if(result_addr != 0){
+    if(copyout(myproc()->pgdir, (uint)result_addr,
+               (char*)&newoff, sizeof(newoff)) < 0)
+      return -1;
+  }
+  return 0;
 }
 
 // dup2 - duplicate a file descriptor to a specific fd number
@@ -2169,15 +2250,16 @@ sys_dup2(void)
     curproc->fdtable->entries[newfd] = 0;
   }
 
-  // Duplicate the file reference
+  // Duplicate the file reference; new descriptor does not inherit FD_CLOEXEC
   curproc->fdtable->entries[newfd] = f;
+  curproc->fdtable->fdflags[newfd] = 0;
   filedup(f);
 
   return newfd;
 }
 
 // fcntl - file control
-// Implements F_DUPFD, F_GETFD, F_SETFD, F_GETFL, F_SETFL
+// Implements F_DUPFD, F_GETFD, F_SETFD, F_GETFL, F_SETFL, F_DUPFD_CLOEXEC
 int
 sys_fcntl(void)
 {
@@ -2192,33 +2274,30 @@ sys_fcntl(void)
     return -1;
 
   switch(cmd){
-  case 0: // F_DUPFD - duplicate fd to lowest available >= arg
+  case 0: // F_DUPFD - duplicate fd to lowest available >= arg; new fd has no FD_CLOEXEC
     if(argint(2, &arg) < 0)
       return -1;
     if(arg < 0 || arg >= proc_fd_limit(curproc))
       return -1;
-    // Find lowest available fd >= arg
     for(int i = arg; i < proc_fd_limit(curproc); i++){
       if(fd_ensure_slot(curproc, i) < 0)
         return -1;
       if(curproc->fdtable->entries[i] == 0){
         curproc->fdtable->entries[i] = f;
+        curproc->fdtable->fdflags[i] = 0;
         filedup(f);
         return i;
       }
     }
-    return -1; // No available fd
+    return -1;
 
-  case 1: // F_GETFD - get file descriptor flags
-    // We don't currently track per-fd flags (like FD_CLOEXEC)
-    // Return 0 for now (no flags set)
-    return 0;
+  case 1: // F_GETFD - get file descriptor flags (FD_CLOEXEC etc.)
+    return (int)(curproc->fdtable->fdflags[fd] & FD_CLOEXEC);
 
   case 2: // F_SETFD - set file descriptor flags
     if(argint(2, &arg) < 0)
       return -1;
-    // We don't currently implement FD_CLOEXEC, but accept the call
-    // TODO: implement close-on-exec properly when exec is enhanced
+    curproc->fdtable->fdflags[fd] = (uint8_t)(arg & FD_CLOEXEC);
     return 0;
 
   case 3: // F_GETFL - get file status flags
@@ -2229,19 +2308,14 @@ sys_fcntl(void)
       flags = O_WRONLY;
     else
       flags = O_RDONLY;
-    // Note: O_APPEND status isn't tracked per-file currently
     return flags;
 
-  case 4: // F_SETFL - set file status flags
+  case 4: // F_SETFL - set file status flags (O_APPEND, O_NONBLOCK not yet tracked)
     if(argint(2, &arg) < 0)
       return -1;
-    // Only O_APPEND and O_NONBLOCK are typically settable
-    // We don't support O_NONBLOCK currently
-    // O_APPEND could be supported but requires file struct changes
-    // For now, accept the call silently
     return 0;
 
-  case 1030: // F_DUPFD_CLOEXEC - duplicate with close-on-exec
+  case 1030: // F_DUPFD_CLOEXEC - duplicate with FD_CLOEXEC set on new descriptor
     if(argint(2, &arg) < 0)
       return -1;
     if(arg < 0 || arg >= proc_fd_limit(curproc))
@@ -2251,8 +2325,8 @@ sys_fcntl(void)
         return -1;
       if(curproc->fdtable->entries[i] == 0){
         curproc->fdtable->entries[i] = f;
+        curproc->fdtable->fdflags[i] = FD_CLOEXEC;
         filedup(f);
-        // TODO: set FD_CLOEXEC flag when implemented
         return i;
       }
     }

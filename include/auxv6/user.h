@@ -124,6 +124,7 @@ int chdir(const char*);
 int dup(int);
 int dup2(int oldfd, int newfd);
 off_t lseek(int fd, off_t offset, int whence);
+int   _llseek(int fd, uint offset_hi, uint offset_lo, loff_t *result, uint whence);
 int fcntl(int fd, int cmd, ...);
 int symlink(const char *target, const char *linkpath);
 ssize_t readlink(const char *path, char *buf, size_t bufsiz);

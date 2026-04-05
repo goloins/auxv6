@@ -95,3 +95,4 @@
 #define SYS_getrlimit 94
 #define SYS_setrlimit 95
 #define SYS_rmdir 96
+#define SYS_lseek64 97

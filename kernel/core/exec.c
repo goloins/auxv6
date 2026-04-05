@@ -9,6 +9,7 @@
 #include "elf.h"
 #include "fs.h"
 #include "vfs.h"
+#include "fcntl.h"
 
 #define EXEC_SHEBANG_LINE_MAX 128
 #define EXEC_SHEBANG_MAX_DEPTH 2
@@ -258,6 +259,23 @@ exec_internal(char *path, char **argv, int depth)
   curproc->tf->esp = sp;
   switchuvm(curproc);
   freevm(oldpgdir);
+
+  // Close any file descriptors marked FD_CLOEXEC (POSIX exec semantics).
+  if(curproc->fdtable){
+    int cfd;
+    for(cfd = 0; cfd < curproc->fdtable->nfds; cfd++){
+      if(curproc->fdtable->entries[cfd] && (curproc->fdtable->fdflags[cfd] & FD_CLOEXEC)){
+        fileclose(curproc->fdtable->entries[cfd]);
+        curproc->fdtable->entries[cfd] = 0;
+        curproc->fdtable->fdflags[cfd] = 0;
+      }
+    }
+    // Trim nfds high-water mark after closures.
+    while(curproc->fdtable->nfds > 0 &&
+          curproc->fdtable->entries[curproc->fdtable->nfds - 1] == 0)
+      curproc->fdtable->nfds--;
+  }
+
   return 0;
 
  bad:
