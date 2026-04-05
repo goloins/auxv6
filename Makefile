@@ -618,6 +618,9 @@ _audiostat: user/audiostat
 _audiotest: user/audiotest
 	cp user/audiotest _audiotest
 
+_audiopollstress: user/audiopollstress
+	cp user/audiopollstress _audiopollstress
+
 _lockprobe: user/lockprobe
 	cp user/lockprobe _lockprobe
 
@@ -753,6 +756,7 @@ UPROGS=\
 	_audioctl\
 	_audiostat\
 	_audiotest\
+	_audiopollstress\
 	_lockprobe\
 	_date\
 	_time\
@@ -847,7 +851,7 @@ clean:
 	user/6get \
 	user/abrowse \
 	user/lsof user/which user/file \
-	user/audioctl user/audiostat user/audiotest \
+	user/audioctl user/audiostat user/audiotest user/audiopollstress \
 	user/server7 \
 	user/top \
 	user/date user/time user/killall user/halt \
