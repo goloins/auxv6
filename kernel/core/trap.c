@@ -357,8 +357,12 @@ trap(struct trapframe *tf)
     }
   }
 
-  if(myproc() && (tf->cs&3) == DPL_USER)
+  if(myproc() && (tf->cs&3) == DPL_USER) {
+    // Keep p->tf synchronized on interrupt/trap return so signal-frame
+    // delivery uses the current user register context.
+    myproc()->tf = tf;
     proc_handle_signals_on_return(myproc());
+  }
 
   // Force process exit if it has been killed and is in user space.
   // (If it is still executing in the kernel, let it keep running
