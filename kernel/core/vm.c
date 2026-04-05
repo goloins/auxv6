@@ -29,6 +29,7 @@ seginit(void)
   c->gdt[SEG_UCODE] = SEG(STA_X|STA_R, 0, 0xffffffff, DPL_USER);
   c->gdt[SEG_UDATA] = SEG(STA_W, 0, 0xffffffff, DPL_USER);
   lgdt(c->gdt, sizeof(c->gdt));
+  segreload();
 }
 
 // Return the address of the PTE in page table pgdir

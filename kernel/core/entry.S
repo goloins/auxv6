@@ -23,6 +23,11 @@
 #include "../../include/mmu.h"
 #include "../../include/param.h"
 
+# Bootstrap stack used from entry() through early scheduler bring-up.
+# Keep it larger than per-proc KSTACKSIZE to tolerate deep IRQ paths.
+# This does not change per-process kernel stack sizing.
+#define BOOT_STACK_SIZE (KSTACKSIZE * 4)
+
 # Multiboot header.  Data to direct multiboot loader.
 .p2align 2
 .text
@@ -56,7 +61,7 @@ entry:
   movl    %eax, %cr0
 
   # Set up the stack pointer.
-  movl $(stack + KSTACKSIZE), %esp
+  movl $(stack + BOOT_STACK_SIZE), %esp
 
   # Jump to main(), and switch to executing at
   # high addresses. The indirect call is needed because
@@ -65,4 +70,4 @@ entry:
   mov $main, %eax
   jmp *%eax
 
-.comm stack, KSTACKSIZE
+.comm stack, BOOT_STACK_SIZE

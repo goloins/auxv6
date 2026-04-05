@@ -312,6 +312,7 @@ int             procfs_readi(struct inode*, char*, uint64_t, uint);
 void            stati(struct inode*, struct stat*);
 int             writei(struct inode*, char*, uint64_t, uint);
 void            vfs_init(void);
+void            multiboot_init(void);
 struct inode*   vfs_namei(char*);
 struct inode*   vfs_nameiparent(char*, char*);
 int             vfs_lookup(char*, struct vnode*);
@@ -620,6 +621,7 @@ int             serial_procfs_dump(char *buf, uint max);
 
 // vm.c
 void            seginit(void);
+void            segreload(void);
 void            kvmalloc(void);
 pde_t*          setupkvm(void);
 char*           uva2ka(pde_t*, char*);

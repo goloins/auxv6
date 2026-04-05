@@ -322,7 +322,11 @@ ideinit(void)
   idewait(0x1f0, 0);
 
   // Probe optional units and get capacity
-  cap0 = FSSIZE;  // Primary IDE disk 0 is always available
+  // Probe primary master capacity too; hardcoding FSSIZE truncates visible
+  // device size and causes valid MBR partitions to be rejected as out-of-range.
+  cap0 = ide_probe_unit(0x1f0, 0);
+  if(cap0 == 0)
+    cap0 = FSSIZE;
   cap1 = ide_probe_unit(0x1f0, 1);
   cap2 = ide_probe_unit(0x170, 0);
   cap3 = ide_probe_unit(0x170, 1);

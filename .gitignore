@@ -125,6 +125,7 @@ user/halt
 include/rootfs_config.h
 .ext2root/
 .ext2root-server7/
+.auxv6root/
 .fatroot/
 .fat32root/
 virtio_boot.log

@@ -122,9 +122,24 @@ Definition of done:
 
 **File:** `tools/build-auxv6-img.sh` (new)
 
-- Validate host tools: `grub-mkstandalone`, `sfdisk`, `mke2fs`, `dd`.
-- Print actionable dependency hint when GRUB tools are missing:
-  `apt install grub-pc-bin grub-common`.
+#### Host GRUB tool resolution
+
+The script must probe for tools in this order:
+
+1. **macOS (Homebrew i686-elf-grub):**  
+   Prefix `i686-elf-grub-`, base path `/opt/homebrew/Cellar/i686-elf-grub/2.12/bin/`.  
+   Installed tools include `i686-elf-grub-mkstandalone`, `i686-elf-grub-mkimage`, `i686-elf-grub-mkrescue`, etc.  
+   Detection: `[ -d /opt/homebrew/Cellar/i686-elf-grub ]` or `command -v i686-elf-grub-mkstandalone`.
+
+2. **Linux (native):**  
+   Unprefixed tools: `grub-mkstandalone`, `grub-mkimage`.  
+   Install hint when missing: `apt install grub-pc-bin grub-common`.
+
+The script sets `GRUB_MKSTANDALONE` and `GRUB_MKIMAGE` variables at startup via probe logic, then uses those variables throughout. If neither is found, exit with an actionable error message covering both platforms.
+
+#### Image build steps
+
+- Validate resolved tool variables plus `sfdisk`, `mke2fs`, `dd`.
 - Build partition ext2 image from staged rootfs at 512 MiB.
 - Build full raw image with DOS/MBR label and partition 1 at sector 2048.
 - Embed GRUB `boot.img` + standalone `core.img` without host `grub-install`.
@@ -194,8 +209,13 @@ Definition of done:
 
 ## Risks and Mitigations
 
-1. GRUB module/tool availability differs by distro.
-   - Mitigation: strict preflight checks and explicit install hint.
+1. GRUB module/tool availability differs by host.
+   - macOS: `i686-elf-grub` Homebrew formula provides all required tools under
+     `/opt/homebrew/Cellar/i686-elf-grub/2.12/bin/` with `i686-elf-grub-` prefix.
+     (`i686-elf-grub-mkstandalone`, `i686-elf-grub-mkimage`, etc.)
+   - Linux: native `grub-pc-bin` / `grub-common` packages provide unprefixed tools.
+   - Mitigation: build script probes both locations and sets tool variables; emits
+     platform-specific install hint on failure.
 2. Root-device parsing may accept malformed cmdline values.
    - Mitigation: reject invalid forms and log chosen source (cmdline, boot_device, scan).
 3. Boot-target migration can break existing automation.

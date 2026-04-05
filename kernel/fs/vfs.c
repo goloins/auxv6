@@ -15,6 +15,9 @@ static int vfs_ready;
 static uint vfs_rootdev = ROOTFS_DEV;
 static char vfs_rootrel[] = "/";
 
+/* Set by multiboot_init() from GRUB cmdline root= arg; 0 = use ROOTFS_DEV. */
+extern uint boot_rootdev;
+
 static int
 vfs_path_split_leading_dotdot(char *path, char **tail)
 {
@@ -567,6 +570,9 @@ vfs_init(void)
 
   initlock(&vfslock, "vfs");
   lockdep_set_rank(&vfslock, LOCK_RANK_DEFAULT, "vfs");
+
+  if(boot_rootdev != 0)
+    vfs_rootdev = boot_rootdev;
 
   memset(&rootvfs, 0, sizeof(rootvfs));
   vfs_root_configure(&rootvfs);

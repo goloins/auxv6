@@ -85,11 +85,13 @@ OBJS = \
 	kernel/fs/log.o\
 	kernel/core/main.o\
 	kernel/driver/mp.o\
+	kernel/core/multiboot.o\
 	kernel/driver/picirq.o\
 	kernel/core/pipe.o\
 	kernel/core/proc.o\
 	kernel/core/sleeplock.o\
 	kernel/core/spinlock.o\
+	kernel/core/segreload.o\
 	kernel/core/libgcc_compat.o\
 	kernel/core/string.o\
 	kernel/core/swtch.o\
@@ -797,6 +799,27 @@ qemu-nox-gdb-ext2root: .gdbinit
 	@echo "*** Now run 'gdb'." 1>&2
 	$(QEMU) -nographic -drive file=aux.bootkern,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
 
+# Single-image GRUB boot targets.
+# Build this target with ROOTFS_DEV set to /dev/hda1 (HD_PART_DEV(0,1)).
+auxv6.img: ROOTFS_DEV_VALUE=4
+auxv6.img: tools/build-auxv6-img.sh tools/stage-ext2-root.sh aux.kern \
+		$(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) \
+		$(ROOTFS_TARGETFS_FILES) $(UPROGS)
+	sh tools/stage-ext2-root.sh .auxv6root .auxv6-part.img \
+		$(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) \
+		$(ROOTFS_TARGETFS_FILES) $(UPROGS)
+	sh tools/build-auxv6-img.sh .auxv6root $@
+
+qemu-singleimage: auxv6.img
+	$(QEMU) -serial mon:stdio -drive file=auxv6.img,index=0,media=disk,format=raw $(QEMUNETOPTS_E1000) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
+qemu-nox-singleimage: auxv6.img
+	$(QEMU) -nographic -drive file=auxv6.img,index=0,media=disk,format=raw -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
+qemu-gdb-singleimage: .gdbinit auxv6.img
+	@echo "*** Now run 'gdb'." 1>&2
+	$(QEMU) -serial mon:stdio -drive file=auxv6.img,index=0,media=disk,format=raw -smp $(CPUS) -m 512 -S $(QEMUGDB) $(QEMUEXTRA)
+
 -include kernel/**/*.d
 -include user/*.d
 -include **/*.d
@@ -811,6 +834,8 @@ clean:
 	test_ext2_oldinit.img \
 	test_ext2_server7.img \
 	test_fat.img \
+	auxv6.img \
+	.auxv6-part.img \
 	vblk0.img \
 	vblk1.img \
 	vblk-stress.img \
@@ -826,6 +851,7 @@ clean:
 	.ext2root \
 	.ext2root-oldinit \
 	.ext2root-server7 \
+	.auxv6root \
 	.fatroot \
 	.fat32root \
 	.exfatroot \
