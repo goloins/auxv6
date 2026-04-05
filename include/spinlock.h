@@ -21,7 +21,7 @@ struct spinlock {
 #define LOCK_RANK_CONSOLE_TTY      20
 #define LOCK_RANK_CONSOLE_GFX      25
 #define LOCK_RANK_FTABLE_INTERNAL  35
-#define LOCK_RANK_TICKS            40
+#define LOCK_RANK_TICKS            LOCK_RANK_DEFAULT
 #define LOCK_RANK_PTABLE           2000
 #define LOCK_RANK_KMEM             2100
 #define LOCK_RANK_LOG              60

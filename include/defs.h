@@ -466,6 +466,7 @@ void            getcallerpcs(void*, uint*);
 int             holding(struct spinlock*);
 void            initlock(struct spinlock*, char*);
 void            lockdep_set_rank(struct spinlock*, int, char*);
+void            lockdep_enable(void);
 void            release(struct spinlock*);
 void            pushcli(void);
 void            popcli(void);

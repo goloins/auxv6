@@ -95,3 +95,27 @@ EXPECT last_fail_class=3
 3. Invoke `qemu-guesttest-template` with those two inputs.
 
 This keeps automated tests consistent across storage, networking, tty, and userland utilities.
+
+## Locking/Console Validation Policy
+
+For any change that touches lock primitives, lock ordering, console locking,
+console read/write paths, or framebuffer mirror behavior, validation must cover
+both headless and graphical boots.
+
+Required minimum matrix:
+
+1. `sudo make qemu-nox`
+2. `sudo make qemu`
+3. In guest: `lockprobe`
+4. In guest: `lockprobe -v`
+5. In guest: `lockprobe -D -C`
+6. In guest: `lockprobe -D -F`
+7. In guest: `lockprobe -L`
+8. In guest: `halt`
+
+Rationale:
+
+- `qemu-nox` alone can miss framebuffer/graphics-console bringup regressions.
+- `qemu` alone can hide serial-path and non-graphics interactions.
+- `-L` specifically covers sanctioned sleep/wakeup handoff transitions used by
+  lockdep false-positive detection work.

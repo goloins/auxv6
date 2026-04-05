@@ -82,6 +82,8 @@ cat /proc/net_dev   # raw interface counter dump, C-locale scaffolding, and corr
 - Audit follow-up found a boot-order lock compatibility break on non-xv6fs roots: `idup()` can run before xv6fs-only `iinit()`, leaving `icache.lock` uninitialized; fix: split out unconditional one-time `icache_init()` and call it before VFS bootstrap.
 - `lockprobe` now has a dedicated lockdep handoff selftest mode (`-L`) that intentionally drives pipe and ticks-based sleep/wakeup transitions to catch lock-order regressions in sanctioned sleep paths.
 - Storage/network lock hardening pass now annotates active block/net lock classes (core net tables, socket layer, IDE/AHCI/NVMe/virtio-blk, major NIC drivers, and filesystem mount locks) with explicit lockdep class labels for clearer panic chains and faster root-causeing.
+- A graphical-boot regression (seen on `make qemu` but not `make qemu-nox`) was traced to lockdep checks firing too early in bring-up; fix: defer lockdep enforcement until late boot via `lockdep_enable()` after memory and console-gfx late-enable complete.
+- Validation policy is now codified for lock/console work: both `make qemu` and `make qemu-nox` boots plus full `lockprobe` matrix (including `-L`) are required before signoff.
 - NVMe/loop device-number collision was fixed by moving loop base to dev 44, restoring stable `nda` visibility in `lsblk` and successful NVMe ext2 mounting.
 - Storage diagnostics improved with `/proc/bdev_table` and `lsblk -v`, making block-device registration/capacity state directly inspectable.
 - `qemu-nvme-fat` image generation now uses dosfstools (`mkfs.fat`/`mkdosfs`) and produces a deterministic FAT16 image containing a known `README.TXT` marker for quick validation.

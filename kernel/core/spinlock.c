@@ -10,6 +10,14 @@
 #include "spinlock.h"
 
 #if KDEBUG_LOCKDEP
+static int lockdep_runtime_enabled;
+
+void
+lockdep_enable(void)
+{
+  lockdep_runtime_enabled = 1;
+}
+
 static int
 lockdep_is_ptable(struct spinlock *lk)
 {
@@ -218,7 +226,8 @@ acquire(struct spinlock *lk)
   getcallerpcs(&lk, lk->pcs);
 #endif
 #if KDEBUG_LOCKDEP
-  lockdep_on_acquire(lk);
+  if(lockdep_runtime_enabled)
+    lockdep_on_acquire(lk);
 #endif
 }
 
@@ -238,7 +247,8 @@ release(struct spinlock *lk)
   }
 
 #if KDEBUG_LOCKDEP
-  lockdep_on_release(lk);
+  if(lockdep_runtime_enabled)
+    lockdep_on_release(lk);
 #endif
 
   lk->pcs[0] = 0;

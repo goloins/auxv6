@@ -59,6 +59,33 @@ variants pass without lockdep panic.
   major NIC drivers, and filesystem mount locks. This preserves behavior while
   improving lock-chain diagnostics during panic triage.
 
+### Boot-Stability Follow-up (Graphical Target)
+
+- A regression reproduced only on graphical boot (`make qemu`) exposed a
+  validation gap from relying too heavily on `make qemu-nox` runs.
+- Root cause was lockdep enforcement occurring too early in boot/device bringup
+  paths; this could hard-fail before useful serial diagnostics were available.
+- Resolution: lockdep runtime checks are now armed explicitly via
+  `lockdep_enable()` after late boot initialization (`kinit2` and
+  `console_gfx_late_enable()`), preserving runtime lockdep value while avoiding
+  pre-console/pre-uart hard-fail risk.
+
+### Required Validation Checklist (Lock/Console Changes)
+
+Apply this checklist to any change in spinlock/sleeplock/lockdep logic,
+console locking, tty read/write synchronization, or framebuffer mirror paths.
+
+1. Host boot test: `sudo make qemu-nox`
+2. Host boot test: `sudo make qemu`
+3. Guest test: `lockprobe`
+4. Guest test: `lockprobe -v`
+5. Guest test: `lockprobe -D -C`
+6. Guest test: `lockprobe -D -F`
+7. Guest test: `lockprobe -L`
+8. Guest test: `halt`
+
+A change is not considered lock-safe until all items above pass.
+
 ### Important Design Deviation from Original Phase 2 Text
 
 The original plan proposed converting console locking directly to sleeplock.

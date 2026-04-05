@@ -2007,15 +2007,24 @@ cprintf(char *fmt, ...)
   int width, prec, have_prec, left, zero;
 
   locking = cons.locking;
+  if(locking && holding(&cons.tty_lock))
+    locking = 0;
 #if KDEBUG_LOCKDEP
   if(locking) {
-    // mycpu() requires interrupts disabled; only consult lockdep state in that case.
-    if((readeflags() & FL_IF) == 0) {
-      struct cpu *cpu = mycpu();
-      // Avoid rank inversions when logging from within other lock-protected paths.
-      if(cpu && cpu->lockdep_depth > 0)
-        locking = 0;
-    }
+    struct cpu *cpu;
+    int depth;
+
+    // Read lockdep depth with interrupts disabled so mycpu() is always valid.
+    depth = 0;
+    pushcli();
+    cpu = mycpu();
+    if(cpu)
+      depth = cpu->lockdep_depth;
+    popcli();
+
+    // Avoid rank inversions when logging from within other lock-protected paths.
+    if(depth > 0)
+      locking = 0;
   }
 #endif
   if(locking)
