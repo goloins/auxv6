@@ -35,6 +35,11 @@
 // bad release, nested acquire, and timeout. Keep enabled while lock refactors
 // are active; set to 0 for quieter production output.
 #define KDEBUG_SPINLOCK_LOCKFAIL 1
+// KDEBUG_LOCKDEP: enable lock-order validation (lockdep-lite) in spinlock
+// acquire/release paths. Panics when a lower-rank lock is acquired while
+// holding a higher-rank lock or when release order mismatches.
+#define KDEBUG_LOCKDEP 1
+#define MAX_LOCKDEP_HELD 32
 
 #define NSOCKET 64              /* max open sockets system-wide */
 

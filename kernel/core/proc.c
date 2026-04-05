@@ -581,6 +581,7 @@ void
 pinit(void)
 {
   initlock(&ptable.lock, "ptable");
+  lockdep_set_rank(&ptable.lock, LOCK_RANK_PTABLE, "ptable");
 }
 
 // Combined signal dispatch called at every trap/syscall return to userspace.
@@ -1534,6 +1535,9 @@ forkret(void)
     // of a regular process (e.g., they call sleep), and thus cannot
     // be run from main().
     first = 0;
+    // icache lock/sleeplocks are used by generic inode ref paths even when
+    // xv6fs is not the selected root filesystem.
+    icache_init();
     // iinit/initlog are xv6fs-specific; only call for xv6-root
     if(ROOTFS_TYPE == ROOTFS_TYPE_XV6FS){
       iinit(ROOTDEV);

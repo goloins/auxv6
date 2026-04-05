@@ -36,6 +36,7 @@ pipealloc(struct file **f0, struct file **f1)
   p->nwrite = 0;
   p->nread = 0;
   initlock(&p->lock, "pipe");
+  lockdep_set_rank(&p->lock, LOCK_RANK_DEFAULT, "pipe");
   (*f0)->type = FD_PIPE;
   (*f0)->readable = 1;
   (*f0)->writable = 0;

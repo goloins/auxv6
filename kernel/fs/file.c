@@ -22,6 +22,7 @@ void
 fileinit(void)
 {
   initsleeplock(&ftable.lock, "ftable");
+  lockdep_set_rank(&ftable.lock.lk, LOCK_RANK_FTABLE_INTERNAL, "ftable_internal");
 }
 
 // Allocate a file structure.

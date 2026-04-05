@@ -28,6 +28,7 @@ bdevinit(void)
   int i;
 
   initlock(&bdevtable.lock, "bdev");
+  lockdep_set_rank(&bdevtable.lock, LOCK_RANK_DEFAULT, "bdev");
   acquire(&bdevtable.lock);
   for(i = 0; i < NDEV; i++){
     bdevtable.dev[i].ops = 0;

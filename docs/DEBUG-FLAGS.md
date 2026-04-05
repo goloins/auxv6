@@ -95,6 +95,7 @@ Control filesystem and driver diagnostic output:
 | `DBG_NVME` | Deep NVMe bring-up tracing (reset/enable/identify/MSI disable) | 0 (always off) |
 | `DBG_VIRTIO_NET` | Verbose virtio-net queue/IRQ/poll diagnostics | 0 (always off) |
 | `KDEBUG_SPINLOCK_LOCKFAIL` | Print spinlock lock-name/owner diagnostics before panic on nested acquire, bad release, and timeout | 1 |
+| `KDEBUG_LOCKDEP` | Enable lockdep-lite lock-order checks in spinlock acquire/release paths | 1 |
 
 ### `KDEBUG_SPINLOCK_LOCKFAIL` - Spinlock Failure Diagnostics
 
@@ -116,6 +117,36 @@ pairing bugs.
 
 Set this to `0` for quieter production output once lock migration work is
 stable.
+
+### `KDEBUG_LOCKDEP` - Lock Order Validation (Lockdep-Lite)
+
+Controls lock-order verification in `kernel/core/spinlock.c`.
+
+**Default:** 1 (enabled)  
+**Type:** Compile-time flag (`include/param.h`)  
+**Files:** `kernel/core/spinlock.c`, lock init sites in core subsystems
+
+**What it checks:**
+- acquire-time order: panics if code acquires a lower-rank lock while holding
+   a higher-rank lock.
+- release-time order: panics if code releases a lock that is not the most
+   recently acquired lock on that CPU.
+- lockdep stack overflow/underflow in per-CPU lock tracking.
+
+**Diagnostics include:**
+- attempted lock name/class/rank
+- top held lock/rank
+- full held-lock chain dump for the current CPU
+
+**Initial ranked classes in-tree:**
+- `console_input` / `console_tty` / `console_gfx`
+- `ftable_internal` (sleeplock internal spinlock)
+- `ticks`
+- `ptable`
+- `log`
+
+This is intentionally a lightweight lockdep pass: it gives fast failure for
+order bugs without introducing a full witness graph.
 
 ### Block Device Table Snapshot (`/proc/bdev_table`)
 

@@ -566,6 +566,7 @@ vfs_init(void)
   struct inode *rootip;
 
   initlock(&vfslock, "vfs");
+  lockdep_set_rank(&vfslock, LOCK_RANK_DEFAULT, "vfs");
 
   memset(&rootvfs, 0, sizeof(rootvfs));
   vfs_root_configure(&rootvfs);

@@ -53,6 +53,7 @@ binit(void)
   struct buf *b;
 
   initlock(&bcache.lock, "bcache");
+  lockdep_set_rank(&bcache.lock, LOCK_RANK_DEFAULT, "bcache");
   memset(bcache.hash, 0, sizeof(bcache.hash));
 
 //PAGEBREAK!

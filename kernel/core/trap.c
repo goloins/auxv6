@@ -36,6 +36,7 @@ static void
 irq_init(void)
 {
   initlock(&irq_lock, "irq");
+  lockdep_set_rank(&irq_lock, LOCK_RANK_DEFAULT, "irq");
   for(int i = 0; i < MAX_IRQ; i++){
     irq_handlers[i].num_handlers = 0;
     for(int j = 0; j < MAX_HANDLERS_PER_IRQ; j++){
@@ -216,6 +217,7 @@ tvinit(void)
   SETGATE(idt[T_SYSCALL], 1, SEG_KCODE<<3, vectors[T_SYSCALL], DPL_USER);
 
   initlock(&tickslock, "time");
+  lockdep_set_rank(&tickslock, LOCK_RANK_TICKS, "ticks");
   ktime_init();
   irq_init();  // Initialize dynamic IRQ handlers
 }

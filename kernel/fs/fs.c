@@ -205,16 +205,29 @@ struct {
   struct inode *hash[ICACHE_HASH_SIZE]; // O(1) iget() lookup chains
 } icache;
 
+static int icache_inited;
+
+void
+icache_init(void)
+{
+  int i;
+
+  if(icache_inited)
+    return;
+
+  initlock(&icache.lock, "icache");
+  lockdep_set_rank(&icache.lock, LOCK_RANK_DEFAULT, "icache");
+  memset(icache.hash, 0, sizeof(icache.hash));
+  for(i = 0; i < NINODE; i++)
+    initsleeplock(&icache.inode[i].lock, "inode");
+
+  icache_inited = 1;
+}
+
 void
 iinit(int dev)
 {
-  int i = 0;
-  
-  initlock(&icache.lock, "icache");
-  memset(icache.hash, 0, sizeof(icache.hash));
-  for(i = 0; i < NINODE; i++) {
-    initsleeplock(&icache.inode[i].lock, "inode");
-  }
+  icache_init();
 
   readsb(dev, &sb);
   cprintf("sb: size %d nblocks %d ninodes %d nlog %d logstart %d\

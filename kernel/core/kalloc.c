@@ -179,6 +179,7 @@ void
 kinit1(void *vstart, void *vend)
 {
   initlock(&kmem.lock, "kmem");
+  lockdep_set_rank(&kmem.lock, LOCK_RANK_KMEM, "kmem");
   kmem.use_lock = 0;
   freerange(vstart, vend);
 }

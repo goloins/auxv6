@@ -2007,6 +2007,17 @@ cprintf(char *fmt, ...)
   int width, prec, have_prec, left, zero;
 
   locking = cons.locking;
+#if KDEBUG_LOCKDEP
+  if(locking) {
+    // mycpu() requires interrupts disabled; only consult lockdep state in that case.
+    if((readeflags() & FL_IF) == 0) {
+      struct cpu *cpu = mycpu();
+      // Avoid rank inversions when logging from within other lock-protected paths.
+      if(cpu && cpu->lockdep_depth > 0)
+        locking = 0;
+    }
+  }
+#endif
   if(locking)
     acquire(&cons.tty_lock);
 
@@ -3800,6 +3811,8 @@ consoleread(struct inode *ip, char *dst, uint off, int n)
       }
 
       if(!canonical && vtime > 0) {
+        release(&cons.tty_lock);
+
         acquire(&tickslock);
 
         if(vmin > 0 && got > 0 && !timed_mode) {
@@ -3810,12 +3823,10 @@ consoleread(struct inode *ip, char *dst, uint off, int n)
         now = ticks;
         if(timed_mode && (int)(now - deadline) >= 0) {
           release(&tickslock);
-          release(&cons.tty_lock);
           ilock(ip);
           return target - n;
         }
 
-        release(&cons.tty_lock);
         sleep(&ticks, &tickslock);
         release(&tickslock);
         acquire(&cons.tty_lock);
@@ -3939,6 +3950,9 @@ consoleinit(void)
   initlock(&cons.input_lock, "console_input");
   initlock(&cons.tty_lock, "console_tty");
   initlock(&cons.gfx_lock, "console_gfx");
+  lockdep_set_rank(&cons.input_lock, LOCK_RANK_CONSOLE_INPUT, "console_input");
+  lockdep_set_rank(&cons.tty_lock, LOCK_RANK_CONSOLE_TTY, "console_tty");
+  lockdep_set_rank(&cons.gfx_lock, LOCK_RANK_CONSOLE_GFX, "console_gfx");
   console_select_hw_surface();
   cga_read_cursor();
   blank = (ushort)(' ' | (0x07 << 8));

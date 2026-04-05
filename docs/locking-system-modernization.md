@@ -23,6 +23,32 @@ already landed and guest-validated.
      console output contexts.
    - `cons.gfx_lock` (spinlock): reserved for graphics register critical paths.
 
+4. Lockdep-lite order validation is now in-tree:
+  - per-lock rank metadata (`rank`, `class_name`) added to `struct spinlock`.
+  - acquire-time order checks panic on rank inversion.
+  - release-time checks panic on non-LIFO release order.
+  - per-CPU held-lock chain diagnostics identify active lock stack on failure.
+  - core lock-class annotations now cover additional hot-path locks (`icache`,
+    `bcache`, `pipe`, `bdev`, `vfs`, `ktime`, `irq`) to improve panic
+    readability and reduce `(null)`/implicit-class diagnostics.
+
+5. Post-landing lockdep regression sweep is complete for the initial tranche:
+   - guest-reported rank inversion (`ptable` -> `kmem`) was fixed by explicit
+     allocator rank annotation.
+   - a real console timed-read lock-order bug was fixed in `consoleread()` by
+     releasing tty lock before acquiring `tickslock` in the timeout-wait path.
+   - canonical xv6 sleep handoff behavior (`sleep(chan, lk)`) is now treated as
+     a sanctioned lockdep transition instead of a generic non-LIFO violation.
+   - a `halt` panic (`mycpu called with interrupts enabled`) was fixed by
+     hardening lockdep-aware `cprintf()` logic to call `mycpu()` only when
+     interrupts are already disabled.
+   - non-xv6fs boot paths now initialize inode-cache locking unconditionally:
+     `icache_init()` runs before VFS/bootstrap inode reference flows so
+     `idup()` cannot acquire an uninitialized `icache.lock`.
+
+Current manual guest validation status: `lockprobe` default, `-v`, and debug
+variants pass without lockdep panic.
+
 ### Important Design Deviation from Original Phase 2 Text
 
 The original plan proposed converting console locking directly to sleeplock.
@@ -505,7 +531,8 @@ void console_gfx_sync() {
 1. Restrict `cons.gfx_lock` to strict register-submit windows and keep
   framebuffer prep outside that lock.
 2. Evaluate per-tty lock granularity when `CONSOLE_NTTY` expands.
-3. Add lock-order assertions for critical console and procfs paths.
+3. Expand rank annotation coverage to additional subsystems beyond the current
+  core set (`console_*`, `ftable_internal`, `ticks`, `ptable`, `log`).
 4. Gather performance counters under heavy console + signal workload after the
   split to quantify contention reduction.
 
@@ -517,6 +544,7 @@ void console_gfx_sync() {
 // In include/param.h
 #define SPINLOCK_TIMEOUT_ITERS    100000000  // ~100ms at 1GHz
 #define KDEBUG_SPINLOCK_LOCKFAIL  1          // pre-panic lock diagnostics
+#define KDEBUG_LOCKDEP            1          // lock-order/release-order checks
 
 // In kernel/core/spinlock.c
 #if KDEBUG_SPINLOCK_LOCKFAIL
@@ -525,6 +553,11 @@ void console_gfx_sync() {
   if(iter >= SPINLOCK_TIMEOUT_ITERS) {
     panic("DEADLOCK: spinlock acquire timeout - circular lock dependency");
   }
+
+#if KDEBUG_LOCKDEP
+  // acquire-time rank inversion check + release-order validation
+  // with per-CPU held-lock chain diagnostics
+#endif
 ```
 
 ### Sleeplock Controls
@@ -558,6 +591,13 @@ void console_gfx_sync() {
 - [x] Interrupt handler holds only `input_lock`
 - [ ] Multi-vCPU contention benchmark data still pending
 - [ ] Latency characterization under load still pending
+
+### Lockdep-Lite Follow-On
+- [x] Rank-aware lock metadata added to spinlock core
+- [x] Acquire-time lock order checks enabled (`KDEBUG_LOCKDEP`)
+- [x] Release-order checks enabled (`KDEBUG_LOCKDEP`)
+- [x] Core lock classes ranked and annotated
+- [ ] Rank coverage expanded for the rest of kernel lock classes
 
 ## References
 

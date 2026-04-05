@@ -9,12 +9,157 @@
 #include "proc.h"
 #include "spinlock.h"
 
+#if KDEBUG_LOCKDEP
+static int
+lockdep_is_ptable(struct spinlock *lk)
+{
+  if(lk == 0)
+    return 0;
+  if(lk->class_name && strcmp(lk->class_name, "ptable") == 0)
+    return 1;
+  if(lk->name && strcmp(lk->name, "ptable") == 0)
+    return 1;
+  return 0;
+}
+
+static void
+lockdep_dump_chain(struct cpu *c)
+{
+  int i;
+
+  cprintf("lockdep held chain (depth=%d):\n", c ? c->lockdep_depth : -1);
+  if(c == 0)
+    return;
+  for(i = 0; i < c->lockdep_depth; i++) {
+    struct spinlock *lk = c->lockdep_locks[i];
+    cprintf("  [%d] %s class=%s rank=%d\n",
+            i,
+            lk && lk->name ? lk->name : "(null)",
+            lk && lk->class_name ? lk->class_name : "(null)",
+            c->lockdep_ranks[i]);
+  }
+}
+
+static void
+lockdep_on_acquire(struct spinlock *lk)
+{
+  struct cpu *c;
+  int top_rank;
+
+  c = mycpu();
+  if(c == 0)
+    return;
+
+  if(c->lockdep_depth > 0) {
+    top_rank = c->lockdep_ranks[c->lockdep_depth - 1];
+    // ptable is a special synchronization pivot in xv6 sleep/sched paths:
+    // allow acquiring ptable under other locks and acquiring other locks
+    // while ptable is held in narrowly-scoped kernel paths.
+    if(!lockdep_is_ptable(lk) &&
+       !lockdep_is_ptable(c->lockdep_locks[c->lockdep_depth - 1]) &&
+       lk->rank < top_rank) {
+      cprintf("lockdep order violation: acquire %s(class=%s rank=%d) while holding rank=%d\n",
+              lk->name ? lk->name : "(null)",
+              lk->class_name ? lk->class_name : "(null)",
+              lk->rank,
+              top_rank);
+      lockdep_dump_chain(c);
+      panic("lockdep: order violation");
+    }
+  }
+
+  if(c->lockdep_depth >= MAX_LOCKDEP_HELD) {
+    cprintf("lockdep overflow: cpu=%d depth=%d max=%d\n",
+            c->apicid,
+            c->lockdep_depth,
+            MAX_LOCKDEP_HELD);
+    panic("lockdep: overflow");
+  }
+
+  c->lockdep_locks[c->lockdep_depth] = lk;
+  c->lockdep_ranks[c->lockdep_depth] = lk->rank;
+  c->lockdep_depth++;
+}
+
+static void
+lockdep_on_release(struct spinlock *lk)
+{
+  struct cpu *c;
+  int idx;
+  int i;
+
+  c = mycpu();
+  if(c == 0)
+    return;
+
+  if(c->lockdep_depth <= 0) {
+    cprintf("lockdep underflow: release %s(class=%s rank=%d) with empty chain\n",
+            lk->name ? lk->name : "(null)",
+            lk->class_name ? lk->class_name : "(null)",
+            lk->rank);
+    panic("lockdep: underflow");
+  }
+
+  idx = c->lockdep_depth - 1;
+  if(c->lockdep_locks[idx] != lk) {
+    // Allow xv6 sleep handoff pattern: sleep(chan, lk) acquires ptable,
+    // then releases lk while ptable remains held.
+    if(c->lockdep_depth >= 2 &&
+       c->lockdep_locks[c->lockdep_depth - 1] &&
+       c->lockdep_locks[c->lockdep_depth - 1]->name &&
+       strcmp(c->lockdep_locks[c->lockdep_depth - 1]->name, "ptable") == 0 &&
+       c->lockdep_locks[c->lockdep_depth - 2] == lk) {
+      c->lockdep_depth--;
+      c->lockdep_locks[c->lockdep_depth - 1] = c->lockdep_locks[c->lockdep_depth];
+      c->lockdep_ranks[c->lockdep_depth - 1] = c->lockdep_ranks[c->lockdep_depth];
+      c->lockdep_locks[c->lockdep_depth] = 0;
+      c->lockdep_ranks[c->lockdep_depth] = 0;
+      return;
+    }
+
+    // If a lock appears below the stack top, this is almost always a bug.
+    // Keep a clear diagnostic with the held-lock chain.
+    for(i = c->lockdep_depth - 1; i >= 0; i--) {
+      if(c->lockdep_locks[i] == lk)
+        break;
+    }
+    cprintf("lockdep release order violation: releasing %s(class=%s rank=%d), top is %s(class=%s rank=%d)\n",
+            lk->name ? lk->name : "(null)",
+            lk->class_name ? lk->class_name : "(null)",
+            lk->rank,
+            c->lockdep_locks[idx] && c->lockdep_locks[idx]->name ? c->lockdep_locks[idx]->name : "(null)",
+            c->lockdep_locks[idx] && c->lockdep_locks[idx]->class_name ? c->lockdep_locks[idx]->class_name : "(null)",
+            c->lockdep_ranks[idx]);
+    if(i >= 0)
+      cprintf("lockdep note: release target present at depth index %d\n", i);
+    lockdep_dump_chain(c);
+    panic("lockdep: release order violation");
+  }
+
+  c->lockdep_depth--;
+  c->lockdep_locks[c->lockdep_depth] = 0;
+  c->lockdep_ranks[c->lockdep_depth] = 0;
+}
+#endif
+
 void
 initlock(struct spinlock *lk, char *name)
 {
   lk->name = name;
   lk->locked = 0;
+  lk->rank = LOCK_RANK_DEFAULT;
+  lk->class_name = name;
   lk->cpu = 0;
+}
+
+void
+lockdep_set_rank(struct spinlock *lk, int rank, char *class_name)
+{
+  if(lk == 0)
+    return;
+  lk->rank = rank;
+  if(class_name)
+    lk->class_name = class_name;
 }
 
 // Acquire the lock.
@@ -72,6 +217,9 @@ acquire(struct spinlock *lk)
 #ifdef KDEBUG_SPINLOCK_CALLSTACK
   getcallerpcs(&lk, lk->pcs);
 #endif
+#if KDEBUG_LOCKDEP
+  lockdep_on_acquire(lk);
+#endif
 }
 
 // Release the lock.
@@ -88,6 +236,10 @@ release(struct spinlock *lk)
 #endif
     panic("release");
   }
+
+#if KDEBUG_LOCKDEP
+  lockdep_on_release(lk);
+#endif
 
   lk->pcs[0] = 0;
   lk->cpu = 0;

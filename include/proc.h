@@ -2,6 +2,7 @@
 #include "signal.h"
 
 struct run;
+struct spinlock;
 
 // Per-CPU state
 struct cpu {
@@ -19,6 +20,11 @@ struct cpu {
   uint sched_picks;            // Number of RUNNABLE selections dispatched
   struct run *kfree_cache[KALLOC_CPU_CACHE]; // Per-CPU free-page stash
   int kfree_cache_count;       // Number of pages in kfree_cache
+#if KDEBUG_LOCKDEP
+  int lockdep_depth;           // Number of currently held locks on this CPU
+  struct spinlock *lockdep_locks[MAX_LOCKDEP_HELD];
+  int lockdep_ranks[MAX_LOCKDEP_HELD];
+#endif
 };
 
 extern struct cpu cpus[NCPU];

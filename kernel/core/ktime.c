@@ -133,6 +133,7 @@ ktime_init(void)
   uint rtc_sec;
 
   initlock(&ktime_lock, "ktime");
+  lockdep_set_rank(&ktime_lock, LOCK_RANK_DEFAULT, "ktime");
   ktime_ticks = 0;
   ktime_tsc_per_tick = 0;
   ktime_last_tick_tsc = 0;
