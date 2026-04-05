@@ -44,6 +44,7 @@ Generated: 2026-04-04
 | kill | targetfs/usr/share/man/kill.md | 2026-04-01 | user/kill.c | source-derived usage/options |
 | ln | targetfs/usr/share/man/ln.md | 2026-04-01 | user/ln.c | source-derived usage/options |
 | login | targetfs/usr/share/man/login.md | 2026-04-01 | user/login.c | source-derived usage/options |
+| lockprobe | targetfs/usr/share/man/lockprobe.md | 2026-04-05 | user/lockprobe.c | lock modernization validation utility for console and ftable paths |
 | losetup | targetfs/usr/share/man/losetup.md | 2026-04-01 | user/losetup.c | source-derived usage/options |
 | lsblk | targetfs/usr/share/man/lsblk.md | 2026-04-01 | user/lsblk.c | source-derived usage/options |
 | lspci | targetfs/usr/share/man/lspci.md | 2026-04-01 | user/lspci.c | source-derived usage/options |

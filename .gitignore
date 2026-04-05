@@ -113,6 +113,7 @@ user/tail
 user/lsof
 user/which
 user/file
+user/lockprobe
 user/server7
 user/date
 user/time

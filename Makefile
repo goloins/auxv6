@@ -542,6 +542,9 @@ _which: user/which
 _file: user/file
 	cp user/file _file
 
+_lockprobe: user/lockprobe
+	cp user/lockprobe _lockprobe
+
 _server7: user/server7
 	cp user/server7 _server7
 
@@ -670,6 +673,7 @@ UPROGS=\
 	_lsof\
 	_which\
 	_file\
+	_lockprobe\
 	_date\
 	_time\
 	_dmesg\
