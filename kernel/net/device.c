@@ -237,8 +237,20 @@ if_set_addr(struct ifnet *ifp, uint addr, uint mask)
 
 	if(addr != 0 && mask != 0)
 		return route_add(addr & mask, mask, 0, addr, ifp, RTF_UP);
-
 	return 0;
+}
+
+void
+if_link_state_update(struct ifnet *ifp, uint state)
+{
+	if(ifp == 0)
+		return;
+	/* Lockless -- caller holds device lock; x86 aligned-word stores are atomic */
+	ifp->if_link_state = state;
+	if(state == LINK_STATE_UP)
+		ifp->if_flags |= IFF_RUNNING;
+	else if(state == LINK_STATE_DOWN)
+		ifp->if_flags &= ~IFF_RUNNING;
 }
 
 int

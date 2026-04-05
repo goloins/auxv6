@@ -42,6 +42,7 @@
 #define RTL_CONFIG1     0x52    /* Configuration 1 */
 #define RTL_MSR         0x58    /* Media status */
 #define RTL_PHY_AR      0x60    /* PHY access register */
+#define MSR_LINKB       0x04    /* Link bad (0 = link good) */
 #define RTL_PHY_DR      0x64    /* PHY data register */
 #define RTL_RMS         0xDA    /* RX max size */
 #define RTL_MTPS        0xEC    /* Max TX packet size */
@@ -420,6 +421,7 @@ static void
 rtl8111_poll(struct ifnet *ifp)
 {
     struct rtl8111_softc *sc = (struct rtl8111_softc *)ifp->if_softc;
+    uint new_state;
 
     if (!sc)
         return;
@@ -427,6 +429,9 @@ rtl8111_poll(struct ifnet *ifp)
     acquire(&sc->lock);
     rtl8111_tx_complete(sc);
     rtl8111_rx_complete(sc);
+    new_state = (rtl_read8(sc, RTL_MSR) & MSR_LINKB) ? LINK_STATE_DOWN : LINK_STATE_UP;
+    if (ifp->if_link_state != new_state)
+        if_link_state_update(ifp, new_state);
     release(&sc->lock);
 }
 
@@ -535,6 +540,9 @@ rtl8111_probe(struct pci_dev *dev)
     sc->ifn.if_mtu = 1500;
     sc->ifn.if_flags = IFF_UP | IFF_BROADCAST | IFF_RUNNING;
     memmove(sc->ifn.if_hwaddr, sc->mac, sizeof(sc->ifn.if_hwaddr));
+    sc->ifn.if_link_state = (rtl_read8(sc, RTL_MSR) & MSR_LINKB) ? LINK_STATE_DOWN : LINK_STATE_UP;
+    if (sc->ifn.if_link_state == LINK_STATE_DOWN)
+        sc->ifn.if_flags &= ~IFF_RUNNING;
     sc->ifn.if_softc = sc;
     sc->ifn.if_input = ether_input;
     sc->ifn.if_ops = &rtl8111_ifnet_ops;

@@ -463,10 +463,8 @@ e1000_irq_handler(int irq, void *arg)
     /* Link status change */
     if (icr & E1000_ICR_LSC) {
         uint32_t status = e1000_read(sc, E1000_STATUS);
-        if (status & E1000_STATUS_LU)
-            sc->ifn.if_flags |= IFF_RUNNING;
-        else
-            sc->ifn.if_flags &= ~IFF_RUNNING;
+        if_link_state_update(&sc->ifn,
+            (status & E1000_STATUS_LU) ? LINK_STATE_UP : LINK_STATE_DOWN);
         cprintf("e1000: link %s\n", (status & E1000_STATUS_LU) ? "up" : "down");
     }
     
@@ -547,6 +545,7 @@ e1000_probe(struct pci_dev *pci)
         sc->ifn.if_flags |= IFF_RUNNING;
     
     memmove(sc->ifn.if_hwaddr, sc->mac, sizeof(sc->ifn.if_hwaddr));
+    sc->ifn.if_link_state = (status & E1000_STATUS_LU) ? LINK_STATE_UP : LINK_STATE_DOWN;
     sc->ifn.if_softc = sc;
     sc->ifn.if_input = ether_input;
     sc->ifn.if_ops = &e1000_ifnet_ops;

@@ -161,7 +161,6 @@ void            pty_poll_events(struct file *f, int *rd, int *wr, int *err);
 
 // audio_core.c
 void            audio_init(void);
-void            audio_tick(void);
 void            audio_pci_probe_init(void);
 void            audio_intel_ac97_init(void);
 void            audio_realtek_ac97_init(void);
@@ -697,6 +696,7 @@ int             if_output(struct ifnet*, struct mbuf*);
 void            if_input(struct ifnet*, struct mbuf*);
 int             if_set_addr(struct ifnet*, uint, uint);
 int             if_set_addr_byindex(uint, uint, uint);
+void            if_link_state_update(struct ifnet*, uint);
 void            loopback_attach(void);
 void            route_init(void);
 int             route_add(uint, uint, uint, uint, struct ifnet*, uint);

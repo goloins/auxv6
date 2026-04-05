@@ -670,6 +670,7 @@ virtio_net_probe(struct pci_dev *pci)
         sc->ifp.if_flags |= IFF_RUNNING;
     VNETDBG("virtio_net: link_status=0x%x if_flags=0x%x mtu=%u\n",
             link_status, sc->ifp.if_flags, sc->ifp.if_mtu);
+        sc->ifp.if_link_state = (link_status & VIRTIO_NET_S_LINK_UP) ? LINK_STATE_UP : LINK_STATE_DOWN;
     memmove(sc->ifp.if_hwaddr, sc->mac, sizeof(sc->ifp.if_hwaddr));
     sc->ifp.if_softc = sc;
     sc->ifp.if_input = ether_input;

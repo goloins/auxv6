@@ -580,6 +580,7 @@ pcnet_probe(struct pci_dev *pci)
     sc->ifn.if_mtu = 1500;
     sc->ifn.if_flags = IFF_UP | IFF_BROADCAST | IFF_RUNNING;
     memmove(sc->ifn.if_hwaddr, sc->mac, sizeof(sc->ifn.if_hwaddr));
+    sc->ifn.if_link_state = LINK_STATE_UP;  /* PCnet: no PHY status reg; RUNNING set at start */
     sc->ifn.if_softc = sc;
     sc->ifn.if_input = ether_input;
     sc->ifn.if_ops = &pcnet_ifnet_ops;
