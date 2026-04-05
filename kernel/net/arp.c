@@ -8,7 +8,6 @@
 #define ETHERTYPE_ARP 0x0806
 #define ARP_OP_REQUEST 1
 #define ARP_OP_REPLY 2
-#define ARP_CACHE_SIZE 128
 #define ARP_PENDING_TICKS 20
 #define ARP_RESOLVED_TICKS 6000
 
@@ -43,7 +42,7 @@ struct arp_entry {
 
 static struct {
 	struct spinlock lock;
-	struct arp_entry entries[ARP_CACHE_SIZE];
+	struct arp_entry entries[NET_ARP_CACHE_MAX];
 } arptab;
 
 static void
@@ -69,7 +68,7 @@ arp_lookup_locked(struct ifnet *ifp, uint ip)
 {
 	int i;
 
-	for(i = 0; i < ARP_CACHE_SIZE; i++){
+	for(i = 0; i < NET_ARP_CACHE_MAX; i++){
 		if(arptab.entries[i].state == ARP_FREE)
 			continue;
 		if(arptab.entries[i].ifp != ifp)
@@ -87,7 +86,7 @@ arp_alloc_locked(void)
 	struct arp_entry *oldest;
 
 	oldest = &arptab.entries[0];
-	for(i = 0; i < ARP_CACHE_SIZE; i++){
+	for(i = 0; i < NET_ARP_CACHE_MAX; i++){
 		if(arptab.entries[i].state == ARP_FREE)
 			return &arptab.entries[i];
 		if(arptab.entries[i].expire < oldest->expire)
@@ -187,7 +186,7 @@ arp_dump(struct arp_info *out, int max)
 
 	n = 0;
 	acquire(&arptab.lock);
-	for(i = 0; i < ARP_CACHE_SIZE && n < max; i++){
+	for(i = 0; i < NET_ARP_CACHE_MAX && n < max; i++){
 		entry = &arptab.entries[i];
 		if(entry->state == ARP_FREE || entry->ifp == 0)
 			continue;

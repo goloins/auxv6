@@ -20,6 +20,7 @@
 #include "sys/select.h"
 #include "poll.h"
 #include "limits.h"
+#include "net.h"
 
 struct stat;
 struct dirent;
@@ -40,8 +41,8 @@ typedef struct {
 #define MOUNTINFO_MAX 32
 #define NETIFINFO_NAME_MAX 16
 #define NETIFINFO_MAX 16
-#define ROUTEINFO_MAX 128
-#define ARPINFO_MAX 128
+#define ROUTEINFO_MAX NET_ROUTE_TABLE_MAX
+#define ARPINFO_MAX NET_ARP_CACHE_MAX
 
 #define ARP_FLAG_PENDING  0x1
 #define ARP_FLAG_RESOLVED 0x2

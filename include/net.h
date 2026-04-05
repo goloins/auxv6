@@ -8,6 +8,8 @@
 #define IFNAMSIZ 16
 #define MAXNETIF 16
 #define ETH_ADDR_LEN 6
+#define NET_ROUTE_TABLE_MAX 128
+#define NET_ARP_CACHE_MAX 128
 
 // Protocol IDs
 #define NET_PROTO_IP   0x0800

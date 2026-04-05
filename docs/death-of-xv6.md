@@ -219,9 +219,10 @@ in-tree by widening existing kernel/user constants in place:
 - `sys_mount` option payload handling is hardened: maximum payload is now one
   page minus NUL (`MOUNT_DATA_MAX = PGSIZE-1`), with heap-backed staging to
   avoid growing kernel stack pressure from large mount options.
-- Network-info tables are widened to reduce legacy fixed-limit truncation:
-  route table capacity (`NROUTE`) and ARP cache capacity (`ARP_CACHE_SIZE`) are
-  raised from 32 to 128, with matching userspace query maxima
+- Network-info tables are widened and centralized to reduce legacy fixed-limit
+  truncation: shared networking capacity constants (`NET_ROUTE_TABLE_MAX` and
+  `NET_ARP_CACHE_MAX` in `include/net.h`) are set to 128 and consumed by route/
+  ARP kernel tables plus matching userspace query maxima
   (`ROUTEINFO_MAX`/`ARPINFO_MAX`).
 
 Given current project policy (ABI expected to evolve), this was done directly

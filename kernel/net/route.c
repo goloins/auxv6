@@ -3,11 +3,9 @@
 #include "../../include/spinlock.h"
 #include "../../include/net.h"
 
-#define NROUTE 128
-
 struct {
 	struct spinlock lock;
-	struct route tab[NROUTE];
+	struct route tab[NET_ROUTE_TABLE_MAX];
 } rtable;
 
 static uint
@@ -31,7 +29,7 @@ route_init(void)
 	initlock(&rtable.lock, "route");
 	lockdep_set_rank(&rtable.lock, LOCK_RANK_DEFAULT, "route");
 	acquire(&rtable.lock);
-	for(i = 0; i < NROUTE; i++){
+	for(i = 0; i < NET_ROUTE_TABLE_MAX; i++){
 		rtable.tab[i].rt_dst = 0;
 		rtable.tab[i].rt_mask = 0;
 		rtable.tab[i].rt_gateway = 0;
@@ -53,7 +51,7 @@ route_add(uint dst, uint mask, uint gateway, uint src, struct ifnet *ifp, uint f
 
 	slot = 0;
 	acquire(&rtable.lock);
-	for(i = 0; i < NROUTE; i++){
+	for(i = 0; i < NET_ROUTE_TABLE_MAX; i++){
 		if(rtable.tab[i].rt_ifp == ifp &&
 		   rtable.tab[i].rt_dst == dst &&
 		   rtable.tab[i].rt_mask == mask){
@@ -91,7 +89,7 @@ route_delete(uint dst, uint mask, struct ifnet *ifp)
 		return -1;
 
 	acquire(&rtable.lock);
-	for(i = 0; i < NROUTE; i++){
+	for(i = 0; i < NET_ROUTE_TABLE_MAX; i++){
 		rt = &rtable.tab[i];
 		if((rt->rt_flags & RTF_UP) == 0)
 			continue;
@@ -126,7 +124,7 @@ route_lookup(uint dst, uint *src, uint *gateway)
 	bestlen = 0;
 
 	acquire(&rtable.lock);
-	for(i = 0; i < NROUTE; i++){
+	for(i = 0; i < NET_ROUTE_TABLE_MAX; i++){
 		rt = &rtable.tab[i];
 		if((rt->rt_flags & RTF_UP) == 0)
 			continue;
@@ -168,7 +166,7 @@ route_dump(struct route_info *out, int max)
 
 	n = 0;
 	acquire(&rtable.lock);
-	for(i = 0; i < NROUTE && n < max; i++){
+	for(i = 0; i < NET_ROUTE_TABLE_MAX && n < max; i++){
 		rt = &rtable.tab[i];
 		if((rt->rt_flags & RTF_UP) == 0)
 			continue;
