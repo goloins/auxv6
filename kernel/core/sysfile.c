@@ -41,13 +41,13 @@ static int nfs_alloc_dev(void);
 static int fdtable_expand(struct fdtable*);
 static void fdtable_init(struct fdtable*);
 
-static int
+int
 proc_fd_limit(struct proc *p)
 {
   if(p == 0)
-    return NOFILE;
-  if(p->rlimit_nofile_cur > (uint)NOFILE)
-    return NOFILE;
+    return NOFILE_HARD;
+  if(p->rlimit_nofile_cur > (uint)NOFILE_HARD)
+    return NOFILE_HARD;
   return (int)p->rlimit_nofile_cur;
 }
 
@@ -1870,6 +1870,11 @@ sys_poll(void)
     return -1;
   if(nfds < 0)
     return -1;
+  {
+    struct proc *curproc = myproc();
+    if(curproc == 0 || nfds > proc_fd_limit(curproc))
+      return -1;
+  }
   if(nfds == 0)
     ufds = 0;
   else {

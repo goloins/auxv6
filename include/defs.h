@@ -246,6 +246,7 @@ struct fdtable* fdtable_alloc(void);
 void            fdtable_free(struct fdtable*);
 int             fdtable_dup(struct fdtable*, struct fdtable*);
 int             fdtable_grow(struct fdtable*);
+int             proc_fd_limit(struct proc*);
 
 // fs.c
 void            readsb(int dev, struct superblock *sb);

@@ -789,8 +789,8 @@ found:
   p->tty = -1;
   p->uid = 0;
   p->gid = 0;
-  p->rlimit_nofile_cur = NOFILE;
-  p->rlimit_nofile_max = NOFILE;
+  p->rlimit_nofile_cur = NOFILE_DEFAULT;
+  p->rlimit_nofile_max = NOFILE_HARD;
   p->xstatus = 0;
   p->wait_event = WAIT_EVENT_NONE;
   p->wait_status = 0;
@@ -874,8 +874,8 @@ userinit(void)
   p->tty = 0;
   p->uid = 0;
   p->gid = 0;
-  p->rlimit_nofile_cur = NOFILE;
-  p->rlimit_nofile_max = NOFILE;
+  p->rlimit_nofile_cur = NOFILE_DEFAULT;
+  p->rlimit_nofile_max = NOFILE_HARD;
   p->xstatus = 0;
   p->wait_event = WAIT_EVENT_NONE;
   p->wait_status = 0;

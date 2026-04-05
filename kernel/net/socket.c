@@ -32,7 +32,7 @@ socket_fdalloc(struct file *f)
   if(curproc == 0 || curproc->fdtable == 0)
     return -1;
 
-  limit = (curproc->rlimit_nofile_cur > (uint)NOFILE) ? NOFILE : (int)curproc->rlimit_nofile_cur;
+  limit = proc_fd_limit(curproc);
 
   for(fd = 0; fd < limit; fd++){
     while(fd >= curproc->fdtable->capacity){

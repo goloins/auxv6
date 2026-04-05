@@ -629,8 +629,8 @@ sys_getrlimit(void)
 
   switch(resource) {
   case RLIMIT_NOFILE:
-    rlp->rlim_cur = p ? (rlim_t)p->rlimit_nofile_cur : (rlim_t)NOFILE;
-    rlp->rlim_max = p ? (rlim_t)p->rlimit_nofile_max : (rlim_t)NOFILE;
+    rlp->rlim_cur = p ? (rlim_t)p->rlimit_nofile_cur : (rlim_t)NOFILE_DEFAULT;
+    rlp->rlim_max = p ? (rlim_t)p->rlimit_nofile_max : (rlim_t)NOFILE_HARD;
     return 0;
   case RLIMIT_STACK:
     rlp->rlim_cur = fixed_stack;
@@ -673,7 +673,7 @@ sys_setrlimit(void)
 
   switch(resource) {
   case RLIMIT_NOFILE:
-    if(rlp->rlim_max > (rlim_t)NOFILE)
+    if(rlp->rlim_max > (rlim_t)NOFILE_HARD)
       return -1;
     p->rlimit_nofile_cur = (uint)rlp->rlim_cur;
     p->rlimit_nofile_max = (uint)rlp->rlim_max;

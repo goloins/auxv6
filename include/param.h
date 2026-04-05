@@ -14,10 +14,16 @@
 #define KALLOC_REFILL_BATCH    16   // pages pulled from global on local refill
 #define KALLOC_DRAIN_BATCH     16   // max pages returned to global per drain
 #define KALLOC_GLOBAL_RESERVE 256   // pages to leave globally available when possible
-#define NOFILE      512  // open files per process (dynamic fdtable limit)
+// Per-process FD limit policy:
+//   NOFILE_DEFAULT — soft limit inherited by each new process.
+//   NOFILE_HARD    — system hard ceiling; setrlimit(RLIMIT_NOFILE) cannot exceed this.
+//   NOFILE         — backward-compat alias for NOFILE_HARD.
+#define NOFILE_DEFAULT  256  // starting soft limit for new processes
+#define NOFILE_HARD     512  // absolute per-process ceiling (setrlimit upper bound)
+#define NOFILE          NOFILE_HARD
 // Deprecated: global open-file ceiling is no longer enforced by a fixed table.
 // Keep NFILE defined for compatibility/documentation only.
-#define NFILE      NOFILE
+#define NFILE      NOFILE_HARD
 #define NINODE      200  // maximum number of active i-nodes
 #define NDEV         64  // maximum block/char device number
 #define ROOTDEV       1  // device number of file system root disk
