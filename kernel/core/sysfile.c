@@ -2355,11 +2355,22 @@ sys_fcntl(void)
       flags = O_WRONLY;
     else
       flags = O_RDONLY;
+
+    if(f->type == FD_INODE && f->ip && f->ip->type == T_DEV &&
+       f->ip->major == AUDIODEV && f->ip->minor != 0){
+      if(audio_get_nonblock(f) > 0)
+        flags |= O_NONBLOCK;
+    }
     return flags;
 
-  case 4: // F_SETFL - set file status flags (O_APPEND, O_NONBLOCK not yet tracked)
+  case 4: // F_SETFL - set file status flags (audio O_NONBLOCK tracked)
     if(argint(2, &arg) < 0)
       return -1;
+    if(f->type == FD_INODE && f->ip && f->ip->type == T_DEV &&
+       f->ip->major == AUDIODEV && f->ip->minor != 0){
+      if(audio_set_nonblock(f, (arg & O_NONBLOCK) != 0) < 0)
+        return -1;
+    }
     return 0;
 
   case 1030: // F_DUPFD_CLOEXEC - duplicate with FD_CLOEXEC set on new descriptor

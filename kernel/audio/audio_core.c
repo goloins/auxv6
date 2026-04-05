@@ -7,6 +7,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "proc.h"
 #include "audio.h"
 #include "audio_ioctl.h"
 
@@ -40,6 +41,7 @@ struct audio_core_state {
 struct audio_stream {
   int in_use;
   struct file *owner;
+  int owner_pid;
   int nonblock;
   uint16_t minor;
 
@@ -182,6 +184,7 @@ audio_stream_alloc_locked(struct file *f, int minor, int nonblock, char *ring)
 {
   int i;
   struct audio_stream *s;
+  struct proc *p;
 
   for(i = 0; i < AUDIO_STREAM_MAX; i++){
     if(audio_streams[i].in_use)
@@ -189,8 +192,10 @@ audio_stream_alloc_locked(struct file *f, int minor, int nonblock, char *ring)
 
     s = &audio_streams[i];
     memset(s, 0, sizeof(*s));
+    p = myproc();
     s->in_use = 1;
     s->owner = f;
+    s->owner_pid = p ? p->pid : -1;
     s->nonblock = nonblock;
     s->minor = (uint16_t)minor;
     s->ring = ring;
@@ -658,6 +663,53 @@ audio_filewrite(struct file *f, char *src, int n)
 
   release(&audio_core.lock);
   return copied;
+}
+
+int
+audio_set_nonblock(struct file *f, int enabled)
+{
+  struct audio_stream *s;
+
+  if(f == 0 || f->type != FD_INODE || f->ip == 0)
+    return -1;
+  if(f->ip->type != T_DEV || f->ip->major != AUDIODEV)
+    return -1;
+  if(!audio_is_stream_minor(f->ip->minor))
+    return -1;
+
+  acquire(&audio_core.lock);
+  s = audio_stream_find_locked(f);
+  if(s == 0){
+    release(&audio_core.lock);
+    return -1;
+  }
+  s->nonblock = enabled ? 1 : 0;
+  release(&audio_core.lock);
+  return 0;
+}
+
+int
+audio_get_nonblock(struct file *f)
+{
+  struct audio_stream *s;
+  int nonblock;
+
+  if(f == 0 || f->type != FD_INODE || f->ip == 0)
+    return -1;
+  if(f->ip->type != T_DEV || f->ip->major != AUDIODEV)
+    return -1;
+  if(!audio_is_stream_minor(f->ip->minor))
+    return -1;
+
+  acquire(&audio_core.lock);
+  s = audio_stream_find_locked(f);
+  if(s == 0){
+    release(&audio_core.lock);
+    return -1;
+  }
+  nonblock = s->nonblock;
+  release(&audio_core.lock);
+  return nonblock;
 }
 
 void
@@ -1315,7 +1367,7 @@ audio_procfs_clients(char *buf, int max)
 
   len = 0;
   if(audio_buf_puts(buf, max, &len,
-                    "slot minor state nonblock used free queued hw sw xruns\n") < 0)
+                    "slot pid minor state nonblock used free queued hw sw xruns\n") < 0)
     return -1;
 
   acquire(&audio_core.lock);
@@ -1332,6 +1384,10 @@ audio_procfs_clients(char *buf, int max)
       frame_bytes = 1;
 
     if(audio_buf_putu(buf, max, &len, (uint)i) < 0)
+      goto overflow;
+    if(audio_buf_putc(buf, max, &len, ' ') < 0)
+      goto overflow;
+    if(audio_buf_putu(buf, max, &len, (uint)s->owner_pid) < 0)
       goto overflow;
     if(audio_buf_putc(buf, max, &len, ' ') < 0)
       goto overflow;

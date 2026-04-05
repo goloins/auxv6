@@ -83,6 +83,13 @@ if_register(struct ifnet *ifp)
 	if(ifp->if_input == 0)
 		ifp->if_input = if_default_input;
 
+	if(ifp->if_link_state == LINK_STATE_UNKNOWN){
+		if((ifp->if_flags & (IFF_UP | IFF_RUNNING)) == (IFF_UP | IFF_RUNNING))
+			ifp->if_link_state = LINK_STATE_UP;
+		else if((ifp->if_flags & IFF_UP) == 0)
+			ifp->if_link_state = LINK_STATE_DOWN;
+	}
+
 	acquire(&if_lock);
 	if(if_next_index == 0 || if_next_index > MAXNETIF){
 		release(&if_lock);
@@ -171,6 +178,7 @@ if_dump(struct netif_info *out, int max)
 		out[n].if_index = ifp->if_index;
 		out[n].if_mtu = ifp->if_mtu;
 		out[n].if_flags = ifp->if_flags;
+		out[n].if_link_state = ifp->if_link_state;
 		out[n].if_addr = ifp->if_addr;
 		out[n].if_netmask = ifp->if_netmask;
 		memmove(out[n].if_hwaddr, ifp->if_hwaddr, sizeof(out[n].if_hwaddr));

@@ -41,6 +41,7 @@
 #define PROCFS_AUDIO_STATS_INO 24  /* /proc/audio_stats — audio counters */
 #define PROCFS_SERIAL_TTY_INO 25   /* /proc/serial_tty — ttyS line capabilities/state */
 #define PROCFS_AUDIO_CLIENTS_INO 26 /* /proc/audio_clients — active audio stream table */
+#define PROCFS_MODEMS_INO     27   /* /proc/modems — discovered modem devices */
 #define PROCFS_VERSION_STR  "a/ux86 aux86 i686\n"
 
 struct procfs_inode {
@@ -75,6 +76,7 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_AUDIO_STATS_INO, "audio_stats", 512 },
   { PROCFS_AUDIO_CLIENTS_INO, "audio_clients", 2048 },
   { PROCFS_SERIAL_TTY_INO, "serial_tty", 512 },
+  { PROCFS_MODEMS_INO, "modems", 2048 },
   { 0, 0, 0 }
 };
 
@@ -195,6 +197,19 @@ procfs_tcp_state_name(uint state)
   case TCPS_LAST_ACK:     return "LAST_ACK";
   case TCPS_TIME_WAIT:    return "TIME_WAIT";
   default:                return "UNKNOWN";
+  }
+}
+
+static const char*
+procfs_if_link_state_name(uint state)
+{
+  switch(state){
+  case LINK_STATE_UP:
+    return "up";
+  case LINK_STATE_DOWN:
+    return "down";
+  default:
+    return "unknown";
   }
 }
 
@@ -335,6 +350,10 @@ procfs_fill_inode(struct inode *ip, uint inum)
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
     ip->size = 512;
+  } else if(inum == PROCFS_MODEMS_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
+    ip->size = 2048;
   } else {
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
@@ -1041,6 +1060,12 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
       return -1;
     return procfs_copy_data(dst, off, n, buf, (uint)r);
   }
+  if(ip->inum == PROCFS_MODEMS_INO){
+    int r = modem_procfs_dump(buf, sizeof(buf));
+    if(r < 0)
+      return -1;
+    return procfs_copy_data(dst, off, n, buf, (uint)r);
+  }
   if(ip->inum == PROCFS_NET_TCP_INO || ip->inum == PROCFS_NET_UDP_INO){
     /* Snapshot all sockets, then format matching ones into procfs_net_outbuf. */
     int ns;
@@ -1132,15 +1157,21 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
   }
   if(ip->inum == PROCFS_NET_DEV_INO){
     struct ifnet *ifp_iter;
+    const char *lstate;
     uint olen;
 
     olen = 0;
     if(procfs_buf_puts(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen,
-                       "Iface    RxPkts   RxBytes  RxErr  TxPkts   TxBytes  TxErr\n") < 0)
+                       "Iface    Link     RxPkts   RxBytes  RxErr  TxPkts   TxBytes  TxErr\n") < 0)
       return -1;
 
     for(ifp_iter = if_first(); ifp_iter != 0; ifp_iter = if_next(ifp_iter)){
+      lstate = procfs_if_link_state_name(ifp_iter->if_link_state);
       if(procfs_buf_puts(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, ifp_iter->if_xname) < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+      if(procfs_buf_putc(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, ' ') < 0)
+        return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
+      if(procfs_buf_puts(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, lstate) < 0)
         return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);
       if(procfs_buf_putc(procfs_net_outbuf, sizeof(procfs_net_outbuf), &olen, ' ') < 0)
         return procfs_copy_data(dst, off, n, procfs_net_outbuf, olen);

@@ -19,6 +19,8 @@ Current tranche is intentionally probe-only and focuses on common legacy PCI mod
   - `kernel/driver/motorola_sm56.c`
 - Build integration in `Makefile`
 - Boot wiring in `kernel/core/main.c`
+- Shared modem probe registry in `kernel/driver/modem.c`
+- Procfs observability node `/proc/modems` for discovered modem-family devices
 - Serial chardev endpoint groundwork:
   - `kernel/driver/serial.c` registers `SERIALDEV` with read/write/ioctl paths
   - UART RX now fans out to serial input buffering via `serial_rx_char()`
@@ -53,6 +55,8 @@ Behavior today:
 
 - Probe/match at boot
 - Emit explicit `(stub)` detection logs for matched devices
+- Track detected modem-family devices in a shared probe table (family, ven:dev, class/subclass, bus:slot.func, irq)
+- Expose that table through `/proc/modems` with a summary line (`total`, `datapath`, `probe_only`)
 - Attach a basic runtime serial tty endpoint (`/dev/ttyS*`) for chardev read/write and minimal tty ioctls
 - Basic terminal-mode behavior for serial now includes `ICANON` and `VMIN/VTIME` read-path handling
 - No modem network data path

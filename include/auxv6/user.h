@@ -59,6 +59,7 @@ struct mountinfo {
 struct netifinfo {
 	uint if_index;
 	char if_name[NETIFINFO_NAME_MAX];
+	uint if_link_state;
 	uint if_addr;
 	uint if_netmask;
 	uchar if_hwaddr[6];

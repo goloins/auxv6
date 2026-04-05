@@ -35,6 +35,19 @@ print_mac(uchar *mac)
   dprintf(1, "\n");
 }
 
+static const char*
+link_state_name(uint state)
+{
+  switch(state) {
+  case LINK_STATE_UP:
+    return "up";
+  case LINK_STATE_DOWN:
+    return "down";
+  default:
+    return "unknown";
+  }
+}
+
 static int
 parse_ipv4(const char *s, uint *out)
 {
@@ -96,8 +109,9 @@ dump_state(void)
 
   dprintf(1, "Interfaces (%d):\n", nif);
   for(i = 0; i < nif; i++) {
-    dprintf(1, "  %s (if%d) mtu=%d flags=0x%x addr=",
-      ifs[i].if_name, ifs[i].if_index, ifs[i].if_mtu, ifs[i].if_flags);
+    dprintf(1, "  %s (if%d) mtu=%d flags=0x%x link=%s addr=",
+      ifs[i].if_name, ifs[i].if_index, ifs[i].if_mtu, ifs[i].if_flags,
+      link_state_name(ifs[i].if_link_state));
     if(ifs[i].if_addr)
       print_ipv4(ifs[i].if_addr);
     else

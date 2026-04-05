@@ -23,6 +23,11 @@
 #define IFF_LOOPBACK  0x8
 #define IFF_RUNNING   0x40
 
+// Link state (BSD-style, normalized for driver parity reporting)
+#define LINK_STATE_UNKNOWN 0
+#define LINK_STATE_DOWN    1
+#define LINK_STATE_UP      2
+
 // Route flags.
 #define RTF_UP        0x1
 #define RTF_GATEWAY   0x2
@@ -127,6 +132,7 @@ struct ifnet {
   char if_xname[IFNAMSIZ];
   uint if_mtu;
   uint if_flags;
+    uint if_link_state;
     uint if_addr;
     uint if_netmask;
     uchar if_hwaddr[ETH_ADDR_LEN];
@@ -155,6 +161,7 @@ struct route {
 struct netif_info {
   uint if_index;
   char if_name[IFNAMSIZ];
+  uint if_link_state;
     uint if_addr;
     uint if_netmask;
     uchar if_hwaddr[ETH_ADDR_LEN];

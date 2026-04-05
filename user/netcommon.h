@@ -138,13 +138,28 @@ net_find_if(struct netifinfo *ifs, int n, const char *name)
   return 0;
 }
 
+static const char* __attribute__((unused))
+net_link_state_name(uint state)
+{
+  switch(state){
+  case LINK_STATE_UP:
+    return "up";
+  case LINK_STATE_DOWN:
+    return "down";
+  default:
+    return "unknown";
+  }
+}
+
 static void __attribute__((unused))
 net_show_interfaces(struct netifinfo *ifs, int n)
 {
   int i;
 
   for(i = 0; i < n; i++) {
-    dprintf(1, "%s: flags=0x%x mtu %d\n", ifs[i].if_name, ifs[i].if_flags, ifs[i].if_mtu);
+    dprintf(1, "%s: flags=0x%x mtu %d link %s\n",
+            ifs[i].if_name, ifs[i].if_flags, ifs[i].if_mtu,
+            net_link_state_name(ifs[i].if_link_state));
     dprintf(1, "    inet ");
     if(ifs[i].if_addr)
       net_print_ipv4(ifs[i].if_addr);

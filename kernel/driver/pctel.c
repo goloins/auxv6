@@ -35,6 +35,7 @@ pctel_match(struct pci_dev *dev)
 static void
 pctel_probe(struct pci_dev *dev)
 {
+  modem_register_stub_probe("pctel", dev);
   cprintf("pctel: found device %x (stub) at %d:%d.%d irq=%d\n",
           dev->device_id, dev->bus, dev->slot, dev->func, dev->irq_line);
 }

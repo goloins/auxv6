@@ -49,21 +49,22 @@ A new read-only procfs node exports active stream rows.
 Header:
 
 ```
-slot minor state nonblock used free queued hw sw xruns
+slot pid minor state nonblock used free queued hw sw xruns
 ```
 
 Each row maps to one in-use stream slot and provides:
 
 1. `slot`: internal stream slot index
-2. `minor`: audio device minor associated with the stream
-3. `state`: textual state (`new`, `configured`, `prepared`, `running`, `xrun`, `stopped`, `drained`)
-4. `nonblock`: `1` if opened nonblocking, else `0`
-5. `used`: bytes currently queued in stream ring
-6. `free`: bytes available in stream ring
-7. `queued`: queued frames
-8. `hw`: consumed frames estimate (`hw_ptr`)
-9. `sw`: produced frames (`sw_ptr`)
-10. `xruns`: per-stream xrun counter
+2. `pid`: owner process id captured at stream allocation
+3. `minor`: audio device minor associated with the stream
+4. `state`: textual state (`new`, `configured`, `prepared`, `running`, `xrun`, `stopped`, `drained`)
+5. `nonblock`: runtime nonblocking state (`1` or `0`)
+6. `used`: bytes currently queued in stream ring
+7. `free`: bytes available in stream ring
+8. `queued`: queued frames
+9. `hw`: consumed frames estimate (`hw_ptr`)
+10. `sw`: produced frames (`sw_ptr`)
+11. `xruns`: per-stream xrun counter
 
 ## Implementation details
 
@@ -99,9 +100,9 @@ The man page was updated to match this expanded output.
 
 ## Limitations after tranche 3
 
-1. No explicit PID/comm linkage is exported yet in `/proc/audio_clients`.
+1. Comm/name linkage is not exported yet (only PID).
 2. Capture stream visibility will remain minimal until capture path is active.
-3. Runtime nonblocking toggles via `F_SETFL` are still not wired into stream behavior.
+3. Non-audio descriptors still do not persist richer status flags in `F_SETFL` (current fix is audio-stream targeted).
 
 ## Manual smoke sequence
 

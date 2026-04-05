@@ -33,6 +33,7 @@ motorola_sm56_match(struct pci_dev *dev)
 static void
 motorola_sm56_probe(struct pci_dev *dev)
 {
+  modem_register_stub_probe("motorola_sm56", dev);
   cprintf("motorola_sm56: found device %x (stub) at %d:%d.%d irq=%d\n",
           dev->device_id, dev->bus, dev->slot, dev->func, dev->irq_line);
 }

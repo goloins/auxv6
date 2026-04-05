@@ -130,9 +130,11 @@ struct rtl8111_softc {
 };
 
 static int rtl8111_output(struct ifnet *ifp, struct mbuf *m);
+static void rtl8111_poll(struct ifnet *ifp);
 
 static struct ifnet_ops rtl8111_ifnet_ops = {
     .if_output = rtl8111_output,
+    .if_poll = rtl8111_poll,
 };
 
 /* Global array */
@@ -412,6 +414,20 @@ rtl8111_rx_complete(struct rtl8111_softc *sc)
         sc->rx_cur = (sc->rx_cur + 1) % RTL_RX_RING_SIZE;
         processed++;
     }
+}
+
+static void
+rtl8111_poll(struct ifnet *ifp)
+{
+    struct rtl8111_softc *sc = (struct rtl8111_softc *)ifp->if_softc;
+
+    if (!sc)
+        return;
+
+    acquire(&sc->lock);
+    rtl8111_tx_complete(sc);
+    rtl8111_rx_complete(sc);
+    release(&sc->lock);
 }
 
 static void

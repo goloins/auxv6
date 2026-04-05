@@ -83,7 +83,7 @@ This directly feeds:
 
 1. Capture readiness (`POLLIN`) is still not implemented for PCM streams.
 2. Xrun and recovery semantics are still evolving toward full Stage 1 completion.
-3. `F_SETFL` runtime toggling of nonblocking mode is still global-kernel TODO; stream nonblocking currently reflects open-time mode.
+3. Broader kernel-wide `F_SETFL` status-flag persistence remains limited; audio stream runtime `O_NONBLOCK` toggling is now implemented.
 
 ## Manual smoke sequence
 
@@ -105,5 +105,4 @@ This tranche addresses Stage 1 task 4 from `docs/audio-subsystem-implementation-
 ## Next follow-on recommendations
 
 1. Add explicit userland poll stress utility for audio write readiness.
-2. Add `F_SETFL` nonblocking tracking so runtime toggles apply to stream write path.
-3. Add capture endpoint scaffolding and `POLLIN` readiness semantics.
+2. Add capture endpoint scaffolding and `POLLIN` readiness semantics.

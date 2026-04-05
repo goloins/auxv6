@@ -163,9 +163,11 @@ struct pcnet_softc {
 };
 
 static int pcnet_output(struct ifnet *ifp, struct mbuf *m);
+static void pcnet_poll(struct ifnet *ifp);
 
 static struct ifnet_ops pcnet_ifnet_ops = {
     .if_output = pcnet_output,
+    .if_poll = pcnet_poll,
 };
 
 /* Global array of PCNET devices */
@@ -455,6 +457,20 @@ pcnet_rx_complete(struct pcnet_softc *sc)
         sc->rx_head = (sc->rx_head + 1) % PCNET_RX_RING_SIZE;
         processed++;
     }
+}
+
+static void
+pcnet_poll(struct ifnet *ifp)
+{
+    struct pcnet_softc *sc = (struct pcnet_softc *)ifp->if_softc;
+
+    if (!sc)
+        return;
+
+    acquire(&sc->lock);
+    pcnet_tx_complete(sc);
+    pcnet_rx_complete(sc);
+    release(&sc->lock);
 }
 
 /*

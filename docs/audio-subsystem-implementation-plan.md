@@ -172,6 +172,8 @@ Status (2026-04-05):
   `docs/audio-stage1-tranche2-readiness.md`.
 - Per-stream procfs observability details are tracked in
   `docs/audio-stage1-tranche3-observability.md`.
+- Runtime `F_SETFL`/`F_GETFL` nonblocking integration is now wired for
+  audio stream descriptors.
 
 Implementation tasks:
 

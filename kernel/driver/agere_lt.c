@@ -33,6 +33,7 @@ agere_lt_match(struct pci_dev *dev)
 static void
 agere_lt_probe(struct pci_dev *dev)
 {
+  modem_register_stub_probe("agere_lt", dev);
   cprintf("agere_lt: found device %x (stub) at %d:%d.%d irq=%d\n",
           dev->device_id, dev->bus, dev->slot, dev->func, dev->irq_line);
 }

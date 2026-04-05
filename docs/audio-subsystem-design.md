@@ -20,6 +20,7 @@ This keeps the kernel small and deterministic while enabling modern multi-applic
 - Stage 1 has started with per-fd stream objects, per-stream software ring buffering, and stream lifecycle open/close hooks in kernel file paths.
 - Stage 1 readiness integration has started: poll/select now receives AUDIODEV-specific writable/error readiness derived from stream ring space and xrun state.
 - Stage 1 observability expanded with `/proc/audio_clients` to expose active stream slot/state/queue snapshots.
+- Audio stream descriptors now honor runtime `O_NONBLOCK` toggles through `fcntl(F_SETFL)` and report state via `F_GETFL`.
 - Default audio endpoint node policy is now wired in devman for `/dev/audioctl` and `/dev/pcmC0D0p`.
 - Detailed Stage-1 tranche-1 runtime behavior is documented in `docs/audio-stage1-tranche1-runtime.md`.
 - Detailed Stage-1 tranche-2 readiness behavior is documented in `docs/audio-stage1-tranche2-readiness.md`.

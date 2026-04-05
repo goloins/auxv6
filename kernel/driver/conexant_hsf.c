@@ -36,6 +36,7 @@ conexant_hsf_match(struct pci_dev *dev)
 static void
 conexant_hsf_probe(struct pci_dev *dev)
 {
+  modem_register_stub_probe("conexant_hsf", dev);
   cprintf("conexant_hsf: found device %x (stub) at %d:%d.%d irq=%d\n",
           dev->device_id, dev->bus, dev->slot, dev->func, dev->irq_line);
 }
