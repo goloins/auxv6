@@ -450,6 +450,91 @@ virtio_gpu_cmd_submit(struct virtio_gpu_softc *sc,
     return -1;
 }
 
+/* Submit two control commands in one queue kick and wait for both responses. */
+static int
+virtio_gpu_cmd_submit_pair(struct virtio_gpu_softc *sc,
+                           struct virtio_gpu_ctrl_hdr *hdr1,
+                           uint req1_size,
+                           void *resp1,
+                           uint resp1_size,
+                           struct virtio_gpu_ctrl_hdr *hdr2,
+                           uint req2_size,
+                           void *resp2,
+                           uint resp2_size,
+                           uint timeout_ms)
+{
+    struct virtqueue *vq;
+    void *bufs[2];
+    uint32_t lens[2];
+    int rc;
+    int tries;
+    int max_tries;
+    int got1;
+    int got2;
+    uint32_t used_len;
+    void *cookie;
+
+    if(!sc || !hdr1 || !hdr2)
+        return -1;
+
+    vq = sc->vdev.vqs[VIRTIO_GPU_Q_CONTROL];
+    if(!vq)
+        return -1;
+
+    acquire(&sc->lock);
+
+    bufs[0] = hdr1;
+    bufs[1] = resp1;
+    lens[0] = req1_size;
+    lens[1] = resp1_size;
+    rc = virtq_add_buf(vq, bufs, lens, 1, 1, hdr1);
+    if(rc < 0) {
+        release(&sc->lock);
+        return -1;
+    }
+
+    bufs[0] = hdr2;
+    bufs[1] = resp2;
+    lens[0] = req2_size;
+    lens[1] = resp2_size;
+    rc = virtq_add_buf(vq, bufs, lens, 1, 1, hdr2);
+    if(rc < 0) {
+        /* Drain the first request we already queued to keep the queue sane. */
+        virtq_kick(vq);
+        max_tries = 10000;
+        for(tries = 0; tries < max_tries; tries++) {
+            cookie = virtq_get_buf(vq, &used_len);
+            if(cookie == hdr1)
+                break;
+        }
+        release(&sc->lock);
+        return -1;
+    }
+
+    virtq_kick(vq);
+    max_tries = (int)(timeout_ms ? timeout_ms * 1000 : 100000);
+    if(max_tries < 10000)
+        max_tries = 10000;
+
+    got1 = 0;
+    got2 = 0;
+    for(tries = 0; tries < max_tries; tries++) {
+        cookie = virtq_get_buf(vq, &used_len);
+        if(cookie == hdr1)
+            got1 = 1;
+        else if(cookie == hdr2)
+            got2 = 1;
+        if(got1 && got2) {
+            release(&sc->lock);
+            return 0;
+        }
+    }
+
+    release(&sc->lock);
+    cprintf("virtio_gpu: command pair timeout types=%x,%x\n", hdr1->type, hdr2->type);
+    return -1;
+}
+
 /* ============ Device commands ============ */
 
 /*
@@ -600,6 +685,52 @@ virtio_gpu_cmd_resource_flush(struct virtio_gpu_softc *sc,
     cmd.r.height = height;
 
     return virtio_gpu_cmd_submit(sc, &cmd.hdr, sizeof(cmd), &resp, sizeof(resp), 1000);
+}
+
+static int
+virtio_gpu_cmd_transfer_and_flush_2d(struct virtio_gpu_softc *sc,
+                                     uint32_t resource_id,
+                                     uint32_t x,
+                                     uint32_t y,
+                                     uint32_t width,
+                                     uint32_t height,
+                                     uint64_t offset)
+{
+    struct virtio_gpu_transfer_to_host_2d transfer;
+    struct virtio_gpu_resource_flush flush;
+    struct virtio_gpu_ctrl_hdr resp1;
+    struct virtio_gpu_ctrl_hdr resp2;
+
+    if(!sc)
+        return -1;
+
+    memset(&transfer, 0, sizeof(transfer));
+    transfer.hdr.type = VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D;
+    transfer.resource_id = resource_id;
+    transfer.offset = offset;
+    transfer.r.x = x;
+    transfer.r.y = y;
+    transfer.r.width = width;
+    transfer.r.height = height;
+
+    memset(&flush, 0, sizeof(flush));
+    flush.hdr.type = VIRTIO_GPU_CMD_RESOURCE_FLUSH;
+    flush.resource_id = resource_id;
+    flush.r.x = x;
+    flush.r.y = y;
+    flush.r.width = width;
+    flush.r.height = height;
+
+    return virtio_gpu_cmd_submit_pair(sc,
+                                      &transfer.hdr,
+                                      sizeof(transfer),
+                                      &resp1,
+                                      sizeof(resp1),
+                                      &flush.hdr,
+                                      sizeof(flush),
+                                      &resp2,
+                                      sizeof(resp2),
+                                      1000);
 }
 
 /*
@@ -869,9 +1000,7 @@ virtio_gpu_display_flush_region(struct display_device *dev,
     off = (uint64_t)y * (uint64_t)fb->stride + (uint64_t)x * (uint64_t)fb->bpp;
     fb_sync_for_device(fb);
 
-    if(virtio_gpu_cmd_transfer_to_host_2d(sc, rid, x, y, w, h, off) < 0)
-        return -1;
-    if(virtio_gpu_cmd_resource_flush(sc, rid, x, y, w, h) < 0)
+    if(virtio_gpu_cmd_transfer_and_flush_2d(sc, rid, x, y, w, h, off) < 0)
         return -1;
 
     return 0;
@@ -904,9 +1033,7 @@ virtio_gpu_display_flush(struct display_device *dev, struct framebuffer *fb)
     /* Full-frame transfer is simpler and more reliable than partial dirty
      * rect uploads for the current mirror path. */
     fb_sync_for_device(fb);
-    rc = virtio_gpu_cmd_transfer_to_host_2d(sc, rid, 0, 0, fb->width, fb->height, 0);
-    if(rc == 0)
-        rc = virtio_gpu_cmd_resource_flush(sc, rid, 0, 0, fb->width, fb->height);
+    rc = virtio_gpu_cmd_transfer_and_flush_2d(sc, rid, 0, 0, fb->width, fb->height, 0);
     if(rc == 0)
         fb_clear_dirty(fb);
     return rc;

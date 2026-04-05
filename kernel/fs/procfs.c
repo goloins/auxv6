@@ -567,6 +567,8 @@ procfs_readi(struct inode *ip, char *dst, uint off, uint n)
       return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "flush_pixels ", gfx.flush_pixels) < 0)
       return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "flush_blocked_tickslock ", gfx.flush_blocked_tickslock) < 0)
+      return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "boot_ready ", gfx.boot_ready) < 0)
       return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "has_dev ", gfx.has_dev) < 0)

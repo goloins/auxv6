@@ -159,6 +159,53 @@ extern uint vectors[];  // in vectors.S: array of 256 entry pointers
 struct spinlock tickslock;
 uint ticks;
 
+static void
+trap_uart_puts(const char *s)
+{
+  if(!s)
+    return;
+  while(*s)
+    uartputc(*s++);
+}
+
+static void
+trap_uart_put_hex(uint x)
+{
+  static char digits[] = "0123456789abcdef";
+  int i;
+
+  trap_uart_puts("0x");
+  for(i = 7; i >= 0; i--)
+    uartputc(digits[(x >> (i * 4)) & 0xF]);
+}
+
+static void
+trap_emergency_report(struct trapframe *tf, const char *reason)
+{
+  trap_uart_puts("\nFATAL trap: ");
+  trap_uart_puts(reason ? reason : "unknown");
+  trap_uart_puts(" cpu=");
+  trap_uart_put_hex((uint)cpuid());
+  trap_uart_puts(" trap=");
+  trap_uart_put_hex((uint)tf->trapno);
+  trap_uart_puts(" err=");
+  trap_uart_put_hex((uint)tf->err);
+  trap_uart_puts(" eip=");
+  trap_uart_put_hex((uint)tf->eip);
+  trap_uart_puts(" cs=");
+  trap_uart_put_hex((uint)tf->cs);
+  trap_uart_puts(" cr2=");
+  trap_uart_put_hex(rcr2());
+  trap_uart_puts("\n");
+}
+
+static void
+trap_kernel_fatal(struct trapframe *tf, const char *reason)
+{
+  trap_emergency_report(tf, reason);
+  panic("trap");
+}
+
 void
 tvinit(void)
 {
@@ -195,6 +242,9 @@ trap(struct trapframe *tf)
   }
 
   switch(tf->trapno){
+  case T_DBLFLT:
+    trap_kernel_fatal(tf, "double-fault");
+    break;
   case T_IRQ0 + IRQ_TIMER:
     if(cpuid() == 0){
       uint current_ticks;
@@ -262,9 +312,9 @@ trap(struct trapframe *tf)
       myproc()->sig_pending |= SIGBIT(SIGSEGV);
     } else {
       // Kernel-mode page fault: always fatal.
-      cprintf("unexpected trap %d from cpu %d eip %x (cr2=0x%x)\n",
-              tf->trapno, cpuid(), tf->eip, rcr2());
-      panic("trap");
+          cprintf("unexpected trap %d from cpu %d eip %x (cr2=0x%x)\n",
+            tf->trapno, cpuid(), tf->eip, rcr2());
+          trap_kernel_fatal(tf, "kernel-page-fault");
     }
     break;
 
@@ -285,7 +335,7 @@ trap(struct trapframe *tf)
       // In kernel, it must be our mistake.
       cprintf("unexpected trap %d from cpu %d eip %x (cr2=0x%x)\n",
               tf->trapno, cpuid(), tf->eip, rcr2());
-      panic("trap");
+      trap_kernel_fatal(tf, "kernel-unexpected-trap");
     }
     // In user space, deliver appropriate signal for hardware faults.
     // If the process has a handler installed, it can catch it.

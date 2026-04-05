@@ -268,6 +268,7 @@ static uint console_gfx_stat_cells_changed;
 static uint console_gfx_stat_cells_rendered;
 static uint console_gfx_stat_flush_calls;
 static uint console_gfx_stat_flush_pixels;
+static uint console_gfx_stat_flush_blocked_tickslock;
 static int console_gfx_owner_pid = -1;
 static uint console_input_event_count;
 
@@ -676,6 +677,18 @@ console_gfx_blank_text_cell(struct text_cell *tc, uchar a)
   tc->width = 1;
 }
 
+static int
+console_gfx_text_cell_equal(const struct text_cell *a, const struct text_cell *b)
+{
+  if(!a || !b)
+    return 0;
+  return a->codepoint == b->codepoint &&
+         a->attr == b->attr &&
+         a->fg_color == b->fg_color &&
+         a->bg_color == b->bg_color &&
+         a->width == b->width;
+}
+
 static void
 console_gfx_scroll_up_locked(struct console_tty_state *t, int top, int bot, int n, uchar a)
 {
@@ -686,9 +699,17 @@ console_gfx_scroll_up_locked(struct console_tty_state *t, int top, int bot, int 
   int move_rows;
   int fill_from;
   int i;
+  int row;
+  int col;
+  int span_left;
+  int span_right;
+  int span_cols;
   int px;
   int src_y;
   int dst_y;
+  int old_cursor_x;
+  int old_cursor_y;
+  int cursor_dst_y;
   uint pixel_w;
   uint pixel_h;
   struct text_cell blank;
@@ -712,8 +733,44 @@ console_gfx_scroll_up_locked(struct console_tty_state *t, int top, int bot, int 
   move_rows = lines - n;
   fill_from = bot + 1 - n;
   console_gfx_blank_text_cell(&blank, a);
+  span_left = cols;
+  span_right = -1;
 
   acquire(&console_gfx_vts->lock);
+  old_cursor_x = console_gfx_vts->cursor_x;
+  old_cursor_y = console_gfx_vts->cursor_y;
+
+  for(row = top; row <= bot - n; row++) {
+    int dst_base;
+    int src_base;
+
+    dst_base = row * cols;
+    src_base = (row + n) * cols;
+    for(col = 0; col < cols; col++) {
+      if(!console_gfx_text_cell_equal(&console_gfx_vts->cells[dst_base + col],
+                                      &console_gfx_vts->cells[src_base + col])) {
+        if(col < span_left)
+          span_left = col;
+        if(col > span_right)
+          span_right = col;
+      }
+    }
+  }
+
+  for(row = fill_from; row <= bot; row++) {
+    int base;
+
+    base = row * cols;
+    for(col = 0; col < cols; col++) {
+      if(!console_gfx_text_cell_equal(&console_gfx_vts->cells[base + col], &blank)) {
+        if(col < span_left)
+          span_left = col;
+        if(col > span_right)
+          span_right = col;
+      }
+    }
+  }
+
   memmove(console_gfx_vts->cells + top * cols,
           console_gfx_vts->cells + (top + n) * cols,
           move_rows * cols * sizeof(struct text_cell));
@@ -723,7 +780,27 @@ console_gfx_scroll_up_locked(struct console_tty_state *t, int top, int bot, int 
             console_gfx_vts->dirty + (top + n) * cols,
             move_rows * cols);
     memset(console_gfx_vts->dirty + top * cols, 0, move_rows * cols);
-    memset(console_gfx_vts->dirty + fill_from * cols, 1, n * cols);
+    if(span_right >= span_left) {
+      span_cols = span_right - span_left + 1;
+      for(row = fill_from; row <= bot; row++)
+        memset(console_gfx_vts->dirty + row * cols + span_left, 1, span_cols);
+    } else {
+      memset(console_gfx_vts->dirty + fill_from * cols, 1, n * cols);
+    }
+
+    /* The cursor underline is an overlay drawn after glyph rendering.
+     * Scrolling with fb_blit_rect can copy that overlay into destination rows
+     * even when cell contents are unchanged, so force cursor-affected cells
+     * dirty to guarantee erase/redraw on the next sync. */
+    if(old_cursor_x >= 0 && old_cursor_x < cols) {
+      if(old_cursor_y >= top && old_cursor_y <= bot)
+        console_gfx_vts->dirty[old_cursor_y * cols + old_cursor_x] = 1;
+      if(old_cursor_y >= top + n && old_cursor_y <= bot) {
+        cursor_dst_y = old_cursor_y - n;
+        if(cursor_dst_y >= top && cursor_dst_y <= bot)
+          console_gfx_vts->dirty[cursor_dst_y * cols + old_cursor_x] = 1;
+      }
+    }
   }
 
   for(i = fill_from * cols; i < (bot + 1) * cols; i++)
@@ -734,7 +811,10 @@ console_gfx_scroll_up_locked(struct console_tty_state *t, int top, int bot, int 
   /* Scrolling reuses moved pixels but still requires redrawing the newly
    * exposed blank rows at the bottom of the region. Account for that work in
    * gfxstats so render_efficiency stays meaningful under the scroll fast path. */
-  console_gfx_stat_cells_changed += (uint)(n * cols);
+  if(span_right >= span_left)
+    console_gfx_stat_cells_changed += (uint)(n * (span_right - span_left + 1));
+  else
+    console_gfx_stat_cells_changed += (uint)(n * cols);
 
   console_gfx_cell_metrics_for_grid(cols, console_tty_rows(t), &cell_w, &cell_h);
   if(cell_w < 1)
@@ -742,10 +822,13 @@ console_gfx_scroll_up_locked(struct console_tty_state *t, int top, int bot, int 
   if(cell_h < 1)
     cell_h = 1;
 
-  px = console_gfx_vts->fb_x;
+  if(span_right < span_left)
+    return;
+
+  px = console_gfx_vts->fb_x + span_left * cell_w;
   src_y = console_gfx_vts->fb_y + (top + n) * cell_h;
   dst_y = console_gfx_vts->fb_y + top * cell_h;
-  pixel_w = (uint)cols * (uint)cell_w;
+  pixel_w = (uint)(span_right - span_left + 1) * (uint)cell_w;
   pixel_h = (uint)move_rows * (uint)cell_h;
   fb_blit_rect(console_gfx_fb, px, src_y,
                console_gfx_fb, px, dst_y,
@@ -1142,6 +1225,7 @@ console_gfx_debug_snapshot(struct console_gfx_debug_info *out)
   out->cells_rendered = console_gfx_stat_cells_rendered;
   out->flush_calls = console_gfx_stat_flush_calls;
   out->flush_pixels = console_gfx_stat_flush_pixels;
+  out->flush_blocked_tickslock = console_gfx_stat_flush_blocked_tickslock;
   out->boot_ready = console_gfx_boot_ready ? 1 : 0;
   out->has_dev = console_gfx_dev ? 1 : 0;
   out->has_fb = console_gfx_fb ? 1 : 0;
@@ -1679,6 +1763,10 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
     return;
   if(!console_gfx_boot_ready)
     return;
+  if(holding(&tickslock)) {
+    console_gfx_stat_flush_blocked_tickslock++;
+    return;
+  }
   if(!console_gfx_ensure_locked(t))
     return;
 
@@ -3444,10 +3532,14 @@ consoleintr(int (*getc)(void))
   struct console_tty_state *t;
   int c, doprocdump = 0;
   int canonical, echo, isig;
+  int pending_pgid;
+  uint pending_signals;
   uchar vintr, vquit, vsusp, vkill, verase, veof, veol;
   const char *esc_seq;
   const char *p;
 
+  pending_pgid = 0;
+  pending_signals = 0;
   acquire(&cons.lock);
   while((c = getc()) >= 0) {
     t = console_tty_by_index(console_active_tty);
@@ -3486,20 +3578,29 @@ consoleintr(int (*getc)(void))
     if(isig) {
       if(vintr && c == (int)vintr) {
         consputc_ansi(t, '^'); consputc_ansi(t, 'C'); consputc_ansi(t, '\n');
-        proc_signal_pgid(t->fg_pgid, SIGINT);
+        if(t->fg_pgid > 0) {
+          pending_pgid = t->fg_pgid;
+          pending_signals |= SIGBIT(SIGINT);
+        }
         if(!(t->termios.c_lflag & NOFLSH))
           t->input.r = t->input.w = t->input.e;
         continue;
       }
       if(vquit && c == (int)vquit) {
-        proc_signal_pgid(t->fg_pgid, SIGQUIT);
+        if(t->fg_pgid > 0) {
+          pending_pgid = t->fg_pgid;
+          pending_signals |= SIGBIT(SIGQUIT);
+        }
         if(!(t->termios.c_lflag & NOFLSH))
           t->input.r = t->input.w = t->input.e;
         continue;
       }
       if(vsusp && c == (int)vsusp) {
         consputc_ansi(t, '^'); consputc_ansi(t, 'Z'); consputc_ansi(t, '\n');
-        proc_signal_pgid(t->fg_pgid, SIGTSTP);
+        if(t->fg_pgid > 0) {
+          pending_pgid = t->fg_pgid;
+          pending_signals |= SIGBIT(SIGTSTP);
+        }
         if(!(t->termios.c_lflag & NOFLSH))
           t->input.r = t->input.w = t->input.e;
         continue;
@@ -3605,6 +3706,18 @@ consoleintr(int (*getc)(void))
     }
   }
   release(&cons.lock);
+
+  /* Deliver job-control signals outside console lock to avoid lock-order
+   * inversions with process-table paths under heavy interactive output. */
+  if(pending_pgid > 0) {
+    if(pending_signals & SIGBIT(SIGINT))
+      proc_signal_pgid(pending_pgid, SIGINT);
+    if(pending_signals & SIGBIT(SIGQUIT))
+      proc_signal_pgid(pending_pgid, SIGQUIT);
+    if(pending_signals & SIGBIT(SIGTSTP))
+      proc_signal_pgid(pending_pgid, SIGTSTP);
+  }
+
   if(doprocdump)
     procdump();
 }
@@ -3617,6 +3730,7 @@ int
 consoleread(struct inode *ip, char *dst, uint off, int n)
 {
   struct console_tty_state *t;
+  struct proc *curproc;
   int tty;
   uint target;
   uint now;
@@ -3635,14 +3749,16 @@ consoleread(struct inode *ip, char *dst, uint off, int n)
   acquire(&cons.lock);
   tty = console_tty_index_from_inode(ip);
   t = console_tty_by_index(tty);
+  curproc = myproc();
 
   /* SIGTTIN: background process reading controlling terminal */
-  if(myproc()->tty >= 0 &&
-     myproc()->pgid != 0 &&
-      myproc()->pgid != t->fg_pgid) {
+  if(curproc &&
+     curproc->tty >= 0 &&
+     curproc->pgid != 0 &&
+      curproc->pgid != t->fg_pgid) {
     release(&cons.lock);
     ilock(ip);
-    proc_signal_pgid(myproc()->pgid, SIGTTIN);
+    proc_signal_pgid(curproc->pgid, SIGTTIN);
     return -1;
   }
 
@@ -3675,7 +3791,7 @@ consoleread(struct inode *ip, char *dst, uint off, int n)
 
   while(n > 0) {
     while(t->input.r == t->input.w) {
-      if(myproc()->killed) {
+      if(curproc && curproc->killed) {
         release(&cons.lock);
         ilock(ip);
         return -1;
@@ -3748,6 +3864,7 @@ consolewrite(struct inode *ip, char *buf, uint off, int n)
 {
   struct console_tty_state *t;
   struct console_tty_state *active;
+  struct proc *curproc;
   int tty;
   int i, c;
 
@@ -3757,15 +3874,17 @@ consolewrite(struct inode *ip, char *buf, uint off, int n)
   tty = console_tty_index_from_inode(ip);
   t = console_tty_by_index(tty);
   active = console_tty_by_index(console_active_tty);
+  curproc = myproc();
 
   /* SIGTTOU: background write with TOSTOP set */
-  if(myproc()->tty >= 0 &&
-     myproc()->pgid != 0 &&
-      myproc()->pgid != t->fg_pgid &&
+  if(curproc &&
+     curproc->tty >= 0 &&
+     curproc->pgid != 0 &&
+      curproc->pgid != t->fg_pgid &&
       (t->termios.c_lflag & TOSTOP)) {
     release(&cons.lock);
     ilock(ip);
-    proc_signal_pgid(myproc()->pgid, SIGTTOU);
+    proc_signal_pgid(curproc->pgid, SIGTTOU);
     return -1;
   }
 
@@ -3781,8 +3900,9 @@ consolewrite(struct inode *ip, char *buf, uint off, int n)
   if(t->defer_flush < 0)
     t->defer_flush = 0;
 
-  if(t == active && t->defer_flush == 0)
+  if(t == active && t->defer_flush == 0) {
     console_flush_tty_locked(t);
+  }
 
   t->output_busy--;
   if(t->output_busy <= 0) {

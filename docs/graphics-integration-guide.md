@@ -99,6 +99,7 @@ What S1 does not solve yet:
 - Performance is materially better after removing the per-sync full-screen clear, and the normal console path now uses dirty-region presents for backends that support `flush_region`.
 - The current operator eye-test for the latest batching and dirty-region changes indicates this was a major practical performance win for day-to-day console use.
 - The graphics path is currently kernel-owned and terminal-first. There is no working `/dev/fb0`, `/dev/dri/card0`, or `libu6gfx` implementation yet.
+- The next two performance bottlenecks are now backend-side: large upload regions during scroll-heavy output and the synchronous `transfer_to_host_2d` + `resource_flush` submission cost in the virtio-gpu path.
 
 ## Gap Analysis
 

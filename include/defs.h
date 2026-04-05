@@ -74,6 +74,7 @@ struct console_gfx_debug_info {
 	uint cells_rendered;
 	uint flush_calls;
 	uint flush_pixels;
+	uint flush_blocked_tickslock;
 	uint boot_ready;
 	uint has_dev;
 	uint has_fb;
