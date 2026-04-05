@@ -665,6 +665,94 @@ console_tty_mark_dirty_all_locked(struct console_tty_state *t)
 }
 
 static void
+console_gfx_blank_text_cell(struct text_cell *tc, uchar a)
+{
+  if(!tc)
+    return;
+  tc->codepoint = ' ';
+  tc->attr = 0;
+  tc->fg_color = (uchar)(a & 0x0F);
+  tc->bg_color = (uchar)((a >> 4) & 0x0F);
+  tc->width = 1;
+}
+
+static void
+console_gfx_scroll_up_locked(struct console_tty_state *t, int top, int bot, int n, uchar a)
+{
+  int cols;
+  int lines;
+  int cell_w;
+  int cell_h;
+  int move_rows;
+  int fill_from;
+  int i;
+  int px;
+  int src_y;
+  int dst_y;
+  uint pixel_w;
+  uint pixel_h;
+  struct text_cell blank;
+
+  if(!t)
+    return;
+  if(!console_gfx_boot_ready)
+    return;
+  if(t != console_tty_by_index(console_active_tty))
+    return;
+  if(!console_gfx_fb || !console_gfx_vts || !console_gfx_vts->cells)
+    return;
+
+  cols = console_tty_cols(t);
+  lines = bot - top + 1;
+  if(cols <= 0 || lines <= 0 || n <= 0 || n >= lines)
+    return;
+  if((int)console_gfx_vts->width != cols || (int)console_gfx_vts->height != console_tty_rows(t))
+    return;
+
+  move_rows = lines - n;
+  fill_from = bot + 1 - n;
+  console_gfx_blank_text_cell(&blank, a);
+
+  acquire(&console_gfx_vts->lock);
+  memmove(console_gfx_vts->cells + top * cols,
+          console_gfx_vts->cells + (top + n) * cols,
+          move_rows * cols * sizeof(struct text_cell));
+
+  if(console_gfx_vts->dirty) {
+    memmove(console_gfx_vts->dirty + top * cols,
+            console_gfx_vts->dirty + (top + n) * cols,
+            move_rows * cols);
+    memset(console_gfx_vts->dirty + top * cols, 0, move_rows * cols);
+    memset(console_gfx_vts->dirty + fill_from * cols, 1, n * cols);
+  }
+
+  for(i = fill_from * cols; i < (bot + 1) * cols; i++)
+    console_gfx_vts->cells[i] = blank;
+  console_gfx_vts->any_dirty = 1;
+  release(&console_gfx_vts->lock);
+
+  /* Scrolling reuses moved pixels but still requires redrawing the newly
+   * exposed blank rows at the bottom of the region. Account for that work in
+   * gfxstats so render_efficiency stays meaningful under the scroll fast path. */
+  console_gfx_stat_cells_changed += (uint)(n * cols);
+
+  console_gfx_cell_metrics_for_grid(cols, console_tty_rows(t), &cell_w, &cell_h);
+  if(cell_w < 1)
+    cell_w = 1;
+  if(cell_h < 1)
+    cell_h = 1;
+
+  px = console_gfx_vts->fb_x;
+  src_y = console_gfx_vts->fb_y + (top + n) * cell_h;
+  dst_y = console_gfx_vts->fb_y + top * cell_h;
+  pixel_w = (uint)cols * (uint)cell_w;
+  pixel_h = (uint)move_rows * (uint)cell_h;
+  fb_blit_rect(console_gfx_fb, px, src_y,
+               console_gfx_fb, px, dst_y,
+               pixel_w, pixel_h);
+}
+
+static void
 console_tty_fill_locked(struct console_tty_state *t, int from, int to, uchar a)
 {
   ushort blank;
@@ -712,6 +800,7 @@ console_tty_scroll_up_locked(struct console_tty_state *t, int top, int bot, int 
   memmove(t->screen + top * cols,
           t->screen + (top + n) * cols,
           (lines - n) * cols * sizeof(ushort));
+  console_gfx_scroll_up_locked(t, top, bot, n, a);
   console_tty_fill_locked(t, (bot + 1 - n) * cols, (bot + 1) * cols, a);
   console_tty_mark_dirty_range_locked(t, top * cols, (bot + 1) * cols);
 }
