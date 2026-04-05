@@ -107,6 +107,7 @@ i226_probe(struct pci_dev *dev)
     sc = &i226_devices[i226_count];
     memset(sc, 0, sizeof(*sc));
     initlock(&sc->lock, "i226");
+    lockdep_set_rank(&sc->lock, LOCK_RANK_DEFAULT, "i226");
     sc->pci = dev;
 
     pci_enable_mem(dev);

@@ -507,6 +507,7 @@ pcnet_probe(struct pci_dev *pci)
     sc = &pcnet_devices[pcnet_count];
     memset(sc, 0, sizeof(*sc));
     initlock(&sc->lock, "pcnet");
+    lockdep_set_rank(&sc->lock, LOCK_RANK_DEFAULT, "pcnet");
     sc->pci = pci;
     
     /* Get I/O base from BAR0 */

@@ -18,6 +18,7 @@ void
 netdev_init(void)
 {
 	initlock(&if_lock, "ifnet");
+	lockdep_set_rank(&if_lock, LOCK_RANK_DEFAULT, "ifnet");
 	if_list = 0;
 	if_next_index = 1;
 	route_init();

@@ -480,6 +480,7 @@ nvme_queue_init(struct nvme_softc *sc, struct nvme_queue *q, int qid, int depth)
     q->cq_phase = 1;
     
     initlock(&q->lock, "nvme_q");
+    lockdep_set_rank(&q->lock, LOCK_RANK_DEFAULT, "nvme_q");
     
     /* Allocate submission queue */
     q->sq = (struct nvme_sqe *)kalloc();
@@ -1122,6 +1123,7 @@ nvme_probe(struct pci_dev *pci)
     memset(sc, 0, sizeof(*sc));
     sc->dev_id = (uint)-1;
     initlock(&sc->lock, "nvme");
+    lockdep_set_rank(&sc->lock, LOCK_RANK_DEFAULT, "nvme");
     sc->pci = pci;
     
     /* Map BAR0 */

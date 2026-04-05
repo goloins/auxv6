@@ -49,6 +49,16 @@ already landed and guest-validated.
 Current manual guest validation status: `lockprobe` default, `-v`, and debug
 variants pass without lockdep panic.
 
+### Additional Hardening (Post-Validation)
+
+- `lockprobe` gained a lockdep handoff selftest mode (`-L`) that exercises
+  sanctioned sleep/wakeup lock transitions (`pipe` and `ticks` paths) as a
+  regression tripwire for non-LIFO false positives and real lock-order bugs.
+- Storage/network lock coverage was expanded with explicit lockdep class
+  annotations across core net tables/socket layer, storage controller locks,
+  major NIC drivers, and filesystem mount locks. This preserves behavior while
+  improving lock-chain diagnostics during panic triage.
+
 ### Important Design Deviation from Original Phase 2 Text
 
 The original plan proposed converting console locking directly to sleeplock.

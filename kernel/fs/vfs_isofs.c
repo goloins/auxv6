@@ -753,6 +753,7 @@ isofs_mount_init(struct mount *m)
     
     memset(mp, 0, sizeof(*mp));
     initlock(&mp->lock, "isofs");
+    lockdep_set_rank(&mp->lock, LOCK_RANK_DEFAULT, "isofs");
     mp->dev = m->dev;
     
     MOUNTDBG("isofs: mount_init dev=%d\n", m->dev);

@@ -1113,6 +1113,7 @@ tmpfs_mount_init(struct mount *m)
     return -1;
   memset(md, 0, sizeof(*md));
   initlock(&md->lock, "tmpfs");
+  lockdep_set_rank(&md->lock, LOCK_RANK_DEFAULT, "tmpfs");
   md->max_bytes = size;
   md->used_bytes = 0;
   md->next_inum = 1;

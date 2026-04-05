@@ -316,6 +316,7 @@ ideinit(void)
   uint cap0, cap1, cap2, cap3;
 
   initlock(&idelock, "ide");
+  lockdep_set_rank(&idelock, LOCK_RANK_DEFAULT, "ide");
   ioapicenable(IRQ_IDE, ncpu - 1);
   ioapicenable(IRQ_IDE + 1, ncpu - 1);
   idewait(0x1f0, 0);

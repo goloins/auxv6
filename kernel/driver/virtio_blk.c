@@ -1222,6 +1222,7 @@ virtio_blk_probe(struct pci_dev *pci)
     struct virtio_blk_softc *sc = &virtio_blk_devices[virtio_blk_count];
     memset(sc, 0, sizeof(*sc));
     initlock(&sc->lock, "virtio_blk");
+    lockdep_set_rank(&sc->lock, LOCK_RANK_DEFAULT, "virtio_blk");
     initsleeplock(&sc->req_lock, "virtio_blk_req");
     
     /* Initialize virtio device */

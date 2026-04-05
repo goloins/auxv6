@@ -1745,6 +1745,7 @@ ahci_port_init(struct ahci_softc *sc, int port)
     p->recover_seq = 0;
     initsleeplock(&p->lock, "ahci_port");
     initlock(&p->irq_lock, "ahci_irq");
+    lockdep_set_rank(&p->irq_lock, LOCK_RANK_DEFAULT, "ahci_irq");
     
     /* Check if device present */
     uint32_t ssts = ahci_port_read(sc, port, AHCI_PxSSTS);
@@ -1899,6 +1900,7 @@ ahci_probe(struct pci_dev *pci)
     struct ahci_softc *sc = &ahci_devices[ahci_count];
     memset(sc, 0, sizeof(*sc));
     initlock(&sc->lock, "ahci");
+    lockdep_set_rank(&sc->lock, LOCK_RANK_DEFAULT, "ahci");
     sc->pci = pci;
     
     /* Map BAR5 (ABAR) */

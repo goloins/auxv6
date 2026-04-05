@@ -488,6 +488,7 @@ e1000_probe(struct pci_dev *pci)
     sc = &e1000_devices[e1000_count];
     memset(sc, 0, sizeof(*sc));
     initlock(&sc->lock, "e1000");
+    lockdep_set_rank(&sc->lock, LOCK_RANK_DEFAULT, "e1000");
     sc->pci = pci;
     
     /* Map BAR0 (memory-mapped registers) */

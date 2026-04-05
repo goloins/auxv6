@@ -732,6 +732,7 @@ vmxnet3_probe(struct pci_dev *dev)
     sc = &vmxnet3_devices[vmxnet3_count];
     memset(sc, 0, sizeof(*sc));
     initlock(&sc->lock, "vmxnet3");
+    lockdep_set_rank(&sc->lock, LOCK_RANK_DEFAULT, "vmxnet3");
     sc->pci = dev;
     
     /* Enable memory and bus master */

@@ -188,6 +188,7 @@ socket_init(void)
   int i;
 
   initlock(&socket_lock, "socket");
+  lockdep_set_rank(&socket_lock, LOCK_RANK_DEFAULT, "socket");
   
   // Initialize socket table
   for(i = 0; i < NSOCKET; i++) {

@@ -29,6 +29,7 @@ route_init(void)
 	int i;
 
 	initlock(&rtable.lock, "route");
+	lockdep_set_rank(&rtable.lock, LOCK_RANK_DEFAULT, "route");
 	acquire(&rtable.lock);
 	for(i = 0; i < NROUTE; i++){
 		rtable.tab[i].rt_dst = 0;

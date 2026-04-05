@@ -581,6 +581,7 @@ virtio_net_probe(struct pci_dev *pci)
     sc = &virtio_net_devices[virtio_net_count];
     memset(sc, 0, sizeof(*sc));
     initlock(&sc->lock, "virtio_net");
+    lockdep_set_rank(&sc->lock, LOCK_RANK_DEFAULT, "virtio_net");
     sc->dbg_last_tx_pending = -1;
     
     /* Initialize virtio device */

@@ -458,6 +458,7 @@ rtl8111_probe(struct pci_dev *dev)
     sc = &rtl8111_devices[rtl8111_count];
     memset(sc, 0, sizeof(*sc));
     initlock(&sc->lock, "rtl8111");
+    lockdep_set_rank(&sc->lock, LOCK_RANK_DEFAULT, "rtl8111");
     sc->pci = dev;
     
     /* Enable memory and bus master */

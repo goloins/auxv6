@@ -559,6 +559,7 @@ nfs_mount_init(struct mount *m)
     return -1;
   memset(md, 0, sizeof(*md));
   initlock(&md->lock, "nfs_mount");
+  lockdep_set_rank(&md->lock, LOCK_RANK_DEFAULT, "nfs_mount");
 
   if(nfs_split_source(src, &md->server, md->export_path, sizeof(md->export_path)) < 0)
     goto fail;

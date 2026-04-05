@@ -119,6 +119,7 @@ i219_probe(struct pci_dev *dev)
     sc = &i219_devices[i219_count];
     memset(sc, 0, sizeof(*sc));
     initlock(&sc->lock, "i219");
+    lockdep_set_rank(&sc->lock, LOCK_RANK_DEFAULT, "i219");
     sc->pci = dev;
 
     pci_enable_mem(dev);

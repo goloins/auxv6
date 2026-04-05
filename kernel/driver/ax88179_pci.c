@@ -106,6 +106,7 @@ ax88179_probe(struct pci_dev *dev)
     sc = &ax88179_devices[ax88179_count];
     memset(sc, 0, sizeof(*sc));
     initlock(&sc->lock, "ax88179");
+    lockdep_set_rank(&sc->lock, LOCK_RANK_DEFAULT, "ax88179");
     sc->pci = dev;
 
     pci_enable_mem(dev);

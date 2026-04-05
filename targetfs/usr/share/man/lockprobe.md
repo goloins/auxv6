@@ -4,7 +4,7 @@
 `lockprobe` - stress utility for lock-path validation in console and file-table code
 
 ## Synopsis
-`lockprobe [-v] [-D] [-l loops] [-w workers] [-r timed_reads] [-C] [-F]`
+`lockprobe [-v] [-D] [-L] [-l loops] [-w workers] [-r timed_reads] [-C] [-F]`
 
 ## Description
 `lockprobe` is a focused validation utility for recently modernized locking paths.
@@ -15,12 +15,15 @@ work:
 - Console write and tty ioctl paths (`tcgetattr`, `tcsetattr`, `TIOCGWINSZ`).
 - Console timed read path in noncanonical mode (`VMIN=0`, `VTIME=1`) to hit
   `consoleread` timeout and wakeup behavior.
+- Optional lockdep handoff selftest mode that forces sleep/wakeup transitions
+  on pipe locks and ticks-based sleep paths.
 
 The utility exits with status `0` on full pass, non-zero if any subtest fails.
 
 ## Options
 - `-v`: Verbose progress logs.
 - `-D`: Debug logs (very chatty). Implies verbose behavior.
+- `-L`: Run lockdep handoff selftest (pipe/ticks sleep transitions).
 - `-l loops`: Loop count for fd/ioctl/write stress. Default: `200`.
 - `-w workers`: Worker process count for concurrent file-table stress. Default: `4`.
 - `-r timed_reads`: Number of timed tty reads in noncanonical mode. Default: `32`.
@@ -51,6 +54,12 @@ Debug only file-table paths:
 
 ```sh
 lockprobe -D -C
+```
+
+Run lockdep handoff selftest along with normal checks:
+
+```sh
+lockprobe -L
 ```
 
 ## Notes

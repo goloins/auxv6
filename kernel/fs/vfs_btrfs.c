@@ -1633,6 +1633,7 @@ btrfs_mount_init(struct mount *m)
     return -1;
   memset(md, 0, sizeof(*md));
   initlock(&md->lock, "btrfs");
+  lockdep_set_rank(&md->lock, LOCK_RANK_DEFAULT, "btrfs");
   md->dev = m->dev;
 
   buf = kalloc();

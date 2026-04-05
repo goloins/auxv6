@@ -12,6 +12,7 @@ struct cfg {
   int timed_reads;
   int verbose;
   int debug;
+  int handoff_selftest;
   int no_console;
   int no_fds;
 };
@@ -26,9 +27,10 @@ static void
 usage(void)
 {
   dprintf(2,
-          "usage: lockprobe [-v] [-D] [-l loops] [-w workers] [-r timed_reads] [-C] [-F]\n"
+          "usage: lockprobe [-v] [-D] [-L] [-l loops] [-w workers] [-r timed_reads] [-C] [-F]\n"
           "  -v  verbose progress output\n"
           "  -D  debug output (very chatty, implies -v)\n"
+          "  -L  run lockdep handoff selftest (pipe/ticks sleep transitions)\n"
           "  -l  loop count for fd/ioctl/write tests (default: 200)\n"
           "  -w  worker processes for concurrent fd stress (default: 4)\n"
           "  -r  timed tty read attempts in noncanonical mode (default: 32)\n"
@@ -269,6 +271,75 @@ test_console_timed_reads(const struct cfg *c)
   return 0;
 }
 
+static int
+test_lockdep_handoffs(const struct cfg *c)
+{
+  int p[2];
+  int pid;
+  int st;
+  int i;
+  int n;
+  int total;
+  char wbuf[128];
+  char rbuf[128];
+
+  (void)c;
+  VLOG("lockprobe: [handoff] start (pipe + ticks sleep)\n");
+
+  if(pipe(p) < 0) {
+    dprintf(2, "lockprobe: [handoff] pipe failed\n");
+    return -1;
+  }
+
+  pid = fork();
+  if(pid < 0) {
+    close(p[0]);
+    close(p[1]);
+    dprintf(2, "lockprobe: [handoff] fork failed\n");
+    return -1;
+  }
+
+  if(pid == 0) {
+    close(p[0]);
+    memset(wbuf, 'A', sizeof(wbuf));
+    for(i = 0; i < 64; i++) {
+      if(write(p[1], wbuf, sizeof(wbuf)) != (int)sizeof(wbuf)) {
+        close(p[1]);
+        exit(1);
+      }
+    }
+    close(p[1]);
+    exit(0);
+  }
+
+  close(p[1]);
+  total = 0;
+  for(i = 0; i < 64; i++) {
+    n = read(p[0], rbuf, sizeof(rbuf));
+    if(n <= 0) {
+      close(p[0]);
+      waitpid(pid, &st, 0);
+      dprintf(2, "lockprobe: [handoff] pipe read failed at iter=%d\n", i);
+      return -1;
+    }
+    total += n;
+    if((i % 4) == 0)
+      sleep(1);
+  }
+  close(p[0]);
+
+  if(waitpid(pid, &st, 0) < 0 || st != 0) {
+    dprintf(2, "lockprobe: [handoff] writer exit=%d\n", st);
+    return -1;
+  }
+
+  for(i = 0; i < 8; i++)
+    sleep(1);
+
+  VLOG("lockprobe: [handoff] pass (bytes=%d)\n", total);
+  return 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -281,6 +352,7 @@ main(int argc, char **argv)
   c.timed_reads = 32;
   c.verbose = 0;
   c.debug = 0;
+  c.handoff_selftest = 0;
   c.no_console = 0;
   c.no_fds = 0;
 
@@ -293,6 +365,8 @@ main(int argc, char **argv)
     } else if(strcmp(argv[i], "-D") == 0) {
       c.debug = 1;
       c.verbose = 1;
+    } else if(strcmp(argv[i], "-L") == 0) {
+      c.handoff_selftest = 1;
     } else if(strcmp(argv[i], "-C") == 0) {
       c.no_console = 1;
     } else if(strcmp(argv[i], "-F") == 0) {
@@ -324,8 +398,8 @@ main(int argc, char **argv)
   g_verbose = c.verbose;
   g_debug = c.debug;
 
-  dprintf(1, "lockprobe: begin loops=%d workers=%d timed_reads=%d verbose=%d debug=%d\n",
-          c.loops, c.workers, c.timed_reads, c.verbose, c.debug);
+    dprintf(1, "lockprobe: begin loops=%d workers=%d timed_reads=%d verbose=%d debug=%d handoff=%d\n",
+      c.loops, c.workers, c.timed_reads, c.verbose, c.debug, c.handoff_selftest);
 
   fails = 0;
 
@@ -343,6 +417,13 @@ main(int argc, char **argv)
       fails++;
   } else {
     VLOG("lockprobe: skipping console tests (-C)\n");
+  }
+
+  if(c.handoff_selftest) {
+    if(test_lockdep_handoffs(&c) < 0)
+      fails++;
+  } else {
+    VLOG("lockprobe: skipping handoff selftest (enable with -L)\n");
   }
 
   if(fails == 0) {

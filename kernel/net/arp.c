@@ -166,6 +166,7 @@ void
 arp_init(void)
 {
 	initlock(&arptab.lock, "arp");
+	lockdep_set_rank(&arptab.lock, LOCK_RANK_DEFAULT, "arp");
 	memset(arptab.entries, 0, sizeof(arptab.entries));
 }
 
