@@ -83,6 +83,7 @@ cat /proc/net_dev   # raw interface counter dump, C-locale scaffolding, and corr
 - UFS2 gained an initial read-only backend (`mount ... ufs2 ...` and `mount ... ffs ...`) integrated through VFS, with first-tranche constraints documented in `docs/ufs2-driver.md`.
 - Linux-host Btrfs image tooling landed (`tools/stage-btrfs-root.sh`, `make nvme-btrfs.img`, `qemu-nvme-btrfs`, `qemu-nox-nvme-btrfs`, `btrfs-reset`) to support repeatable guest validation.
 - On-demand user stack growth (Area 5) is complete: exec pre-allocates `USER_STACK_MAX_PAGES`, page faults grow one page at a time, fork inherits stack bounds metadata, and overflow now terminates with correct SIGSEGV wait status; `stackgrowtest` currently passes 3/3 in guest.
+- xv6fs has started formal deprecation in-tree: legacy build/runtime paths are now gated behind `LEGACY_XV6FS=1`, and default rootfs staging no longer advertises xv6fs mounts.
 
 ---
 

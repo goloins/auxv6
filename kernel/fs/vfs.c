@@ -114,7 +114,11 @@ vfs_root_configure(struct vfs *fs)
 #if ROOTFS_TYPE == ROOTFS_TYPE_EXT2
   vfs_ext2_init(fs);
 #elif ROOTFS_TYPE == ROOTFS_TYPE_XV6FS
+#if CONFIG_LEGACY_XV6FS
   vfs_xv6fs_init(fs);
+#else
+#error ROOTFS_TYPE_XV6FS requires LEGACY_XV6FS=1
+#endif
 #else
 #error Unsupported ROOTFS_TYPE
 #endif

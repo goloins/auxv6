@@ -45,7 +45,7 @@ Other footguns (don't ignore these):
 - you cannot run the user/_applications directly. They are compiled for a auxv6 system.
 - make qemu is the command to run the system, sudo is required if the build host is macos
 - make qemu-nox is the command to run the system without a graphical console, sudo is required if the build host is macos
-- xv6fs is deprecated. don't spend any time on it. If you need to mount a filesystem, use the ext2 image.
+- xv6fs is deprecated and legacy-gated. It is disabled by default; only enable it intentionally with `LEGACY_XV6FS=1` for targeted legacy work. If you need to mount a filesystem, use the ext2 image.
 - don't assume kernel code or headers are static targets, if you need to add a header, add it to include/ and update the relevant files. If you need to add a function, add it to the relevant file in kernel/ or ulib/ and update the relevant headers.
 - don't use the mkfs that comes from original xv6, it is not compatible with the ext2 image. Use the tools/stage-ext2-root.sh script to create an ext2 image from a directory. You can use fakeroot or sudo to create the image with root ownership, which is required for some files to have the correct permissions. If you don't have fakeroot or sudo, you can run the script without them, but the files will be owned by the current user and may not have the correct permissions.
 - if we determine that one misbehavior from a feature or program is a bug, but not the main bug, we should still fix it, but we should also make sure to document it in the relevant area.

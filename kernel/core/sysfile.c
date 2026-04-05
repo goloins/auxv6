@@ -1447,7 +1447,12 @@ sys_mount(void)
   if(memcmp(fstype_buf, "procfs", 7) == 0) {
     vfs_procfs_init(fs);
   } else if(memcmp(fstype_buf, "xv6fs", 6) == 0) {
+#if CONFIG_LEGACY_XV6FS
     vfs_xv6fs_init(fs);
+#else
+    kfree((void*)fs);
+    return -1;
+#endif
   } else if(memcmp(fstype_buf, "ext2", 5) == 0 ||
              memcmp(fstype_buf, "ext2fs", 7) == 0) {
     vfs_ext2_init(fs);
@@ -1480,8 +1485,10 @@ sys_mount(void)
   else if(memcmp(fstype_buf, "ext2", 5) == 0 ||
            memcmp(fstype_buf, "ext2fs", 7) == 0)
     dev = has_dev_override ? dev_override : EXT2DEV;
+#if CONFIG_LEGACY_XV6FS
   else if(memcmp(fstype_buf, "xv6fs", 6) == 0)
     dev = has_dev_override ? dev_override : ROOTDEV;
+#endif
   else if(memcmp(fstype_buf, "msdosfs", 8) == 0 ||
           memcmp(fstype_buf, "fat", 4) == 0)
     dev = has_dev_override ? dev_override : DISK_DEV(3);
