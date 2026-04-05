@@ -3,14 +3,15 @@
 
 #include "types.h"
 #include "stdint.h"
+#include "limits.h"
 
 struct inode;
 struct dirent;
 struct stat;
 
-#define VFS_NAME_MAX 8
-#define VFS_MOUNT_PATH_MAX 32
-#define VFS_MOUNTS_MAX 8
+#define VFS_NAME_MAX (NAME_MAX + 1)
+#define VFS_MOUNT_PATH_MAX PATH_MAX
+#define VFS_MOUNTS_MAX 32
 
 #define VFS_CAP_READ     0x0001
 #define VFS_CAP_WRITE    0x0002

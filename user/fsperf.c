@@ -3,7 +3,7 @@
 // Exercises the fs performance changes from kernel-perf-hardening:
 //   - Inode cache hash table (ICACHE_HASH_SIZE=64, O(1) lookup via ihash)
 //   - Buffer cache hash table (BCACHE_HASH_SIZE=64, O(1) lookup via bhash)
-//   - Raised NINODE (200), NFILE (256), NOFILE (32), NBUF (128)
+//   - Raised cache/descriptor budgets (NINODE/NOFILE*/NBUF)
 //
 // Usage: fsperf
 // Prints [PASS]/[FAIL] for each sub-test and a final summary.
@@ -756,8 +756,8 @@ main(int argc, char *argv[])
   char tmpfs_type[32];
 
   dprintf(1, "fsperf: inode-cache and buffer-cache stress\n");
-  dprintf(1, "  NINODE=%d NFILE=%d NOFILE=%d NBUF=%d\n",
-          NINODE, NFILE, NOFILE, NBUF);
+    dprintf(1, "  NINODE=%d NOFILE_DEFAULT=%d NOFILE_HARD=%d NBUF=%d\n",
+      NINODE, NOFILE_DEFAULT, NOFILE_HARD, NBUF);
   dprintf(1, "  profile=%s\n", FSPERF_PROFILE);
 
   if(detect_tmp_backend(tmpfs_type, sizeof(tmpfs_type)) == 0){

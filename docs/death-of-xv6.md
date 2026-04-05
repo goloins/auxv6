@@ -75,17 +75,22 @@ Rationale:
 
 ## Compatibility and architecture notes
 
-### i386 syscall ABI caveat (known follow-up)
+### i386 seek ABI caveat (resolved in follow-on)
 
-The kernel internals are now large-file clean for offsets/sizes, but current
-`sys_lseek` userspace argument width on i386 is still 32-bit.
+This document originally tracked a known follow-up for full userspace 64-bit
+seek ABI parity. That follow-up is now landed:
 
-Implication:
+- Dedicated `sys_lseek64` is in-tree (Linux-compatible `_llseek` split-argument
+  ABI).
+- Userspace `_llseek` wrapper and `lseek64()` helper are in-tree.
+- `sys_lseek` now returns `off_t` correctly on i386 by writing the high 32 bits
+  to `tf->edx` (int64 return convention uses `edx:eax`).
 
-- Relative movement in a single seek syscall remains bounded by 32-bit argument
-  width.
-- Full-range userspace seek parity requires a dedicated 64-bit seek syscall
-  (`sys_lseek64` or `_llseek`-style split-argument ABI).
+Current implication:
+
+- Large-file seek parity is now available to userspace.
+- Callers that require explicit full-range behavior should prefer
+  `lseek64()`/`_llseek` on i386.
 
 ### Why msdosfs keeps some 32-bit arithmetic
 
@@ -136,7 +141,6 @@ early-boot behavior was hardened so static-size growth fails safely.
 
 ## What this tranche does NOT claim
 
-- It does not complete userspace 64-bit seek ABI parity.
 - It does not attempt to modernize all historical scheduler/process-table design
   choices in one step.
 - It does not claim every backend now supports arbitrarily large files; it
@@ -144,11 +148,40 @@ early-boot behavior was hardened so static-size growth fails safely.
 
 ## P1 progress (descriptor ceilings)
 
-Status: Deferred (2026-04-05).
+Status: Landed (2026-04-05), validated.
 
-P1-A descriptor-ceiling bumps were attempted, built cleanly, and then rolled
-back pending boot-stability isolation after a reported early-boot regression.
-The values were returned to the prior baseline while regression triage proceeds.
+P1-A is no longer a simple compile-time `NFILE` bump experiment. The descriptor
+ceiling path was modernized to match current Unix expectations:
+
+- Per-process descriptor state now lives in dynamic `fdtable` storage instead of
+  fixed xv6-era arrays.
+- Descriptor policy is split into soft/hard limits:
+  - `NOFILE_DEFAULT` (inherited soft limit for new processes)
+  - `NOFILE_HARD` (setrlimit ceiling)
+- Historical `NFILE` naming has been removed from live policy surfaces; runtime
+  descriptor behavior is defined by `NOFILE_DEFAULT`/`NOFILE_HARD` plus dynamic
+  fdtable growth semantics.
+- `select(2)`, `poll(2)`, socket fd allocation, and rlimit checks now route
+  through the same runtime descriptor-limit policy.
+- Close-on-exec semantics (`FD_CLOEXEC`) are fully implemented and validated.
+
+Validation note:
+
+- `fdtest(1)` regression suite currently passes 16/16 in guest, including
+  descriptor lifecycle, `fcntl` flag behavior, and seek ABI checks.
+- Descriptor-limit observability slice is now in-tree via `/proc/fdlimits`,
+  reporting per-process `SOFT/HARD/USED/HIGHWATER` counters.
+
+### Next part of P1-A (follow-on)
+
+With the old fixed-`NFILE` scaling issue removed, the next descriptor-ceiling
+work is contract cleanup rather than emergency capacity tuning:
+
+- Descriptor-limit procfs introspection is now landed (`/proc/fdlimits`), so
+  tooling can query live limits/counters without compile-time constants.
+- Audit remaining fixed-size userspace interfaces that still imply tiny
+  historical limits (outside fdtable proper), and migrate them to versioned
+  widened ABIs where required.
 
 ## P1 progress (pipe policy)
 
@@ -175,12 +208,22 @@ P1-B modernizes pipe buffering while preserving POSIX-visible atomicity rules.
 
 ## Next recommended tranche (remaining P1)
 
-- Pipe policy modernization:
-  - raise pipe capacity while preserving POSIX `PIPE_BUF` atomicity semantics.
-- Exec argument policy modernization:
-  - reconcile `MAXARG` (count-oriented) and `ARG_MAX` (byte-oriented) behavior.
-- Keep each limit change paired with explicit kernel memory-accounting rationale
-  and regression checks.
+The original remaining-P1 items in this document (pipe policy and exec-argument
+policy) are now landed. Mount-metadata fixed-limit cleanup is also now landed
+in-tree by widening existing kernel/user constants in place:
+
+- `VFS_NAME_MAX` and `MOUNTINFO_NAME_MAX` now align to `NAME_MAX + 1`.
+- `VFS_MOUNT_PATH_MAX` and `MOUNTINFO_PATH_MAX` now align to `PATH_MAX`.
+- Mount table/query capacity is raised from 8 to 32 (`VFS_MOUNTS_MAX` and
+  `MOUNTINFO_MAX`) so the wider metadata ABI is usable at higher mount counts.
+
+Given current project policy (ABI expected to evolve), this was done directly
+without a temporary versioned syscall shim.
+
+Immediate follow-through remains validation-centric:
+
+- Validate with `mount`, `mounts`, `ls`, `lsblk`, and `/proc/mountstats` on
+  longer mount paths and non-trivial filesystem type names.
 
 ## P1 progress (exec argument policy)
 

@@ -9,6 +9,7 @@ struct pipe;
 struct proc;
 struct procinfo_k;
 struct procfdinfo_k;
+struct procfdlimitinfo_k;
 struct rtcdate;
 struct spinlock;
 struct sleeplock;
@@ -461,6 +462,8 @@ uint            proc_cwd_dev(void);
 struct inode*   proc_cwd_idup(void);
 int             proc_snapshot(struct procinfo_k *out, int max);
 int             proc_fd_snapshot(struct procfdinfo_k *out, int max, int skip);
+int             proc_fd_limits_snapshot(struct procfdlimitinfo_k *out, int max,
+										int skip);
 void            procdump(void);
 void            scheduler(void) __attribute__((noreturn));
 void            sched(void);

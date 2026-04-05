@@ -5,12 +5,12 @@
 #include "auxv6/user.h"
 #include "fcntl.h"
 
-#define NAME_MAX 32
+#define WHOAMI_NAME_BUFSZ 32
 
 int
 main(void)
 {
-  char name[NAME_MAX];
+  char name[WHOAMI_NAME_BUFSZ];
   struct passwd *pw;
 
   pw = getpwuid((uid_t)getuid());

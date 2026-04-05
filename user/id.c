@@ -6,15 +6,15 @@
 #include "auxv6/user.h"
 #include "fcntl.h"
 
-#define NAME_MAX 32
+#define ID_NAME_BUFSZ 32
 
 int
 main(void)
 {
   int uid;
   int gid;
-  char user[NAME_MAX];
-  char grpname[NAME_MAX];
+  char user[ID_NAME_BUFSZ];
+  char grpname[ID_NAME_BUFSZ];
   struct passwd *pw;
   struct group *gr;
 

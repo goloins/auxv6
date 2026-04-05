@@ -19,6 +19,7 @@
 #include "termios.h"
 #include "sys/select.h"
 #include "poll.h"
+#include "limits.h"
 
 struct stat;
 struct dirent;
@@ -34,9 +35,9 @@ typedef struct {
 	int si_pid;
 } siginfo_t;
 
-#define MOUNTINFO_NAME_MAX 8
-#define MOUNTINFO_PATH_MAX 32
-#define MOUNTINFO_MAX 8
+#define MOUNTINFO_NAME_MAX (NAME_MAX + 1)
+#define MOUNTINFO_PATH_MAX PATH_MAX
+#define MOUNTINFO_MAX 32
 #define NETIFINFO_NAME_MAX 16
 #define NETIFINFO_MAX 16
 #define ROUTEINFO_MAX 32

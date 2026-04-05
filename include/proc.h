@@ -88,6 +88,15 @@ struct procfdinfo_k {
   char name[16];
 };
 
+struct procfdlimitinfo_k {
+  int pid;
+  uint soft;
+  uint hard;
+  uint used;
+  uint highwater;
+  char name[16];
+};
+
 // Per-process state
 struct proc {
   uint sz;                     // Size of process memory (bytes)

@@ -5,6 +5,7 @@
 //
 
 #include "types.h"
+#include "x86.h"
 #include "defs.h"
 #include "param.h"
 #include "stat.h"
@@ -2114,8 +2115,8 @@ sys_select(void)
 //   arg1: offset_lo   (esp+8)   — low  32 bits of the 64-bit offset
 //   arg2: offset_hi   (esp+12)  — high 32 bits of the 64-bit offset
 //   arg3: whence      (esp+16)
-// Returns the new offset (truncated to 32 bits for ABI compatibility); callers
-// needing the full 64-bit result should use _llseek (sys_lseek64).
+// Returns off_t via edx:eax (i386 int64_t return convention):
+//   eax = low 32 bits, edx = high 32 bits (written into tf->edx before return).
 int
 sys_lseek(void)
 {
@@ -2162,8 +2163,9 @@ sys_lseek(void)
 
   f->off = newoff;
   iunlock(f->ip);
-  // Return low 32 bits; use _llseek for full 64-bit result
-  return (int)(newoff & 0x7fffffff);
+  // Return 64-bit offset via edx:eax (i386 int64_t return convention).
+  myproc()->tf->edx = (uint)((uint64_t)newoff >> 32);
+  return (int)(uint)(newoff & 0xffffffff);
 }
 
 // _llseek / lseek64 — 64-bit seek with Linux-compatible 5-arg ABI:

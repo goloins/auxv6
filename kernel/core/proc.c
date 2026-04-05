@@ -2048,6 +2048,53 @@ proc_fd_snapshot(struct procfdinfo_k *out, int max, int skip)
   return n;
 }
 
+int
+proc_fd_limits_snapshot(struct procfdlimitinfo_k *out, int max, int skip)
+{
+  struct proc *p;
+  int n;
+
+  if(out == 0 || max <= 0 || skip < 0)
+    return -1;
+
+  n = 0;
+  acquire(&ptable.lock);
+  for(p = ptable.proc; p < &ptable.proc[NPROC] && n < max; p++){
+    int fd;
+    uint used;
+    uint highwater;
+
+    if(p->state == UNUSED || p->pid <= 0)
+      continue;
+
+    if(skip > 0){
+      skip--;
+      continue;
+    }
+
+    used = 0;
+    highwater = 0;
+    if(p->fdtable){
+      highwater = (uint)p->fdtable->nfds;
+      for(fd = 0; fd < p->fdtable->nfds; fd++){
+        if(p->fdtable->entries[fd])
+          used++;
+      }
+    }
+
+    out[n].pid = p->pid;
+    out[n].soft = p->rlimit_nofile_cur;
+    out[n].hard = p->rlimit_nofile_max;
+    out[n].used = used;
+    out[n].highwater = highwater;
+    safestrcpy(out[n].name, p->name, sizeof(out[n].name));
+    n++;
+  }
+  release(&ptable.lock);
+
+  return n;
+}
+
 //PAGEBREAK: 36
 // Print a process listing to console.  For debugging.
 // Runs when user types ^P on console.

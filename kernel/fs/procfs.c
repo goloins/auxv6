@@ -36,6 +36,7 @@
 #define PROCFS_NET_DEV_INO    19   /* /proc/net_dev  — interface counters */
 #define PROCFS_SCHEDSTAT_INO  20   /* /proc/schedstat — scheduler counters */
 #define PROCFS_VMSTAT_INO     21   /* /proc/vmstat — allocator/vm counters */
+#define PROCFS_FDLIMITS_INO   22   /* /proc/fdlimits — per-proc fd limits */
 #define PROCFS_VERSION_STR  "a/ux86 aux86 i686\n"
 
 struct procfs_inode {
@@ -65,6 +66,7 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_NET_DEV_INO, "net_dev", 1024 },
   { PROCFS_SCHEDSTAT_INO, "schedstat", 256 },
   { PROCFS_VMSTAT_INO, "vmstat", 512 },
+  { PROCFS_FDLIMITS_INO, "fdlimits", 2048 },
   { 0, 0, 0 }
 };
 
@@ -305,6 +307,10 @@ procfs_fill_inode(struct inode *ip, uint inum)
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
     ip->size = 512;
+  } else if(inum == PROCFS_FDLIMITS_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
+    ip->size = 2048;
   } else {
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
@@ -488,7 +494,7 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     return -1;
   if(ip->inum == PROCFS_ROOT_INO){
     // Note: . and .. are synthesized by VFS for mount roots
-    struct dirent more_entries[20];
+    struct dirent more_entries[21];
     memset(more_entries, 0, sizeof(more_entries));
     more_entries[0].inum = PROCFS_UPTIME_INO;
     safestrcpy(more_entries[0].name, "uptime", DIRSIZ);
@@ -530,6 +536,8 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     safestrcpy(more_entries[18].name, "schedstat", DIRSIZ);
     more_entries[19].inum = PROCFS_VMSTAT_INO;
     safestrcpy(more_entries[19].name, "vmstat", DIRSIZ);
+    more_entries[20].inum = PROCFS_FDLIMITS_INO;
+    safestrcpy(more_entries[20].name, "fdlimits", DIRSIZ);
     return procfs_copy_data(dst, off, n, (char*)more_entries, sizeof(more_entries));
   }
   if(ip->inum == PROCFS_VERSION_INO)
@@ -891,6 +899,53 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
         if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
           return procfs_copy_data(dst, off, n, buf, len);
         if(procfs_buf_puts(buf, sizeof(buf), &len, finfo[i].name) < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+      }
+
+      skip += fm;
+    }
+    return procfs_copy_data(dst, off, n, buf, len);
+  }
+  if(ip->inum == PROCFS_FDLIMITS_INO){
+    struct procfdlimitinfo_k flinfo[16];
+    int fm;
+    int skip;
+
+    len = 0;
+    if(procfs_buf_puts(buf, sizeof(buf), &len,
+                       "PID SOFT HARD USED HIGHWATER NAME\n") < 0)
+      return -1;
+
+    skip = 0;
+    for(;;){
+      fm = proc_fd_limits_snapshot(flinfo, 16, skip);
+      if(fm <= 0)
+        break;
+
+      for(i = 0; i < fm; i++){
+        if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)flinfo[i].pid) < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putu(buf, sizeof(buf), &len, flinfo[i].soft) < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putu(buf, sizeof(buf), &len, flinfo[i].hard) < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putu(buf, sizeof(buf), &len, flinfo[i].used) < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putu(buf, sizeof(buf), &len, flinfo[i].highwater) < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+          return procfs_copy_data(dst, off, n, buf, len);
+        if(procfs_buf_puts(buf, sizeof(buf), &len, flinfo[i].name) < 0)
           return procfs_copy_data(dst, off, n, buf, len);
         if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
           return procfs_copy_data(dst, off, n, buf, len);

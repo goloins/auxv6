@@ -14,13 +14,13 @@ static char writebuf[TMPFS_OVERWRITE];
 int
 main(int argc, char *argv[])
 {
-  struct mountinfo entries[8];
+  struct mountinfo entries[MOUNTINFO_MAX];
   struct stat st;
   int n, i;
 
   dprintf(1, "=== Mount Test Utility ===\n");
   dprintf(1, "\nCurrent mounts before mount(2):\n");
-  n = mountinfo(entries, 8);
+  n = mountinfo(entries, MOUNTINFO_MAX);
   dprintf(1, "Found %d mounts\n", n);
   for(i = 0; i < n; i++) {
     dprintf(1, "  %s (dev=%d flags=%d)\n", entries[i].path, entries[i].dev, entries[i].flags);
@@ -34,7 +34,7 @@ main(int argc, char *argv[])
     dprintf(1, "mount() succeeded!\n");
 
     dprintf(1, "\nCurrent mounts after mount(2):\n");
-    n = mountinfo(entries, 8);
+    n = mountinfo(entries, MOUNTINFO_MAX);
     dprintf(1, "Found %d mounts\n", n);
     for(i = 0; i < n; i++) {
       dprintf(1, "  %s (dev=%d flags=%d fstype=%s)\n", 

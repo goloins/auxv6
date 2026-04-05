@@ -5,7 +5,7 @@
 #include "fcntl.h"
 #include "auxv6/user.h"
 
-#define NAME_MAX 32
+#define CHOWN_NAME_BUFSZ 32
 
 static int
 parse_decimal(const char *s)
@@ -32,7 +32,7 @@ main(int argc, char *argv[])
   int gid;
   char *spec;
   char *colon;
-  char ownerbuf[NAME_MAX];
+  char ownerbuf[CHOWN_NAME_BUFSZ];
   int ownerlen;
   struct passwd *pw;
   struct group *gr;
@@ -62,8 +62,8 @@ main(int argc, char *argv[])
     /* [owner]:group */
     ownerlen = (int)(colon - spec);
     if(ownerlen > 0) {
-      if(ownerlen >= NAME_MAX)
-        ownerlen = NAME_MAX - 1;
+      if(ownerlen >= CHOWN_NAME_BUFSZ)
+        ownerlen = CHOWN_NAME_BUFSZ - 1;
       memmove(ownerbuf, spec, ownerlen);
       ownerbuf[ownerlen] = 0;
       uid = parse_decimal(ownerbuf);

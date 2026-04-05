@@ -315,7 +315,7 @@ main(int argc, char *argv[])
   int total_passed = 0, total_failed_runs = 0;
 
   dprintf(1, "kallocstress: allocator-focused stress and regression checks\n");
-  dprintf(1, "  NPROC=%d NCPU=%d NFILE=%d\n", NPROC, NCPU, NFILE);
+  dprintf(1, "  NPROC=%d NCPU=%d NOFILE_HARD=%d\n", NPROC, NCPU, NOFILE_HARD);
   dprintf(1, "  profile=%s\n", KALLOCSTRESS_PROFILE);
 
   for(r = 0; r < nruns; r++){
