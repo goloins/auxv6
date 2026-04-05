@@ -53,7 +53,9 @@ static uint kmsg_head;
 static uint kmsg_size;
 
 static struct {
-  struct spinlock lock;
+  struct spinlock input_lock;   // Phase 3: protects console input buffer (interrupt context)
+  struct spinlock tty_lock;     // Phase 3: protects TTY state (spinlock for early boot)
+  struct spinlock gfx_lock;     // Phase 3: protects graphics registers (brief operations)
   int locking;
 } cons;
 
@@ -82,9 +84,9 @@ console_kmsg_read(char *dst, int max)
   if(dst == 0 || max <= 0)
     return 0;
 
-  acquire(&cons.lock);
+  acquire(&cons.input_lock);
   if(kmsg_size == 0) {
-    release(&cons.lock);
+    release(&cons.input_lock);
     return 0;
   }
 
@@ -95,7 +97,7 @@ console_kmsg_read(char *dst, int max)
   for(i = 0; i < (uint)n; i++)
     dst[i] = kmsg_ring[(start + i) % KMSG_RING_SIZE];
 
-  release(&cons.lock);
+  release(&cons.input_lock);
   return n;
 }
 
@@ -1099,11 +1101,11 @@ console_logo_get_enabled(void)
 int
 console_logo_set_enabled(int enabled)
 {
-  acquire(&cons.lock);
+  acquire(&cons.tty_lock);
   console_logo_enabled = enabled ? 1 : 0;
   if(console_logo_enabled)
     console_gfx_logo_drawn = 0;
-  release(&cons.lock);
+  release(&cons.tty_lock);
   return 0;
 }
 
@@ -1115,14 +1117,14 @@ console_gfx_server_claim(int pid)
   if(pid <= 0)
     return -1;
 
-  acquire(&cons.lock);
+  acquire(&cons.tty_lock);
   if(console_gfx_owner_pid >= 0 && console_gfx_owner_pid != pid)
     rc = -1;
   else {
     console_gfx_owner_pid = pid;
     rc = 0;
   }
-  release(&cons.lock);
+  release(&cons.tty_lock);
   return rc;
 }
 
@@ -1134,7 +1136,7 @@ console_gfx_server_release(int pid)
   if(pid <= 0)
     return -1;
 
-  acquire(&cons.lock);
+  acquire(&cons.tty_lock);
   if(console_gfx_owner_pid != pid)
     rc = -1;
   else {
@@ -1145,7 +1147,7 @@ console_gfx_server_release(int pid)
     console_flush_tty_locked(t);
     rc = 0;
   }
-  release(&cons.lock);
+  release(&cons.tty_lock);
   return rc;
 }
 
@@ -1154,9 +1156,9 @@ console_gfx_server_owner(void)
 {
   int pid;
 
-  acquire(&cons.lock);
+  acquire(&cons.tty_lock);
   pid = console_gfx_owner_pid;
-  release(&cons.lock);
+  release(&cons.tty_lock);
   return pid;
 }
 
@@ -1165,9 +1167,9 @@ console_input_events(void)
 {
   uint n;
 
-  acquire(&cons.lock);
+  acquire(&cons.tty_lock);
   n = console_input_event_count;
-  release(&cons.lock);
+  release(&cons.tty_lock);
   return n;
 }
 
@@ -1218,7 +1220,7 @@ console_gfx_debug_snapshot(struct console_gfx_debug_info *out)
 
   memset(out, 0, sizeof(*out));
 
-  acquire(&cons.lock);
+  acquire(&cons.tty_lock);
 
   out->sync_calls = console_gfx_stat_sync_calls;
   out->cells_changed = console_gfx_stat_cells_changed;
@@ -1298,7 +1300,7 @@ console_gfx_debug_snapshot(struct console_gfx_debug_info *out)
   out->gfx_owner_pid = console_gfx_owner_pid;
   out->input_events = console_input_event_count;
 
-  release(&cons.lock);
+  release(&cons.tty_lock);
   return 0;
 }
 
@@ -1307,11 +1309,11 @@ console_gfx_late_enable(void)
 {
   struct console_tty_state *t;
 
-  acquire(&cons.lock);
+  acquire(&cons.tty_lock);
   console_gfx_boot_ready = 1;
   t = console_tty_by_index(console_active_tty);
   console_gfx_sync_from_tty_locked(t);
-  release(&cons.lock);
+  release(&cons.tty_lock);
 }
 
 static void
@@ -2006,7 +2008,7 @@ cprintf(char *fmt, ...)
 
   locking = cons.locking;
   if(locking)
-    acquire(&cons.lock);
+    acquire(&cons.tty_lock);
 
   if(fmt == 0)
     panic("null fmt");
@@ -2095,7 +2097,7 @@ cprintf(char *fmt, ...)
   }
 
   if(locking)
-    release(&cons.lock);
+    release(&cons.tty_lock);
 }
 
 void
@@ -3303,10 +3305,10 @@ console_set_foreground_pgid(int tty, int pgid)
 {
   struct console_tty_state *t;
 
-  acquire(&cons.lock);
+  acquire(&cons.tty_lock);
   t = console_tty_by_index(tty);
   t->fg_pgid = pgid;
-  release(&cons.lock);
+  release(&cons.tty_lock);
 }
 
 int
@@ -3315,10 +3317,10 @@ console_get_foreground_pgid(int tty)
   struct console_tty_state *t;
   int pgid;
 
-  acquire(&cons.lock);
+  acquire(&cons.tty_lock);
   t = console_tty_by_index(tty);
   pgid = t->fg_pgid;
-  release(&cons.lock);
+  release(&cons.tty_lock);
   return pgid;
 }
 
@@ -3328,10 +3330,10 @@ console_get_termios(int tty, struct termios *tp)
   struct console_tty_state *t;
 
   if(tp == 0) return -1;
-  acquire(&cons.lock);
+  acquire(&cons.tty_lock);
   t = console_tty_by_index(tty);
   *tp = t->termios;
-  release(&cons.lock);
+  release(&cons.tty_lock);
   return 0;
 }
 
@@ -3345,7 +3347,7 @@ console_set_termios(int tty, const struct termios *tp, int optional_actions)
      optional_actions != TCSADRAIN &&
      optional_actions != TCSAFLUSH)
     return -1;
-  acquire(&cons.lock);
+  acquire(&cons.tty_lock);
   t = console_tty_by_index(tty);
 
   if(optional_actions == TCSANOW) {
@@ -3354,7 +3356,7 @@ console_set_termios(int tty, const struct termios *tp, int optional_actions)
     t->pending_termios = *tp;
     t->pending_termios_valid = 1;
     t->pending_termios_action = optional_actions;
-    release(&cons.lock);
+    release(&cons.tty_lock);
     return 0;
   } else {
     t->termios = *tp;
@@ -3362,17 +3364,17 @@ console_set_termios(int tty, const struct termios *tp, int optional_actions)
       t->input.r = t->input.w = t->input.e;
   }
 
-  release(&cons.lock);
+  release(&cons.tty_lock);
   return 0;
 }
 
 void
 console_set_active_tty(int tty)
 {
-  acquire(&cons.lock);
+  acquire(&cons.tty_lock);
   console_active_tty = console_tty_index_clamp(tty);
   console_flush_tty_locked(console_tty_by_index(console_active_tty));
-  release(&cons.lock);
+  release(&cons.tty_lock);
 }
 
 int
@@ -3380,9 +3382,9 @@ console_get_active_tty(void)
 {
   int tty;
 
-  acquire(&cons.lock);
+  acquire(&cons.tty_lock);
   tty = console_active_tty;
-  release(&cons.lock);
+  release(&cons.tty_lock);
   return tty;
 }
 
@@ -3407,9 +3409,9 @@ console_ioctl(int fd, int request, uint arg)
   switch(request) {
   case 0x5401:  /* TCGETS */
     if(arg == 0) return -1;
-    acquire(&cons.lock);
+    acquire(&cons.tty_lock);
     *(struct termios *)arg = t->termios;
-    release(&cons.lock);
+    release(&cons.tty_lock);
     return 0;
 
   case 0x5402:  /* TCSETS */
@@ -3425,15 +3427,15 @@ console_ioctl(int fd, int request, uint arg)
   case 0x5413:  /* TIOCGWINSZ */
     if(arg == 0) return -1;
     ws = (struct winsize *)arg;
-    acquire(&cons.lock);
+    acquire(&cons.tty_lock);
     *ws = t->winsize;
-    release(&cons.lock);
+    release(&cons.tty_lock);
     return 0;
 
   case 0x5414:  /* TIOCSWINSZ */
     if(arg == 0) return -1;
     ws = (struct winsize *)arg;
-    acquire(&cons.lock);
+    acquire(&cons.tty_lock);
     t->winsize = *ws;
     t->winsize.ws_row = (ushort)console_clamp_rows((int)t->winsize.ws_row);
     t->winsize.ws_col = (ushort)console_clamp_cols((int)t->winsize.ws_col);
@@ -3443,24 +3445,24 @@ console_ioctl(int fd, int request, uint arg)
     if(t == console_tty_by_index(console_active_tty))
       console_flush_tty_locked(t);
     pgid = t->fg_pgid;
-    release(&cons.lock);
+    release(&cons.tty_lock);
     proc_signal_pgid(pgid, SIGWINCH);
     return 0;
 
   case 0x540F:  /* TIOCGPGRP */
     if(arg == 0) return -1;
     pgidp = (int *)arg;
-    acquire(&cons.lock);
+    acquire(&cons.tty_lock);
     *pgidp = t->fg_pgid;
-    release(&cons.lock);
+    release(&cons.tty_lock);
     return 0;
 
   case 0x5410:  /* TIOCSPGRP */
     if(arg == 0) return -1;
     pgidp = (int *)arg;
-    acquire(&cons.lock);
+    acquire(&cons.tty_lock);
     t->fg_pgid = *pgidp;
-    release(&cons.lock);
+    release(&cons.tty_lock);
     return 0;
 
   case 0x540E:  /* TIOCSCTTY */
@@ -3480,9 +3482,9 @@ console_ioctl(int fd, int request, uint arg)
 
   case 0x541B:  /* FIONREAD / TIOCINQ */
     if(arg == 0) return -1;
-    acquire(&cons.lock);
+    acquire(&cons.tty_lock);
     *(int *)arg = (int)(t->input.w - t->input.r);
-    release(&cons.lock);
+    release(&cons.tty_lock);
     return 0;
 
   case 0x54A0:  /* TIOCGACTTTY */
@@ -3511,9 +3513,9 @@ console_ioctl(int fd, int request, uint arg)
     if((int)arg != TCIFLUSH && (int)arg != TCOFLUSH && (int)arg != TCIOFLUSH)
       return -1;
     if((int)arg == TCIFLUSH || (int)arg == TCIOFLUSH) {
-      acquire(&cons.lock);
+      acquire(&cons.tty_lock);
       t->input.r = t->input.w = t->input.e;
-      release(&cons.lock);
+      release(&cons.tty_lock);
     }
     return 0;
 
@@ -3540,7 +3542,7 @@ consoleintr(int (*getc)(void))
 
   pending_pgid = 0;
   pending_signals = 0;
-  acquire(&cons.lock);
+  acquire(&cons.input_lock);  // Phase 3: use input_lock (spinlock) for interrupt context
   while((c = getc()) >= 0) {
     t = console_tty_by_index(console_active_tty);
     console_input_event_count++;
@@ -3705,7 +3707,7 @@ consoleintr(int (*getc)(void))
       }
     }
   }
-  release(&cons.lock);
+  release(&cons.input_lock);
 
   /* Deliver job-control signals outside console lock to avoid lock-order
    * inversions with process-table paths under heavy interactive output. */
@@ -3746,7 +3748,7 @@ consoleread(struct inode *ip, char *dst, uint off, int n)
   (void)off;
   iunlock(ip);
   target = n;
-  acquire(&cons.lock);
+  acquire(&cons.tty_lock);
   tty = console_tty_index_from_inode(ip);
   t = console_tty_by_index(tty);
   curproc = myproc();
@@ -3756,7 +3758,7 @@ consoleread(struct inode *ip, char *dst, uint off, int n)
      curproc->tty >= 0 &&
      curproc->pgid != 0 &&
       curproc->pgid != t->fg_pgid) {
-    release(&cons.lock);
+    release(&cons.tty_lock);
     ilock(ip);
     proc_signal_pgid(curproc->pgid, SIGTTIN);
     return -1;
@@ -3776,7 +3778,7 @@ consoleread(struct inode *ip, char *dst, uint off, int n)
         *dst++ = t->input.buf[t->input.r++ % INPUT_BUF];
         n--;
       }
-      release(&cons.lock);
+      release(&cons.tty_lock);
       ilock(ip);
       return target - n;
     }
@@ -3792,7 +3794,7 @@ consoleread(struct inode *ip, char *dst, uint off, int n)
   while(n > 0) {
     while(t->input.r == t->input.w) {
       if(curproc && curproc->killed) {
-        release(&cons.lock);
+        release(&cons.tty_lock);
         ilock(ip);
         return -1;
       }
@@ -3808,19 +3810,19 @@ consoleread(struct inode *ip, char *dst, uint off, int n)
         now = ticks;
         if(timed_mode && (int)(now - deadline) >= 0) {
           release(&tickslock);
-          release(&cons.lock);
+          release(&cons.tty_lock);
           ilock(ip);
           return target - n;
         }
 
-        release(&cons.lock);
+        release(&cons.tty_lock);
         sleep(&ticks, &tickslock);
         release(&tickslock);
-        acquire(&cons.lock);
+        acquire(&cons.tty_lock);
         continue;
       }
 
-      sleep(&t->input.r, &cons.lock);
+      sleep(&t->input.r, &cons.tty_lock);
     }
 
     c = t->input.buf[t->input.r++ % INPUT_BUF];
@@ -3854,7 +3856,7 @@ consoleread(struct inode *ip, char *dst, uint off, int n)
        (t->termios.c_cc[VEOL] && c == (int)t->termios.c_cc[VEOL]))
       break;
   }
-  release(&cons.lock);
+  release(&cons.tty_lock);
   ilock(ip);
   return target - n;
 }
@@ -3870,7 +3872,7 @@ consolewrite(struct inode *ip, char *buf, uint off, int n)
 
   (void)off;
   iunlock(ip);
-  acquire(&cons.lock);
+  acquire(&cons.tty_lock);
   tty = console_tty_index_from_inode(ip);
   t = console_tty_by_index(tty);
   active = console_tty_by_index(console_active_tty);
@@ -3882,7 +3884,7 @@ consolewrite(struct inode *ip, char *buf, uint off, int n)
      curproc->pgid != 0 &&
       curproc->pgid != t->fg_pgid &&
       (t->termios.c_lflag & TOSTOP)) {
-    release(&cons.lock);
+    release(&cons.tty_lock);
     ilock(ip);
     proc_signal_pgid(curproc->pgid, SIGTTOU);
     return -1;
@@ -3916,7 +3918,7 @@ consolewrite(struct inode *ip, char *buf, uint off, int n)
     }
   }
 
-  release(&cons.lock);
+  release(&cons.tty_lock);
   ilock(ip);
   return n;
 }
@@ -3933,7 +3935,10 @@ consoleinit(void)
   ushort init_rows;
   ushort init_cols;
 
-  initlock(&cons.lock, "console");
+  // Phase 3: Initialize three separate locks for input, TTY, and graphics
+  initlock(&cons.input_lock, "console_input");
+  initlock(&cons.tty_lock, "console_tty");
+  initlock(&cons.gfx_lock, "console_gfx");
   console_select_hw_surface();
   cga_read_cursor();
   blank = (ushort)(' ' | (0x07 << 8));

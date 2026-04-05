@@ -14,14 +14,14 @@
 
 struct devsw devsw[NDEV];
 struct {
-  struct spinlock lock;
+  struct sleeplock lock;  // Phase 2: converted from spinlock (safe: not interrupt-context)
   struct file file[NFILE];
 } ftable;
 
 void
 fileinit(void)
 {
-  initlock(&ftable.lock, "ftable");
+  initsleeplock(&ftable.lock, "ftable");
 }
 
 // Allocate a file structure.
@@ -30,17 +30,17 @@ filealloc(void)
 {
   struct file *f;
 
-  acquire(&ftable.lock);
+  acquiresleep(&ftable.lock);
   for(f = ftable.file; f < ftable.file + NFILE; f++){
     if(f->ref == 0){
       f->ref = 1;
       f->pty_side = PTY_SIDE_NONE;
       f->pty_index = -1;
-      release(&ftable.lock);
+      releasesleep(&ftable.lock);
       return f;
     }
   }
-  release(&ftable.lock);
+  releasesleep(&ftable.lock);
   return 0;
 }
 
@@ -48,11 +48,11 @@ filealloc(void)
 struct file*
 filedup(struct file *f)
 {
-  acquire(&ftable.lock);
+  acquiresleep(&ftable.lock);
   if(f->ref < 1)
     panic("filedup");
   f->ref++;
-  release(&ftable.lock);
+  releasesleep(&ftable.lock);
   return f;
 }
 
@@ -62,17 +62,17 @@ fileclose(struct file *f)
 {
   struct file ff;
 
-  acquire(&ftable.lock);
+  acquiresleep(&ftable.lock);
   if(f->ref < 1)
     panic("fileclose");
   if(--f->ref > 0){
-    release(&ftable.lock);
+    releasesleep(&ftable.lock);
     return;
   }
   ff = *f;
   f->ref = 0;
   f->type = FD_NONE;
-  release(&ftable.lock);
+  releasesleep(&ftable.lock);
 
   if(ff.type == FD_PIPE)
     pipeclose(ff.pipe, ff.writable);
@@ -307,18 +307,18 @@ file_has_refs_on_dev(uint dev)
 {
   struct file *f;
 
-  acquire(&ftable.lock);
+  acquiresleep(&ftable.lock);
   for(f = ftable.file; f < ftable.file + NFILE; f++){
     if(f->ref < 1)
       continue;
     if(f->type != FD_INODE || f->ip == 0)
       continue;
     if(f->ip->dev == dev){
-      release(&ftable.lock);
+      releasesleep(&ftable.lock);
       return 1;
     }
   }
-  release(&ftable.lock);
+  releasesleep(&ftable.lock);
   return 0;
 }
 

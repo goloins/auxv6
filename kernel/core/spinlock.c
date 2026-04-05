@@ -25,38 +25,40 @@ void
 acquire(struct spinlock *lk)
 {
   uint iter;
-  uint prev_iter;
 
   pushcli(); // disable interrupts to avoid deadlock.
-  if(holding(lk))
-    panic("acquire");
+  if(holding(lk)) {
+#if KDEBUG_SPINLOCK_LOCKFAIL
+    cprintf("spinlock acquire nested: lock=%s cpu=%d\n",
+            lk->name ? lk->name : "(null)",
+            mycpu() ? mycpu()->apicid : -1);
+#endif
+    panic("acquire: deadlock - nested acquire of same lock");
+  }
 
   // The xchg is atomic.
   // The 'pause' hint tells the CPU this is a spin-wait loop, which
   // reduces bus traffic and power consumption on HT/SMT cores and
   // avoids a memory-order violation penalty when the lock is released.
   iter = 0;
-  prev_iter = 0;
   while(xchg(&lk->locked, 1) != 0) {
     iter++;
     asm volatile("pause");
 
     // Spinlock timeout watchdog: if we've been spinning for way too long,
-    // force diagnostic output to UART even though interrupts are disabled.
-    // This ensures we never have a truly silent deadlock.
-    if(iter > 100000000 && (iter - prev_iter) > 50000000) {
-      prev_iter = iter;
-      // Force output to UART (bypassing all locks)
-      uartputc('S');
-      uartputc('P');
-      uartputc('I');
-      uartputc('N');
-      uartputc(':');
-      uartputc(' ');
-      // Output lock name (first 4 chars)
-      uartputc(lk->name ? lk->name[0] : '?');
-      uartputc(lk->name && lk->name[1] ? lk->name[1] : '?');
-      uartputc('\n');
+    // diagnose and panic. This prevents silent deadlocks - the kernel will
+    // now panic with a clear message instead of hanging silently.
+    if(iter >= SPINLOCK_TIMEOUT_ITERS) {
+      // Panic with diagnostic info. With KDEBUG_SPINLOCK_CALLSTACK enabled,
+      // the stack trace shows which code is stuck trying to acquire this lock.
+#if KDEBUG_SPINLOCK_LOCKFAIL
+      cprintf("spinlock timeout: lock=%s cpu=%d owner_cpu=%d iter=%u\n",
+              lk->name ? lk->name : "(null)",
+              mycpu() ? mycpu()->apicid : -1,
+              lk->cpu ? lk->cpu->apicid : -1,
+              iter);
+#endif
+      panic("DEADLOCK: spinlock acquire timeout - circular lock dependency");
     }
   }
 
@@ -76,8 +78,16 @@ acquire(struct spinlock *lk)
 void
 release(struct spinlock *lk)
 {
-  if(!holding(lk))
+  if(!holding(lk)) {
+#if KDEBUG_SPINLOCK_LOCKFAIL
+    cprintf("spinlock bad release: lock=%s cpu=%d owner_cpu=%d locked=%d\n",
+            lk->name ? lk->name : "(null)",
+            mycpu() ? mycpu()->apicid : -1,
+            lk->cpu ? lk->cpu->apicid : -1,
+            lk->locked);
+#endif
     panic("release");
+  }
 
   lk->pcs[0] = 0;
   lk->cpu = 0;

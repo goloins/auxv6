@@ -27,5 +27,14 @@
 #define USER_STACK_PAGES        4
 #define USER_STACK_MAX_PAGES   64
 
+// Spinlock locking system modernization: Phase 1 safety nets.
+// SPINLOCK_TIMEOUT_ITERS: iterations before acquire() panics on deadlock.
+// At ~1GHz per CPU, 100M iterations ≈ 100ms timeout. Adjust per platform.
+#define SPINLOCK_TIMEOUT_ITERS 100000000  // ~100ms at 1GHz, panic on exceed
+// KDEBUG_SPINLOCK_LOCKFAIL: emit lock-name/owner diagnostics before panic on
+// bad release, nested acquire, and timeout. Keep enabled while lock refactors
+// are active; set to 0 for quieter production output.
+#define KDEBUG_SPINLOCK_LOCKFAIL 1
+
 #define NSOCKET 64              /* max open sockets system-wide */
 

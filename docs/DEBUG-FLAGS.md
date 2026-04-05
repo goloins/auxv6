@@ -94,6 +94,28 @@ Control filesystem and driver diagnostic output:
 | `DBG_AHCI` | AHCI controller diagnostics | 0 (always off) |
 | `DBG_NVME` | Deep NVMe bring-up tracing (reset/enable/identify/MSI disable) | 0 (always off) |
 | `DBG_VIRTIO_NET` | Verbose virtio-net queue/IRQ/poll diagnostics | 0 (always off) |
+| `KDEBUG_SPINLOCK_LOCKFAIL` | Print spinlock lock-name/owner diagnostics before panic on nested acquire, bad release, and timeout | 1 |
+
+### `KDEBUG_SPINLOCK_LOCKFAIL` - Spinlock Failure Diagnostics
+
+Controls whether spinlock failure paths emit lock-owner diagnostics right before
+panic. This is useful while modernizing lock topology and tracking down lock
+pairing bugs.
+
+**Default:** 1 (enabled)  
+**Type:** Compile-time flag (`include/param.h`)  
+**File:** `kernel/core/spinlock.c`
+
+**When enabled, these diagnostics are printed before panic:**
+- nested acquire on same CPU:
+   - `spinlock acquire nested: lock=<name> cpu=<apicid>`
+- timeout in spin-wait path:
+   - `spinlock timeout: lock=<name> cpu=<apicid> owner_cpu=<apicid> iter=<n>`
+- bad release (not held by current CPU):
+   - `spinlock bad release: lock=<name> cpu=<apicid> owner_cpu=<apicid> locked=<0|1>`
+
+Set this to `0` for quieter production output once lock migration work is
+stable.
 
 ### Block Device Table Snapshot (`/proc/bdev_table`)
 
