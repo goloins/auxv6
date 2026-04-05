@@ -22,7 +22,7 @@
 #define DEFAULT_CREATE_DIR_MODE (M_IRUSR | M_IWUSR | M_IXUSR | M_IRGRP | M_IXGRP | M_IROTH | M_IXOTH)
 #define DEFAULT_CREATE_DEV_MODE (M_IRUSR | M_IWUSR | M_IRGRP | M_IWGRP | M_IROTH | M_IWOTH)
 #define GETCWD_MAX_DEPTH 32
-#define MOUNT_DATA_MAX 256
+#define MOUNT_DATA_MAX (PGSIZE - 1)
 
 static int create_default_mode(short type);
 static int create_device_mode(int mode);
@@ -1623,6 +1623,7 @@ sys_mount(void)
   char *path, *fstype;
   int flags;
   char *data;
+  char *data_buf;
   int datalen;
   int mount_flags;
   int has_dev_override;
@@ -1631,7 +1632,6 @@ sys_mount(void)
   struct vfs *fs;
   char path_buf[256];
   char fstype_buf[256];
-  char data_buf[MOUNT_DATA_MAX + 1];
 
   if(argstr(0, &path) < 0)
     return -1;
@@ -1647,8 +1647,8 @@ sys_mount(void)
   // Copy strings to kernel space
   safestrcpy(path_buf, path, sizeof(path_buf));
   safestrcpy(fstype_buf, fstype, sizeof(fstype_buf));
-  data_buf[0] = 0;
   data = 0;
+  data_buf = 0;
   if(datalen > 0){
     if(datalen > MOUNT_DATA_MAX)
       return -1;
@@ -1774,12 +1774,28 @@ sys_mount(void)
     return -1;
   }
 
+  // Stage mount data on heap (one page max) to avoid large stack buffers.
+  if(datalen > 0){
+    data_buf = (char*)kmalloc((uint)(datalen + 1));
+    if(data_buf == 0){
+      kfree((void*)fs);
+      return -1;
+    }
+    memmove(data_buf, data, datalen);
+    data_buf[datalen] = 0;
+  }
+
   if(vfs_register_mount(fs, dev, mount_flags, path_buf,
-                        data_buf[0] ? data_buf : 0, datalen) < 0){
+                        data_buf ? data_buf : 0, datalen) < 0){
     MOUNTDBG("sys_mount: failed path=%s type=%s dev=%d\n", path_buf, fstype_buf, dev);
+    if(data_buf)
+      kmalloc_free(data_buf);
     kfree((void*)fs);
     return -1;
   }
+
+  if(data_buf)
+    kmalloc_free(data_buf);
 
   MOUNTDBG("sys_mount: ok path=%s type=%s dev=%d\n", path_buf, fstype_buf, dev);
   return 0;

@@ -216,6 +216,9 @@ in-tree by widening existing kernel/user constants in place:
 - `VFS_MOUNT_PATH_MAX` and `MOUNTINFO_PATH_MAX` now align to `PATH_MAX`.
 - Mount table/query capacity is raised from 8 to 32 (`VFS_MOUNTS_MAX` and
   `MOUNTINFO_MAX`) so the wider metadata ABI is usable at higher mount counts.
+- `sys_mount` option payload handling is hardened: maximum payload is now one
+  page minus NUL (`MOUNT_DATA_MAX = PGSIZE-1`), with heap-backed staging to
+  avoid growing kernel stack pressure from large mount options.
 
 Given current project policy (ABI expected to evolve), this was done directly
 without a temporary versioned syscall shim.
