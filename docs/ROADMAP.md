@@ -89,6 +89,7 @@ cat /proc/net_dev   # raw interface counter dump, C-locale scaffolding, and corr
 - Multiple backend 4 GB truncation footguns were removed in the same pass (notably btrfs/exfat/nfs/ufs2 inode-size assignment and stat export paths), and msdosfs cluster math was explicitly kept 32-bit bounded to avoid libgcc 64-bit division helper linkage in kernel mode.
 - PID allocation now has explicit wrap-safe behavior: `PID_MAX` policy added, alloc path wraps back to PID 2, skips in-use PIDs under `ptable.lock`, and panics only on true PID-space exhaustion instead of relying on unchecked signed overflow.
 - Known follow-up from the large-file tranche: the current 32-bit `sys_lseek` syscall ABI still accepts a 32-bit relative offset argument on i386; a dedicated 64-bit seek syscall (`sys_lseek64`/`_llseek`-style split argument ABI) remains planned for full userspace seek-range parity.
+- Detailed tranche notes are now tracked in `docs/death-of-xv6.md` (scope, rationale, compatibility boundaries, and follow-up map).
 - NVMe/loop device-number collision was fixed by moving loop base to dev 44, restoring stable `nda` visibility in `lsblk` and successful NVMe ext2 mounting.
 - Storage diagnostics improved with `/proc/bdev_table` and `lsblk -v`, making block-device registration/capacity state directly inspectable.
 - `qemu-nvme-fat` image generation now uses dosfstools (`mkfs.fat`/`mkdosfs`) and produces a deterministic FAT16 image containing a known `README.TXT` marker for quick validation.
