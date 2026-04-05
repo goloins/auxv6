@@ -3749,7 +3749,7 @@ consoleintr(int (*getc)(void))
  * -------------------------------------------------------------------------- */
 
 int
-consoleread(struct inode *ip, char *dst, uint off, int n)
+consoleread(struct inode *ip, char *dst, uint64_t off, int n)
 {
   struct console_tty_state *t;
   struct proc *curproc;
@@ -3882,7 +3882,7 @@ consoleread(struct inode *ip, char *dst, uint off, int n)
 }
 
 int
-consolewrite(struct inode *ip, char *buf, uint off, int n)
+consolewrite(struct inode *ip, char *buf, uint64_t off, int n)
 {
   struct console_tty_state *t;
   struct console_tty_state *active;

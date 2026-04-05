@@ -658,7 +658,7 @@ stati(struct inode *ip, struct stat *st)
 // Read data from inode.
 // Caller must hold ip->lock.
 int
-readi(struct inode *ip, char *dst, uint off, uint n)
+readi(struct inode *ip, char *dst, uint64_t off, uint n)
 {
   uint tot, m;
   struct buf *bp;
@@ -690,7 +690,7 @@ readi(struct inode *ip, char *dst, uint off, uint n)
 // Write data to inode.
 // Caller must hold ip->lock.
 int
-writei(struct inode *ip, char *src, uint off, uint n)
+writei(struct inode *ip, char *src, uint64_t off, uint n)
 {
   uint tot, m;
   struct buf *bp;

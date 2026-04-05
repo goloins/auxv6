@@ -1,4 +1,9 @@
 #define NPROC       128  // maximum number of processes
+// PID_MAX: highest assignable process ID.  PIDs wrap back to 2 (preserving
+// PID 1 for init) and skip any slot already in use.  Chosen to match the
+// traditional POSIX lower bound (32767 = 2^15-1) while giving headroom well
+// above NPROC=128.  Raise if NPROC is ever increased significantly.
+#define PID_MAX     32767
 #define KSTACKSIZE 4096  // size of per-process kernel stack
 #define NCPU          8  // maximum number of CPUs
 #define KALLOC_CPU_CACHE 32  // per-CPU cached free pages before global flush

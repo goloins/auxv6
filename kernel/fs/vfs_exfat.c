@@ -590,7 +590,7 @@ exfat_make_inode(uint dev, uint inum, ushort attrs,
   ip->uid = 0;
   ip->gid = 0;
   ip->mode = mode;
-  ip->size = (size > 0xFFFFFFFFULL) ? 0xFFFFFFFFU : (uint)size;
+  ip->size = size;  /* uint64_t: no longer clamped to 4 GB */
   memset(ip->addrs, 0, sizeof(ip->addrs));
   ip->addrs[0] = first_cluster;
   ip->addrs[1] = stream_flags;

@@ -307,7 +307,7 @@ ufs2_make_inode(struct ufs2_mount_data *md, uint inum)
   ip->mode = dip.di_mode;
   ip->major = 0;
   ip->minor = 0;
-  ip->size = (uint)dip.di_size;
+  ip->size = dip.di_size;  /* uint64_t: UFS2 di_size is 64-bit, no truncation */
   memset(ip->addrs, 0, sizeof(ip->addrs));
   lo = (uint64)inum;
   hi = (uint64)inum >> 32;
@@ -384,11 +384,11 @@ ufs2_dirlookup(struct inode *dp, char *name, uint *poff)
     return 0;
 
   off = 0;
-  while(off < (uint)ddip.di_size){
+  while(off < ddip.di_size){
     struct ufs2_dirent *de;
     uint chunk;
 
-    chunk = ufs2_min_u32(PGSIZE, (uint)ddip.di_size - off);
+    chunk = ufs2_min_u32(PGSIZE, (uint)(ddip.di_size - off));
     if(ufs2_read_data(md, &ddip, buf, off, chunk) < 0)
       break;
 
@@ -471,11 +471,11 @@ ufs2_read(struct inode *ip, char *dst, uint off, uint n)
     if(dirbuf == 0)
       return -1;
 
-    while(pos < (uint)dip.di_size && emitted + sizeof(struct dirent) <= n){
+    while(pos < dip.di_size && emitted + sizeof(struct dirent) <= n){
       uint chunk;
       uint p;
 
-      chunk = ufs2_min_u32(PGSIZE, (uint)dip.di_size - pos);
+      chunk = ufs2_min_u32(PGSIZE, (uint)(dip.di_size - pos));
       if(ufs2_read_data(md, &dip, dirbuf, pos, chunk) < 0)
         break;
 
@@ -592,7 +592,7 @@ ufs2_readlink(struct inode *ip, char *buf, uint size)
   if(ufs2_read_dinode(md, inum, &dip) < 0)
     return -1;
 
-  n = (uint)dip.di_size;
+  n = (uint)dip.di_size;  /* symlink target is always short; truncate safe */
   if(n >= size)
     n = size - 1;
 

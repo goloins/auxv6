@@ -1,3 +1,4 @@
+#include "stdint.h"  /* uint64_t for file-offset parameters */
 struct buf;
 struct console_gfx_debug_info;
 struct context;
@@ -255,10 +256,10 @@ void            itruncate(struct inode*);
 int             namecmp(const char*, const char*);
 struct inode*   namei(char*);
 struct inode*   nameiparent(char*, char*);
-int             readi(struct inode*, char*, uint, uint);
-int             procfs_readi(struct inode*, char*, uint, uint);
+int             readi(struct inode*, char*, uint64_t, uint);
+int             procfs_readi(struct inode*, char*, uint64_t, uint);
 void            stati(struct inode*, struct stat*);
-int             writei(struct inode*, char*, uint, uint);
+int             writei(struct inode*, char*, uint64_t, uint);
 void            vfs_init(void);
 struct inode*   vfs_namei(char*);
 struct inode*   vfs_nameiparent(char*, char*);

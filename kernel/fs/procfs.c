@@ -464,7 +464,7 @@ procfs_vaccess(struct inode *ip, int mode)
 }
 
 int
-procfs_readi(struct inode *ip, char *dst, uint off, uint n)
+procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
 {
   char buf[2048];
   struct procinfo_k *pinfo;

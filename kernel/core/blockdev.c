@@ -8,8 +8,8 @@
 #include "blockdev.h"
 #include "file.h"
 
-static int blockdev_read(struct inode *ip, char *dst, uint off, int n);
-static int blockdev_write(struct inode *ip, char *src, uint off, int n);
+static int blockdev_read(struct inode *ip, char *dst, uint64_t off, int n);
+static int blockdev_write(struct inode *ip, char *src, uint64_t off, int n);
 
 struct {
   struct spinlock lock;
@@ -44,7 +44,7 @@ bdevinit(void)
 }
 
 static int
-blockdev_read(struct inode *ip, char *dst, uint off, int n)
+blockdev_read(struct inode *ip, char *dst, uint64_t off, int n)
 {
   uint total;
   uint limit;
@@ -83,7 +83,7 @@ blockdev_read(struct inode *ip, char *dst, uint off, int n)
 }
 
 static int
-blockdev_write(struct inode *ip, char *src, uint off, int n)
+blockdev_write(struct inode *ip, char *src, uint64_t off, int n)
 {
   uint total;
   uint limit;

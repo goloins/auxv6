@@ -71,7 +71,7 @@ struct procfdinfo_k {
   int type;
   int readable;
   int writable;
-  uint off;
+  uint64_t off;  /* Current file offset — widened to match struct file.off */
   uint dev;
   uint inum;
   char name[16];

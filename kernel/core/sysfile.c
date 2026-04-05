@@ -25,8 +25,8 @@
 
 static int create_default_mode(short type);
 static int create_device_mode(int mode);
-static int inode_dir_read(struct inode *dp, struct dirent *de, uint off);
-static struct inode* inode_dir_lookup(struct inode *dp, char *name, uint *poff);
+static int inode_dir_read(struct inode *dp, struct dirent *de, uint64_t off);
+static struct inode* inode_dir_lookup(struct inode *dp, char *name, uint64_t *poff);
 static int child_name_in_parent(struct inode *parent, uint child_inum, char *name);
 static ushort visible_dirent_inum(uint inum);
 static int buildcwd(struct inode *cwd, char *buf, int size);
@@ -95,7 +95,7 @@ create_device_mode(int mode)
 }
 
 static int
-inode_dir_read(struct inode *dp, struct dirent *de, uint off)
+inode_dir_read(struct inode *dp, struct dirent *de, uint64_t off)
 {
   const struct vnode_ops *ops;
 
@@ -109,7 +109,7 @@ inode_dir_read(struct inode *dp, struct dirent *de, uint off)
 }
 
 static struct inode*
-inode_dir_lookup(struct inode *dp, char *name, uint *poff)
+inode_dir_lookup(struct inode *dp, char *name, uint64_t *poff)
 {
   const struct vnode_ops *ops;
 
@@ -136,7 +136,7 @@ visible_dirent_inum(uint inum)
 static int
 child_name_in_parent(struct inode *parent, uint child_inum, char *name)
 {
-  uint off;
+  uint64_t off;
   int i;
   struct dirent de;
   ushort want_inum;
@@ -830,7 +830,7 @@ bad:
 static int
 isdirempty(struct inode *dp)
 {
-  int off;
+  uint64_t off;
   struct dirent de;
 
   for(off=2*sizeof(de); off<dp->size; off+=sizeof(de)){
@@ -849,7 +849,7 @@ remove_path(char *path, int dironly)
   struct inode *ip, *dp;
   struct dirent de;
   char name[DIRSIZ];
-  uint off;
+  uint64_t off;
 
   begin_op();
   if((dp = vfs_resolve_parent(path, name)) == 0){
@@ -1039,7 +1039,7 @@ sys_open(void)
   char *path;
   int fd, omode;
   int must_write;
-  uint startoff;
+  uint64_t startoff;  /* O_APPEND: set to ip->size; otherwise 0 */
   struct file *f;
   struct inode *ip;
   const struct vnode_ops *ops;
@@ -1815,13 +1815,17 @@ sys_select(void)
 
 // lseek - reposition read/write file offset
 // Returns the new offset on success, -1 on failure.
+// NOTE: 'offset' is a 32-bit int matching the current 32-bit syscall ABI on
+// i386.  This limits a single seek call to ±2 GB relative movement, matching
+// the Linux 32-bit lseek(2) limitation.  sys_lseek64 / _llseek (two 32-bit
+// halves) will be added for full-range 64-bit seeks.
 int
 sys_lseek(void)
 {
   struct file *f;
   int offset;
   int whence;
-  int newoff;
+  int64_t newoff;  /* 64-bit internally; promotes SEEK_END on large files */
 
   if(argfd(0, 0, &f) < 0 || argint(1, &offset) < 0 || argint(2, &whence) < 0)
     return -1;
@@ -1840,10 +1844,10 @@ sys_lseek(void)
     newoff = offset;
     break;
   case 1: // SEEK_CUR
-    newoff = f->off + offset;
+    newoff = (int64_t)f->off + offset;
     break;
   case 2: // SEEK_END
-    newoff = f->ip->size + offset;
+    newoff = (int64_t)f->ip->size + offset;
     break;
   default:
     iunlock(f->ip);

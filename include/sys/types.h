@@ -20,7 +20,13 @@ typedef int             mode_t;     /* File mode (permissions) */
 typedef unsigned int    ino_t;      /* Inode number */
 typedef unsigned int    dev_t;      /* Device number */
 typedef unsigned int    nlink_t;    /* Link count */
-typedef int             off_t;      /* File offset (should be 64-bit for large files) */
+typedef int64_t         off_t;      /* File offset — 64-bit for files up to 2^63-1 bytes.
+ *   On 32-bit i386, lseek() takes a 32-bit 'offset' argument per the
+ *   current syscall ABI; sys_lseek64 / _llseek will be added for
+ *   full-range seeks.  All kernel-internal paths (f->off, ip->size)
+ *   use uint64_t / int64_t and are already large-file-clean.
+ */
+typedef int64_t         loff_t;     /* BSD/Linux large-file alias for off_t */
 typedef unsigned int    blksize_t;  /* Block size */
 typedef unsigned int    blkcnt_t;   /* Block count */
 

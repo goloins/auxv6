@@ -8,7 +8,9 @@ struct file {
   struct pipe *pipe;
   struct inode *ip;
   struct socket *socket;
-  uint off;
+  uint64_t off;  /* Current file offset — 64-bit to support files > 4 GB.
+                 * Widened from uint; all code that reads/writes this field
+                 * must use uint64_t or int64_t locals to avoid truncation. */
 };
 
 
@@ -29,15 +31,20 @@ struct inode {
   short uid;
   short gid;
   short mode;
-  uint size;
+  uint64_t size;  /* File size in bytes — 64-bit to support files > 4 GB.
+                  * On-disk representation (dinode.size) remains uint for
+                  * the xv6fs format; backends up-cast on inode load. */
   uint addrs[NADDRS];
 };
 
 // table mapping major device number to
 // device functions
 struct devsw {
-  int (*read)(struct inode*, char*, uint, int);
-  int (*write)(struct inode*, char*, uint, int);
+  /* offset is uint64_t to match the widened f->off / ip->size fields.
+   * Device drivers that ignore offset (e.g. console, pty) accept the
+   * wider type with no behavioural change. */
+  int (*read)(struct inode*, char*, uint64_t, int);
+  int (*write)(struct inode*, char*, uint64_t, int);
 };
 
 extern struct devsw devsw[];

@@ -190,7 +190,7 @@ fileread(struct file *f, char *addr, int n)
         // The fs will read from offset 0 when we ask for adjusted offset
         ops = vfs_dev_vops(f->ip->dev);
         if(ops && ops->read){
-          uint adj_off = f->off - 2 * sizeof(struct dirent);
+          uint64_t adj_off = f->off - 2 * sizeof(struct dirent);
           r = ops->read(f->ip, addr, adj_off, n);
           if(r > 0)
             f->off += r;

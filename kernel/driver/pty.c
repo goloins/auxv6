@@ -578,7 +578,7 @@ pty_close(struct file *f)
 }
 
 int
-ptyread(struct inode *ip, char *dst, uint off, int n)
+ptyread(struct inode *ip, char *dst, uint64_t off, int n)
 {
   (void)ip;
   (void)dst;
@@ -588,7 +588,7 @@ ptyread(struct inode *ip, char *dst, uint off, int n)
 }
 
 int
-ptywrite(struct inode *ip, char *src, uint off, int n)
+ptywrite(struct inode *ip, char *src, uint64_t off, int n)
 {
   (void)ip;
   (void)src;

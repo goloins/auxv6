@@ -287,7 +287,7 @@ nfs_make_inode(struct nfs_mount_data *md, uint inum, fattr3 *attr, fhandle3 *fh)
   ip->uid = (short)attr->uid;
   ip->gid = (short)attr->gid;
   ip->mode = (short)nfs_mode_from_attr(attr);
-  ip->size = (uint)attr->size;
+  ip->size = attr->size;  /* uint64_t: direct assignment, no truncation */
   memset(ip->addrs, 0, sizeof(ip->addrs));
   releasesleep(&ip->lock);
 
@@ -491,7 +491,7 @@ nfs_stat_vop(struct inode *ip, struct stat *st)
   st->st_uid = (short)attr.uid;
   st->st_gid = (short)attr.gid;
   st->st_mode = nfs_mode_from_attr(&attr);
-  st->st_size = (uint)attr.size;
+  st->st_size = attr.size;  /* uint64_t: direct assignment, no truncation */
   st->st_atime = (int)attr.atime_sec;
   st->st_mtime = (int)attr.mtime_sec;
   st->st_ctime = (int)attr.ctime_sec;

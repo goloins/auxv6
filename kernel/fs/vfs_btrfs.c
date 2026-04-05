@@ -843,7 +843,7 @@ btrfs_make_inode(struct btrfs_mount_data *md, uint64_t tree_id,
   ip->uid = (short)btrfs_get_u32(&ii->uid);
   ip->gid = (short)btrfs_get_u32(&ii->gid);
   ip->mode = (short)(mode & 0xFFFF);
-  ip->size = (size64 > 0xFFFFFFFFULL) ? 0xFFFFFFFFU : (uint)size64;
+  ip->size = size64;  /* uint64_t: no longer clamped to 4 GB */
 
   ip->addrs[BTRFS_IP_TREE_BYTENR_LO] = (uint)(tree_bytenr & 0xFFFFFFFFULL);
   ip->addrs[BTRFS_IP_TREE_BYTENR_HI] = (uint)(tree_bytenr >> 32);

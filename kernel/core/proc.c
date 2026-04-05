@@ -711,7 +711,39 @@ allocproc(void)
 
 found:
   p->state = EMBRYO;
-  p->pid = nextpid++;
+
+  // Assign a unique PID.  nextpid is bumped monotonically; when it would
+  // exceed PID_MAX we wrap back to 2 (preserving PID 1 for init) and scan
+  // forward to skip any PID still in use.  With NPROC=128 and PID_MAX=32767
+  // collisions after wrap are extremely rare but must be handled correctly.
+  // ptable.lock is already held so the in-use scan is safe.
+  {
+    int candidate;
+    int found_pid;
+    int tries;
+    struct proc *q;
+
+    found_pid = 0;
+    for(tries = 0; tries < PID_MAX && !found_pid; tries++){
+      candidate = nextpid;
+      if(nextpid >= PID_MAX)
+        nextpid = 2;   /* wrap: skip 0 (invalid) and 1 (init) */
+      else
+        nextpid++;
+
+      /* Collision check: is any live process already using 'candidate'? */
+      found_pid = 1;
+      for(q = ptable.proc; q < &ptable.proc[NPROC]; q++){
+        if(q != p && q->state != UNUSED && q->pid == candidate){
+          found_pid = 0;
+          break;
+        }
+      }
+    }
+    if(!found_pid)
+      panic("allocproc: PID space exhausted");
+    p->pid = candidate;
+  }
   p->ppid = 0;
   p->pgid = p->pid;
   p->sid = p->pid;
