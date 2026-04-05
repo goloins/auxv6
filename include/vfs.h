@@ -2,6 +2,7 @@
 #define XV6_VFS_H
 
 #include "types.h"
+#include "stdint.h"
 
 struct inode;
 struct dirent;
@@ -23,8 +24,8 @@ struct stat;
 #define SYMLOOP_MAX      8   // Maximum symlink depth during path resolution
 
 struct vnode_ops {
-  int (*read)(struct inode *ip, char *dst, uint off, uint n);
-  int (*write)(struct inode *ip, char *src, uint off, uint n);
+  int (*read)(struct inode *ip, char *dst, uint64_t off, uint n);
+  int (*write)(struct inode *ip, char *src, uint64_t off, uint n);
   int (*truncate)(struct inode *ip);
   int (*drop)(struct inode *ip);
   int (*stat)(struct inode *ip, struct stat *st);

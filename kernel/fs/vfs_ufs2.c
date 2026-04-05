@@ -432,7 +432,7 @@ ufs2_root_inode(struct vfs *fs)
 }
 
 static int
-ufs2_read(struct inode *ip, char *dst, uint off, uint n)
+ufs2_read(struct inode *ip, char *dst, uint64_t off, uint n)
 {
   struct ufs2_mount_data *md;
   struct ufs2_dinode dip;
@@ -512,7 +512,7 @@ ufs2_read(struct inode *ip, char *dst, uint off, uint n)
 }
 
 static int
-ufs2_write(struct inode *ip, char *src, uint off, uint n)
+ufs2_write(struct inode *ip, char *src, uint64_t off, uint n)
 {
   (void)ip;
   (void)src;

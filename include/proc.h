@@ -1,4 +1,5 @@
 // Shared signal constants/types used by kernel and user ABI.
+#include "stdint.h"
 #include "signal.h"
 
 struct run;

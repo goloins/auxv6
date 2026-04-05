@@ -285,7 +285,7 @@ isofs_root_inode(struct vfs *fs)
  * VFS: Read file data (for regular files) or synthesize dirents (for directories).
  */
 static int
-isofs_read(struct inode *ip, char *dst, uint off, uint n)
+isofs_read(struct inode *ip, char *dst, uint64_t off, uint n)
 {
     struct isofs_mount_data *mp = isofs_mount_data_ptr;
     uint extent;
@@ -413,7 +413,7 @@ isofs_read(struct inode *ip, char *dst, uint off, uint n)
  * VFS: Write - not supported (read-only filesystem).
  */
 static int
-isofs_write(struct inode *ip, char *src, uint off, uint n)
+isofs_write(struct inode *ip, char *src, uint64_t off, uint n)
 {
     return -1;  /* Read-only filesystem */
 }

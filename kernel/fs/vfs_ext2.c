@@ -1785,7 +1785,7 @@ restart:
 }
 
 static int
-ext2_read(struct inode *ip, char *dst, uint off, uint n)
+ext2_read(struct inode *ip, char *dst, uint64_t off, uint n)
 {
   struct ext2_mount_data *data;
   struct ext2_inode dip;
@@ -1822,7 +1822,7 @@ ext2_read(struct inode *ip, char *dst, uint off, uint n)
 }
 
 static int
-ext2_write(struct inode *ip, char *src, uint off, uint n)
+ext2_write(struct inode *ip, char *src, uint64_t off, uint n)
 {
   struct ext2_mount_data *data;
   struct ext2_inode dip;

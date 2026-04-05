@@ -1217,7 +1217,7 @@ msdos_min_u32(uint a, uint b)
 }
 
 static int
-msdos_read_file_data(struct inode *ip, char *dst, uint off, uint n)
+msdos_read_file_data(struct inode *ip, char *dst, uint64_t off, uint n)
 {
   struct msdos_mount_data *md;
   uint cluster;
@@ -1225,6 +1225,7 @@ msdos_read_file_data(struct inode *ip, char *dst, uint off, uint n)
   uint skip;
   uint within;
   uint done;
+  uint off32;
 
   if(ip == 0 || dst == 0)
     return -1;
@@ -1250,8 +1251,12 @@ msdos_read_file_data(struct inode *ip, char *dst, uint off, uint n)
   if(cluster_bytes == 0)
     return -1;
 
-  skip = off / cluster_bytes;
-  within = off % cluster_bytes;
+  if(off > 0xFFFFFFFFULL)
+    return -1;
+  off32 = (uint)off;
+
+  skip = off32 / cluster_bytes;
+  within = off32 % cluster_bytes;
 
   while(skip > 0){
     if(msdos_next_cluster(md, cluster, &cluster) < 0)
@@ -2003,7 +2008,7 @@ msdos_inode_put(struct inode *ip)
 }
 
 static int
-msdos_read(struct inode *ip, char *dst, uint off, uint n)
+msdos_read(struct inode *ip, char *dst, uint64_t off, uint n)
 {
   struct nth_ctx ctx;
   struct dirent de;
@@ -2058,7 +2063,7 @@ msdos_read(struct inode *ip, char *dst, uint off, uint n)
 }
 
 static int
-msdos_write_file_data(struct inode *ip, char *src, uint off, uint n)
+msdos_write_file_data(struct inode *ip, char *src, uint64_t off, uint n)
 {
   struct msdos_mount_data *md;
   uint old_first_cluster;
@@ -2067,11 +2072,12 @@ msdos_write_file_data(struct inode *ip, char *src, uint off, uint n)
   uint last_cluster;
   uint cluster_count;
   uint need_clusters;
-  uint new_end;
+  uint new_end32;
   uint cluster_bytes;
   uint skip;
   uint within;
   uint done;
+  uint off32;
 
   if(ip == 0 || src == 0)
     return -1;
@@ -2091,7 +2097,12 @@ msdos_write_file_data(struct inode *ip, char *src, uint off, uint n)
     return -1;
   if(off + n < off)
     return -1;
-  new_end = off + n;
+  if(off > 0xFFFFFFFFULL)
+    return -1;
+  off32 = (uint)off;
+  new_end32 = off32 + n;
+  if(new_end32 < off32)
+    return -1;
 
   first_cluster = ip->addrs[0];
 
@@ -2099,7 +2110,7 @@ msdos_write_file_data(struct inode *ip, char *src, uint off, uint n)
   if(cluster_bytes == 0)
     return -1;
 
-  need_clusters = (new_end + cluster_bytes - 1) / cluster_bytes;
+  need_clusters = (new_end32 + cluster_bytes - 1) / cluster_bytes;
   if(need_clusters > 0){
     if(first_cluster < 2){
       if(msdos_alloc_cluster(md, &first_cluster) < 0)
@@ -2136,8 +2147,8 @@ msdos_write_file_data(struct inode *ip, char *src, uint off, uint n)
   if(need_clusters > 0 && cluster < 2)
     return -1;
 
-  skip  = off / cluster_bytes;
-  within = off % cluster_bytes;
+  skip  = off32 / cluster_bytes;
+  within = off32 % cluster_bytes;
   done  = 0;                      /* initialize before the skip loop */
 
   while(skip > 0){
@@ -2191,8 +2202,8 @@ msdos_write_file_data(struct inode *ip, char *src, uint off, uint n)
       return (done == 0) ? -1 : (int)done;
   }
 
-  if(done > 0 && new_end > ip->size){
-    ip->size = new_end;
+  if(done > 0 && new_end32 > ip->size){
+    ip->size = new_end32;
     if(msdos_sync_inode_entry(ip) < 0)
       return -1;
   } else if(done > 0 && ip->addrs[0] != old_first_cluster){
@@ -2204,7 +2215,7 @@ msdos_write_file_data(struct inode *ip, char *src, uint off, uint n)
 }
 
 static int
-msdos_write(struct inode *ip, char *src, uint off, uint n)
+msdos_write(struct inode *ip, char *src, uint64_t off, uint n)
 {
   if(ip == 0 || src == 0)
     return -1;

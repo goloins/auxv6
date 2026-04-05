@@ -77,7 +77,7 @@ exec_internal(char *path, char **argv, int depth)
 {
   char *s, *last;
   int i, off;
-  int (*read_fn)(struct inode*, char*, uint, uint);
+  int (*read_fn)(struct inode*, char*, uint64_t, uint);
   int (*access_fn)(struct inode*, int);
   const struct vnode_ops *ops;
   uint argc, sz, sp, ustack[3+MAXARG+1];

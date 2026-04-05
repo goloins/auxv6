@@ -26,7 +26,7 @@
 static int create_default_mode(short type);
 static int create_device_mode(int mode);
 static int inode_dir_read(struct inode *dp, struct dirent *de, uint64_t off);
-static struct inode* inode_dir_lookup(struct inode *dp, char *name, uint64_t *poff);
+static struct inode* inode_dir_lookup(struct inode *dp, char *name, uint *poff);
 static int child_name_in_parent(struct inode *parent, uint child_inum, char *name);
 static ushort visible_dirent_inum(uint inum);
 static int buildcwd(struct inode *cwd, char *buf, int size);
@@ -109,7 +109,7 @@ inode_dir_read(struct inode *dp, struct dirent *de, uint64_t off)
 }
 
 static struct inode*
-inode_dir_lookup(struct inode *dp, char *name, uint64_t *poff)
+inode_dir_lookup(struct inode *dp, char *name, uint *poff)
 {
   const struct vnode_ops *ops;
 
@@ -849,7 +849,7 @@ remove_path(char *path, int dironly)
   struct inode *ip, *dp;
   struct dirent de;
   char name[DIRSIZ];
-  uint64_t off;
+  uint off;
 
   begin_op();
   if((dp = vfs_resolve_parent(path, name)) == 0){

@@ -437,7 +437,7 @@ nfs_inode_put(struct inode *ip)
 }
 
 static int
-nfs_read_vop(struct inode *ip, char *dst, uint off, uint n)
+nfs_read_vop(struct inode *ip, char *dst, uint64_t off, uint n)
 {
   struct nfs_mount_data *md;
   fhandle3 fh;

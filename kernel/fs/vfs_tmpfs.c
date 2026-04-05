@@ -630,7 +630,7 @@ tmpfs_inode_put(struct inode *ip)
 }
 
 static int
-tmpfs_read(struct inode *ip, char *dst, uint off, uint n)
+tmpfs_read(struct inode *ip, char *dst, uint64_t off, uint n)
 {
   struct tmpfs_node *node;
   struct dirent de;
@@ -672,7 +672,7 @@ tmpfs_read(struct inode *ip, char *dst, uint off, uint n)
 }
 
 static int
-tmpfs_write(struct inode *ip, char *src, uint off, uint n)
+tmpfs_write(struct inode *ip, char *src, uint64_t off, uint n)
 {
   struct tmpfs_node *node;
   struct tmpfs_mount_data *md;

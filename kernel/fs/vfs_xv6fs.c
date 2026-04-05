@@ -8,13 +8,13 @@
 #include "vfs.h"
 
 static int
-xv6fs_read(struct inode *ip, char *dst, uint off, uint n)
+xv6fs_read(struct inode *ip, char *dst, uint64_t off, uint n)
 {
   return readi(ip, dst, off, n);
 }
 
 static int
-xv6fs_write(struct inode *ip, char *src, uint off, uint n)
+xv6fs_write(struct inode *ip, char *src, uint64_t off, uint n)
 {
   return writei(ip, src, off, n);
 }

@@ -1226,7 +1226,7 @@ btrfs_scan_file_extent_cb(struct btrfs_mount_data *md, void *leaf, struct btrfs_
 }
 
 static int
-btrfs_read_file_bytes(struct inode *ip, char *dst, uint off, uint n)
+btrfs_read_file_bytes(struct inode *ip, char *dst, uint64_t off, uint n)
 {
   struct btrfs_mount_data *md;
   struct btrfs_read_ctx ctx;
@@ -1277,7 +1277,7 @@ btrfs_root_inode(struct vfs *fs)
 }
 
 static int
-btrfs_read(struct inode *ip, char *dst, uint off, uint n)
+btrfs_read(struct inode *ip, char *dst, uint64_t off, uint n)
 {
   uint idx;
   uint written;
@@ -1346,7 +1346,7 @@ btrfs_read(struct inode *ip, char *dst, uint off, uint n)
 }
 
 static int
-btrfs_write(struct inode *ip, char *src, uint off, uint n)
+btrfs_write(struct inode *ip, char *src, uint64_t off, uint n)
 {
   (void)ip;
   (void)src;

@@ -755,7 +755,7 @@ exfat_inode_put(struct inode *ip)
 }
 
 static int
-exfat_read(struct inode *ip, char *dst, uint off, uint n)
+exfat_read(struct inode *ip, char *dst, uint64_t off, uint n)
 {
   struct exfat_mount_data *md;
 
@@ -803,7 +803,7 @@ exfat_read(struct inode *ip, char *dst, uint off, uint n)
 }
 
 static int
-exfat_write(struct inode *ip, char *src, uint off, uint n)
+exfat_write(struct inode *ip, char *src, uint64_t off, uint n)
 {
   (void)ip;
   (void)src;

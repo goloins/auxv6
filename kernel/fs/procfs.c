@@ -437,13 +437,13 @@ procfs_inode_put(struct inode *ip)
 }
 
 static int
-procfs_vread(struct inode *ip, char *dst, uint off, uint n)
+procfs_vread(struct inode *ip, char *dst, uint64_t off, uint n)
 {
   return procfs_readi(ip, dst, off, n);
 }
 
 static int
-procfs_vwrite(struct inode *ip, char *src, uint off, uint n)
+procfs_vwrite(struct inode *ip, char *src, uint64_t off, uint n)
 {
   return procfs_writei(ip, src, off, n);
 }
