@@ -96,7 +96,11 @@ Current implication:
 
 msdosfs cluster traversal currently keeps key division/modulo math in 32-bit
 space intentionally to avoid pulling compiler runtime 64-bit division helpers
-into kernel link (`__udivmoddi4`) in this toolchain/link model.
+into hot paths where it is unnecessary.
+
+As of 2026-04-05, auxv6 now also ships in-kernel compiler-runtime fallback
+helpers (`__udivdi3`/`__umoddi3`/`__divdi3`/`__moddi3`) so toolchains that do
+not provide these symbols in `libgcc.a` still produce a linkable kernel.
 
 This is an explicit, documented boundary in this tranche, not an accidental
 leftover.

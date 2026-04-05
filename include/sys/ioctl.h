@@ -7,6 +7,7 @@
 
 #include "sys/types.h"
 #include "termios.h"
+#include "audio_ioctl.h"
 
 #define TCGETS      0x5401
 #define TCSETS      0x5402
@@ -23,6 +24,23 @@
 #define TIOCOUTQ    0x5411
 #define FIONREAD    0x541B
 #define TIOCINQ     FIONREAD
+
+#define TIOCMGET    0x5415
+#define TIOCMBIS    0x5416
+#define TIOCMBIC    0x5417
+#define TIOCMSET    0x5418
+
+#define TIOCM_LE    0x001
+#define TIOCM_DTR   0x002
+#define TIOCM_RTS   0x004
+#define TIOCM_ST    0x008
+#define TIOCM_SR    0x010
+#define TIOCM_CTS   0x020
+#define TIOCM_CAR   0x040
+#define TIOCM_CD    TIOCM_CAR
+#define TIOCM_RNG   0x080
+#define TIOCM_RI    TIOCM_RNG
+#define TIOCM_DSR   0x100
 
 #define TIOCGACTTTY 0x54A0
 #define TIOCSACTTTY 0x54A1

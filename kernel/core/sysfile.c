@@ -589,6 +589,19 @@ fd_ready_events(struct file *f)
   events = 0;
   switch(f->type){
   case FD_INODE:
+    if(f->ip && f->ip->type == T_DEV && f->ip->major == AUDIODEV){
+      rd = 0;
+      wr = 0;
+      err = 0;
+      audio_poll_events(f, &rd, &wr, &err);
+      if(f->readable && rd)
+        events |= POLLIN;
+      if(f->writable && wr)
+        events |= POLLOUT;
+      if(err)
+        events |= POLLERR | POLLHUP;
+      break;
+    }
     if(f->ip && f->ip->type == T_DEV && f->ip->major == PTYDEV){
       rd = 0;
       wr = 0;
@@ -1388,6 +1401,23 @@ sys_open(void)
   f->off = startoff;
   f->readable = !(omode & O_WRONLY);
   f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
+
+  if(ip->type == T_DEV && ip->major == SERIALDEV){
+    if(serial_open(f, ip->minor, omode) < 0){
+      fd_clear(fd);
+      fileclose(f);
+      return -1;
+    }
+  }
+
+  if(ip->type == T_DEV && ip->major == AUDIODEV){
+    if(audio_open(f, ip->minor, omode) < 0){
+      fd_clear(fd);
+      fileclose(f);
+      return -1;
+    }
+  }
+
   return fd;
 }
 

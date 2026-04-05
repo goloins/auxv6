@@ -158,6 +158,40 @@ int             pty_fileread(struct file *f, char *dst, int n);
 int             pty_filewrite(struct file *f, char *src, int n);
 void            pty_poll_events(struct file *f, int *rd, int *wr, int *err);
 
+// audio_core.c
+void            audio_init(void);
+void            audio_pci_probe_init(void);
+void            audio_intel_ac97_init(void);
+void            audio_realtek_ac97_init(void);
+void            audio_creative_live_init(void);
+void            audio_creative_audigy_init(void);
+void            audio_cmedia_cm8738_init(void);
+void            audio_via_envy24_init(void);
+void            audio_yamaha_dsxg_init(void);
+void            audio_ess_maestro_init(void);
+void            audio_adi_soundmax_init(void);
+void            audio_sigmatel_hda_init(void);
+void            audio_intel_hda_init(void);
+void            audio_realtek_hda_init(void);
+void            audio_conexant_hda_init(void);
+void            audio_nvidia_mcp_init(void);
+void            audio_creative_xfi_init(void);
+int             audio_is_ioctl(int request);
+int             audio_ioctl_arg_size(int request);
+int             audio_ioctl_file(struct file *f, int request, uint arg);
+int             audio_open(struct file *f, int minor, int omode);
+void            audio_close(struct file *f);
+int             audio_filewrite(struct file *f, char *src, int n);
+void            audio_poll_events(struct file *f, int *rd, int *wr, int *err);
+int             audio_procfs_summary(char *buf, int max);
+int             audio_procfs_stats(char *buf, int max);
+int             audio_procfs_clients(char *buf, int max);
+int             audio_register_hw_device(uint16_t vendor_id, uint16_t device_id,
+										 uint16_t card, uint16_t device,
+										 uint16_t direction, uint32_t flags,
+										 uint32_t hw_profile,
+										 const char *driver_name);
+
 // Master debug flag - set to 1 to enable boot diagnostics and subsystem logging.
 // Controlled via -DAUXV6_DEBUG=1 or by editing here.
 #ifndef AUXV6_DEBUG
@@ -340,6 +374,7 @@ int             virtio_blk_set_tune(const char *buf, int n);
 
 // virtio_gpu.c
 void            virtio_gpu_init(void);
+void            intel_gfx_init(void);
 
 // graphics/display.c
 void            display_init(void);
@@ -565,6 +600,20 @@ int             irq_unregister(int irq, const char *name);
 void            uartinit(void);
 void            uartintr(void);
 void            uartputc(int);
+void            uart_apply_termios(uint c_cflag);
+uint            uart_get_modem_bits(void);
+void            uart_set_modem_control(uint set_mask, uint clear_mask);
+
+// serial.c
+void            serialinit(void);
+int             serial_open(struct file *f, int minor, int omode);
+void            serial_close(struct file *f);
+void            serial_rx_char(int c);
+void            serial_modem_update(uint bits);
+int             serial_get_termios_file(struct file *f, struct termios *tp);
+int             serial_set_termios_file(struct file *f, const struct termios *tp, int optional_actions);
+int             serial_ioctl_file(struct file *f, int request, uint arg);
+int             serial_procfs_dump(char *buf, uint max);
 
 // vm.c
 void            seginit(void);
@@ -655,6 +704,13 @@ void            mbuf_free(struct mbuf*);
 void            arp_init(void);
 int             arp_resolve(struct ifnet*, uint, uchar*, struct mbuf*);
 int             arp_dump(struct arp_info*, int);
+void            modem_init(void);
+void            conexant_hsf_init(void);
+void            agere_lt_init(void);
+void            smartlink_init(void);
+void            pctel_init(void);
+void            intel_softmodem_init(void);
+void            motorola_sm56_init(void);
 void            arp_input(struct ifnet*, struct mbuf*);
 int             ether_output(struct ifnet*, struct mbuf*, const uchar*, ushort);
 int             ether_output_ip(struct ifnet*, struct mbuf*, uint);

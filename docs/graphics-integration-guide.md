@@ -55,6 +55,11 @@ What S1 does not solve yet:
 - The command path is still synchronous polling rather than a fully asynchronous response or fence model.
 - Manual QEMU validation is still pending for the new modern transport path. The authoritative runtime signal for this work should come from the graphical framebuffer console, not from an automated guest harness.
 
+**Intel display-class PCI stub:**
+- `kernel/driver/intel_gfx.c` now performs Linux or BSD-inspired early attach scaffolding for Intel display-class PCI functions.
+- Current scope is deliberately minimal: class-match probe, PCI memory and bus-master enable, MMIO BAR selection or mapping (BAR0 preferred, BAR2 fallback), and attach diagnostics.
+- No KMS or GEM path is wired yet, no IRQ render flow is enabled, and this stub does not take ownership from the current virtio-gpu framebuffer console path.
+
 **Console integration:**
 - `kernel/driver/console.c` now allocates its framebuffer from the discovered display mode when one is present, with `640x400` kept as a fallback.
 - The active tty is mirrored into a VT surface sized from the current tty winsize, centered within the framebuffer, and flushed through the generic display ops.

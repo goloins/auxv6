@@ -3,6 +3,24 @@ OBJS = \
 	kernel/fs/bio.o\
 	kernel/driver/console.o\
 	kernel/driver/pty.o\
+	kernel/audio/audio_core.o\
+	kernel/driver/audio_pci.o\
+	kernel/driver/audio_pci_common.o\
+	kernel/driver/audio_intel_ac97.o\
+	kernel/driver/audio_realtek_ac97.o\
+	kernel/driver/audio_creative_live.o\
+	kernel/driver/audio_creative_audigy.o\
+	kernel/driver/audio_cmedia_cm8738.o\
+	kernel/driver/audio_via_envy24.o\
+	kernel/driver/audio_yamaha_dsxg.o\
+	kernel/driver/audio_ess_maestro.o\
+	kernel/driver/audio_adi_soundmax.o\
+	kernel/driver/audio_sigmatel_hda.o\
+	kernel/driver/audio_intel_hda.o\
+	kernel/driver/audio_realtek_hda.o\
+	kernel/driver/audio_conexant_hda.o\
+	kernel/driver/audio_nvidia_mcp.o\
+	kernel/driver/audio_creative_xfi.o\
 	kernel/core/exec.o\
 	kernel/fs/file.o\
 	kernel/fs/fs.o\
@@ -19,10 +37,18 @@ OBJS = \
 	kernel/driver/ide.o\
 	kernel/driver/ioapic.o\
 	kernel/driver/pci.o\
+	kernel/driver/modem.o\
+	kernel/driver/conexant_hsf.o\
+	kernel/driver/agere_lt.o\
+	kernel/driver/smartlink.o\
+	kernel/driver/pctel.o\
+	kernel/driver/intel_softmodem.o\
+	kernel/driver/motorola_sm56.o\
 	kernel/driver/dma.o\
 	kernel/driver/virtio.o\
 	kernel/driver/virtio_blk.o\
 	kernel/driver/virtio_gpu.o\
+	kernel/driver/intel_gfx.o\
 	kernel/driver/virtio_net.o\
 	kernel/driver/ahci.o\
 	kernel/driver/nvme.o\
@@ -64,6 +90,7 @@ OBJS = \
 	kernel/core/proc.o\
 	kernel/core/sleeplock.o\
 	kernel/core/spinlock.o\
+	kernel/core/libgcc_compat.o\
 	kernel/core/string.o\
 	kernel/core/swtch.o\
 	kernel/core/syscall.o\
@@ -72,6 +99,7 @@ OBJS = \
 	kernel/core/sysproc.o\
 	kernel/core/trap.o\
 	kernel/core/trapasm.o\
+	kernel/driver/serial.o\
 	kernel/driver/uart.o\
 	kernel/core/vectors.o\
 	kernel/core/vm.o\
@@ -251,7 +279,7 @@ entryother: kernel/boot/entryother.S
 	$(OBJDUMP) -S bootblockother.o > entryother.asm
 
 aux.kern: toolchain-check $(OBJS) kernel/core/entry.o entryother config/kernel.ld
-	$(LD) $(LDFLAGS) -T config/kernel.ld -o aux.kern kernel/core/entry.o $(OBJS) -b binary entryother
+	$(LD) $(LDFLAGS) -T config/kernel.ld -o aux.kern kernel/core/entry.o $(OBJS) -b binary entryother $(LIBGCC)
 	@set -e; \
 	line="$$($(TOOLPREFIX)size aux.kern | tail -n 1)"; \
 	set -- $$line; \
@@ -284,7 +312,7 @@ aux.kern: toolchain-check $(OBJS) kernel/core/entry.o entryother config/kernel.l
 # needing a scratch disk.
 MEMFSOBJS = $(filter-out kernel/driver/ide.o,$(OBJS)) kernel/driver/memide.o
 kernelmemfs: $(MEMFSOBJS) kernel/core/entry.o entryother config/kernel.ld fs.img
-	$(LD) $(LDFLAGS) -T config/kernel.ld -o kernelmemfs kernel/core/entry.o  $(MEMFSOBJS) -b binary entryother fs.img
+	$(LD) $(LDFLAGS) -T config/kernel.ld -o kernelmemfs kernel/core/entry.o  $(MEMFSOBJS) -b binary entryother fs.img $(LIBGCC)
 	$(OBJDUMP) -S kernelmemfs > kernelmemfs.asm
 	$(OBJDUMP) -t kernelmemfs | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > kernelmemfs.sym
 
@@ -581,6 +609,15 @@ _which: user/which
 _file: user/file
 	cp user/file _file
 
+_audioctl: user/audioctl
+	cp user/audioctl _audioctl
+
+_audiostat: user/audiostat
+	cp user/audiostat _audiostat
+
+_audiotest: user/audiotest
+	cp user/audiotest _audiotest
+
 _lockprobe: user/lockprobe
 	cp user/lockprobe _lockprobe
 
@@ -713,6 +750,9 @@ UPROGS=\
 	_lsof\
 	_which\
 	_file\
+	_audioctl\
+	_audiostat\
+	_audiotest\
 	_lockprobe\
 	_date\
 	_time\
@@ -807,6 +847,7 @@ clean:
 	user/6get \
 	user/abrowse \
 	user/lsof user/which user/file \
+	user/audioctl user/audiostat user/audiotest \
 	user/server7 \
 	user/top \
 	user/date user/time user/killall user/halt \

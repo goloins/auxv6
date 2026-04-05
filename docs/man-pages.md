@@ -13,6 +13,9 @@ Generated: 2026-04-04
 | abrowse | targetfs/usr/share/man/abrowse.md | 2026-04-03 | user/abrowse.c | basic terminal HTTP browser (text/html/markdown/plain) |
 | 6get | targetfs/usr/share/man/6get.md | 2026-04-02 | user/6get.c | source-derived usage/options; see docs/6get-http-transfer-notes.md |
 | ahcitest | targetfs/usr/share/man/ahcitest.md | 2026-04-02 | user/ahcitest.c | AHCI regression binary |
+| audioctl | targetfs/usr/share/man/audioctl.md | 2026-04-05 | user/audioctl.c | Stage-0 audio ioctl control/query utility |
+| audiostat | targetfs/usr/share/man/audiostat.md | 2026-04-05 | user/audiostat.c | Stage-1 audio procfs summary/counter/clients reader |
+| audiotest | targetfs/usr/share/man/audiotest.md | 2026-04-05 | user/audiotest.c | Stage-0 audio write-path/xrun recovery exerciser |
 | arp | targetfs/usr/share/man/arp.md | 2026-04-01 | user/arp.c | source-derived usage/options |
 | cat | targetfs/usr/share/man/cat.md | 2026-04-01 | user/cat.c | source-derived usage/options |
 | chgrp | targetfs/usr/share/man/chgrp.md | 2026-04-01 | user/chgrp.c | source-derived usage/options |

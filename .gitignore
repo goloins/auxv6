@@ -113,6 +113,9 @@ user/tail
 user/lsof
 user/which
 user/file
+user/audioctl
+user/audiostat
+user/audiotest
 user/lockprobe
 user/server7
 user/date

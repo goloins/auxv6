@@ -86,6 +86,10 @@ fileclose(struct file *f)
   else if(ff.type == FD_INODE){
     if(ff.ip && ff.ip->type == T_DEV && ff.ip->major == PTYDEV)
       pty_close(&ff);
+    if(ff.ip && ff.ip->type == T_DEV && ff.ip->major == SERIALDEV)
+      serial_close(&ff);
+    if(ff.ip && ff.ip->type == T_DEV && ff.ip->major == AUDIODEV)
+      audio_close(&ff);
     begin_op();
     iput(ff.ip);
     end_op();
@@ -252,6 +256,8 @@ filewrite(struct file *f, char *addr, int n)
            f->ip->dev, f->ip->inum, (int)f->off, n);
     if(f->ip->type == T_DEV && f->ip->major == PTYDEV)
       return pty_filewrite(f, addr, n);
+    if(f->ip->type == T_DEV && f->ip->major == AUDIODEV)
+      return audio_filewrite(f, addr, n);
 
     if(f->ip->type == T_DEV){
       ilock(f->ip);

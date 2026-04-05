@@ -23,6 +23,8 @@
 #define MAX_PATH 64
 #define CREATED_LINE_MAX 512
 #define MAX_RULES 32
+#define SERIALDEV 4
+#define AUDIODEV 5
 
 struct devman_device {
   char path[MAX_PATH];
@@ -458,6 +460,35 @@ devman_enumerate_pty_devices(void)
     ndevices++;
   }
 
+  /* Serial TTY devices (/dev/ttyS0..3) */
+  for(i = 0; i < 4; i++) {
+    if(ndevices >= MAX_DEVICES)
+      break;
+    strcpy(path, "/dev/ttyS0");
+    path[9] = '0' + i;
+    strcpy(devices[ndevices].path, path);
+    devices[ndevices].major = SERIALDEV;
+    devices[ndevices].minor = i + 1;
+    devices[ndevices].type = M_IFCHR;
+    ndevices++;
+  }
+
+  /* Audio control + default playback endpoint */
+  if(ndevices < MAX_DEVICES) {
+    strcpy(devices[ndevices].path, "/dev/audioctl");
+    devices[ndevices].major = AUDIODEV;
+    devices[ndevices].minor = 0;
+    devices[ndevices].type = M_IFCHR;
+    ndevices++;
+  }
+  if(ndevices < MAX_DEVICES) {
+    strcpy(devices[ndevices].path, "/dev/pcmC0D0p");
+    devices[ndevices].major = AUDIODEV;
+    devices[ndevices].minor = 1;
+    devices[ndevices].type = M_IFCHR;
+    ndevices++;
+  }
+
   /* Console and standard char devices */
   if(ndevices < MAX_DEVICES) {
     strcpy(devices[ndevices].path, "/dev/console");
@@ -610,6 +641,9 @@ devman_remove_managed_nodes(void)
     path[9] = 0;
     devman_remove_node(path);
   }
+
+  devman_remove_node("/dev/audioctl");
+  devman_remove_node("/dev/pcmC0D0p");
 
   devman_remove_node("/dev/console");
   devman_remove_node("/dev/null");

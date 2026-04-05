@@ -18,6 +18,12 @@
 #ifndef PTYDEV
 #define PTYDEV 3
 #endif
+#ifndef SERIALDEV
+#define SERIALDEV 4
+#endif
+#ifndef AUDIODEV
+#define AUDIODEV 5
+#endif
 
 #define KTIME_CLOCK_REALTIME  0
 #define KTIME_CLOCK_MONOTONIC 1
@@ -692,6 +698,7 @@ sys_setrlimit(void)
   {
     int fd;
     int request;
+    int arg_size;
     char *arg_ptr;
     int arg_int;
     int tty_major;
@@ -700,16 +707,28 @@ sys_setrlimit(void)
     if(argint(0, &fd) < 0 || argint(1, &request) < 0)
       return -1;
 
+    if(myproc()->fdtable == 0 || fd < 0 || fd >= myproc()->fdtable->nfds)
+      return -1;
+    f = myproc()->fdtable->entries[fd];
+    if(f == 0)
+      return -1;
+
+    if(audio_is_ioctl(request)){
+      if(proc_tty_major(fd) != AUDIODEV)
+        return -1;
+      arg_size = audio_ioctl_arg_size(request);
+      if(arg_size <= 0)
+        return -1;
+      if(argptr(2, &arg_ptr, arg_size) < 0)
+        return -1;
+      return audio_ioctl_file(f, request, (uint)arg_ptr);
+    }
+
     if(!proc_is_tty_fd(fd))
       return -1;
 
     tty_major = proc_tty_major(fd);
     if(tty_major < 0)
-      return -1;
-    if(myproc()->fdtable == 0 || fd < 0 || fd >= myproc()->fdtable->nfds)
-      return -1;
-    f = myproc()->fdtable->entries[fd];
-    if(f == 0)
       return -1;
 
     switch(request) {
@@ -723,6 +742,8 @@ sys_setrlimit(void)
         return console_ioctl(fd, request, (uint)arg_ptr);
       if(tty_major == PTYDEV)
         return pty_ioctl_file(f, request, (uint)arg_ptr);
+      if(tty_major == SERIALDEV)
+        return serial_ioctl_file(f, request, (uint)arg_ptr);
       return -1;
 
     case 0x5413:  /* TIOCGWINSZ */
@@ -732,6 +753,8 @@ sys_setrlimit(void)
         return console_ioctl(fd, request, (uint)arg_ptr);
       if(tty_major == PTYDEV)
         return pty_ioctl_file(f, request, (uint)arg_ptr);
+      if(tty_major == SERIALDEV)
+        return serial_ioctl_file(f, request, (uint)arg_ptr);
       return -1;
 
     case 0x5414:  /* TIOCSWINSZ */
@@ -741,6 +764,8 @@ sys_setrlimit(void)
         return console_ioctl(fd, request, (uint)arg_ptr);
       if(tty_major == PTYDEV)
         return pty_ioctl_file(f, request, (uint)arg_ptr);
+      if(tty_major == SERIALDEV)
+        return serial_ioctl_file(f, request, (uint)arg_ptr);
       return -1;
 
     case 0x540F:  /* TIOCGPGRP */
@@ -750,6 +775,8 @@ sys_setrlimit(void)
         return console_ioctl(fd, request, (uint)arg_ptr);
       if(tty_major == PTYDEV)
         return pty_ioctl_file(f, request, (uint)arg_ptr);
+      if(tty_major == SERIALDEV)
+        return serial_ioctl_file(f, request, (uint)arg_ptr);
       return -1;
 
     case 0x5410:  /* TIOCSPGRP */
@@ -759,6 +786,8 @@ sys_setrlimit(void)
         return console_ioctl(fd, request, (uint)arg_ptr);
       if(tty_major == PTYDEV)
         return pty_ioctl_file(f, request, (uint)arg_ptr);
+      if(tty_major == SERIALDEV)
+        return serial_ioctl_file(f, request, (uint)arg_ptr);
       return -1;
 
     case 0x540E:  /* TIOCSCTTY */
@@ -768,6 +797,8 @@ sys_setrlimit(void)
         return console_ioctl(fd, request, (uint)arg_int);
       if(tty_major == PTYDEV)
         return pty_ioctl_file(f, request, (uint)arg_int);
+      if(tty_major == SERIALDEV)
+        return serial_ioctl_file(f, request, (uint)arg_int);
       return -1;
 
     case 0x540B:  /* TCFLSH */
@@ -777,10 +808,16 @@ sys_setrlimit(void)
         return console_ioctl(fd, request, (uint)arg_int);
       if(tty_major == PTYDEV)
         return pty_ioctl_file(f, request, (uint)arg_int);
+      if(tty_major == SERIALDEV)
+        return serial_ioctl_file(f, request, (uint)arg_int);
       return -1;
 
     case 0x5411:  /* TIOCOUTQ */
     case 0x541B:  /* FIONREAD / TIOCINQ */
+    case 0x5415:  /* TIOCMGET */
+    case 0x5416:  /* TIOCMBIS */
+    case 0x5417:  /* TIOCMBIC */
+    case 0x5418:  /* TIOCMSET */
     case 0x80045430: /* TIOCGPTN */
       if(argptr(2, &arg_ptr, sizeof(int)) < 0)
         return -1;
@@ -788,6 +825,8 @@ sys_setrlimit(void)
         return console_ioctl(fd, request, (uint)arg_ptr);
       if(tty_major == PTYDEV)
         return pty_ioctl_file(f, request, (uint)arg_ptr);
+      if(tty_major == SERIALDEV)
+        return serial_ioctl_file(f, request, (uint)arg_ptr);
       return -1;
 
     case 0x54A3:  /* TIOCISATTY */
@@ -795,6 +834,8 @@ sys_setrlimit(void)
         return console_ioctl(fd, request, 0);
       if(tty_major == PTYDEV)
         return pty_ioctl_file(f, request, 0);
+      if(tty_major == SERIALDEV)
+        return serial_ioctl_file(f, request, 0);
       return -1;
 
     case 0x54A0:  /* TIOCGACTTTY */
@@ -804,6 +845,8 @@ sys_setrlimit(void)
         return console_ioctl(fd, request, (uint)arg_ptr);
       if(tty_major == PTYDEV)
         return pty_ioctl_file(f, request, (uint)arg_ptr);
+      if(tty_major == SERIALDEV)
+        return serial_ioctl_file(f, request, (uint)arg_ptr);
       return -1;
 
     case 0x54A1:  /* TIOCSACTTTY */
@@ -813,6 +856,8 @@ sys_setrlimit(void)
         return console_ioctl(fd, request, (uint)arg_int);
       if(tty_major == PTYDEV)
         return pty_ioctl_file(f, request, (uint)arg_int);
+      if(tty_major == SERIALDEV)
+        return serial_ioctl_file(f, request, (uint)arg_int);
       return -1;
 
     case 0x54A2:  /* TIOCGNTTY */
@@ -822,6 +867,8 @@ sys_setrlimit(void)
         return console_ioctl(fd, request, (uint)arg_ptr);
       if(tty_major == PTYDEV)
         return pty_ioctl_file(f, request, (uint)arg_ptr);
+      if(tty_major == SERIALDEV)
+        return serial_ioctl_file(f, request, (uint)arg_ptr);
       return -1;
 
     default:

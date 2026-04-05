@@ -37,6 +37,10 @@
 #define PROCFS_SCHEDSTAT_INO  20   /* /proc/schedstat — scheduler counters */
 #define PROCFS_VMSTAT_INO     21   /* /proc/vmstat — allocator/vm counters */
 #define PROCFS_FDLIMITS_INO   22   /* /proc/fdlimits — per-proc fd limits */
+#define PROCFS_AUDIO_INO      23   /* /proc/audio — audio core summary */
+#define PROCFS_AUDIO_STATS_INO 24  /* /proc/audio_stats — audio counters */
+#define PROCFS_SERIAL_TTY_INO 25   /* /proc/serial_tty — ttyS line capabilities/state */
+#define PROCFS_AUDIO_CLIENTS_INO 26 /* /proc/audio_clients — active audio stream table */
 #define PROCFS_VERSION_STR  "a/ux86 aux86 i686\n"
 
 struct procfs_inode {
@@ -67,6 +71,10 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_SCHEDSTAT_INO, "schedstat", 256 },
   { PROCFS_VMSTAT_INO, "vmstat", 512 },
   { PROCFS_FDLIMITS_INO, "fdlimits", 2048 },
+  { PROCFS_AUDIO_INO, "audio", 512 },
+  { PROCFS_AUDIO_STATS_INO, "audio_stats", 512 },
+  { PROCFS_AUDIO_CLIENTS_INO, "audio_clients", 2048 },
+  { PROCFS_SERIAL_TTY_INO, "serial_tty", 512 },
   { 0, 0, 0 }
 };
 
@@ -311,6 +319,22 @@ procfs_fill_inode(struct inode *ip, uint inum)
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
     ip->size = 2048;
+  } else if(inum == PROCFS_AUDIO_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
+    ip->size = 512;
+  } else if(inum == PROCFS_AUDIO_STATS_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
+    ip->size = 512;
+  } else if(inum == PROCFS_AUDIO_CLIENTS_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
+    ip->size = 2048;
+  } else if(inum == PROCFS_SERIAL_TTY_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
+    ip->size = 512;
   } else {
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
@@ -494,51 +518,18 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     return -1;
   if(ip->inum == PROCFS_ROOT_INO){
     // Note: . and .. are synthesized by VFS for mount roots
-    struct dirent more_entries[21];
+    struct dirent more_entries[32];
+    int entc;
+
     memset(more_entries, 0, sizeof(more_entries));
-    more_entries[0].inum = PROCFS_UPTIME_INO;
-    safestrcpy(more_entries[0].name, "uptime", DIRSIZ);
-    more_entries[1].inum = PROCFS_VERSION_INO;
-    safestrcpy(more_entries[1].name, "version", DIRSIZ);
-    more_entries[2].inum = PROCFS_PCI_INO;
-    safestrcpy(more_entries[2].name, "pci", DIRSIZ);
-    more_entries[3].inum = PROCFS_VBLK_FLUSH_INO;
-    safestrcpy(more_entries[3].name, "vblk_flush", DIRSIZ);
-    more_entries[4].inum = PROCFS_AHCI_TUNE_INO;
-    safestrcpy(more_entries[4].name, "ahci_tune", DIRSIZ);
-    more_entries[5].inum = PROCFS_MEMINFO_INO;
-    safestrcpy(more_entries[5].name, "meminfo", DIRSIZ);
-    more_entries[6].inum = PROCFS_PS_INO;
-    safestrcpy(more_entries[6].name, "ps", DIRSIZ);
-    more_entries[7].inum = PROCFS_MOUNTSTATS_INO;
-    safestrcpy(more_entries[7].name, "mountstats", DIRSIZ);
-    more_entries[8].inum = PROCFS_LOGO_INO;
-    safestrcpy(more_entries[8].name, "logo", DIRSIZ);
-    more_entries[9].inum = PROCFS_GFXSTATS_INO;
-    safestrcpy(more_entries[9].name, "gfxstats", DIRSIZ);
-    more_entries[10].inum = PROCFS_LSOF_INO;
-    safestrcpy(more_entries[10].name, "lsof", DIRSIZ);
-    more_entries[11].inum = PROCFS_NVME_TUNE_INO;
-    safestrcpy(more_entries[11].name, "nvme_tune", DIRSIZ);
-    more_entries[12].inum = PROCFS_SERVER7_INO;
-    safestrcpy(more_entries[12].name, "server7", DIRSIZ);
-    more_entries[13].inum = PROCFS_LOADAVG_INO;
-    safestrcpy(more_entries[13].name, "loadavg", DIRSIZ);
-    more_entries[14].inum = PROCFS_BDEV_TABLE_INO;
-    safestrcpy(more_entries[14].name, "bdev_table", DIRSIZ);
-    more_entries[15].inum = PROCFS_NET_TCP_INO;
-    safestrcpy(more_entries[15].name, "net_tcp", DIRSIZ);
-    more_entries[16].inum = PROCFS_NET_UDP_INO;
-    safestrcpy(more_entries[16].name, "net_udp", DIRSIZ);
-    more_entries[17].inum = PROCFS_NET_DEV_INO;
-    safestrcpy(more_entries[17].name, "net_dev", DIRSIZ);
-    more_entries[18].inum = PROCFS_SCHEDSTAT_INO;
-    safestrcpy(more_entries[18].name, "schedstat", DIRSIZ);
-    more_entries[19].inum = PROCFS_VMSTAT_INO;
-    safestrcpy(more_entries[19].name, "vmstat", DIRSIZ);
-    more_entries[20].inum = PROCFS_FDLIMITS_INO;
-    safestrcpy(more_entries[20].name, "fdlimits", DIRSIZ);
-    return procfs_copy_data(dst, off, n, (char*)more_entries, sizeof(more_entries));
+    entc = 0;
+    for(i = 0; procfs_inodes[i].name && entc < 32; i++) {
+      more_entries[entc].inum = procfs_inodes[i].inum;
+      safestrcpy(more_entries[entc].name, procfs_inodes[i].name, DIRSIZ);
+      entc++;
+    }
+    return procfs_copy_data(dst, off, n, (char*)more_entries,
+                            (uint)(entc * sizeof(struct dirent)));
   }
   if(ip->inum == PROCFS_VERSION_INO)
     return procfs_copy_data(dst, off, n, PROCFS_VERSION_STR,
@@ -1025,6 +1016,30 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0) return -1;
 #undef LAVG_DIV
     return procfs_copy_data(dst, off, n, buf, len);
+  }
+  if(ip->inum == PROCFS_AUDIO_INO){
+    int r = audio_procfs_summary(buf, sizeof(buf));
+    if(r < 0)
+      return -1;
+    return procfs_copy_data(dst, off, n, buf, (uint)r);
+  }
+  if(ip->inum == PROCFS_AUDIO_STATS_INO){
+    int r = audio_procfs_stats(buf, sizeof(buf));
+    if(r < 0)
+      return -1;
+    return procfs_copy_data(dst, off, n, buf, (uint)r);
+  }
+  if(ip->inum == PROCFS_AUDIO_CLIENTS_INO){
+    int r = audio_procfs_clients(buf, sizeof(buf));
+    if(r < 0)
+      return -1;
+    return procfs_copy_data(dst, off, n, buf, (uint)r);
+  }
+  if(ip->inum == PROCFS_SERIAL_TTY_INO){
+    int r = serial_procfs_dump(buf, sizeof(buf));
+    if(r < 0)
+      return -1;
+    return procfs_copy_data(dst, off, n, buf, (uint)r);
   }
   if(ip->inum == PROCFS_NET_TCP_INO || ip->inum == PROCFS_NET_UDP_INO){
     /* Snapshot all sockets, then format matching ones into procfs_net_outbuf. */

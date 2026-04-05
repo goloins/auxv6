@@ -26,9 +26,13 @@ main(void)
   ioapicinit();    // another interrupt controller
   display_init();  // display device registry
   pci_init();      // PCI bus enumeration
+  modem_init();    // modem-class PCI probe stubs
   virtio_gpu_init(); // virtio-gpu subsystem
+  intel_gfx_init();  // intel display-class PCI probe stub
   consoleinit();   // console hardware
   ptyinit();       // pseudo-terminal endpoints
+  serialinit();    // serial tty chardev endpoints
+  audio_init();    // audio char-device skeleton and ioctl entrypoints
   uartinit();      // serial port
   pinit();         // process table
   tvinit();        // trap vectors

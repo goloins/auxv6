@@ -1369,7 +1369,7 @@ proc_is_tty_fd(int fd)
     return 0;
   if(f->ip->type != T_DEV)
     return 0;
-  if(f->ip->major != CONSOLE && f->ip->major != PTYDEV)
+  if(f->ip->major != CONSOLE && f->ip->major != PTYDEV && f->ip->major != SERIALDEV)
     return 0;
 
   return 1;
@@ -1422,6 +1422,9 @@ proc_tcgetattr(int fd, uint termios_addr)
   if(f->ip->major == PTYDEV)
     return pty_get_termios_file(f, (struct termios*)termios_addr);
 
+  if(f->ip->major == SERIALDEV)
+    return serial_get_termios_file(f, (struct termios*)termios_addr);
+
   return -1;
 }
 
@@ -1450,6 +1453,9 @@ proc_tcsetattr(int fd, int optional_actions, uint termios_addr)
 
   if(f->ip->major == PTYDEV)
     return pty_set_termios_file(f, (const struct termios*)termios_addr, optional_actions);
+
+  if(f->ip->major == SERIALDEV)
+    return serial_set_termios_file(f, (const struct termios*)termios_addr, optional_actions);
 
   return -1;
 }
