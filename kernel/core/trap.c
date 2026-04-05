@@ -257,8 +257,6 @@ trap(struct trapframe *tf)
       wakeup(&ticks);
       release(&tickslock);
       ktime_tick(current_ticks);
-      // Advance audio ring buffers and wake blocked writers.
-      audio_tick();
       // Check all processes for expired alarms
       proc_check_alarms(current_ticks);
       // Update load averages every 500 ticks (5 seconds at 100Hz)

@@ -627,7 +627,7 @@ audio_filewrite(struct file *f, char *src, int n)
         break;
       }
 
-      sleep(&s->ring_head, &audio_core.lock);
+      sleep(&ticks, &audio_core.lock);
       if(!s->in_use || s->owner != f){
         release(&audio_core.lock);
         return (copied > 0) ? copied : -1;
@@ -1054,7 +1054,7 @@ audio_ioctl_file(struct file *f, int request, uint arg)
           release(&audio_core.lock);
           return -1;
         }
-        sleep(&s->ring_head, &audio_core.lock);
+        sleep(&ticks, &audio_core.lock);
         if(!s->in_use || s->owner != f){
           release(&audio_core.lock);
           return -1;
@@ -1435,28 +1435,6 @@ audio_procfs_clients(char *buf, int max)
 overflow:
   release(&audio_core.lock);
   return -1;
-}
-
-/*
- * Called from the timer interrupt handler on every tick (CPU 0 only).
- * Drives software ring consumption for all running streams and wakes
- * any process blocked in a synchronous write waiting for ring space.
- * This is the software analogue of the hardware DMA completion IRQ.
- */
-void
-audio_tick(void)
-{
-  int i;
-  struct audio_stream *s;
-
-  acquire(&audio_core.lock);
-  for(i = 0; i < AUDIO_STREAM_MAX; i++){
-    s = &audio_streams[i];
-    if(!s->in_use || s->stream_state != AUDIO_ST_RUNNING)
-      continue;
-    audio_stream_consume_locked(s);
-  }
-  release(&audio_core.lock);
 }
 
 void
