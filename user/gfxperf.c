@@ -137,9 +137,8 @@ read_gfxstats(struct gfxstats_snapshot *out)
 static uint
 delta_u(uint after, uint before)
 {
-  if(after >= before)
-    return after - before;
-  return 0;
+  /* Unsigned subtraction is wrap-safe for monotonically increasing counters. */
+  return after - before;
 }
 
 static uint

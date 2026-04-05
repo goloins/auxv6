@@ -627,48 +627,15 @@ console_hw_cursor_from_tty(struct console_tty_state *t)
 static void
 console_tty_mark_dirty_range_locked(struct console_tty_state *t, int from, int to)
 {
-  int cols;
-  int cells;
-  int top;
-  int bottom;
-
-  if(!t)
-    return;
-
-  cols = console_tty_cols(t);
-  cells = console_tty_cells(t);
-  if(cols <= 0 || cells <= 0)
-    return;
-
-  if(from < 0)
-    from = 0;
-  if(to > cells)
-    to = cells;
-  if(from >= to)
-    return;
-
-  top = from / cols;
-  bottom = (to - 1) / cols;
-
-  if(!t->dirty_rows_valid) {
-    t->dirty_rows_valid = 1;
-    t->dirty_row_top = top;
-    t->dirty_row_bottom = bottom;
-    return;
-  }
-
-  if(top < t->dirty_row_top)
-    t->dirty_row_top = top;
-  if(bottom > t->dirty_row_bottom)
-    t->dirty_row_bottom = bottom;
+  (void)t;
+  (void)from;
+  (void)to;
 }
 
 static void
 console_tty_mark_dirty_all_locked(struct console_tty_state *t)
 {
-  if(!t)
-    return;
-  console_tty_mark_dirty_range_locked(t, 0, console_tty_cells(t));
+  (void)t;
 }
 
 static void
@@ -1442,6 +1409,8 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
   int rendered;
   struct dirty_rect rect;
   uint area;
+  int cell_w;
+  int cell_h;
 
   if(!t)
     return;
@@ -1466,13 +1435,8 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
   old_cursor_x = console_gfx_vts->cursor_x;
   old_cursor_y = console_gfx_vts->cursor_y;
 
-  if(t->dirty_rows_valid) {
-    row0 = t->dirty_row_top;
-    row1 = t->dirty_row_bottom;
-  } else {
-    row0 = rows;
-    row1 = -1;
-  }
+  row0 = 0;
+  row1 = rows - 1;
 
   if(row0 < 0)
     row0 = 0;
@@ -1527,7 +1491,6 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
   console_gfx_vts->cursor_y = new_cursor_y;
   if(changed)
     console_gfx_vts->any_dirty = 1;
-  t->dirty_rows_valid = 0;
   release(&console_gfx_vts->lock);
 
   if(!changed)
@@ -1546,6 +1509,19 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
     fb_get_dirty_rect(console_gfx_fb, &rect);
     if(rect.right >= rect.left && rect.bottom >= rect.top)
       area = (uint)(rect.right - rect.left + 1) * (uint)(rect.bottom - rect.top + 1);
+  }
+
+  if(area == 0 && rendered > 0) {
+    /* Fallback accounting for cases where dirty-rect metadata is unavailable.
+     * This keeps /proc/gfxstats useful without changing flush behavior. */
+    console_gfx_cell_metrics_for_grid(cols, rows, &cell_w, &cell_h);
+    if(cell_w < 1)
+      cell_w = 1;
+    if(cell_h < 1)
+      cell_h = 1;
+    area = (uint)rendered * (uint)cell_w * (uint)cell_h;
+    if(area == 0 || area > console_gfx_fb->width * console_gfx_fb->height)
+      area = console_gfx_fb->width * console_gfx_fb->height;
   }
 
   display_flush(console_gfx_dev, console_gfx_fb);
