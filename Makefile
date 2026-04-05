@@ -36,6 +36,7 @@ OBJS = \
 	kernel/driver/netvsc.o\
 	kernel/driver/loop.o\
 	kernel/core/kalloc.o\
+	kernel/core/kmalloc.o\
 	kernel/driver/kbd.o\
 	kernel/driver/lapic.o\
 	kernel/fs/log.o\
@@ -234,6 +235,25 @@ entryother: kernel/boot/entryother.S
 
 aux.kern: toolchain-check $(OBJS) kernel/core/entry.o entryother config/kernel.ld
 	$(LD) $(LDFLAGS) -T config/kernel.ld -o aux.kern kernel/core/entry.o $(OBJS) -b binary entryother
+	@set -e; \
+	line="$$($(TOOLPREFIX)size aux.kern | tail -n 1)"; \
+	set -- $$line; \
+	text=$${1:-0}; data=$${2:-0}; bss=$${3:-0}; dec=$${4:-0}; \
+	hard_total=$$((8*1024*1024)); \
+	soft_total=$$((6*1024*1024)); \
+	bss_hard=$$((4*1024*1024)); \
+	printf "kernel-size: text=%s data=%s bss=%s total=%s bytes\n" "$$text" "$$data" "$$bss" "$$dec"; \
+	if [ "$$dec" -gt "$$hard_total" ]; then \
+		echo "ERROR: kernel total size exceeds hard budget (8MB)." >&2; \
+		exit 1; \
+	fi; \
+	if [ "$$bss" -gt "$$bss_hard" ]; then \
+		echo "ERROR: kernel .bss exceeds hard budget (4MB)." >&2; \
+		exit 1; \
+	fi; \
+	if [ "$$dec" -gt "$$soft_total" ]; then \
+		echo "WARN: kernel total size exceeds soft budget (6MB); consider reducing static footprint or expanding early-map budget intentionally." >&2; \
+	fi
 	$(OBJDUMP) -S aux.kern > kernel.asm
 	$(OBJDUMP) -t aux.kern | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > kernel.sym
 	install -d $(TARGETFS_DIR)

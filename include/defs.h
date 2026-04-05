@@ -140,6 +140,12 @@ char*           kalloc(void);
 void            kfree(char*);
 char*           kalloc_contiguous(uint npages);
 
+// kmalloc.c — Phase 1A: variable-sized kernel memory allocator
+void            kmalloc_init(void);
+void*           kmalloc(uint size);
+void            kmalloc_free(void *ptr);
+void*           kmalloc_realloc(void *ptr, uint size);
+
 // pty.c
 void            ptyinit(void);
 int             pty_open(struct file *f, int minor);
@@ -234,6 +240,12 @@ int             fileread(struct file*, char*, int n);
 int             filestat(struct file*, struct stat*);
 int             filewrite(struct file*, char*, int n);
 int             file_has_refs_on_dev(uint dev);
+
+// sysfile.c — Phase 1A: file descriptor table (fdtable) functions
+struct fdtable* fdtable_alloc(void);
+void            fdtable_free(struct fdtable*);
+int             fdtable_dup(struct fdtable*, struct fdtable*);
+int             fdtable_grow(struct fdtable*);
 
 // fs.c
 void            readsb(int dev, struct superblock *sb);

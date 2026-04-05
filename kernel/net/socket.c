@@ -27,13 +27,26 @@ socket_fdalloc(struct file *f)
 {
   int fd;
   struct proc *curproc = myproc();
+  int limit;
 
-  for(fd = 0; fd < NOFILE; fd++){
-    if(curproc->ofile[fd] == 0){
-      curproc->ofile[fd] = f;
+  if(curproc == 0 || curproc->fdtable == 0)
+    return -1;
+
+  limit = (curproc->rlimit_nofile_cur > (uint)NOFILE) ? NOFILE : (int)curproc->rlimit_nofile_cur;
+
+  for(fd = 0; fd < limit; fd++){
+    while(fd >= curproc->fdtable->capacity){
+      if(fdtable_grow(curproc->fdtable) < 0)
+        return -1;
+    }
+    if(fd >= curproc->fdtable->nfds)
+      curproc->fdtable->nfds = fd + 1;
+    if(curproc->fdtable->entries[fd] == 0){
+      curproc->fdtable->entries[fd] = f;
       return fd;
     }
   }
+
   return -1;
 }
 
@@ -1738,10 +1751,13 @@ getfd_socket(int fd)
 {
   struct file *f;
   
-  if(fd < 0 || fd >= NOFILE || !myproc()->ofile[fd])
+  if(myproc() == 0 || myproc()->fdtable == 0 || fd < 0 || fd >= myproc()->fdtable->nfds)
+    return 0;
+
+  if(!myproc()->fdtable->entries[fd])
     return 0;
   
-  f = myproc()->ofile[fd];
+  f = myproc()->fdtable->entries[fd];
   
   if(f->type == FD_SOCKET)
     return f->socket;

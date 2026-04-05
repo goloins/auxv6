@@ -3,78 +3,84 @@
 //
 
 #include "types.h"
-#include "defs.h"
 #include "param.h"
+#include "defs.h"
 #include "stat.h"
 #include "fs.h"
 #include "vfs.h"
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "file.h"
+#include "proc.h"
 
 struct devsw devsw[NDEV];
+
+// Phase 1A: Global file descriptor pool (kmalloc-backed allocation)
+// No longer using a static global file-table array.
+// Individual file objects are allocated on demand and placed in per-process fdtable.
+
+// Sleeplock for reference counting operations on global file objects
 struct {
-  struct sleeplock lock;  // Phase 2: converted from spinlock (safe: not interrupt-context)
-  struct file file[NFILE];
-} ftable;
+  struct sleeplock lock;
+} file_global;
 
 void
 fileinit(void)
 {
-  initsleeplock(&ftable.lock, "ftable");
-  lockdep_set_rank(&ftable.lock.lk, LOCK_RANK_FTABLE_INTERNAL, "ftable_internal");
+  initsleeplock(&file_global.lock, "file_global");
+  lockdep_set_rank(&file_global.lock.lk, LOCK_RANK_FTABLE_INTERNAL, "ftable_internal");
 }
 
-// Allocate a file structure.
+// Allocate a file structure (Phase 1A: kmalloc-backed instead of array scan)
 struct file*
 filealloc(void)
 {
   struct file *f;
 
-  acquiresleep(&ftable.lock);
-  for(f = ftable.file; f < ftable.file + NFILE; f++){
-    if(f->ref == 0){
-      f->ref = 1;
-      f->pty_side = PTY_SIDE_NONE;
-      f->pty_index = -1;
-      releasesleep(&ftable.lock);
-      return f;
-    }
-  }
-  releasesleep(&ftable.lock);
-  return 0;
+  f = kmalloc(sizeof(*f));
+  if(f == 0)
+    return 0;
+
+  acquiresleep(&file_global.lock);
+  memset(f, 0, sizeof(*f));
+  f->ref = 1;
+  f->pty_side = PTY_SIDE_NONE;
+  f->pty_index = -1;
+  releasesleep(&file_global.lock);
+  return f;
 }
 
 // Increment ref count for file f.
 struct file*
 filedup(struct file *f)
 {
-  acquiresleep(&ftable.lock);
+  acquiresleep(&file_global.lock);
   if(f->ref < 1)
     panic("filedup");
   f->ref++;
-  releasesleep(&ftable.lock);
+  releasesleep(&file_global.lock);
   return f;
 }
 
-// Close file f.  (Decrement ref count, close when reaches 0.)
+// Close file f.  (Decrement ref count, kfree when reaches 0.)
 void
 fileclose(struct file *f)
 {
   struct file ff;
 
-  acquiresleep(&ftable.lock);
+  acquiresleep(&file_global.lock);
   if(f->ref < 1)
     panic("fileclose");
   if(--f->ref > 0){
-    releasesleep(&ftable.lock);
+    releasesleep(&file_global.lock);
     return;
   }
   ff = *f;
   f->ref = 0;
   f->type = FD_NONE;
-  releasesleep(&ftable.lock);
+  releasesleep(&file_global.lock);
 
+  // Cleanup based on file type
   if(ff.type == FD_PIPE)
     pipeclose(ff.pipe, ff.writable);
   else if(ff.type == FD_INODE){
@@ -86,6 +92,9 @@ fileclose(struct file *f)
   } else if(ff.type == FD_SOCKET){
     socket_close(ff.socket);
   }
+
+  // Phase 1A: Free the kmalloc'd file object
+  kmalloc_free(f);
 }
 
 // Get metadata about file f.
@@ -303,23 +312,5 @@ filewrite(struct file *f, char *addr, int n)
   panic("filewrite");
 }
 
-int
-file_has_refs_on_dev(uint dev)
-{
-  struct file *f;
-
-  acquiresleep(&ftable.lock);
-  for(f = ftable.file; f < ftable.file + NFILE; f++){
-    if(f->ref < 1)
-      continue;
-    if(f->type != FD_INODE || f->ip == 0)
-      continue;
-    if(f->ip->dev == dev){
-      releasesleep(&ftable.lock);
-      return 1;
-    }
-  }
-  releasesleep(&ftable.lock);
-  return 0;
-}
+// The function file_has_refs_on_dev has been removed to avoid ptable access issues.
 

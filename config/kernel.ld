@@ -58,6 +58,15 @@ SECTIONS
 
 	PROVIDE(end = .);
 
+	/*
+	 * Early boot executes with entrypgdir before kvmalloc(), so the linked
+	 * kernel image must fit in that pre-mapped window.
+	 *
+	 * entrypgdir currently maps 8MB at KERNBASE.
+	 */
+	ASSERT((end - 0x80000000) <= 0x00800000,
+	       "kernel image exceeds early-boot 8MB mapping window; increase entrypgdir map or reduce static footprint")
+
 	/DISCARD/ : {
 		*(.eh_frame .note.GNU-stack)
 	}

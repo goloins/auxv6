@@ -36,6 +36,10 @@ struct {
   struct proc proc[NPROC];
 } ptable;
 
+typedef char proc_table_size_guard[
+  (sizeof(ptable.proc) <= PROC_TABLE_BYTES_MAX) ? 1 : -1
+];
+
 // Provided by mp.c: reverse APIC-ID -> cpus[] index, built at mpinit().
 extern uchar apic_cpu_map[256];
 
@@ -48,6 +52,41 @@ static volatile int active_alarm_count;
 static struct proc *initproc;
 
 int nextpid = 1;
+// Phase 1A: Check if any process has an open file on the given device.
+// Called by fs.c when unmounting or checking device in-use status.
+int
+file_has_refs_on_dev(uint dev)
+{
+  int i;
+  struct proc *p;
+  struct file *f;
+
+  acquire(&ptable.lock);
+  
+  // Walk all processes' fdtables to find open files on device
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if(p->state == UNUSED || p->fdtable == 0)
+      continue;
+    
+    for(i = 0; i < p->fdtable->nfds; i++){
+      f = p->fdtable->entries[i];
+      if(f == 0)
+        continue;
+      if(f->ref < 1)
+        continue;
+      if(f->type != FD_INODE || f->ip == 0)
+        continue;
+      if(f->ip->dev == dev){
+        release(&ptable.lock);
+        return 1;
+      }
+    }
+  }
+  
+  release(&ptable.lock);
+  return 0;
+}
+
 extern void forkret(void);
 extern void trapret(void);
 
@@ -772,6 +811,16 @@ found:
     p->state = UNUSED;
     return 0;
   }
+
+  // Phase 1A: Allocate dynamic file descriptor table
+  p->fdtable = fdtable_alloc();
+  if(p->fdtable == 0){
+    kfree(p->kstack);
+    p->kstack = 0;
+    p->state = UNUSED;
+    return 0;
+  }
+
   sp = p->kstack + KSTACKSIZE;
 
   // Leave room for trap frame.
@@ -917,9 +966,18 @@ fork(void)
   // Clear %eax so that fork returns 0 in the child.
   np->tf->eax = 0;
 
-  for(i = 0; i < NOFILE; i++)
-    if(curproc->ofile[i])
-      np->ofile[i] = filedup(curproc->ofile[i]);
+  // Phase 1A: Duplicate file descriptor table from parent
+  if(fdtable_dup(curproc->fdtable, np->fdtable) < 0){
+    kfree(np->kstack);
+    np->kstack = 0;
+    fdtable_free(np->fdtable);
+    np->fdtable = 0;
+    freevm(np->pgdir);
+    np->pgdir = 0;
+    np->state = UNUSED;
+    return -1;
+  }
+
   np->cwd = idup(curproc->cwd);
 
   safestrcpy(np->name, curproc->name, sizeof(curproc->name));
@@ -943,17 +1001,14 @@ exit(int status)
 {
   struct proc *curproc = myproc();
   struct proc *p;
-  int fd;
 
   if(curproc == initproc)
     panic("init exiting");
 
-  // Close all open files.
-  for(fd = 0; fd < NOFILE; fd++){
-    if(curproc->ofile[fd]){
-      fileclose(curproc->ofile[fd]);
-      curproc->ofile[fd] = 0;
-    }
+  // Phase 1A: Close all files via fdtable_free
+  if(curproc->fdtable){
+    fdtable_free(curproc->fdtable);
+    curproc->fdtable = 0;
   }
 
   begin_op();
@@ -1306,10 +1361,10 @@ proc_is_tty_fd(int fd)
   curproc = myproc();
   if(curproc == 0)
     return 0;
-  if(fd < 0 || fd >= NOFILE)
+  if(fd < 0 || curproc->fdtable == 0 || fd >= curproc->fdtable->nfds)
     return 0;
 
-  f = curproc->ofile[fd];
+  f = curproc->fdtable->entries[fd];
   if(f == 0 || f->type != FD_INODE || f->ip == 0)
     return 0;
   if(f->ip->type != T_DEV)
@@ -1329,10 +1384,10 @@ proc_tty_major(int fd)
   curproc = myproc();
   if(curproc == 0)
     return -1;
-  if(fd < 0 || fd >= NOFILE)
+  if(fd < 0 || curproc->fdtable == 0 || fd >= curproc->fdtable->nfds)
     return -1;
 
-  f = curproc->ofile[fd];
+  f = curproc->fdtable->entries[fd];
   if(f == 0 || f->type != FD_INODE || f->ip == 0)
     return -1;
   if(f->ip->type != T_DEV)
@@ -1350,10 +1405,11 @@ proc_tcgetattr(int fd, uint termios_addr)
   curproc = myproc();
   if(curproc == 0 || termios_addr == 0)
     return -1;
-  if(!proc_is_tty_fd(fd))
+  if(!proc_is_tty_fd(fd)) {
     return -1;
+  }
 
-  f = curproc->ofile[fd];
+    f = curproc->fdtable->entries[fd];
   if(f == 0 || f->ip == 0)
     return -1;
 
@@ -1378,10 +1434,11 @@ proc_tcsetattr(int fd, int optional_actions, uint termios_addr)
   curproc = myproc();
   if(curproc == 0 || termios_addr == 0)
     return -1;
-  if(!proc_is_tty_fd(fd))
+  if(!proc_is_tty_fd(fd)) {
     return -1;
+  }
 
-  f = curproc->ofile[fd];
+    f = curproc->fdtable->entries[fd];
   if(f == 0 || f->ip == 0)
     return -1;
 
@@ -1958,10 +2015,10 @@ proc_fd_snapshot(struct procfdinfo_k *out, int max, int skip)
     if(p->state == UNUSED || p->pid <= 0)
       continue;
 
-    for(fd = 0; fd < NOFILE && n < max; fd++){
+    for(fd = 0; p->fdtable && fd < p->fdtable->nfds && n < max; fd++){
       struct file *f;
 
-      f = p->ofile[fd];
+      f = p->fdtable->entries[fd];
       if(f == 0)
         continue;
 

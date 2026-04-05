@@ -706,7 +706,9 @@ sys_setrlimit(void)
     tty_major = proc_tty_major(fd);
     if(tty_major < 0)
       return -1;
-    f = myproc()->ofile[fd];
+    if(myproc()->fdtable == 0 || fd < 0 || fd >= myproc()->fdtable->nfds)
+      return -1;
+    f = myproc()->fdtable->entries[fd];
     if(f == 0)
       return -1;
 

@@ -4,6 +4,10 @@
 #define PHYSTOP 0x20000000          // Top physical memory (512 MB)
 #define DEVSPACE 0xFE000000         // Other devices are at high addresses
 
+// Early-boot identity/high mapping window used by entrypgdir before kvmalloc.
+// Must be a multiple of 4MB because entrypgdir uses 4MB PDEs (PTE_PS).
+#define BOOT_EARLY_PHYSTOP 0x00800000  // 8 MB
+
 // Key addresses for address space layout (see kmap in vm.c for layout)
 #define KERNBASE 0x80000000         // First kernel virtual address
 #define KERNLINK (KERNBASE+EXTMEM)  // Address where kernel is linked

@@ -28,6 +28,10 @@ struct kpage_meta {
 
 static struct kpage_meta kpage_meta[PHYSTOP / PGSIZE];
 
+typedef char kpage_meta_size_guard[
+  (sizeof(kpage_meta) <= KPAGE_META_BYTES_MAX) ? 1 : -1
+];
+
 static inline struct kpage_meta*
 kpage_meta_pa(uint pa)
 {

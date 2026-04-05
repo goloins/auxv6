@@ -9,16 +9,18 @@
 #include "file.h"
 #include "signal.h"
 
-#define PIPESIZE 512
-
 struct pipe {
   struct spinlock lock;
-  char data[PIPESIZE];
+  char data[PIPE_CAPACITY];
   uint nread;     // number of bytes read
   uint nwrite;    // number of bytes written
   int readopen;   // read fd is still open
   int writeopen;  // write fd is still open
 };
+
+typedef char pipe_struct_size_guard[
+  (sizeof(struct pipe) <= PGSIZE) ? 1 : -1
+];
 
 int
 pipealloc(struct file **f0, struct file **f1)
@@ -93,7 +95,7 @@ pipewrite(struct pipe *p, char *addr, int n)
   }
   
   for(i = 0; i < n; i++){
-    while(p->nwrite == p->nread + PIPESIZE){  //DOC: pipewrite-full
+    while(p->nwrite == p->nread + PIPE_CAPACITY){  //DOC: pipewrite-full
       if(p->readopen == 0 || curproc->killed){
         release(&p->lock);
         if(p->readopen == 0)
@@ -103,7 +105,7 @@ pipewrite(struct pipe *p, char *addr, int n)
       wakeup(&p->nread);
       sleep(&p->nwrite, &p->lock);  //DOC: pipewrite-sleep
     }
-    p->data[p->nwrite++ % PIPESIZE] = addr[i];
+    p->data[p->nwrite++ % PIPE_CAPACITY] = addr[i];
   }
   wakeup(&p->nread);  //DOC: pipewrite-wakeup1
   release(&p->lock);
@@ -126,7 +128,7 @@ piperead(struct pipe *p, char *addr, int n)
   for(i = 0; i < n; i++){  //DOC: piperead-copy
     if(p->nread == p->nwrite)
       break;
-    addr[i] = p->data[p->nread++ % PIPESIZE];
+    addr[i] = p->data[p->nread++ % PIPE_CAPACITY];
   }
   wakeup(&p->nwrite);  //DOC: piperead-wakeup
   release(&p->lock);
@@ -150,7 +152,7 @@ pipe_writable(struct pipe *p)
   int ready;
 
   acquire(&p->lock);
-  ready = (p->nwrite < p->nread + PIPESIZE) || (p->readopen == 0);
+  ready = (p->nwrite < p->nread + PIPE_CAPACITY) || (p->readopen == 0);
   release(&p->lock);
   return ready;
 }

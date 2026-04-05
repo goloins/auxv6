@@ -80,16 +80,22 @@ exec_internal(char *path, char **argv, int depth)
   int (*read_fn)(struct inode*, char*, uint64_t, uint);
   int (*access_fn)(struct inode*, int);
   const struct vnode_ops *ops;
-  uint argc, sz, sp, ustack[3+MAXARG+1];
+  uint argc, sz, sp;
+  uint arg_bytes;
+  uint *ustack;
   struct elfhdr elf;
   struct inode *ip;
   struct proghdr ph;
   char shebang_line[EXEC_SHEBANG_LINE_MAX];
   char interp[EXEC_SHEBANG_LINE_MAX];
   char interp_arg[EXEC_SHEBANG_LINE_MAX];
-  char *script_argv[MAXARG+3];
+  char *script_argv[EXEC_ARGC_MAX+3];
   pde_t *pgdir, *oldpgdir;
   struct proc *curproc = myproc();
+
+#if ((3 + EXEC_ARGC_MAX + 1) * 4 > PGSIZE)
+#error "exec ustack staging exceeds one page; lower EXEC_ARGC_MAX or refactor staging"
+#endif
 
   begin_op();
 
@@ -106,6 +112,7 @@ exec_internal(char *path, char **argv, int depth)
   if(ops && ops->access)
     access_fn = ops->access;
   pgdir = 0;
+  ustack = 0;
 
   if(access_fn(ip, IACC_EXEC) < 0)
     goto bad;
@@ -136,7 +143,7 @@ exec_internal(char *path, char **argv, int depth)
       script_argv[aidx++] = interp_arg;
     script_argv[aidx++] = path;
     for(argi = 1; argv[argi]; argi++){
-      if(aidx >= MAXARG)
+      if(aidx >= EXEC_ARGC_MAX)
         goto bad;
       script_argv[aidx++] = argv[argi];
     }
@@ -200,12 +207,25 @@ exec_internal(char *path, char **argv, int depth)
   }
   sp = sz;
 
+  // Stage argv pointers in a single page to keep kernel stack bounded even
+  // when EXEC_ARGC_MAX increases over time.
+  ustack = (uint*)kalloc();
+  if(ustack == 0)
+    goto bad;
+
   // Push argument strings, prepare rest of stack in ustack.
+  arg_bytes = 0;
   for(argc = 0; argv[argc]; argc++) {
-    if(argc >= MAXARG)
+    uint arglen;
+
+    if(argc >= EXEC_ARGC_MAX)
       goto bad;
-    sp = (sp - (strlen(argv[argc]) + 1)) & ~3;
-    if(copyout(pgdir, sp, argv[argc], strlen(argv[argc]) + 1) < 0)
+    arglen = strlen(argv[argc]) + 1;
+    if(arg_bytes + arglen < arg_bytes || arg_bytes + arglen > EXEC_ARG_BYTES_MAX)
+      goto bad;
+    arg_bytes += arglen;
+    sp = (sp - arglen) & ~3;
+    if(copyout(pgdir, sp, argv[argc], arglen) < 0)
       goto bad;
     ustack[3+argc] = sp;
   }
@@ -218,6 +238,9 @@ exec_internal(char *path, char **argv, int depth)
   sp -= (3+argc+1) * 4;
   if(copyout(pgdir, sp, ustack, (3+argc+1)*4) < 0)
     goto bad;
+
+  kfree((char*)ustack);
+  ustack = 0;
 
   // Save program name for debugging.
   for(last=s=path; *s; s++)
@@ -238,6 +261,8 @@ exec_internal(char *path, char **argv, int depth)
   return 0;
 
  bad:
+  if(ustack)
+    kfree((char*)ustack);
   if(pgdir)
     freevm(pgdir);
   if(ip){

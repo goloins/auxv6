@@ -1,6 +1,8 @@
 // Shared signal constants/types used by kernel and user ABI.
 #include "stdint.h"
 #include "signal.h"
+#include "mmu.h"     // For struct taskstate, NSEGS
+// Forward declare struct taskstate to avoid double-inclusion
 
 struct run;
 struct spinlock;
@@ -51,6 +53,14 @@ struct context {
 };
 
 enum procstate { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, STOPPED, ZOMBIE };
+
+// Per-process file descriptor table (Phase 1A: dynamic replacement for fixed ofile[NOFILE])
+struct fdtable {
+  struct file **entries;       // Dynamic array of file pointers
+  int capacity;                // Total allocated slots
+  int nfds;                    // Number of valid fd entries (high water mark)
+  // TODO Phase 1B: struct rw_spinlock lock;  // Per-process RW lock for future parallelism
+};
 
 struct procinfo_k {
   int pid;
@@ -112,7 +122,7 @@ struct proc {
   uint cticks;                 // Cumulative CPU ticks charged to this process
   uint stack_top;              // VA of top of user stack region (const after exec)
   uint stack_bot;              // VA of bottom of current accessible user stack
-  struct file *ofile[NOFILE];  // Open files
+  struct fdtable *fdtable;     // Dynamic file descriptor table (Phase 1A)
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
 };

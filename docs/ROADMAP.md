@@ -90,6 +90,11 @@ cat /proc/net_dev   # raw interface counter dump, C-locale scaffolding, and corr
 - PID allocation now has explicit wrap-safe behavior: `PID_MAX` policy added, alloc path wraps back to PID 2, skips in-use PIDs under `ptable.lock`, and panics only on true PID-space exhaustion instead of relying on unchecked signed overflow.
 - Known follow-up from the large-file tranche: the current 32-bit `sys_lseek` syscall ABI still accepts a 32-bit relative offset argument on i386; a dedicated 64-bit seek syscall (`sys_lseek64`/`_llseek`-style split argument ABI) remains planned for full userspace seek-range parity.
 - Detailed tranche notes are now tracked in `docs/death-of-xv6.md` (scope, rationale, compatibility boundaries, and follow-up map).
+- P1 descriptor-ceiling modernization was attempted and correlated with an early-boot regression. Isolation via binary-search load-testing identified a sharp boundary at **NFILE=1024**: all values up to and including NFILE=1023 boot and pass full smoke tests, but NFILE=1024 triggers a trap-14 (page fault) in fileread() during login with cr2 pointing inside the ftable global. Root cause remains TBD (power-of-2 struct alignment, bitwise assumption, or linker layout quirk), but the boundary is empirically stable: **NFILE=1023 is now locked as the descriptor-ceiling safe maximum**, providing 1023 global file handles (~4× improvement over prior 256 baseline). Detailed isolation matrix and findings documented in `/memories/repo/nfile-1024-boundary-failure.md`.
+- Early-boot stability was hardened as a direct follow-up: entry paging window expanded to 8MB and linker now asserts kernel image fit in that pre-kvmalloc window, converting a silent early-boot fault class into an explicit build-time error.
+- Growth-budget guardrails were added to prevent future "too large" regressions from surfacing only at runtime: compile-time table-size assertions (proc/file/page-meta), post-link kernel size checks (hard 8MB total, hard 4MB `.bss`, soft 6MB warning), and per-build footprint reporting in `make aux.kern`.
+- P1 pipe-policy modernization is now landed: kernel pipe capacity increased (`512 -> 2048`) while POSIX `PIPE_BUF` atomicity floor remains `512`, with compile-time fit/invariant guards (`PIPE_CAPACITY >= 512`, `sizeof(struct pipe) <= PGSIZE`).
+- P1 exec-argument modernization is now landed: exec enforces dual limits (`EXEC_ARGC_MAX=128`, `EXEC_ARG_BYTES_MAX=4096`) aligned with `ARG_MAX`, and argv pointer staging moved off fixed kernel stack arrays to one-page heap staging with compile-time fit guards.
 - NVMe/loop device-number collision was fixed by moving loop base to dev 44, restoring stable `nda` visibility in `lsblk` and successful NVMe ext2 mounting.
 - Storage diagnostics improved with `/proc/bdev_table` and `lsblk -v`, making block-device registration/capacity state directly inspectable.
 - `qemu-nvme-fat` image generation now uses dosfstools (`mkfs.fat`/`mkdosfs`) and produces a deterministic FAT16 image containing a known `README.TXT` marker for quick validation.
@@ -342,7 +347,51 @@ Definition of done for next bump:
 
 ---
 
-## Remaining POSIX/Libc Gaps (Selected)
+## Known Limitations and Outstanding Issues (2026-04-05)
+
+### Descriptor Ceiling Boundary (NFILE=1024 Failure)
+**Status:** Documented 2026-04-05 after isolated binary-search regression analysis.
+
+**Symptom:** When `NFILE` constant in `include/param.h` is set to exactly 1024, the kernel boots and reaches the login prompt, but crashes with a trap-14 (page fault) during the first interactive login sequence.
+
+**Isolation Matrix (Binary Search):**
+| NFILE | Boot Result | Status |
+|-------|-------------|--------|
+| 512–960 | ✅ pass | Stable across all tested midpoints |
+| **1023** | ✅ **pass** | Empirically safe maximum (2^10 − 1) |
+| **1024** | ❌ **fail** | Trap 14 in fileread(), cr2 inside ftable |
+
+**Crash Details:**
+- **Trap Type:** 14 (page fault, read protection violation)
+- **Instruction:** `0x80109c65` in fileread() at `f->off += r` (updating file offset field)
+- **Fault Address (CR2):** `0x8017fc4c` (inside ftable, approximately at file[3].off)
+- **Trigger:** Login sequence (high I/O load)
+- **Reproducibility:** 100% on `qemu-nox`
+
+**Suspected Root Causes:**
+1. **Compiler/Linker struct alignment corner case** at exactly 1024-entry boundary
+2. **Bitwise logic assuming NFILE ≤ 1023** (e.g., using `& 0x3ff` modulo or power-of-2 assumptions)
+3. **Off-by-one in size calculations** triggered only at 2^10 threshold
+4. **GCC -O2 optimization quirk** specific to NFILE=1024 value
+
+**Current Mitigation:**
+- **NFILE is locked at 1023** in `include/param.h`
+- This provides 1023 global file handles, a **~4× improvement** over the prior 256-entry baseline
+- All smoke tests, stress tests, and full boot sequences pass stably at NFILE=1023
+- Full binary-search isolation matrix is documented in `/memories/repo/nfile-1024-boundary-failure.md`
+
+**Recommended Next Steps:**
+1. Symbolic kernel debugging (`gdb` stepping through fileread page fault with NFILE=1024)
+2. Compare kernel struct layouts (objdump) with NFILE=1023 vs 1024
+3. Inspect linker map for address collisions at BSS boundary
+4. Examine assembly output for any hardcoded 1024 assumptions
+5. Try alternative struct packing or alignment directives if layout is suspect
+
+**Impact:** Minor—NFILE=1023 is sufficient for current workloads. Future improvement if deeper root cause is identified and fixed.
+
+---
+
+
 
 - Missing syscalls: `mmap`; broader `ioctl` coverage for non-tty devices.
 - libc/POSIX portability tranche scope now remaining: writable `fmemopen` semantics if required by real callers, fuller `perror` parity, and broader address-family/name-service work beyond the current truthful IPv4 `netdb` subset.

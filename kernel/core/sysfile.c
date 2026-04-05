@@ -37,6 +37,9 @@ static struct inode* vfs_resolve_parent(char *path, char *name);
 static int remove_path(char *path, int dironly);
 static int tmpfs_alloc_dev(void);
 static int nfs_alloc_dev(void);
+// Phase 1A: fdtable functions
+static int fdtable_expand(struct fdtable*);
+static void fdtable_init(struct fdtable*);
 
 static int
 proc_fd_limit(struct proc *p)
@@ -48,8 +51,198 @@ proc_fd_limit(struct proc *p)
   return (int)p->rlimit_nofile_cur;
 }
 
+//
+// Phase 1A: File Descriptor Table (fdtable) Functions
+// Replacement for legacy static global file-table model.
+// Each process now has its own dynamic fdtable that grows on demand.
+//
+
+#define FDTABLE_INIT_CAPACITY 32  // Start small; grow exponentially
+
+// Initialize a new fdtable with initial capacity.
+static void
+fdtable_init(struct fdtable *ft)
+{
+  ft->entries = (struct file**)kalloc();
+  if(ft->entries == 0)
+    panic("fdtable_init: kalloc failed");
+  memset(ft->entries, 0, PGSIZE);
+  ft->capacity = FDTABLE_INIT_CAPACITY;
+  ft->nfds = 0;
+}
+
+// Expand fdtable by doubling capacity (or add 256 slots, whichever is larger).
+// Returns 0 on success, -1 on failure.
+static int
+fdtable_expand(struct fdtable *ft)
+{
+  int new_capacity;
+  uint new_bytes;
+  struct file **new_entries;
+
+  new_capacity = (ft->capacity > 256) ? (ft->capacity * 2) : (ft->capacity + 256);
+
+  new_bytes = (uint)new_capacity * sizeof(struct file *);
+  if(new_bytes > PGSIZE)
+    return -1;
+
+  new_entries = (struct file**)kalloc();
+  if(new_entries == 0)
+    return -1;
+
+  // Copy existing entries
+  memmove(new_entries, ft->entries, ft->capacity * sizeof(struct file *));
+  memset(&new_entries[ft->capacity], 0,
+         (new_capacity - ft->capacity) * sizeof(struct file *));
+
+  kfree((char*)ft->entries);
+  ft->entries = new_entries;
+  ft->capacity = new_capacity;
+  return 0;
+}
+
+// Allocate a new fdtable for a process.
+struct fdtable*
+fdtable_alloc(void)
+{
+  struct fdtable *ft;
+
+  ft = (struct fdtable*)kalloc();
+  if(ft == 0)
+    return 0;
+
+  memset(ft, 0, PGSIZE);
+  fdtable_init(ft);
+  return ft;
+}
+
+// Free an fdtable and all its file references.
+void
+fdtable_free(struct fdtable *ft)
+{
+  int i;
+  
+  if(ft == 0)
+    return;
+  
+  // Close all open files in this table
+  for(i = 0; i < ft->nfds; i++){
+    if(ft->entries[i]){
+      fileclose(ft->entries[i]);
+      ft->entries[i] = 0;
+    }
+  }
+
+  kfree((char*)ft->entries);
+  kfree((char*)ft);
+}
+
+// Duplicate fdtable from parent during fork.
+// Returns 0 on success, -1 on failure.
+int
+fdtable_dup(struct fdtable *parent_ft, struct fdtable *child_ft)
+{
+  int i;
+
+  if(parent_ft == 0)
+    return -1;
+
+  // Ensure destination capacity and clean inherited default entries.
+  if(child_ft->entries == 0)
+    return -1;
+  if(parent_ft->capacity > child_ft->capacity){
+    if(fdtable_expand(child_ft) < 0)
+      return -1;
+  }
+
+  memset(child_ft->entries, 0, child_ft->capacity * sizeof(struct file *));
+  memset(child_ft->entries, 0, parent_ft->capacity * sizeof(struct file *));
+  child_ft->capacity = parent_ft->capacity;
+  child_ft->nfds = parent_ft->nfds;
+
+  // Duplicate file references
+  for(i = 0; i < parent_ft->nfds; i++){
+    if(parent_ft->entries[i]){
+      child_ft->entries[i] = filedup(parent_ft->entries[i]);
+    }
+  }
+
+  return 0;
+}
+
+// Wrapper for fdtable_expand exported to defs.h
+int
+fdtable_grow(struct fdtable *ft)
+{
+  return fdtable_expand(ft);
+}
+
+//
+// Phase 1A: File descriptor access helpers
+// These abstract the fdtable implementation from syscall code.
+//
+
+// Get file from current process's fdtable by fd number.
+// Returns NULL if fd is invalid or not open.
+static inline struct file*
+fd_get(int fd)
+{
+  struct proc *curproc = myproc();
+  
+  if(curproc == 0 || curproc->fdtable == 0 || fd < 0 || fd >= curproc->fdtable->nfds)
+    return 0;
+  
+  return curproc->fdtable->entries[fd];
+}
+
+// Set file in current process's fdtable at fd.
+// Assumes fd is valid (0 <= fd < nfds).
+static inline void
+fd_set(int fd, struct file *f)
+{
+  struct proc *curproc = myproc();
+  
+  if(curproc && curproc->fdtable && fd >= 0 && fd < curproc->fdtable->nfds)
+    curproc->fdtable->entries[fd] = f;
+}
+
+// Clear file in current process's fdtable at fd.
+static inline void
+fd_clear(int fd)
+{
+  struct proc *curproc = myproc();
+
+  if(curproc == 0 || curproc->fdtable == 0 || fd < 0 || fd >= curproc->fdtable->nfds)
+    return;
+
+  curproc->fdtable->entries[fd] = 0;
+
+  // Keep nfds as a high-water mark without trailing holes.
+  while(curproc->fdtable->nfds > 0 &&
+        curproc->fdtable->entries[curproc->fdtable->nfds - 1] == 0)
+    curproc->fdtable->nfds--;
+}
+
+// Ensure current process fdtable can address slot 'fd'.
+// Returns 0 on success, -1 on failure.
+static int
+fd_ensure_slot(struct proc *p, int fd)
+{
+  if(p == 0 || p->fdtable == 0 || fd < 0)
+    return -1;
+
+  while(fd >= p->fdtable->capacity){
+    if(fdtable_expand(p->fdtable) < 0)
+      return -1;
+  }
+
+  if(fd >= p->fdtable->nfds)
+    p->fdtable->nfds = fd + 1;
+
+  return 0;
+}
+
 #define SELECT_BITS_PER_WORD (8 * sizeof(uint))
-#define SELECT_WORDS ((NOFILE + SELECT_BITS_PER_WORD - 1) / SELECT_BITS_PER_WORD)
 
 #define POLLIN   0x0001
 #define POLLPRI  0x0002
@@ -304,16 +497,24 @@ vfs_resolve_parent(char *path, char *name)
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
+// Phase 1A: Updated to work with dynamic fdtable instead of fixed ofile[].
 static int
 argfd(int n, int *pfd, struct file **pf)
 {
   int fd;
   struct file *f;
+  struct proc *curproc = myproc();
 
   if(argint(n, &fd) < 0)
     return -1;
-  if(fd < 0 || fd >= NOFILE || (f=myproc()->ofile[fd]) == 0)
+  
+  if(curproc == 0 || curproc->fdtable == 0)
     return -1;
+  
+  // Bounds check: fd must be valid and exist in fdtable
+  if(fd < 0 || fd >= curproc->fdtable->nfds || (f = curproc->fdtable->entries[fd]) == 0)
+    return -1;
+  
   if(pfd)
     *pfd = fd;
   if(pf)
@@ -323,6 +524,7 @@ argfd(int n, int *pfd, struct file **pf)
 
 // Allocate a file descriptor for the given file.
 // Takes over file reference from caller on success.
+// Phase 1A: Uses dynamic fdtable instead of global ftable array.
 static int
 fdalloc(struct file *f)
 {
@@ -330,14 +532,27 @@ fdalloc(struct file *f)
   struct proc *curproc = myproc();
   int limit;
 
+  if(curproc == 0 || curproc->fdtable == 0)
+    return -1;
+
   limit = proc_fd_limit(curproc);
 
+  // Ensure capacity can represent the process limit.
+  while(curproc->fdtable->capacity < limit){
+    if(fdtable_expand(curproc->fdtable) < 0)
+      return -1;
+  }
+
+  // Reuse the lowest available descriptor (POSIX-like behavior).
   for(fd = 0; fd < limit; fd++){
-    if(curproc->ofile[fd] == 0){
-      curproc->ofile[fd] = f;
+    if(fd >= curproc->fdtable->nfds)
+      curproc->fdtable->nfds = fd + 1;
+    if(curproc->fdtable->entries[fd] == 0){
+      curproc->fdtable->entries[fd] = f;
       return fd;
     }
   }
+
   return -1;
 }
 
@@ -426,10 +641,10 @@ poll_scan(struct kpollfd *fds, int nfds)
       continue;
     }
 
-    if(fd >= NOFILE || p->ofile[fd] == 0){
+    if(p == 0 || p->fdtable == 0 || fd >= p->fdtable->nfds || p->fdtable->entries[fd] == 0){
       revents = POLLNVAL;
     } else {
-      f = p->ofile[fd];
+      f = p->fdtable->entries[fd];
       mask = fd_ready_events(f);
       revents = mask & (fds[i].events | POLLERR | POLLHUP | POLLNVAL);
     }
@@ -466,7 +681,8 @@ select_set_add(int *set, int fd)
 
 static int
 select_scan(int nfds, int *in_read, int *in_write, int *in_except,
-            int *out_read, int *out_write, int *out_except)
+            int *out_read, int *out_write, int *out_except,
+            int words)
 {
   int fd;
   int ready;
@@ -477,9 +693,9 @@ select_scan(int nfds, int *in_read, int *in_write, int *in_except,
   ready = 0;
   p = myproc();
 
-  memset(out_read, 0, SELECT_WORDS * sizeof(int));
-  memset(out_write, 0, SELECT_WORDS * sizeof(int));
-  memset(out_except, 0, SELECT_WORDS * sizeof(int));
+  memset(out_read, 0, words * sizeof(int));
+  memset(out_write, 0, words * sizeof(int));
+  memset(out_except, 0, words * sizeof(int));
 
   for(fd = 0; fd < nfds; fd++){
     if((!in_read || !select_set_has(in_read, fd)) &&
@@ -487,7 +703,7 @@ select_scan(int nfds, int *in_read, int *in_write, int *in_except,
        (!in_except || !select_set_has(in_except, fd)))
       continue;
 
-    if(fd >= NOFILE || p->ofile[fd] == 0){
+    if(p == 0 || p->fdtable == 0 || fd >= p->fdtable->nfds || p->fdtable->entries[fd] == 0){
       if(in_except && select_set_has(in_except, fd)){
         select_set_add(out_except, fd);
         ready++;
@@ -495,7 +711,7 @@ select_scan(int nfds, int *in_read, int *in_write, int *in_except,
       continue;
     }
 
-    f = p->ofile[fd];
+    f = p->fdtable->entries[fd];
     mask = fd_ready_events(f);
 
     if(in_read && select_set_has(in_read, fd) && (mask & (POLLIN | POLLHUP | POLLERR))){
@@ -617,7 +833,7 @@ sys_close(void)
 
   if(argfd(0, &fd, &f) < 0)
     return -1;
-  myproc()->ofile[fd] = 0;
+  fd_clear(fd);
   fileclose(f);
   return 0;
 }
@@ -1122,7 +1338,7 @@ sys_open(void)
 
   if(ip->type == T_DEV && ip->major == PTYDEV){
     if(pty_open(f, ip->minor) < 0){
-      myproc()->ofile[fd] = 0;
+      fd_clear(fd);
       fileclose(f);
       iunlockput(ip);
       end_op();
@@ -1135,7 +1351,7 @@ sys_open(void)
     ops = vfs_dev_vops(ip->dev);
     if(ops && ops->truncate){
       if(ops->truncate(ip) < 0){
-        myproc()->ofile[fd] = 0;
+        fd_clear(fd);
         fileclose(f);
         iunlockput(ip);
         end_op();
@@ -1592,7 +1808,7 @@ sys_umount(void)
 int
 sys_exec(void)
 {
-  char *path, *argv[MAXARG];
+  char *path, *argv[EXEC_ARGC_MAX];
   int i;
   uint uargv, uarg;
 
@@ -1629,7 +1845,7 @@ sys_pipe(void)
   fd0 = -1;
   if((fd0 = fdalloc(rf)) < 0 || (fd1 = fdalloc(wf)) < 0){
     if(fd0 >= 0)
-      myproc()->ofile[fd0] = 0;
+      fd_clear(fd0);
     fileclose(rf);
     fileclose(wf);
     return -1;
@@ -1700,57 +1916,101 @@ int
 sys_select(void)
 {
   int nfds;
+  int words;
+  int bytes;
   int read_addr;
   int write_addr;
   int except_addr;
   int timeout_addr;
-  int in_read[SELECT_WORDS];
-  int in_write[SELECT_WORDS];
-  int in_except[SELECT_WORDS];
-  int out_read[SELECT_WORDS];
-  int out_write[SELECT_WORDS];
-  int out_except[SELECT_WORDS];
+  int *buf;
+  int *in_read;
+  int *in_write;
+  int *in_except;
+  int *out_read;
+  int *out_write;
+  int *out_except;
   int timeout_ticks;
   int timeout_ms;
   uint start;
   uint now;
   int ready;
   struct ktimeval *tv;
+  struct proc *curproc;
 
   if(argint(0, &nfds) < 0 || argint(1, &read_addr) < 0 || argint(2, &write_addr) < 0 ||
      argint(3, &except_addr) < 0 || argint(4, &timeout_addr) < 0)
     return -1;
 
-  if(nfds < 0 || nfds > NOFILE)
+  curproc = myproc();
+  if(nfds < 0 || curproc == 0 || nfds > proc_fd_limit(curproc))
     return -1;
 
-  memset(in_read, 0, sizeof(in_read));
-  memset(in_write, 0, sizeof(in_write));
-  memset(in_except, 0, sizeof(in_except));
+  words = (nfds + SELECT_BITS_PER_WORD - 1) / SELECT_BITS_PER_WORD;
+  bytes = words * sizeof(int);
+
+  // Pack six fd-set bitmaps into one kmalloc buffer.
+  if(words == 0)
+    buf = 0;
+  else {
+    buf = (int*)kmalloc((uint)(6 * bytes));
+    if(buf == 0)
+      return -1;
+  }
+
+  in_read = buf;
+  in_write = buf ? (buf + words) : 0;
+  in_except = buf ? (buf + 2 * words) : 0;
+  out_read = buf ? (buf + 3 * words) : 0;
+  out_write = buf ? (buf + 4 * words) : 0;
+  out_except = buf ? (buf + 5 * words) : 0;
+
+  if(words > 0){
+    memset(in_read, 0, bytes);
+    memset(in_write, 0, bytes);
+    memset(in_except, 0, bytes);
+  }
 
   if(read_addr){
-    if((uint)read_addr >= myproc()->sz || (uint)read_addr + sizeof(in_read) > myproc()->sz)
+    if((uint)read_addr >= myproc()->sz || (uint)read_addr + bytes > myproc()->sz){
+      if(buf)
+        kmalloc_free(buf);
       return -1;
-    memmove(in_read, (void*)read_addr, sizeof(in_read));
+    }
+    if(bytes > 0)
+      memmove(in_read, (void*)read_addr, bytes);
   }
   if(write_addr){
-    if((uint)write_addr >= myproc()->sz || (uint)write_addr + sizeof(in_write) > myproc()->sz)
+    if((uint)write_addr >= myproc()->sz || (uint)write_addr + bytes > myproc()->sz){
+      if(buf)
+        kmalloc_free(buf);
       return -1;
-    memmove(in_write, (void*)write_addr, sizeof(in_write));
+    }
+    if(bytes > 0)
+      memmove(in_write, (void*)write_addr, bytes);
   }
   if(except_addr){
-    if((uint)except_addr >= myproc()->sz || (uint)except_addr + sizeof(in_except) > myproc()->sz)
+    if((uint)except_addr >= myproc()->sz || (uint)except_addr + bytes > myproc()->sz){
+      if(buf)
+        kmalloc_free(buf);
       return -1;
-    memmove(in_except, (void*)except_addr, sizeof(in_except));
+    }
+    if(bytes > 0)
+      memmove(in_except, (void*)except_addr, bytes);
   }
 
   timeout_ticks = -1;
   if(timeout_addr){
-    if((uint)timeout_addr >= myproc()->sz || (uint)timeout_addr + sizeof(*tv) > myproc()->sz)
+    if((uint)timeout_addr >= myproc()->sz || (uint)timeout_addr + sizeof(*tv) > myproc()->sz){
+      if(buf)
+        kmalloc_free(buf);
       return -1;
+    }
     tv = (struct ktimeval*)timeout_addr;
-    if(tv->tv_sec < 0 || tv->tv_usec < 0 || tv->tv_usec >= 1000000)
+    if(tv->tv_sec < 0 || tv->tv_usec < 0 || tv->tv_usec >= 1000000){
+      if(buf)
+        kmalloc_free(buf);
       return -1;
+    }
     timeout_ms = tv->tv_sec * 1000 + (tv->tv_usec + 999) / 1000;
     timeout_ticks = timeout_ms_to_ticks(timeout_ms);
   }
@@ -1766,41 +2026,51 @@ sys_select(void)
                         except_addr ? in_except : 0,
                         out_read,
                         out_write,
-                        out_except);
+                        out_except,
+                        words);
     if(ready > 0){
-      if(read_addr)
-        memmove((void*)read_addr, out_read, sizeof(out_read));
-      if(write_addr)
-        memmove((void*)write_addr, out_write, sizeof(out_write));
-      if(except_addr)
-        memmove((void*)except_addr, out_except, sizeof(out_except));
+      if(read_addr && bytes > 0)
+        memmove((void*)read_addr, out_read, bytes);
+      if(write_addr && bytes > 0)
+        memmove((void*)write_addr, out_write, bytes);
+      if(except_addr && bytes > 0)
+        memmove((void*)except_addr, out_except, bytes);
+      if(buf)
+        kmalloc_free(buf);
       return ready;
     }
 
     if(timeout_addr && timeout_ticks == 0){
-      if(read_addr)
-        memset((void*)read_addr, 0, sizeof(out_read));
-      if(write_addr)
-        memset((void*)write_addr, 0, sizeof(out_write));
-      if(except_addr)
-        memset((void*)except_addr, 0, sizeof(out_except));
+      if(read_addr && bytes > 0)
+        memset((void*)read_addr, 0, bytes);
+      if(write_addr && bytes > 0)
+        memset((void*)write_addr, 0, bytes);
+      if(except_addr && bytes > 0)
+        memset((void*)except_addr, 0, bytes);
+      if(buf)
+        kmalloc_free(buf);
       return 0;
     }
 
-    if(myproc()->killed)
+    if(myproc()->killed){
+      if(buf)
+        kmalloc_free(buf);
       return -1;
+    }
 
     if(timeout_ticks >= 0){
       acquire(&tickslock);
       now = ticks;
       if(now - start >= (uint)timeout_ticks){
         release(&tickslock);
-        if(read_addr)
-          memset((void*)read_addr, 0, sizeof(out_read));
-        if(write_addr)
-          memset((void*)write_addr, 0, sizeof(out_write));
-        if(except_addr)
-          memset((void*)except_addr, 0, sizeof(out_except));
+        if(read_addr && bytes > 0)
+          memset((void*)read_addr, 0, bytes);
+        if(write_addr && bytes > 0)
+          memset((void*)write_addr, 0, bytes);
+        if(except_addr && bytes > 0)
+          memset((void*)except_addr, 0, bytes);
+        if(buf)
+          kmalloc_free(buf);
         return 0;
       }
       sleep(&ticks, &tickslock);
@@ -1878,24 +2148,24 @@ sys_dup2(void)
     return -1;
 
   // Validate newfd
-  if(newfd < 0 || newfd >= NOFILE)
+  if(newfd < 0 || newfd >= proc_fd_limit(curproc))
     return -1;
 
   // If oldfd == newfd, just return newfd (no-op per POSIX)
   if(oldfd == newfd)
     return newfd;
 
-  if(newfd >= proc_fd_limit(curproc))
+  if(fd_ensure_slot(curproc, newfd) < 0)
     return -1;
 
   // If newfd is already open, close it first
-  if(curproc->ofile[newfd] != 0){
-    fileclose(curproc->ofile[newfd]);
-    curproc->ofile[newfd] = 0;
+  if(curproc->fdtable->entries[newfd] != 0){
+    fileclose(curproc->fdtable->entries[newfd]);
+    curproc->fdtable->entries[newfd] = 0;
   }
 
   // Duplicate the file reference
-  curproc->ofile[newfd] = f;
+  curproc->fdtable->entries[newfd] = f;
   filedup(f);
 
   return newfd;
@@ -1920,12 +2190,14 @@ sys_fcntl(void)
   case 0: // F_DUPFD - duplicate fd to lowest available >= arg
     if(argint(2, &arg) < 0)
       return -1;
-    if(arg < 0 || arg >= NOFILE)
+    if(arg < 0 || arg >= proc_fd_limit(curproc))
       return -1;
     // Find lowest available fd >= arg
     for(int i = arg; i < proc_fd_limit(curproc); i++){
-      if(curproc->ofile[i] == 0){
-        curproc->ofile[i] = f;
+      if(fd_ensure_slot(curproc, i) < 0)
+        return -1;
+      if(curproc->fdtable->entries[i] == 0){
+        curproc->fdtable->entries[i] = f;
         filedup(f);
         return i;
       }
@@ -1967,11 +2239,13 @@ sys_fcntl(void)
   case 1030: // F_DUPFD_CLOEXEC - duplicate with close-on-exec
     if(argint(2, &arg) < 0)
       return -1;
-    if(arg < 0 || arg >= NOFILE)
+    if(arg < 0 || arg >= proc_fd_limit(curproc))
       return -1;
     for(int i = arg; i < proc_fd_limit(curproc); i++){
-      if(curproc->ofile[i] == 0){
-        curproc->ofile[i] = f;
+      if(fd_ensure_slot(curproc, i) < 0)
+        return -1;
+      if(curproc->fdtable->entries[i] == 0){
+        curproc->fdtable->entries[i] = f;
         filedup(f);
         // TODO: set FD_CLOEXEC flag when implemented
         return i;

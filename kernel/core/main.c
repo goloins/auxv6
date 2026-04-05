@@ -17,7 +17,7 @@ extern char end[]; // first address after kernel loaded from ELF file
 int
 main(void)
 {
-  kinit1(end, P2V(4*1024*1024)); // phys page allocator
+  kinit1(end, P2V(BOOT_EARLY_PHYSTOP)); // phys page allocator (early mapped window)
   kvmalloc();      // kernel page table
   mpinit();        // detect other processors
   lapicinit();     // interrupt controller
@@ -34,6 +34,7 @@ main(void)
   tvinit();        // trap vectors
   bdevinit();      // block device switch
   binit();         // buffer cache
+  kmalloc_init();  // Phase 1A: kernel malloc allocator
   fileinit();      // file table
   ideinit();       // disk
   ahci_init();     // AHCI SATA controllers
@@ -43,7 +44,7 @@ main(void)
   netdev_init();   // network interfaces
   socket_init();   // socket table
   startothers();   // start other processors
-  kinit2(P2V(4*1024*1024), P2V(PHYSTOP)); // must come after startothers()
+  kinit2(P2V(BOOT_EARLY_PHYSTOP), P2V(PHYSTOP)); // must come after startothers()
   console_gfx_late_enable(); // framebuffer mirror can allocate after full memory is online
   lockdep_enable(); // enable lockdep after early bring-up to avoid pre-console hard-fail
   userinit();      // first user process
@@ -111,13 +112,20 @@ startothers(void)
 // Page directories (and page tables) must start on page boundaries,
 // hence the __aligned__ attribute.
 // PTE_PS in a page directory entry enables 4Mbyte pages.
+// Keep this in sync with BOOT_EARLY_PHYSTOP in memlayout.h.
+
+#if (BOOT_EARLY_PHYSTOP != (8*1024*1024))
+#error "entrypgdir initializer assumes BOOT_EARLY_PHYSTOP == 8MB"
+#endif
 
 __attribute__((__aligned__(PGSIZE)))
 pde_t entrypgdir[NPDENTRIES] = {
-  // Map VA's [0, 4MB) to PA's [0, 4MB)
+  // Map VA's [0, 8MB) to PA's [0, 8MB)
   [0] = (0) | PTE_P | PTE_W | PTE_PS,
-  // Map VA's [KERNBASE, KERNBASE+4MB) to PA's [0, 4MB)
+  [1] = (0x00400000) | PTE_P | PTE_W | PTE_PS,
+  // Map VA's [KERNBASE, KERNBASE+8MB) to PA's [0, 8MB)
   [KERNBASE>>PDXSHIFT] = (0) | PTE_P | PTE_W | PTE_PS,
+  [(KERNBASE>>PDXSHIFT) + 1] = (0x00400000) | PTE_P | PTE_W | PTE_PS,
 };
 
 //PAGEBREAK!

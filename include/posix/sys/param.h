@@ -23,6 +23,7 @@
 
 /* I/O sizes */
 #ifndef PIPE_BUF
+/* POSIX minimum atomic pipe write size. Kernel pipe capacity may be larger. */
 #define PIPE_BUF    512
 #endif
 #ifndef NOFILE
