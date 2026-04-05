@@ -216,9 +216,13 @@ in-tree by widening existing kernel/user constants in place:
 - `VFS_MOUNT_PATH_MAX` and `MOUNTINFO_PATH_MAX` now align to `PATH_MAX`.
 - Mount table/query capacity is raised from 8 to 32 (`VFS_MOUNTS_MAX` and
   `MOUNTINFO_MAX`) so the wider metadata ABI is usable at higher mount counts.
-- `sys_mount` option payload handling is hardened: maximum payload is now one
-  page minus NUL (`MOUNT_DATA_MAX = PGSIZE-1`), with heap-backed staging to
+- `sys_mount` option payload handling is hardened: maximum payload is now driven
+  by shared policy (`MOUNT_DATA_MAX` in `limits.h`, currently `PATH_MAX-1`),
+  with heap-backed staging to
   avoid growing kernel stack pressure from large mount options.
+- Mount-capacity policy is now centralized through `MOUNT_MAX` in `limits.h`,
+  with both kernel (`VFS_MOUNTS_MAX`) and userspace (`MOUNTINFO_MAX`) mount
+  ceilings wired to the same shared constant.
 - Network-info tables are widened and centralized to reduce legacy fixed-limit
   truncation: shared networking capacity constants (`NET_ROUTE_TABLE_MAX` and
   `NET_ARP_CACHE_MAX` in `include/net.h`) are set to 128 and consumed by route/

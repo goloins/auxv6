@@ -11,7 +11,7 @@ struct stat;
 
 #define VFS_NAME_MAX (NAME_MAX + 1)
 #define VFS_MOUNT_PATH_MAX PATH_MAX
-#define VFS_MOUNTS_MAX 32
+#define VFS_MOUNTS_MAX MOUNT_MAX
 
 #define VFS_CAP_READ     0x0001
 #define VFS_CAP_WRITE    0x0002

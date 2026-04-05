@@ -19,6 +19,8 @@
 #define ARG_MAX      4096
 #define OPEN_MAX     16
 #define CHILD_MAX    64
+#define MOUNT_MAX    32
+#define MOUNT_DATA_MAX (PATH_MAX - 1)
 
 /* Character type */
 #define CHAR_BIT     8

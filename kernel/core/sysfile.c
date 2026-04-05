@@ -22,7 +22,6 @@
 #define DEFAULT_CREATE_DIR_MODE (M_IRUSR | M_IWUSR | M_IXUSR | M_IRGRP | M_IXGRP | M_IROTH | M_IXOTH)
 #define DEFAULT_CREATE_DEV_MODE (M_IRUSR | M_IWUSR | M_IRGRP | M_IWGRP | M_IROTH | M_IWOTH)
 #define GETCWD_MAX_DEPTH 32
-#define MOUNT_DATA_MAX (PGSIZE - 1)
 
 static int create_default_mode(short type);
 static int create_device_mode(int mode);
