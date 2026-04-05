@@ -24,6 +24,9 @@ initlock(struct spinlock *lk, char *name)
 void
 acquire(struct spinlock *lk)
 {
+  uint iter;
+  uint prev_iter;
+
   pushcli(); // disable interrupts to avoid deadlock.
   if(holding(lk))
     panic("acquire");
@@ -32,8 +35,30 @@ acquire(struct spinlock *lk)
   // The 'pause' hint tells the CPU this is a spin-wait loop, which
   // reduces bus traffic and power consumption on HT/SMT cores and
   // avoids a memory-order violation penalty when the lock is released.
-  while(xchg(&lk->locked, 1) != 0)
+  iter = 0;
+  prev_iter = 0;
+  while(xchg(&lk->locked, 1) != 0) {
+    iter++;
     asm volatile("pause");
+
+    // Spinlock timeout watchdog: if we've been spinning for way too long,
+    // force diagnostic output to UART even though interrupts are disabled.
+    // This ensures we never have a truly silent deadlock.
+    if(iter > 100000000 && (iter - prev_iter) > 50000000) {
+      prev_iter = iter;
+      // Force output to UART (bypassing all locks)
+      uartputc('S');
+      uartputc('P');
+      uartputc('I');
+      uartputc('N');
+      uartputc(':');
+      uartputc(' ');
+      // Output lock name (first 4 chars)
+      uartputc(lk->name ? lk->name[0] : '?');
+      uartputc(lk->name && lk->name[1] ? lk->name[1] : '?');
+      uartputc('\n');
+    }
+  }
 
   // Tell the C compiler and the processor to not move loads or stores
   // past this point, to ensure that the critical section's memory

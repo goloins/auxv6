@@ -37,7 +37,7 @@
  * --------------------------------------------------------------------- */
 
 #define MAX_PROCS        128          /* matches kernel NPROC               */
-#define REFRESH_TICKS    300          /* default refresh interval (3s@100Hz)*/
+#define REFRESH_TICKS    100          /* default refresh interval (1s@100Hz) */
 #define HEADER_LINES     5            /* rows consumed by the summary header */
 #define PS_BUF_SIZE      8192         /* buffer for /proc/ps read           */
 #define MEMINFO_BUF      256
@@ -759,28 +759,25 @@ main(void)
       render(cur_ut, la1, la5, la15, nrun, ntot, mem_total, mem_free);
     }
 
-    /* Poll for input during the refresh interval */
+    /* Sleep for the refresh interval, checking for input once at the start */
     {
-      int waited = 0;
-      while(waited < REFRESH_TICKS && !g_quit && !g_winch){
-        key = term_poll_key(&ts, 100);  /* 100ms slices */
-        waited += 10;  /* ~100ms = 10 ticks at 100Hz */
-
-        if(key <= 0) continue;
-
+      key = term_poll_key(&ts, 0);  /* Non-blocking check for input */
+      if(key > 0){
         switch(key){
         case 'q': case 'Q':
           g_quit = 1;
           break;
         case 'r': case 'R': case ' ':
-          waited = REFRESH_TICKS;  /* break out of wait loop → refresh now */
-          break;
+          break;  /* Refresh immediately by re-rendering */
         case 'h': case '?':
           show_help_flag = !show_help_flag;
-          /* Force re-render immediately */
-          waited = REFRESH_TICKS;
           break;
         }
+      }
+      
+      /* Sleep for 1 second if no forced refresh */
+      if(key != 'r' && key != 'R' && key != ' '){
+        sleep(1);
       }
     }
   }

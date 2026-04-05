@@ -11,7 +11,7 @@ top
 ## Duty
 Provides a full-screen, continuously-updated view of the running system.
 Displays a system summary (uptime, load averages, memory) followed by a
-process table sorted by CPU usage.  The display refreshes every ~3 seconds.
+process table sorted by CPU usage.  The display refreshes every ~1 second.
 
 ## Data Sources
 - `/proc/ps` — per-process snapshot: PID, state, virtual size, cumulative CPU
@@ -58,4 +58,4 @@ ps(1), free(1)
 ## Source Audit
 - Source files: user/top.c, user/libterm.c
 - Header: include/libterm.h
-- Last updated: 2026-04-03
+- Last updated: 2026-04-05

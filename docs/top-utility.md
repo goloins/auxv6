@@ -42,8 +42,8 @@ Full-screen process monitor.  Refresh cycle:
    `cpu_pct_x10 = (delta_cticks * 1000) / elapsed_ticks` per process.
 6. Insertion-sort by CPU% descending.
 7. Render header (uptime, load, memory) and process rows via libterm.
-8. Poll for keyboard input in 100 ms slices until the 3-second interval
-   expires or the user presses a key.
+8. Poll for keyboard input in short slices against an uptime-tick budget
+   until the 1-second interval expires or the user presses a key.
 
 ### Kernel changes
 
