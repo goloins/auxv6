@@ -3,7 +3,7 @@
 #include "../../include/spinlock.h"
 #include "../../include/net.h"
 
-#define NROUTE 32
+#define NROUTE 128
 
 struct {
 	struct spinlock lock;

@@ -40,8 +40,8 @@ typedef struct {
 #define MOUNTINFO_MAX 32
 #define NETIFINFO_NAME_MAX 16
 #define NETIFINFO_MAX 16
-#define ROUTEINFO_MAX 32
-#define ARPINFO_MAX 32
+#define ROUTEINFO_MAX 128
+#define ARPINFO_MAX 128
 
 #define ARP_FLAG_PENDING  0x1
 #define ARP_FLAG_RESOLVED 0x2
