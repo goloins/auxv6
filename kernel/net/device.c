@@ -31,6 +31,23 @@ netdev_init(void)
 	ax88179_pci_init();
 	pcnet_init();
 	rtl8111_init();
+	rtl8125_init();
+	rtl8139_init();
+	tg3_init();
+	bnxt_init();
+	atlantic_init();
+	skge_init();
+	via_rhine_init();
+	igb_init();
+	ixgbe_init();
+	i40e_init();
+	ice_init();
+	bnx2_init();
+	bnx2x_init();
+	mlx4_en_init();
+	mlx5e_init();
+	ena_init();
+	alx_init();
 	vmxnet3_init();
 	netvsc_init();
 }

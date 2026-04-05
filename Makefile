@@ -32,6 +32,23 @@ OBJS = \
 	kernel/driver/ax88179_pci.o\
 	kernel/driver/pcnet.o\
 	kernel/driver/rtl8111.o\
+	kernel/driver/rtl8125.o\
+	kernel/driver/rtl8139.o\
+	kernel/driver/tg3.o\
+	kernel/driver/bnxt.o\
+	kernel/driver/atlantic.o\
+	kernel/driver/skge.o\
+	kernel/driver/via_rhine.o\
+	kernel/driver/igb.o\
+	kernel/driver/ixgbe.o\
+	kernel/driver/i40e.o\
+	kernel/driver/ice.o\
+	kernel/driver/bnx2.o\
+	kernel/driver/bnx2x.o\
+	kernel/driver/mlx4_en.o\
+	kernel/driver/mlx5e.o\
+	kernel/driver/ena.o\
+	kernel/driver/alx.o\
 	kernel/driver/vmxnet3.o\
 	kernel/driver/netvsc.o\
 	kernel/driver/loop.o\

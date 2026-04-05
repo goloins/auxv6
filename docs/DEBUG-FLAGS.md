@@ -398,7 +398,7 @@ Edit `include/defs.h` directly:
 ### Default (Quiet Boot) - `AUXV6_DEBUG=0`
 ```
 rtl8111: attached rtl0 irq=27
-i219: attached wm0 (stub, TX/RX not implemented yet)
+i219: attached wm0 (polling TX/RX)
 virtio_net: attached vtnet0 irq=11
 net: attached lo0 (if1)
 mount: skip /mnt (dev /dev/hdb not present)
@@ -418,10 +418,10 @@ loop: initialized 8 loop devices (minor 7-14)
 rtl8111: initializing driver
 rtl8111: found 8169 at 0:3.0 irq=27 regs=0xffffd000a3e00000
 rtl8111: attached rtl0 irq=27
-i219: initializing driver stub
+i219: initializing driver
 i219: found at 0:5.0 devid=15fb rev=2 irq=20
 i219: MAC XX:XX:XX:XX:XX:XX
-i219: attached wm0 (stub, TX/RX not implemented yet)
+i219: attached wm0 (polling TX/RX)
 virtio_net: initializing driver
 virtio_net: MAC 52:54:00:12:34:56
 virtio: created queue 0 with 256 entries

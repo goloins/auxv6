@@ -47,7 +47,7 @@ cat /proc/net_dev   # raw interface counter dump, C-locale scaffolding, and corr
 | Userland docs/manpages | 82% | `man` now renders richer markdown and the tree ships 90+ documented utilities, but coverage depth and maintenance discipline still need work |
 | Graphics / framebuffer console | 72% | Framebuffer core, display registry, builtin font/render path, rich `/proc/gfxstats`, virtio-gpu scanout discovery, display-sized framebuffer allocation, display-derived readable boot geometry, stable mirror behavior, ownership plumbing for server7, and recent sync-path speedups are landed; CGA still owns the canonical console path, virtio-gpu still uses whole-frame uploads, and no `/dev/fb0` or `/dev/dri/card0` ABI exists yet |
 | procfs | 84% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`, `/proc/meminfo`, `/proc/ps`, `/proc/loadavg`, `/proc/schedstat`, `/proc/mountstats`, `/proc/gfxstats`, `/proc/lsof`, `/proc/fdlimits`, `/proc/server7`, `/proc/bdev_table`, `/proc/net_tcp`, `/proc/net_udp`, `/proc/net_dev`; breadth is now solid and now includes low-cost scheduler counters plus descriptor-limit observability, though deeper per-process drill-down can still improve |
-| Real NICs | 60% | E1000, PCNET, and RTL8111 have full ifnet integration; virtio-net continues to improve; VMXnet3 has a basic polling datapath; netvsc, I219-V, I226-V, and AX88179 PCI remain stub-grade |
+| Real NICs | 77% | E1000, PCNET, RTL8111, I219-V, I226-V, and AX88179 PCI provide ifnet TX/RX datapaths (polling completion model), VMXnet3 has a basic polling datapath, and additional bring-up stubs are now in-tree for RTL8125, RTL8139/8139C/RTL8110S, BCM5700/5719/5720 (tg3), BCM57412/57416 (bnxt), AQC107/AQC108 (atlantic), Marvell 88E8001 (skge), VIA VT6103 (Rhine), Intel igb/ixgbe/i40e/ice families, Broadcom bnx2/bnx2x, Mellanox mlx4_en/mlx5e, Amazon ENA, and Atheros alx/atl1c; netvsc remains VMBus-gated until transport support lands |
 | Device node management | 90% | `devman -s` creates `/dev` nodes from kernel inventory; `/etc/devman.conf` now carries full glob-pattern→mode policy rules; `devman -c` removes stale nodes; `devman -d` daemonizes with double-fork+setsid and periodic cleanup loop; hotplug event fd remains the only open item |
 | Modern storage | 91% | AHCI now has interrupt-driven completions, slot allocation, telemetry, and fault-injection hooks; NVMe correctness hardening complete (polled-only IRQ model, monotonic CID counter, recovery memory-safety, shutdown notification, LBA-size guard), dev-number collision with loop devices fixed, and ext2/ext2fs mount alias validated on `/dev/nda`; NVMe timeout/reset recovery path is in place |
 
@@ -94,6 +94,9 @@ cat /proc/net_dev   # raw interface counter dump, C-locale scaffolding, and corr
 - `sys_mount` payload staging is now modernized for safety and headroom: mount-option payload cap is centralized as shared policy (`MOUNT_DATA_MAX` in `limits.h`, currently `PATH_MAX-1`) and staging moved from fixed kernel-stack buffers to heap-backed temporary storage, reducing stack pressure while allowing larger mount option strings.
 - Mount-capacity policy is now centralized: shared `MOUNT_MAX` in `limits.h` now drives both kernel mount-table capacity (`VFS_MOUNTS_MAX`) and userspace mount query capacity (`MOUNTINFO_MAX`), removing duplicate hardcoded ceilings.
 - Network-info fixed-limit cleanup is now landed: route and ARP capacities are raised from 32 to 128 and centralized in shared networking policy constants (`NET_ROUTE_TABLE_MAX`, `NET_ARP_CACHE_MAX` in `include/net.h`), with matching userspace query ceilings (`ROUTEINFO_MAX`, `ARPINFO_MAX`) to avoid early truncation in tooling.
+- Real-NIC coverage expanded with a new stub-driver tranche: `rtl8139` (RTL8139/8139C/RTL8110S), `rtl8125`, `tg3` (BCM5700/5719/5720), `bnxt` (BCM57412/57416), `atlantic` (AQC107/AQC108), `skge` (88E8001 family), and `via_rhine` (VT6103 family).
+- Follow-on stub tranche landed for additional common 1999-2020 families: `igb`, `ixgbe`, `i40e`, `ice`, `bnx2`, `bnx2x`, `mlx4_en`, `mlx5e`, `ena`, and `alx`.
+- Driver-registration wiring was updated end-to-end for the new NIC tranche: build integration in `Makefile`, init declarations in `include/defs.h`, runtime registration in `kernel/net/device.c`, and vendor IDs added in `include/pci.h` (Broadcom/Marvell/VIA/Aquantia).
 - P1 descriptor-ceiling modernization is now landed as a subsystem uplift rather than a raw constant bump: per-process dynamic `fdtable` storage is in-tree, policy is split into `NOFILE_DEFAULT` (soft/inherited) and `NOFILE_HARD` (setrlimit ceiling), legacy `NFILE` naming has been removed from live policy surfaces, and descriptor-limit enforcement is unified across `select(2)`, `poll(2)`, socket allocation, and rlimit paths.
 - P1 descriptor-ceiling validation is green: `fdtest(1)` passes 16/16 in guest, including `FD_CLOEXEC`, `dup`/`dup2`, select/poll limit handling, and seek ABI integration checks.
 - Next part of P1-A is ABI cleanup (not more ceiling brute-force): descriptor-limit observability is now landed via `/proc/fdlimits`; continue migrating any remaining fixed-size userspace interfaces that still carry legacy tiny bounds.
@@ -597,6 +600,15 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 - [x] ARP request/reply handling
 - [x] Packet queuing pending resolution
 
+#### 4.3 NIC Stub Coverage Expansion [COMPLETE]
+**Status:** Implemented 2026-04-05  
+**Files:** `kernel/driver/rtl8139.c`, `kernel/driver/rtl8125.c`, `kernel/driver/tg3.c`, `kernel/driver/bnxt.c`, `kernel/driver/atlantic.c`, `kernel/driver/skge.c`, `kernel/driver/via_rhine.c`, `kernel/net/device.c`, `include/defs.h`, `include/pci.h`, `Makefile`  
+**Tasks:**
+- [x] Add polling-datapath stubs for Realtek RTL8139/RTL8139C/RTL8110S and RTL8125 families
+- [x] Add polling-datapath stubs for Broadcom tg3 (BCM5700/5719/5720) and bnxt (BCM57412/57416)
+- [x] Add polling-datapath stubs for Aquantia Atlantic (AQC107/AQC108), Marvell Yukon (88E8001 family), and VIA Rhine (VT6103 family)
+- [x] Wire init paths/build registration and expand PCI vendor constants used by the new probes
+
 ---
 
 ### POSIX / Libc Milestones (Completed)
@@ -634,12 +646,19 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 | `kernel/driver/virtio_net.c` | Initial virtio network driver with RX/TX integration |
 | `kernel/driver/virtio_blk.c` | Virtio block driver with blockdev integration |
 | `kernel/driver/e1000.c` | Intel E1000 Gigabit Ethernet with full ifnet integration |
-| `kernel/driver/i219.c` | Intel I219-V/e1000e-style attach stub (PCI match, MMIO map, MAC/link read, ifnet registration) |
-| `kernel/driver/i226.c` | Intel I226-V/igc-style attach stub (PCI match, MMIO map, MAC/link read, ifnet registration) |
-| `kernel/driver/ax88179_pci.c` | ASIX AX88179 PCI-only stub scaffold (no xHCI/USB dependency) |
+| `kernel/driver/i219.c` | Intel I219-V/e1000e-style driver with descriptor-ring TX/RX and polling completions |
+| `kernel/driver/i226.c` | Intel I226-V/igc-style driver with descriptor-ring TX/RX and polling completions |
+| `kernel/driver/ax88179_pci.c` | ASIX AX88179 PCI-oriented driver with descriptor-ring TX/RX and polling completions |
 | `kernel/driver/pcnet.c` | AMD PCNET-PCI II with full ifnet integration |
 | `kernel/driver/rtl8111.c` | Realtek RTL8111/8168 Gigabit Ethernet with full ifnet integration |
-| `kernel/driver/vmxnet3.c` | VMware VMXnet3 paravirtualized NIC stub |
+| `kernel/driver/rtl8139.c` | Realtek RTL8139/RTL8139C/RTL8110S legacy + C+ polling datapath stub |
+| `kernel/driver/rtl8125.c` | Realtek RTL8125 2.5GbE polling datapath stub |
+| `kernel/driver/tg3.c` | Broadcom BCM5700/5719/5720 (tg3-family) polling datapath stub |
+| `kernel/driver/bnxt.c` | Broadcom BCM57412/57416 (bnxt-family) HWRM-based polling datapath stub |
+| `kernel/driver/atlantic.c` | Aquantia AQC107/AQC108 (Atlantic-family) polling datapath stub |
+| `kernel/driver/skge.c` | Marvell 88E8001/Yukon-family polling datapath stub |
+| `kernel/driver/via_rhine.c` | VIA VT6103/Rhine-family polling datapath stub |
+| `kernel/driver/vmxnet3.c` | VMware VMXnet3 paravirtualized NIC with basic polling datapath |
 | `kernel/driver/netvsc.c` | Microsoft Hyper-V NetVSC paravirtualized NIC stub |
 | `kernel/driver/pty.c` | Dynamic PTY driver backend with multi-slot allocation, per-endpoint state, termios/winsize/ioctl support |
 | `kernel/driver/ahci.c` | AHCI/SATA driver with interrupt-driven DMA read/write and ATAPI read-only path |

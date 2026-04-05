@@ -100,6 +100,10 @@
 #define PCI_VENDOR_QEMU     0x1234
 #define PCI_VENDOR_VIRTIO   0x1AF4
 #define PCI_VENDOR_REALTEK  0x10EC
+#define PCI_VENDOR_BROADCOM 0x14E4
+#define PCI_VENDOR_MARVELL  0x11AB
+#define PCI_VENDOR_VIA      0x1106
+#define PCI_VENDOR_AQUANTIA 0x1D6A
 
 /* Known Device IDs */
 #define PCI_DEVICE_E1000    0x100E  /* Intel 82540EM Gigabit Ethernet */
