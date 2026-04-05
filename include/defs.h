@@ -161,6 +161,7 @@ void            pty_poll_events(struct file *f, int *rd, int *wr, int *err);
 
 // audio_core.c
 void            audio_init(void);
+void            audio_tick(void);
 void            audio_pci_probe_init(void);
 void            audio_intel_ac97_init(void);
 void            audio_realtek_ac97_init(void);
