@@ -520,6 +520,8 @@ _sigtest: user/sigtest
 
 _stackgrowtest: user/stackgrowtest
 	cp user/stackgrowtest _stackgrowtest
+_fdtest: user/fdtest
+	cp user/fdtest _fdtest
 _usertests: user/usertests
 	cp user/usertests _usertests
 
@@ -679,6 +681,7 @@ UPROGS=\
 	_kallocstress\
 	_sigtest\
 	_stackgrowtest\
+	_fdtest\
 	_usertests\
 	_wc\
 	_zombie\
