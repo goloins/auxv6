@@ -658,58 +658,27 @@ struct cpu*
 mycpu(void)
 {
   uchar apicid;
-  uchar apicid2;
-  uchar idx;
   int i;
 
   if(readeflags()&FL_IF)
     panic("mycpu called with interrupts enabled\n");
 
-  // Early bootstrap path: before SMP tables are fully usable, route all
-  // calls to CPU0 to avoid spurious panics that hide real boot output.
+  // Early bootstrap path.
   if(ncpu <= 1)
     return &cpus[0];
 
-  // O(1) reverse lookup through the table built at mpinit().
+  // Keep this lookup read-only and deterministic in runtime paths.
+  // Runtime mutation of APIC-ID maps can turn transient anomalies into
+  // cross-CPU accounting corruption (pushcli/popcli underflow cascades).
   apicid = (uchar)lapicid();
-  idx = apic_cpu_map[apicid];
-  if(idx != 0xff){
-    if((int)idx < ncpu && cpus[idx].apicid == apicid)
-      return &cpus[idx];
-    // Reverse map entry exists but is stale/corrupted; rebuild below.
-    apic_cpu_map[apicid] = 0xff;
-  }
-
-  // Recover if the reverse map entry was clobbered at runtime.
   for(i = 0; i < ncpu; i++){
-    if(cpus[i].apicid == apicid){
-      apic_cpu_map[apicid] = (uchar)i;
+    if((uchar)cpus[i].apicid == apicid)
       return &cpus[i];
-    }
   }
 
-  // Retry once: some virtualized environments can transiently report a
-  // bad APIC ID read under heavy interrupt load.
-  apicid2 = (uchar)lapicid();
-  if(apicid2 != apicid){
-    idx = apic_cpu_map[apicid2];
-    if(idx != 0xff){
-      if((int)idx < ncpu && cpus[idx].apicid == apicid2)
-        return &cpus[idx];
-      apic_cpu_map[apicid2] = 0xff;
-    }
-    for(i = 0; i < ncpu; i++){
-      if(cpus[i].apicid == apicid2){
-        apic_cpu_map[apicid2] = (uchar)i;
-        return &cpus[i];
-      }
-    }
-  }
-
-  cprintf("mycpu: apic lookup failed apicid=%d retry=%d ncpu=%d\n",
-          apicid, apicid2, ncpu);
+  cprintf("mycpu: apic lookup failed apicid=%d ncpu=%d\n", apicid, ncpu);
   panic("unknown apicid\n");
-  return &cpus[idx];
+  return &cpus[0];
 }
 
 // Disable interrupts so that we are not rescheduled

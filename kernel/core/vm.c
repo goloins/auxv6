@@ -12,33 +12,6 @@
 extern char data[];  // defined by kernel.ld
 pde_t *kpgdir;  // for use in scheduler()
 static uint vm_bad_pte_drops;
-static uint vm_kernel_pde_repairs;
-
-static void
-vm_sync_kernel_pdes(pde_t *pgdir)
-{
-  uint i;
-  uint repaired;
-
-  if(pgdir == 0 || kpgdir == 0)
-    return;
-
-  repaired = 0;
-  for(i = PDX(KERNBASE); i < NPDENTRIES; i++){
-    if(pgdir[i] != kpgdir[i]){
-      pgdir[i] = kpgdir[i];
-      repaired++;
-    }
-  }
-
-  if(repaired > 0){
-    vm_kernel_pde_repairs += repaired;
-    if((vm_kernel_pde_repairs & 0x3f) == repaired){
-      cprintf("vm_sync_kernel_pdes: repaired=%u total=%u pgdir=%p\n",
-              repaired, vm_kernel_pde_repairs, pgdir);
-    }
-  }
-}
 
 // Set up CPU's kernel segment descriptors.
 // Run once on entry on each CPU.
@@ -76,9 +49,9 @@ walkpgdir(pde_t *pgdir, const void *va, int alloc)
     if(pa == 0 || pa >= PHYSTOP || pa >= KERNBASE){
       cprintf("walkpgdir: bad pde pgdir=%p va=%p pde=%p raw=%x pa=%x\n",
               pgdir, va, pde, *pde, pa);
-      *pde = 0;
       if(!alloc)
         return 0;
+      *pde = 0;
       pgtab = (pte_t*)kalloc();
       if(pgtab == 0)
         return 0;
@@ -216,9 +189,6 @@ switchuvm(struct proc *p)
     panic("switchuvm: no kstack");
   if(p->pgdir == 0)
     panic("switchuvm: no pgdir");
-
-  // Enforce canonical kernel-half mappings for every process before switch.
-  vm_sync_kernel_pdes(p->pgdir);
 
   pushcli();
   mycpu()->gdt[SEG_TSS] = SEG16(STS_T32A, &mycpu()->ts,
@@ -370,6 +340,7 @@ freevm(pde_t *pgdir)
   uint i;
   uint raw;
   uint pa;
+  uint kpa;
 
   if(pgdir == 0)
     panic("freevm: no pgdir");
@@ -383,6 +354,15 @@ freevm(pde_t *pgdir)
                 pgdir, i, raw, pa);
         pgdir[i] = 0;
         continue;
+      }
+      if(kpgdir && i >= PDX(KERNBASE)){
+        kpa = PTE_ADDR(kpgdir[i]);
+        if(kpa != 0 && kpa == pa){
+          cprintf("freevm: skip aliased kernel pde pgdir=%p idx=%u raw=%x kraw=%x pa=%x\n",
+                  pgdir, i, raw, kpgdir[i], pa);
+          pgdir[i] = 0;
+          continue;
+        }
       }
       kfree(P2V(pa));
       pgdir[i] = 0;

@@ -254,8 +254,8 @@ trap(struct trapframe *tf)
       acquire(&tickslock);
       ticks++;
       current_ticks = ticks;
-      wakeup(&ticks);
       release(&tickslock);
+      wakeup(&ticks);
       ktime_tick(current_ticks);
       // Check all processes for expired alarms
       proc_check_alarms(current_ticks);

@@ -2,10 +2,24 @@
 #include "../../include/defs.h"
 #include "../../include/spinlock.h"
 #include "../../include/net.h"
+#include "../../include/memlayout.h"
 
 static struct spinlock if_lock;
 static struct ifnet *if_list;
 static uint if_next_index;
+static int if_list_poisoned;
+
+static int
+if_ptr_valid(struct ifnet *ifp)
+{
+	if(ifp == 0)
+		return 0;
+	if((uint)ifp < KERNBASE)
+		return 0;
+	if(!kaddr_writable_current_pgdir((char*)ifp))
+		return 0;
+	return 1;
+}
 
 static void
 if_default_input(struct ifnet *ifp, struct mbuf *m)
@@ -21,6 +35,7 @@ netdev_init(void)
 	lockdep_set_rank(&if_lock, LOCK_RANK_DEFAULT, "ifnet");
 	if_list = 0;
 	if_next_index = 1;
+	if_list_poisoned = 0;
 	route_init();
 	arp_init();
 	loopback_attach();
@@ -58,11 +73,29 @@ netdev_poll(void)
 {
 	struct ifnet *snapshot[MAXNETIF];
 	struct ifnet *ifp;
+	struct ifnet *next;
 	int n = 0;
 
+	if(if_list_poisoned)
+		return;
+
 	acquire(&if_lock);
-	for(ifp = if_list; ifp && n < MAXNETIF; ifp = ifp->if_next)
+	for(ifp = if_list; ifp && n < MAXNETIF; ifp = next){
+		if(!if_ptr_valid(ifp)){
+			cprintf("netdev_poll: poison ifp=%p n=%d; disabling poll\n", ifp, n);
+			if_list_poisoned = 1;
+			if_list = 0;
+			break;
+		}
 		snapshot[n++] = ifp;
+		next = ifp->if_next;
+		if(next && !if_ptr_valid(next)){
+			cprintf("netdev_poll: poison next ifp=%p next=%p; truncating\n", ifp, next);
+			ifp->if_next = 0;
+			if_list_poisoned = 1;
+			break;
+		}
+	}
 	release(&if_lock);
 
 	for(int i = 0; i < n; i++){

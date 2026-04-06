@@ -518,6 +518,32 @@ Interpretation:
 - Non-zero `warn_total` currently reflects optional/incomplete surfaces and diagnostic-path
    variability, which are tracked as completeness debt rather than corruption signals.
 
+## Critical Root-Cause Correction (2026-04-06, later)
+
+A regression introduced in VM hardening caused catastrophic page-table ownership
+violations and can directly explain `eip=0`, trap-6-on-valid-text-address,
+and triple-fault reboot loops.
+
+Root cause chain:
+1. `switchuvm()` was calling `vm_sync_kernel_pdes()` to copy kernel-half PDEs
+   from global `kpgdir` into each process `pgdir`.
+2. This made process pgdirs alias kernel page-table pages owned by `kpgdir`.
+3. `freevm()` later walks all present PDEs in a process pgdir and `kfree()`s
+   the PDE-backed page-table pages.
+4. Result: shared kernel page-table pages could be freed from process teardown,
+   corrupting kernel mappings globally.
+
+Concrete fix applied:
+- Removed `vm_sync_kernel_pdes()` and its invocation from `switchuvm()` in
+  [kernel/core/vm.c](kernel/core/vm.c).
+- Kept `walkpgdir(alloc=0)` non-destructive behavior (no PDE mutation on read-only walk).
+
+Why this is a core fix (not a band-aid):
+- Restores page-table ownership invariants: each process only frees page-table
+  pages it owns, and kernel scheduler mappings in `kpgdir` are not aliased into
+  per-process teardown ownership.
+- Directly targets a corruption producer, not only downstream crash sites.
+
 This is the first clean bounded high-stress run after the COW/user-copy cleanup passes and is
 the current stability baseline.
 
@@ -616,6 +642,26 @@ Applied fixes:
       - Rationale: avoids catastrophic panic loops/triple-fault cycles from a
          single poisoned freelist node and preserves runtime to gather upstream
          corruption diagnostics.
+
+11. `kernel/core/kalloc.c` (fail-safe chain handling)
+      - On bad global freelist head in `kalloc_refill_local()`, allocator now
+         stops trusting `r->next` entirely and resets `kmem.freelist = 0`.
+      - Added `poison next` detection: if a popped valid run has invalid `next`,
+         freelist is reset instead of following chain.
+      - Added head-sanity checks before linking in drain/early paths; invalid
+         freelist heads are reset proactively.
+      - Intent: convert random-chain execution/corruption into controlled OOM,
+         improving survivability and preserving serial diagnostics under severe
+         allocator poisoning.
+
+12. `kernel/net/device.c` (if_list poisoning containment)
+      - Hardened `netdev_poll()` linked-list walk of `if_list` with kernel-pointer
+         validation before dereferencing `if_next`.
+      - On poisoned `ifp`/`if_next`, poll path now logs and quarantines by
+         truncating/disabling polling instead of following corrupt pointers.
+      - This directly targets observed crash site `eip=0x80165ee9` where
+         `netdev_poll` was dereferencing `ifp->if_next` from a corrupted pointer
+         and cascading into `eip=0` fatal traps.
 
 Intent of tranche:
 - Prevent allocator crashes when current process page tables have transiently broken

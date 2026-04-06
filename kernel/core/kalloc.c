@@ -139,6 +139,7 @@ struct {
   uint deferred_frees;
   uint invalid_cache_drops;
   uint invalid_global_drops;
+  uint freelist_head_resets;
   uint duplicate_frees;
 } kmem;
 
@@ -211,15 +212,22 @@ kalloc_refill_local(struct cpu *c)
         cprintf("kalloc_refill_local: drop bad global run=%p drops=%u\n",
                 r, kmem.invalid_global_drops);
 
-      // If we can safely read the run header, unlink this node and continue.
-      // Otherwise bail out of refill to avoid dereferencing poisoned memory.
-      if(kaddr_writable_current_pgdir((char*)r))
-        kmem.freelist = r->next;
-      else
-        kmem.freelist = 0;
-      continue;
+      // Freelist chain is poisoned. Stop trusting next pointers and fall back
+      // to controlled OOM behavior instead of chasing potentially arbitrary data.
+      kmem.freelist = 0;
+      kmem.freelist_head_resets++;
+      break;
     }
-    kmem.freelist = r->next;
+    if(r->next && !kalloc_runptr_valid(r->next)){
+      kmem.invalid_global_drops++;
+      kmem.freelist_head_resets++;
+      if((kmem.invalid_global_drops & 0x3f) == 1)
+        cprintf("kalloc_refill_local: poison next run=%p next=%p drops=%u\n",
+                r, r->next, kmem.invalid_global_drops);
+      kmem.freelist = 0;
+    } else {
+      kmem.freelist = r->next;
+    }
     batch[n++] = r;
   }
 
@@ -253,6 +261,10 @@ kalloc_drain_local(struct cpu *c)
     return;
 
   acquire(&kmem.lock);
+  if(kmem.freelist && !kalloc_runptr_valid(kmem.freelist)){
+    kmem.freelist = 0;
+    kmem.freelist_head_resets++;
+  }
   i = 0;
   while(i < drain){
     p = kalloc_cache_pop_valid(c);
@@ -370,6 +382,10 @@ kfree(char *v)
 
   // Early boot: single CPU, no locking, no per-CPU caches.
   if(!kmem.use_lock){
+    if(kmem.freelist && !kalloc_runptr_valid(kmem.freelist)){
+      kmem.freelist = 0;
+      kmem.freelist_head_resets++;
+    }
     r->next = kmem.freelist;
     kmem.freelist = r;
     kmem.free_pages++;
@@ -384,6 +400,10 @@ kfree(char *v)
   if(c->kfree_cache_count >= KALLOC_CPU_CACHE){
     // Emergency fallback: move one page out under lock and proceed.
     acquire(&kmem.lock);
+    if(kmem.freelist && !kalloc_runptr_valid(kmem.freelist)){
+      kmem.freelist = 0;
+      kmem.freelist_head_resets++;
+    }
     if(c->kfree_cache_count > 0){
       struct run *p = kalloc_cache_pop_valid(c);
       if(p){
