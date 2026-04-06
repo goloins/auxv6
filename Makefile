@@ -334,7 +334,7 @@ tags: $(OBJS) kernel/boot/entryother.S user/_init
 kernel/core/vectors.S: tools/vectors.pl
 	./tools/vectors.pl > kernel/core/vectors.S
 
-LIBC_OBJS = user/ulib.o user/string.o user/errstr.o user/umalloc.o user/tty.o user/inet.o user/fmt.o user/dirent.o user/fnmatch.o user/glob.o user/ftw.o user/fts.o user/locale.o user/pwdgrp.o user/env.o user/conf.o user/path.o user/tempfile.o user/timecore.o user/resource.o user/netdb.o user/stdlib.o user/posix_fs.o user/posix.o user/stdio.o user/regex.o user/calloc.o user/libterm.o user/checksum.o
+LIBC_OBJS = user/ulib.o user/string.o user/errstr.o user/umalloc.o user/tty.o user/inet.o user/fmt.o user/dirent.o user/fnmatch.o user/glob.o user/ftw.o user/fts.o user/locale.o user/pwdgrp.o user/env.o user/conf.o user/path.o user/tempfile.o user/timecore.o user/resource.o user/netdb.o user/stdlib.o user/posix_fs.o user/posix.o user/stdio.o user/regex.o user/calloc.o user/libterm.o user/checksum.o user/gzip.o
 LIBAUXV6_OBJS = user/crt0.o user/usys.o user/printf.o user/resolve.o
 ULIB = $(LIBC_OBJS) $(LIBAUXV6_OBJS)
 
@@ -631,6 +631,12 @@ _which: user/which
 _file: user/file
 	cp user/file _file
 
+_gunzip: user/gunzip
+	cp user/gunzip _gunzip
+
+_tar: user/tar
+	cp user/tar _tar
+
 _uniq: user/uniq
 	cp user/uniq _uniq
 
@@ -848,6 +854,8 @@ UPROGS=\
 	_lsof\
 	_which\
 	_file\
+	_gunzip\
+	_tar\
 	_uniq\
 	_sort\
 	_sum\

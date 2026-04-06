@@ -115,6 +115,8 @@ user/tail
 user/lsof
 user/which
 user/file
+user/gunzip
+user/tar
 user/uniq
 user/sort
 user/sum

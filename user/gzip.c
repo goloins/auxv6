@@ -6,6 +6,7 @@
 
 #define GZIP_INBUF_SZ 4096
 #define GZIP_OUTBUF_SZ 4096
+#define GZIP_STORE_CHUNK 4096
 #define GZIP_WINSZ 32768
 #define HUFF_MAXBITS 15
 #define HUFF_MAX_SYMS 288
@@ -129,6 +130,23 @@ out_put_byte(struct out_stream *out, uchar b)
   }
 
   out->buf[out->len++] = b;
+  return 0;
+}
+
+static int
+gzip_write_all(int fd, const void *buf, int n)
+{
+  const uchar *p;
+  int off;
+
+  p = (const uchar*)buf;
+  off = 0;
+  while(off < n) {
+    int m = write(fd, p + off, n - off);
+    if(m <= 0)
+      return -1;
+    off += m;
+  }
   return 0;
 }
 
@@ -772,5 +790,96 @@ aux_gzip_output_name(const char *in_path, char *out, int out_sz)
     return -1;
   memmove(out, in_path, n);
   memmove(out + n, ".out", 5);
+  return 0;
+}
+
+int
+aux_gzip_deflate_store_fd(int in_fd, int out_fd)
+{
+  static const uchar gzip_hdr[10] = {
+    0x1f, 0x8b, 0x08, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0x03
+  };
+  uchar buf[GZIP_STORE_CHUNK];
+  uchar next_buf[GZIP_STORE_CHUNK];
+  uint crc;
+  uint usize;
+  int n;
+  int i;
+
+  crc32_init();
+
+  if(gzip_write_all(out_fd, gzip_hdr, sizeof(gzip_hdr)) < 0)
+    return -1;
+
+  crc = 0xffffffffU;
+  usize = 0;
+
+  n = read(in_fd, buf, sizeof(buf));
+  if(n < 0)
+    return -1;
+
+  if(n == 0) {
+    uchar empty_blk[5];
+
+    empty_blk[0] = 0x01;
+    empty_blk[1] = 0x00;
+    empty_blk[2] = 0x00;
+    empty_blk[3] = 0xff;
+    empty_blk[4] = 0xff;
+    if(gzip_write_all(out_fd, empty_blk, sizeof(empty_blk)) < 0)
+      return -1;
+  }
+
+  while(n > 0) {
+    uchar blk_hdr[5];
+    uint nlen;
+    int nn;
+    int final;
+
+    nn = read(in_fd, next_buf, sizeof(next_buf));
+    if(nn < 0)
+      return -1;
+    final = (nn == 0);
+
+    blk_hdr[0] = final ? 0x01 : 0x00;
+    blk_hdr[1] = (uchar)(n & 0xff);
+    blk_hdr[2] = (uchar)((n >> 8) & 0xff);
+    nlen = ((uint)n) ^ 0xffffU;
+    blk_hdr[3] = (uchar)(nlen & 0xff);
+    blk_hdr[4] = (uchar)((nlen >> 8) & 0xff);
+
+    if(gzip_write_all(out_fd, blk_hdr, sizeof(blk_hdr)) < 0)
+      return -1;
+    if(gzip_write_all(out_fd, buf, n) < 0)
+      return -1;
+
+    for(i = 0; i < n; i++)
+      crc = crc32_update(crc, buf[i]);
+    usize += (uint)n;
+
+    if(final)
+      break;
+    memmove(buf, next_buf, (uint)nn);
+    n = nn;
+  }
+
+  crc ^= 0xffffffffU;
+
+  {
+    uchar tr[8];
+    tr[0] = (uchar)(crc & 0xff);
+    tr[1] = (uchar)((crc >> 8) & 0xff);
+    tr[2] = (uchar)((crc >> 16) & 0xff);
+    tr[3] = (uchar)((crc >> 24) & 0xff);
+    tr[4] = (uchar)(usize & 0xff);
+    tr[5] = (uchar)((usize >> 8) & 0xff);
+    tr[6] = (uchar)((usize >> 16) & 0xff);
+    tr[7] = (uchar)((usize >> 24) & 0xff);
+    if(gzip_write_all(out_fd, tr, sizeof(tr)) < 0)
+      return -1;
+  }
+
   return 0;
 }
