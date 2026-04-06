@@ -1765,7 +1765,7 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
     return;
   if(!console_gfx_boot_ready)
     return;
-  if(holding(&tickslock)) {
+  if(!(readeflags() & FL_IF) && holding(&tickslock)) {
     console_gfx_stat_flush_blocked_tickslock++;
     return;
   }
@@ -2007,20 +2007,19 @@ cprintf(char *fmt, ...)
   int width, prec, have_prec, left, zero;
 
   locking = cons.locking;
-  if(locking && holding(&cons.tty_lock))
+  if(locking && !(readeflags() & FL_IF) && holding(&cons.tty_lock))
     locking = 0;
 #if KDEBUG_LOCKDEP
   if(locking) {
     struct cpu *cpu;
     int depth;
 
-    // Read lockdep depth with interrupts disabled so mycpu() is always valid.
     depth = 0;
-    pushcli();
-    cpu = mycpu();
-    if(cpu)
-      depth = cpu->lockdep_depth;
-    popcli();
+    if(!(readeflags() & FL_IF)) {
+      cpu = mycpu();
+      if(cpu)
+        depth = cpu->lockdep_depth;
+    }
 
     // Avoid rank inversions when logging from within other lock-protected paths.
     if(depth > 0)

@@ -297,11 +297,11 @@ getcallerpcs(void *v, uint pcs[])
 int
 holding(struct spinlock *lock)
 {
-  int r;
-  pushcli();
-  r = lock->locked && lock->cpu == mycpu();
-  popcli();
-  return r;
+  // Modern contract: this helper must not perturb interrupt nesting.
+  // If interrupts are enabled, conservatively report "not held".
+  if(readeflags() & FL_IF)
+    return 0;
+  return lock->locked && lock->cpu == mycpu();
 }
 
 
