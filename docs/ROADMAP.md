@@ -10,16 +10,13 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - Multi-filesystem support with mount table
 
 **Architecture:** x86 32-bit, single address space per process  
-**Current State:** ext2-root is the default boot path, the kernel has received a substantial 2026-04 performance-hardening pass, the first NFS read-only path is partially wired, server7 has an initial session-aware bootstrap, and the userland now includes a broader admin/TUI layer (`top`, `abrowse`, `man`, `which`, `lsof`, `file`) plus a materially stronger libc/POSIX portability baseline (`getrlimit`/`setrlimit`, `netdb`, `fnmatch`, `glob`, `scandir`, `nftw`, `fts`netstat -s          # interface counters
-netstat -t          # TCP socket table (try after starting a server)
-netstat -u          # UDP socket table (try after DHCP or ping)
-cat /proc/net_dev   # raw interface counter dump, C-locale scaffolding, and corrected `unlink`/`rmdir` semantics).
+**Current State:** ext2-root is the default boot path, the kernel has received a substantial 2026-04 performance-hardening pass, the first NFS read-only path is partially wired, server7 has an initial session-aware bootstrap, and the userland now includes a broader admin/TUI layer (`top`, `abrowse`, `man`, `which`, `lsof`, `file`) plus a materially stronger libc/POSIX portability baseline (`getrlimit`/`setrlimit`, `netdb`, `fnmatch`, `glob`, `scandir`, `nftw`, `fts`, C-locale scaffolding, and corrected `unlink`/`rmdir` semantics).
 
 ---
 
 ## Current Subsystem Status
 
-### ✅ Mature Subsystems (75-95% complete)
+### ✅ Mature Subsystems
 | Subsystem | Status | Notes |
 |-----------|--------|-------|
 | VFS Layer | 92% | Multi-backend dispatch (`xv6fs/ext2/msdosfs/exfat/btrfs/ufs2/isofs/tmpfs/nfs`), mount table, longest-prefix matching |
@@ -39,99 +36,41 @@ cat /proc/net_dev   # raw interface counter dump, C-locale scaffolding, and corr
 | Terminal/PTY stack | 90% | Console + dynamic PTY allocation (`/dev/ptmx` -> `/dev/pts/N`), per-endpoint queue/termios/winsize/ioctl routing, job-control integration, query/reply compatibility work, and termcheck coverage |
 | Virtio storage | 95% | Virtio core + virtio-blk with DoD checklist complete; queue-depth tuning and retry telemetry in place |
 
-### ⚠️ Partially Implemented (50-74%)
+### ⚠️ Active / Mixed-Maturity Subsystems
 | Subsystem | Status | Notes |
 |-----------|--------|-------|
-| Networking interfaces | 68% | BSD ifnet abstraction, loopback, virtio-net, routing, DHCP tooling, outbound packet path, and multiple working drivers; link-state polish and broader real-hardware parity still lag |
-| POSIX compatibility layer | 79% | Broader tty/ioctl compatibility, dynamic `openpty`/`ptsname_r` path, truthful time/stdio tranche work, `getrlimit`/`setrlimit`, minimal `netdb`, shell/text traversal helpers (`fnmatch`, `glob`, `scandir`, `nftw`, `fts`), C-locale scaffolding, and corrected `unlink`/`rmdir` semantics are in-tree; identity/account and stdio follow-on work remain |
+| Networking interfaces | 72% | BSD ifnet abstraction, loopback, virtio-net, routing, DHCP tooling, outbound packet path, and broad real-NIC coverage are in-tree; normalized link-state visibility is wired through `/proc/net_dev`, and tun/tap Phase-1 foundations are present (`/dev/net/tun`, ifnet registration, tun queue/read/write path); TAP/L2 parity and wider real-hardware soak still lag |
+| POSIX compatibility layer | 83% | Broader tty/ioctl compatibility, dynamic `openpty`/`ptsname_r`, truthful time/stdio tranche work, `getrlimit`/`setrlimit`, minimal `netdb`, shell/text traversal helpers (`fnmatch`, `glob`, `scandir`, `nftw`, `fts`), C-locale scaffolding, identity/group lookup (`getpwnam`/`getpwuid`/`getgrnam`/`getgrgid`), and stdio follow-ons (`vfscanf`, `tmpfile`) are in-tree; remaining work is mostly thread/runtime truthfulness follow-through |
 | Userland docs/manpages | 82% | `man` now renders richer markdown and the tree ships 90+ documented utilities, but coverage depth and maintenance discipline still need work |
-| Graphics / framebuffer console | 72% | Framebuffer core, display registry, builtin font/render path, rich `/proc/gfxstats`, virtio-gpu scanout discovery, display-sized framebuffer allocation, display-derived readable boot geometry, stable mirror behavior, ownership plumbing for server7, and recent sync-path speedups are landed; Intel display-class PCI attach scaffolding (probe + MMIO BAR map) is now in-tree as a basic bring-up stub; CGA still owns the canonical console path, virtio-gpu still uses whole-frame uploads, and no `/dev/fb0` or `/dev/dri/card0` ABI exists yet |
-| procfs | 84% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`, `/proc/meminfo`, `/proc/ps`, `/proc/loadavg`, `/proc/schedstat`, `/proc/mountstats`, `/proc/gfxstats`, `/proc/lsof`, `/proc/fdlimits`, `/proc/server7`, `/proc/bdev_table`, `/proc/net_tcp`, `/proc/net_udp`, `/proc/net_dev`; breadth is now solid and now includes low-cost scheduler counters plus descriptor-limit observability, though deeper per-process drill-down can still improve |
-| Real NICs | 79% | E1000, PCNET, RTL8111, I219-V, I226-V, AX88179, RTL8125, RTL8139/8139C/RTL8110S, tg3, bnxt, atlantic, skge, and via_rhine provide ifnet TX/RX datapaths (polling completion model); the follow-on families (`igb`, `ixgbe`, `i40e`, `ice`, `bnx2`, `bnx2x`, `mlx4_en`, `mlx5e`, `ena`, `alx`) are now phase-1 attachable drivers with PCI bring-up + ifnet registration while ring TX/RX programming is still pending. VMXnet3 keeps its basic polling datapath and netvsc remains VMBus-gated until transport support lands. |
+| Graphics / framebuffer console | 74% | Framebuffer core, display registry, builtin font/render path, rich `/proc/gfxstats`, virtio-gpu scanout discovery, display-sized framebuffer allocation, display-derived readable boot geometry, stable mirror behavior, ownership plumbing for server7, dirty-rect tracking scaffolding, and sync-path speedups are landed; Intel display-class PCI attach scaffolding (probe + MMIO BAR map) is in-tree as a basic bring-up stub; CGA still owns the canonical console path, virtio-gpu still uses whole-frame uploads, and no `/dev/fb0` or `/dev/dri/card0` ABI exists yet |
+| procfs | 87% | `/proc/uptime`, `/proc/version`, `/proc/pci`, `/proc/vblk_flush`, `/proc/ahci_tune`, `/proc/meminfo`, `/proc/ps`, `/proc/loadavg`, `/proc/schedstat`, `/proc/vmstat`, `/proc/mountstats`, `/proc/gfxstats`, `/proc/lsof`, `/proc/fdlimits`, `/proc/server7`, `/proc/bdev_table`, `/proc/net_tcp`, `/proc/net_udp`, `/proc/net_dev`, `/proc/audio`, `/proc/audio_stats`, `/proc/audio_clients`, `/proc/serial_tty`, `/proc/modems`; breadth is strong, though deeper per-process drill-down can still improve |
 | Real NICs | 84% | E1000, PCNET, RTL8111, I219-V, I226-V, AX88179, RTL8125, RTL8139/8139C/RTL8110S, tg3, bnxt, atlantic, skge, and via_rhine provide full ifnet TX/RX datapaths; all 10 second-wave families (`igb`, `ixgbe`, `i40e`, `ice`, `bnx2`, `bnx2x`, `mlx4_en`, `mlx5e`, `ena`, `alx`) now have phase-2 descriptor-ring TX/RX: igb uses the e1000-class register map identical to I219, ixgbe uses the 82599/X540 register map with legacy descriptors, alx uses TPD/RFD/RRD rings, bnx2/bnx2x use BD rings with context-indirect init and status-block completions, i40e/ice wire QTX_TAIL/QRX_TAIL, mlx4/mlx5 implement WQE SQ/RQ+CQ rings with UAR doorbell, and ena implements SQ/CQ pairs with phase-bit completion. VMXnet3 keeps its basic polling datapath and netvsc remains VMBus-gated until transport support lands. |
 | Device node management | 90% | `devman -s` creates `/dev` nodes from kernel inventory; `/etc/devman.conf` now carries full glob-pattern→mode policy rules; `devman -c` removes stale nodes; `devman -d` daemonizes with double-fork+setsid and periodic cleanup loop; hotplug event fd remains the only open item |
 | Modern storage | 91% | AHCI now has interrupt-driven completions, slot allocation, telemetry, and fault-injection hooks; NVMe correctness hardening complete (polled-only IRQ model, monotonic CID counter, recovery memory-safety, shutdown notification, LBA-size guard), dev-number collision with loop devices fixed, and ext2/ext2fs mount alias validated on `/dev/nda`; NVMe timeout/reset recovery path is in place |
 
-### 🚧 Early Or Stubbed (0-49%)
+### 🚧 Early Or Stubbed
 | Subsystem | Status | Notes |
 |-----------|--------|-------|
 | NFS | 45% | XDR/RPC transport, MOUNT plumbing, read-only VFS wiring, and basic GETATTR/LOOKUP/READ paths landed; READDIR decode stub still in place; deprioritized pending other work |
 | exFAT | 35% | Initial read-only backend parser is in-tree (boot-sector validation, entry-set traversal, case-insensitive lookup, regular-file reads), but the mount device-selection path still needs parity wiring in `sys_mount`; write/allocate/truncate/rename metadata paths and robust seeded-image tooling remain out of scope |
 | Btrfs | 35% | Initial read-only VFS backend landed (`btrfs` mount type): single-device volumes, metadata-tree traversal, directory lookup/readdir, regular-file reads, and symlink reads; write paths, compression/RAID/multi-device, and many advanced features remain out of scope |
 | UFS2/FFS | 28% | Initial read-only VFS backend landed (`ufs2`/`ffs` mount type): superblock probe, inode/directory traversal, direct/single-indirect file reads, and symlink reads with conservative format assumptions; write paths and broader on-disk compatibility hardening remain out of scope |
-| Audio subsystem | 22% | Stage-0 native ABI/core skeleton is in-tree with ioctl and procfs surfaces; PCI audio-family probe stubs register common AC97/HDA/legacy controller families into the audio registry with OSS-intent capability flags; Stage-1 has started with per-fd stream objects, per-stream software ring buffers, and blocking/nonblocking PCM write semantics wired through kernel file open/write/close paths |
+| Audio subsystem | 38% | Stage-0 ABI/core is in-tree with ioctl + procfs surfaces and PCI-family probe stubs; Stage-1 tranches 1-3 are now landed with per-fd stream objects/ring buffers, blocking + `O_NONBLOCK` PCM write semantics, poll/select readiness wiring, and `/proc/audio_clients` observability via `audiostat`; capture/hardware backends and OSS compatibility remain follow-on |
 | Device hotplug/eventing | None | Planned kernel event path for live node add/remove beyond boot-time `devman -s` |
 
 ---
 
 ## Recent Wins (2026-04 Snapshot)
 
-- Kernel-core performance hardening landed: larger core limits, O(1) cache lookups for buffers/inodes, per-CPU allocator caching, faster `mycpu()`, scheduler idle `hlt`, and syscall-return signal fast paths.
-- `top(1)` and `libterm` landed, backed by new `/proc/loadavg` support and per-process `cticks` accounting.
-- Added `/proc/schedstat` with scheduler pass/idle-halt/pick counters to support Track 0 performance follow-through without introducing high-risk scheduler redesign.
-- `abrowse(1)` landed as a text-mode browser layered on the existing HTTP client path.
-- Server7 now has a dedicated boot profile, `/proc/server7` ownership control, and session-aware startup policy scaffolding.
-- Documentation/manpage coverage expanded substantially, with markdown-aware `man(1)` support and a much broader default userland.
-- `gfxperf(1)` landed to compute `/proc/gfxstats`-based flush and render efficiency metrics from workload deltas; its counter math now handles 32-bit wrap safely for long-running sessions.
-- A dirty-row bounded framebuffer-sync prototype was attempted but rolled back after a login-path stability regression; the console currently remains on the known-good full-surface compare path.
-- Audio Stage-1 tranche 1 is now in progress: per-fd PCM stream state/ring buffering landed in kernel core, stream lifecycle is now hooked into open/close paths, and `devman` now creates `/dev/audioctl` and `/dev/pcmC0D0p` by default.
-- Audio Stage-1 tranche 1 internals, semantics, and follow-on checklist are documented in `docs/audio-stage1-tranche1-runtime.md`.
-- Audio Stage-1 tranche 2 added explicit poll/select readiness wiring for AUDIODEV stream descriptors; details are documented in `docs/audio-stage1-tranche2-readiness.md`.
-- Audio Stage-1 tranche 3 added `/proc/audio_clients` per-stream observability and wired `audiostat` to print all `/proc/audio*` nodes; details are documented in `docs/audio-stage1-tranche3-observability.md`.
-- Audio follow-on runtime fixes landed: `fcntl(F_SETFL/F_GETFL)` now toggles/reports stream `O_NONBLOCK` state for audio descriptors, and `/proc/audio_clients` now includes owner pid for per-stream attribution.
-- Bounded dirty-rect framebuffer scaffolding (`FB_MAX_DIRTY_RECTS=8`) is present, but runtime still uses the conservative single-bounding-rect flush path for stability while follow-on tuning continues.
-- Framebuffer bring-up and console performance moved forward materially: DMA framebuffer allocation now reserves real contiguous runs from the global page freelist instead of relying on repeated `kalloc()` adjacency, and tty upward scroll now reuses existing framebuffer pixels instead of rerendering nearly the whole visible surface on every scrolled line.
-- Locking modernization tranche landed for crash prevention and diagnosability: spinlock acquire timeout + nested-acquire detection now panic instead of silently hanging, and lock-failure paths print lock-name/owner diagnostics under `KDEBUG_SPINLOCK_LOCKFAIL`.
-- Console locking is now split into domain-specific locks (`input_lock`, `tty_lock`, `gfx_lock`) and file-table locking uses sleeplock; a login-path boot panic introduced during refactor (`spinlock bad release: lock=console_tty`) was root-caused to lock-pair mismatches and fixed in-tree.
-- Lockdep-lite is now wired in spinlock core under `KDEBUG_LOCKDEP`: acquire-time rank checks, release-order checks, and per-CPU held-lock chain diagnostics are active for annotated core locks (`console_*`, `ftable_internal`, `ticks`, `ptable`, `kmem`, `log`, `icache`, `bcache`, `pipe`, `bdev`, `vfs`, `ktime`, `irq`).
-- Follow-on lockdep stabilization fixed real lock-order bugs and rank-map gaps discovered under guest load (`lockprobe`/`ls`): `consoleread()` timed-wait now releases tty before taking `tickslock`, `kmem` is explicitly ranked above `ptable`, and sanctioned `sleep(chan, lk)` handoff semantics no longer false-positive as generic release-order bugs.
-- A short-lived `halt` regression (`panic: mycpu called with interrupts enabled`) was root-caused to a lockdep-aware `cprintf()` guard calling `mycpu()` with interrupts on; fix: gate that probe behind `FL_IF==0` so `mycpu()` is only used in valid interrupt state.
-- Audit follow-up found a boot-order lock compatibility break on non-xv6fs roots: `idup()` can run before xv6fs-only `iinit()`, leaving `icache.lock` uninitialized; fix: split out unconditional one-time `icache_init()` and call it before VFS bootstrap.
-- `lockprobe` now has a dedicated lockdep handoff selftest mode (`-L`) that intentionally drives pipe and ticks-based sleep/wakeup transitions to catch lock-order regressions in sanctioned sleep paths.
-- Storage/network lock hardening pass now annotates active block/net lock classes (core net tables, socket layer, IDE/AHCI/NVMe/virtio-blk, major NIC drivers, and filesystem mount locks) with explicit lockdep class labels for clearer panic chains and faster root-causeing.
-- A graphical-boot regression (seen on `make qemu` but not `make qemu-nox`) was traced to lockdep checks firing too early in bring-up; fix: defer lockdep enforcement until late boot via `lockdep_enable()` after memory and console-gfx late-enable complete.
-- Validation policy is now codified for lock/console work: both `make qemu` and `make qemu-nox` boots plus full `lockprobe` matrix (including `-L`) are required before signoff.
-- Kernel-core large-file P0 hardening tranche is now landed build-clean: `struct file.off` and in-memory `struct inode.size` are widened to 64-bit, `struct stat.st_size` is widened to 64-bit, and `off_t` is now `int64_t` in libc headers.
-- VFS/data-path offset plumbing is now widened end-to-end: `readi/writei/procfs_readi`, device-switch read/write callbacks, and VFS vnode read/write callbacks now take 64-bit offsets; all in-tree filesystem backends were signature-aligned in the same tranche.
-- Multiple backend 4 GB truncation footguns were removed in the same pass (notably btrfs/exfat/nfs/ufs2 inode-size assignment and stat export paths), and msdosfs cluster math was explicitly kept 32-bit bounded to avoid libgcc 64-bit division helper linkage in kernel mode.
-- PID allocation now has explicit wrap-safe behavior: `PID_MAX` policy added, alloc path wraps back to PID 2, skips in-use PIDs under `ptable.lock`, and panics only on true PID-space exhaustion instead of relying on unchecked signed overflow.
-- Large-file seek ABI follow-up is now landed: `sys_lseek64`/`_llseek` are in-tree for full-range seek on i386, and `sys_lseek` now returns `off_t` correctly via i386 `edx:eax` int64 return convention.
-- Detailed tranche notes are now tracked in `docs/death-of-xv6.md` (scope, rationale, compatibility boundaries, and follow-up map).
-- Fixed-limit mount metadata holdover is now landed: `VFS_NAME_MAX`/`MOUNTINFO_NAME_MAX` are widened to `NAME_MAX + 1`, `VFS_MOUNT_PATH_MAX`/`MOUNTINFO_PATH_MAX` are widened to `PATH_MAX`, and mount table/query capacity is raised from 8 to 32 (`VFS_MOUNTS_MAX`/`MOUNTINFO_MAX`), replacing old xv6-era tight limits in both kernel and user ABI surfaces.
-- `sys_mount` payload staging is now modernized for safety and headroom: mount-option payload cap is centralized as shared policy (`MOUNT_DATA_MAX` in `limits.h`, currently `PATH_MAX-1`) and staging moved from fixed kernel-stack buffers to heap-backed temporary storage, reducing stack pressure while allowing larger mount option strings.
-- Mount-capacity policy is now centralized: shared `MOUNT_MAX` in `limits.h` now drives both kernel mount-table capacity (`VFS_MOUNTS_MAX`) and userspace mount query capacity (`MOUNTINFO_MAX`), removing duplicate hardcoded ceilings.
-- Network-info fixed-limit cleanup is now landed: route and ARP capacities are raised from 32 to 128 and centralized in shared networking policy constants (`NET_ROUTE_TABLE_MAX`, `NET_ARP_CACHE_MAX` in `include/net.h`), with matching userspace query ceilings (`ROUTEINFO_MAX`, `ARPINFO_MAX`) to avoid early truncation in tooling.
-- Real-NIC coverage expanded with a new stub-driver tranche: `rtl8139` (RTL8139/8139C/RTL8110S), `rtl8125`, `tg3` (BCM5700/5719/5720), `bnxt` (BCM57412/57416), `atlantic` (AQC107/AQC108), `skge` (88E8001 family), and `via_rhine` (VT6103 family).
-- Follow-on NIC tranche advanced from probe-only stubs to phase-1 attachable drivers (`igb`, `ixgbe`, `i40e`, `ice`, `bnx2`, `bnx2x`, `mlx4_en`, `mlx5e`, `ena`, `alx`): PCI enable + BAR map + deterministic MAC + ifnet registration are now wired, with descriptor-ring TX/RX programming tracked as the next step.
-- Network driver parity follow-up landed for legacy-heavy bring-up paths: `pcnet` and `rtl8111` now wire `if_poll` so RX/TX completions run under `netdev_poll` in addition to IRQ handlers, reducing lost-progress risk when interrupts are delayed/masked.
-- Network observability follow-up landed: shared interface ABI now carries normalized link state (`unknown/down/up`), `if_register` seeds sane defaults for drivers that do not yet report media explicitly, `/proc/net_dev` now includes a `Link` column, and userland network views now surface link status consistently.
-- Initial modem coverage scaffold landed for common legacy PCI modem families (probe-only): Conexant HSF/HCF, Agere/Lucent LT, Smart Link, PCTel, Intel 536/537-class softmodems, and Motorola SM56; current tranche is detection-only and intentionally does not yet provide data/control paths.
-- Modem observability follow-up landed: stub probes now register into a shared modem inventory and `/proc/modems` exposes family/ven:dev/location/irq plus probe-only summary counters for concrete tranche planning.
-- Serial modem chardev groundwork is now in-tree: `SERIALDEV` runtime endpoint with `/dev/ttyS0..3` node creation via `devman`, UART RX fanout into serial input buffering, per-minor runtime isolation (ttyS0 hardware-backed, ttyS1..ttyS3 virtual placeholders), and core termios/ioctl read/write coverage. See `docs/modem-driver.md` and `docs/serial-per-minor-isolation.md` for current semantics and limits.
-- Procfs visibility for serial line capability/state is now in-tree via `/proc/serial_tty` (per-minor `hw_backed`, carrier/hangup, open refs, fg pgid, modem output bits, and canonical/CLOCAL flags).
-- Driver-registration wiring was updated end-to-end for the new NIC tranche: build integration in `Makefile`, init declarations in `include/defs.h`, runtime registration in `kernel/net/device.c`, and vendor IDs added in `include/pci.h` (Broadcom/Marvell/VIA/Aquantia).
-- P1 descriptor-ceiling modernization is now landed as a subsystem uplift rather than a raw constant bump: per-process dynamic `fdtable` storage is in-tree, policy is split into `NOFILE_DEFAULT` (soft/inherited) and `NOFILE_HARD` (setrlimit ceiling), legacy `NFILE` naming has been removed from live policy surfaces, and descriptor-limit enforcement is unified across `select(2)`, `poll(2)`, socket allocation, and rlimit paths.
-- P1 descriptor-ceiling validation is green: `fdtest(1)` passes 16/16 in guest, including `FD_CLOEXEC`, `dup`/`dup2`, select/poll limit handling, and seek ABI integration checks.
-- Next part of P1-A is ABI cleanup (not more ceiling brute-force): descriptor-limit observability is now landed via `/proc/fdlimits`; continue migrating any remaining fixed-size userspace interfaces that still carry legacy tiny bounds.
-- Early-boot stability was hardened as a direct follow-up: entry paging window expanded to 8MB and linker now asserts kernel image fit in that pre-kvmalloc window, converting a silent early-boot fault class into an explicit build-time error.
-- Growth-budget guardrails were added to prevent future "too large" regressions from surfacing only at runtime: compile-time table-size assertions (proc/file/page-meta), post-link kernel size checks (hard 8MB total, hard 4MB `.bss`, soft 6MB warning), and per-build footprint reporting in `make aux.kern`.
-- P1 pipe-policy modernization is now landed: kernel pipe capacity increased (`512 -> 2048`) while POSIX `PIPE_BUF` atomicity floor remains `512`, with compile-time fit/invariant guards (`PIPE_CAPACITY >= 512`, `sizeof(struct pipe) <= PGSIZE`).
-- P1 exec-argument modernization is now landed: exec enforces dual limits (`EXEC_ARGC_MAX=128`, `EXEC_ARG_BYTES_MAX=4096`) aligned with `ARG_MAX`, and argv pointer staging moved off fixed kernel stack arrays to one-page heap staging with compile-time fit guards.
-- NVMe/loop device-number collision was fixed by moving loop base to dev 44, restoring stable `nda` visibility in `lsblk` and successful NVMe ext2 mounting.
-- Storage diagnostics improved with `/proc/bdev_table` and `lsblk -v`, making block-device registration/capacity state directly inspectable.
-- `qemu-nvme-fat` image generation now uses dosfstools (`mkfs.fat`/`mkdosfs`) and produces a deterministic FAT16 image containing a known `README.TXT` marker for quick validation.
-- FAT32 NVMe workflow is now validated end to end (`qemu-nvme-fat32`): mount, short-name create/read/unlink, multi-block growth/truncate, long-filename create/read/unlink, and mkdir/rmdir all pass in guest.
-- The FAT long-filename failure was fixed at the root contract instead of only in the backend: the old 14-character directory-component limit was removed in favor of `NAME_MAX + 1`, and the `getdents`/`readdir` bridge plus shell path handling were updated to match.
-- FAT/msdosfs follow-up hardening landed after bringup: real FAT timestamps are now written and surfaced through `stat(2)`, VFAT unlink removes the full LFN chain, create rejects duplicate generated short-name aliases, and basic FAT rename support is now wired through the VFS rename hook.
-- exFAT first tranche landed as a read-only backend parser with NVMe image/tooling hooks (`nvme-exfat.img`, `qemu-nvme-exfat`, `qemu-nox-nvme-exfat`); remaining integration parity includes `sys_mount` device-selection wiring plus better host-side seeded-image tooling.
-- The FAT32 follow-up regression sweep also repaired cross-layer fallout from the global dirent-size change: direct `getdents()` callers were resized to stay within the syscall page limit, `getcwd()` path reconstruction was fixed for the widened synthetic dirent ABI, and the first FAT directory-rename subtree check was rewritten to avoid a sleep-lock deadlock.
-- Current guest status on `qemu-nvme-fat32`: `fatregress -d /mnt/fat32` completes with `fatregress: all checks passed`.
-- Btrfs gained an initial read-only backend (`mount ... btrfs ...`) integrated through VFS, with explicit first-tranche constraints documented in `docs/btrfs-driver.md`.
-- UFS2 gained an initial read-only backend (`mount ... ufs2 ...` and `mount ... ffs ...`) integrated through VFS, with first-tranche constraints documented in `docs/ufs2-driver.md`.
-- Linux-host Btrfs image tooling landed (`tools/stage-btrfs-root.sh`, `make nvme-btrfs.img`, `qemu-nvme-btrfs`, `qemu-nox-nvme-btrfs`, `btrfs-reset`) to support repeatable guest validation.
-- On-demand user stack growth (Area 5) is complete: exec pre-allocates `USER_STACK_MAX_PAGES`, page faults grow one page at a time, fork inherits stack bounds metadata, and overflow now terminates with correct SIGSEGV wait status; `stackgrowtest` currently passes 3/3 in guest.
-- xv6fs has started formal deprecation in-tree: legacy build/runtime paths are now gated behind `LEGACY_XV6FS=1`, and default rootfs staging no longer advertises xv6fs mounts.
-- FD-table modernization tranche is complete: `struct fdtable` is now fully dynamic (`entries` + `fdflags` pages via kalloc), `NFILE` deprecated as alias of `NOFILE_HARD`, `NOFILE_DEFAULT=256` (soft, inherited) and `NOFILE_HARD=512` (setrlimit ceiling) split, `proc_fd_limit()` is now extern and used consistently in `sys_select`, `sys_poll`, and `socket_fdalloc`. `FD_CLOEXEC` is fully implemented: per-fd flag bits live in the `fdflags` page, `F_GETFD`/`F_SETFD`/`F_DUPFD`/`F_DUPFD_CLOEXEC` all work, `exec.c` closes cloexec FDs after image commit, and fork inherits flags (POSIX). `sys_lseek` was fixed for the i386 `int64_t` return convention (must set `tf->edx` high half in addition to `eax`); `sys_lseek64`/`_llseek` (5-arg Linux ABI, SYS_lseek64=97) and `lseek64()` inline wrapper are now present. `fdtest(1)` regression suite (16 tests) validates the full tranche and passes 16/16 in guest.
+Highlights are now summarized here and tracked in detail in `docs/CHANGELOG-2026-04.md`.
+
+- Kernel-core perf and correctness hardening consolidated: allocator/cache improvements, lockdep-lite rollout, and stable COW slice progress.
+- Storage and filesystem coverage broadened: NVMe/AHCI hardening, FAT32 validation, plus initial read-only btrfs/ufs2/exfat tracks.
+- Networking and observability matured: broader NIC coverage, link-state visibility, and procfs instrumentation growth.
+- Userland/admin ergonomics advanced: `top`, `abrowse`, `man`, `which`, `lsof`, `file`, and richer docs/man coverage.
+- Audio Stage-1 tranches 1-3 are landed with stream lifecycle, readiness, and observability wired.
+
+For full chronology and implementation-level detail, see `docs/CHANGELOG-2026-04.md`.
 
 ---
 
@@ -421,7 +360,7 @@ Definition of done for next bump:
 - libc/POSIX portability tranche scope now remaining: writable `fmemopen` semantics if required by real callers, fuller `perror` parity, and broader address-family/name-service work beyond the current truthful IPv4 `netdb` subset.
 - threads: real kernel/libc thread support remains to be designed and implemented; placeholder pthread typedefs are not runtime support.
 - Headers: fuller socket-family declarations/constants and any broader resolver interfaces only when their backing is real.
-- TUN/TAP support is currently absent end-to-end: no tun/tap char device major/minor, no `/dev/net/tun` control node, no `TUNSETIFF`/`TUNSETPERSIST`/`TUNSETOWNER` ioctl surface, no IFF_TUN/IFF_TAP packet-mode semantics, no userspace-facing per-interface create/destroy/bring-up control, and no bridge-style L2 integration path for TAP.
+- TUN/TAP support is partially landed: Phase 0 control-plane scaffolding is in-tree (`/dev/net/tun`, ioctl routing and baseline policy, `tuntapctl` utility) and Phase 1 tun datapath bring-up is underway; TAP/L2 parity, broader lifecycle hardening, and soak/regression signoff remain outstanding.
 
 ### TUN/TAP Full-Support Tranche (new)
 
@@ -842,75 +781,12 @@ void *dma_alloc_aligned(uint size, uint align, uint *phys_addr);
 
 ---
 
-## Past Changes (2026-04-03) — kernel performance hardening
+## Change History
 
-Ten targeted optimisations addressing the worst xv6-heritage bottlenecks, all
-without restructuring the core proc/lock model.  Every change compiled and
-linked cleanly against the full kernel tree.
+The detailed 2026-04 implementation log has been moved to `docs/CHANGELOG-2026-04.md` so this roadmap stays focused on current status, active work, and forward priorities.
 
-### Resource limits
-- `NPROC` 64→128, `NFILE` 100→256, `NINODE` 50→200, `NOFILE` (per-process) 16→32, `NBUF` 30→128 (decoupled from `LOGSIZE`).  The 30-buffer cache was the most acute bottleneck; 15 KB of cache for an entire OS workload caused nearly-constant eviction and disk I/O.
-
-### Allocator (`kernel/core/kalloc.c`)
-- `kfree()` debug `memset(v, 1, PGSIZE)` is now gated behind `-DKDEBUG_KFREE_POISON`.  Production builds no longer write 4 KB of junk on every page free.  `exec()` frees the old address space page-by-page, making this a frequent hot path.
-
-### Spinlock (`kernel/core/spinlock.c`)
-- Added `pause` (x86 `PAUSE` hint) in the spin-wait loop.  On HT/SMT cores this reduces bus-lock traffic and avoids the memory-order violation that can stall a pipeline when the lock owner releases while the spinner holds a stale cacheline.
-- `getcallerpcs()` (10-frame `%ebp` walk) is now conditional on `-DKDEBUG_SPINLOCK_CALLSTACK`.  This call was executed on *every* `acquire()` in the kernel.
-
-### `mycpu()` (`kernel/core/proc.c`, `kernel/driver/mp.c`)
-- `mpinit()` now builds a 256-entry `apic_cpu_map[]` reverse table: `apicid → cpus[] index`.  `mycpu()` replaced its O(ncpu) LAPIC-ID linear scan + per-call LAPIC MMIO read with a single array lookup.  `mycpu()` is called from `myproc()`, `acquire()`, `release()`, `sched()`, `yield()`, and every lock-related path, so this is a hot fix.
-
-### Scheduler (`kernel/core/proc.c`)
-- **Per-CPU scan start offset** (`cpu.sched_last`): each CPU remembers the index just past the last process it ran and starts its next scan there.  Eliminates the tendency for all CPUs to race for the same low-indexed slots and spreads scheduling naturally across the full table.
-- **Idle `hlt`**: when a scheduler pass finds zero RUNNABLE processes, the CPU releases `ptable.lock` and executes `hlt`, suspending until the next interrupt.  Previously all CPUs spun in a tight loop repeatedly acquiring/releasing `ptable.lock` at the timer rate, even when the system was completely idle.  This was the dominant source of inter-CPU lock contention on a lightly-loaded system.
-
-### Timer ISR (`kernel/core/proc.c`, `kernel/core/sysproc.c`)
-- Added `active_alarm_count` (an atomic counter) that tracks the number of processes with live alarms.  `proc_check_alarms()` now returns immediately (no `ptable.lock` acquire, no O(NPROC) scan) when the counter is zero.  On a system with no `alarm()`-using processes this eliminates two `ptable.lock` acquire/release cycles per 10 ms tick on CPU 0.
-- `proc_set_alarm()` helper maintains the counter; `sys_alarm` delegates through it.
-
-### Syscall-return signal dispatch (`kernel/core/trap.c`, `kernel/core/proc.c`)
-- The three back-to-back `ptable.lock` acquire/release/acquire/release/acquire/release sequences (`proc_apply_pending_signals` + `proc_deliver_signal` + `proc_maybe_stop_current`) at every syscall and trap return are now wrapped in a single `proc_handle_signals_on_return()` call with a lockless fast-path precheck.  When `sig_pending`, `sig_caught`, and `state` are all clear, no lock is touched at all.
-
-### Buffer cache (`kernel/fs/bio.c`, `include/buf.h`)
-- Added a 64-entry hash table (`bcache.hash[BCACHE_HASH_SIZE]`) alongside the existing LRU doubly-linked list.  `bget()` cache-hit lookups are now O(1) (average 2 comparisons) instead of O(NBUF) = O(128).  Eviction still uses the LRU list; on eviction the buffer is removed from its old hash chain and inserted into the new one.  A `B_INHASH` flag tracks whether a slot is presently in a chain.
-
-### Inode cache (`kernel/fs/fs.c`, `include/file.h`)
-- Added a 64-entry hash table (`icache.hash[ICACHE_HASH_SIZE]`) with the same design.  `iget()` cache-hit lookups are now O(1) instead of the previous O(NINODE) = O(200) linear scan under `icache.lock`.  Slot recycling removes the old entry from the hash and inserts the new assignment.
-
----
-
-## Past Changes (2026-03-30 to 2026-04-03)
-
-- `ping` revised to run continuously until ^C (SIGINT), printing standard statistics on exit.
-- `traceroute` added: ICMP ECHO probe with increasing TTL, `setsockopt(IP_TTL)` support, three probes per hop, 1 s timeout per probe.
-  - **FIXME:** intermediate hops are invisible under QEMU SLIRP; SLIRP does not synthesise ICMP TIME_EXCEEDED per hop, so every destination shows at hop 1. Needs tap/bridge networking or a SLIRP-aware workaround to show real path depth.
-- `setsockopt`/`getsockopt` syscalls added (SYS_setsockopt=88, SYS_getsockopt=89) with `IPPROTO_IP`/`IP_TTL` support.
-- `ip_output_ttl()` added to IP layer; raw socket send paths thread per-socket TTL through to outgoing packets.
-- `ICMP_TIMXCEED`, `ICMP_UNREACH`, and related ICMP type/code constants added to `include/net.h`.
-- AHCI recovery/retry work landed (idle-stall recovery, bounded fault injection, mount-stress + soak harnesses, `test-ahci-regression`).
-- AHCI interrupt-driven completion and multi-slot queue depth enabled; ATAPI read-only path added with `/dev/cdrom*` nodes.
-- Toolchain hardening added (`-nostdinc`, toolchain checks for 32-bit libgcc helpers).
-- libc portability tranches 1 and 2 landed: canonical headers, time/civil calendar, stdio seek/tell/scan, and stream buffering (`setvbuf`/`setbuf`/`setlinebuf`).
-- libc ABI cleanup phase 5 completed (`crt0.S`, clean `exit`, `dprintf` vs `printf` split).
-- procfs expanded (`/proc/ahci_tune`, `/proc/vblk_flush`, `/proc/meminfo`, `/proc/lsof`).
-- VFS/getdents system-root iteration now suppresses backend `.` and `..` entries only at `/`; other mount roots such as `/tmp` are unchanged.
-- Guest harness improved with command-completion markers and safer ANSI handling.
-- devman integrated into boot runlevel; `man` and initial manpage set added.
-- Virtio-blk stress and retry harnesses added; virtio multi-device probe fixes landed.
-- Loop device hardening and `looptest` regression suite landed.
-- Terminal/PTY compatibility tranches landed (query/reply support, job control, termcap upgrades, termcheck smoke/full suites).
-- Kernel-core performance hardening landed: larger core limits, buffer/inode hash tables, faster `mycpu()`, per-CPU allocator caching, scheduler idle `hlt`, and syscall-return signal fast paths.
-- `top(1)` and `libterm` landed, with `/proc/loadavg` plus per-process `cticks` support behind them.
-- `abrowse(1)` landed as the first in-tree text-mode browser built on the existing HTTP client path.
-- `make e1000` and `make qemu-server7` boot profiles were added for more targeted bring-up and validation.
-- virtio-net runtime diagnostics/polling resilience improved, alongside follow-on fixes in `telnet`, `sh`, and DHCP tooling.
-- Framebuffer console sync-path speedups landed, reducing full-refresh overhead without changing the current ownership model.
-- Framebuffer sync follow-up currently keeps the known-good full-surface compare path for stability, while `gfxperf` provides a binary guest probe for `pixels_per_flush`, `cells_per_sync`, and `render_efficiency` from `/proc/gfxstats` deltas.
-- `gfxperf` delta accounting now uses wrap-safe unsigned subtraction so `flush_pixels` and other counters remain meaningful in long runs.
-- Latest framebuffer slowdown fix stops redrawing the decorative logo on every console sync, preventing the single dirty bounding box from stretching from the top-right logo region down to the active cursor row during normal text output.
-- Latest validated framebuffer tranche: scroll-heavy console output now feels visibly faster in guest, `gfxperf -Q -P 20` remains around 1 sync/flush per emitted line with `render_efficiency=1.00`, and `cells_per_sync` dropped from near full-screen churn to roughly 160-200 cells after the scroll reuse path and stats-accounting fix.
-- Next framebuffer performance targets are now clearly backend-facing rather than text-render-facing: first reduce per-scroll upload area/flush pixels where safe, then reduce virtio-gpu synchronous command overhead by batching or otherwise lowering transfer/flush submission cost without regressing interactive latency.
-- Step-1 + Step-2 validation (2026-04-05) confirmed both backend goals moved: scroll changed-span clipping cut `pixels_per_flush` and `cells_per_sync` again, and paired virtio-gpu transfer+flush submit preserved low sync count while raising sustained quick-run throughput (`gfxperf -q -P 25` reached ~90.9 lines/sec with `render_efficiency=1.00`).
-- Added a very basic Intel graphics probe or attach stub (`kernel/driver/intel_gfx.c`) inspired by Linux or BSD early i915-style bring-up: Intel display-class match, PCI memory or bus-master enable, MMIO BAR selection (BAR0 preferred, BAR2 fallback), and attach diagnostics. Modesetting/render submission remains follow-on.
-- Audio Stage-0 follow-on landed for hardware discovery: a new PCI audio probe-stub tranche now matches fifteen historically common controller families (AC97/HDA/legacy PCI), registers them through the native audio core registry, and tags per-device capability flags to keep `/dev/dsp` + `/dev/mixer` OSS compatibility planning directly aligned with discovered hardware classes.
+Historical highlights covered there include:
+- kernel-core perf and locking modernization details;
+- storage/network/libc tranche landings and follow-on fixes;
+- framebuffer and audio stage-by-stage updates;
+- guest validation checkpoints and known regressions.

@@ -1,0 +1,68 @@
+# auxv6 Development Changelog (2026-04)
+
+This document holds the detailed 2026-04 change history that was moved out of `docs/ROADMAP.md` so the roadmap can stay focused on current status and forward planning.
+
+## Recent Wins (2026-04 Snapshot)
+
+- Kernel-core performance hardening landed: larger core limits, O(1) cache lookups for buffers/inodes, per-CPU allocator caching, faster `mycpu()`, scheduler idle `hlt`, and syscall-return signal fast paths.
+- `top(1)` and `libterm` landed, backed by `/proc/loadavg` and per-process `cticks` accounting.
+- Added `/proc/schedstat` with scheduler pass/idle-halt/pick counters to support Track 0 follow-through without high-risk scheduler redesign.
+- `abrowse(1)` landed as a text-mode browser layered on the existing HTTP client path.
+- Server7 gained a dedicated boot profile, `/proc/server7` ownership control, and session-aware startup policy scaffolding.
+- Documentation/manpage coverage expanded substantially with markdown-aware `man(1)` and broader default userland docs.
+- `gfxperf(1)` landed to compute `/proc/gfxstats` flush/render efficiency; counter math handles 32-bit wrap safely.
+- Dirty-row bounded framebuffer-sync prototype was attempted then rolled back after login-path instability; runtime remains on known-good full-surface compare path.
+- Audio Stage-1 tranche 1 landed: per-fd PCM stream state/ring buffering and stream lifecycle open/close hooks.
+- Audio Stage-1 tranche 2 landed: poll/select readiness wiring for AUDIODEV stream descriptors.
+- Audio Stage-1 tranche 3 landed: `/proc/audio_clients` observability and `audiostat` integration.
+- Audio follow-on runtime fixes landed: `fcntl(F_SETFL/F_GETFL)` now toggles/reports stream `O_NONBLOCK`; `/proc/audio_clients` now includes owner pid.
+- Framebuffer bring-up and console performance advanced: DMA framebuffer allocation now reserves contiguous runs from freelist; tty upward scroll reuses existing framebuffer pixels instead of near-full rerender.
+- Locking modernization landed: spinlock acquire-timeout + nested-acquire panic behavior, lock-failure owner diagnostics, and lockdep-lite rank checks/diagnostics under debug flags.
+- Console locking split into domain-specific locks (`input_lock`, `tty_lock`, `gfx_lock`); login-path mismatch regression was fixed.
+- Lockdep follow-ons fixed real lock-order bugs and rank-map gaps discovered under guest load (`lockprobe`, `ls`, sanctioned sleep handoff paths).
+- Early lockdep bring-up ordering regression (`make qemu` vs `make qemu-nox`) was fixed by deferring enforcement until late boot.
+- Validation policy for lock/console work was codified: both `make qemu` and `make qemu-nox`, plus full `lockprobe` matrix (including `-L`).
+- Large-file hardening landed build-clean: 64-bit offsets/sizes in key file/inode/stat paths; lseek ABI follow-up (`sys_lseek64`/`_llseek`) landed.
+- Mount metadata limits and mount capacity were widened and centralized with shared policy constants.
+- Network fixed-limit cleanup landed: route/ARP capacities raised and centralized (`NET_ROUTE_TABLE_MAX`, `NET_ARP_CACHE_MAX`), with matching userspace query ceilings.
+- Real NIC coverage expanded across both legacy/stub and second-wave families; descriptor-ring TX/RX follow-on landed for 10 second-wave drivers.
+- Network observability follow-on landed: normalized link state and `/proc/net_dev` Link column surfaced in userland views.
+- Modem and serial groundwork landed: probe-visible modem inventory (`/proc/modems`) and `/dev/ttyS0..3` runtime endpoints with per-minor isolation plus `/proc/serial_tty` visibility.
+- Descriptor-ceiling modernization landed: dynamic per-process fdtable, split default/hard limits, unified enforcement, `/proc/fdlimits`, and `FD_CLOEXEC` end-to-end behavior.
+- Early-boot growth guardrails landed (entry window fit assertions, kernel image size checks, per-build footprint reporting).
+- Pipe and exec argument policy modernizations landed with compile-time fit/invariant guards.
+- NVMe/loop dev-number collision was fixed (loop moved to dev 44-51), restoring stable `/dev/nda` behavior.
+- Storage diagnostics improved with `/proc/bdev_table` and `lsblk -v`.
+- FAT32 NVMe workflow validated end-to-end; `fatregress -d /mnt/fat32` reported all checks passed.
+- exFAT, btrfs, and ufs2 read-only first tranches are in-tree with documented scope boundaries.
+- User stack growth (Area 5) is complete and guest validated (`stackgrowtest` 3/3 pass).
+
+## Past Changes (2026-03-30 to 2026-04-03)
+
+- `ping` revised to run until SIGINT and print exit statistics.
+- `traceroute` landed with ICMP ECHO probes and `IP_TTL` socket option support.
+- `setsockopt`/`getsockopt` syscalls landed with `IPPROTO_IP` + `IP_TTL` support.
+- AHCI recovery/retry instrumentation and interrupt-driven completion landed.
+- Toolchain hardening landed (`-nostdinc`, libgcc helper checks for 32-bit target).
+- libc portability tranches 1 and 2 landed (canonical headers, time/civil calendar, stdio seek/tell/scan, stream buffering).
+- procfs breadth expanded (`/proc/ahci_tune`, `/proc/vblk_flush`, `/proc/meminfo`, `/proc/lsof`).
+- devman boot integration landed with initial manpages and utility coverage.
+- Virtio-blk stress/retry harnesses and multi-device probe fixes landed.
+- Loop device hardening and `looptest` regression suite landed.
+- Terminal/PTY compatibility tranches landed (query/reply behavior, job control, termcap upgrades, `termcheck` coverage).
+- Framebuffer sync-path speedups and wrap-safe gfxperf delta accounting landed; later follow-ons improved scroll-heavy throughput.
+- Intel graphics attach/probe stub (`kernel/driver/intel_gfx.c`) landed as early bring-up scaffolding.
+- Audio Stage-0 follow-on probe tranche landed across common PCI audio families.
+
+## Known Regressions and Constraints (Tracked)
+
+- `NFILE=1024` remains a known trap-14 boundary failure; `NFILE=1023` remains the safe lock value while root cause work is pending.
+- TUN/TAP is partially landed (Phase 0 + early Phase 1 foundations); TAP/L2 parity and full soak signoff remain pending.
+- exFAT device-selection parity in `sys_mount` remains an open integration item.
+
+## Cross-References
+
+- Roadmap and active plan: `docs/ROADMAP.md`
+- Kernel perf hardening map: `docs/kernel-perf-hardening.md`
+- Allocator/VM blueprint: `docs/allocator-vm-refactor-blueprint.md`
+- Audio stage docs: `docs/audio-stage1-tranche1-runtime.md`, `docs/audio-stage1-tranche2-readiness.md`, `docs/audio-stage1-tranche3-observability.md`
