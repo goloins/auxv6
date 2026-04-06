@@ -25,6 +25,14 @@ struct {
   struct sleeplock lock;
 } file_global;
 
+struct {
+  struct spinlock lock;
+  struct file *head;
+  uint count;
+} file_cache;
+
+#define FILE_CACHE_MAX 512
+
 static int
 file_handle_valid(struct file *f)
 {
@@ -46,6 +54,7 @@ fileinit(void)
 {
   initsleeplock(&file_global.lock, "file_global");
   lockdep_set_rank(&file_global.lock.lk, LOCK_RANK_FTABLE_INTERNAL, "ftable_internal");
+  initlock(&file_cache.lock, "file_cache");
 }
 
 // Allocate a file structure (Phase 1A: kmalloc-backed instead of array scan)
@@ -54,9 +63,21 @@ filealloc(void)
 {
   struct file *f;
 
-  f = kmalloc(sizeof(*f));
-  if(f == 0)
-    return 0;
+  f = 0;
+  acquire(&file_cache.lock);
+  if(file_cache.head){
+    f = file_cache.head;
+    file_cache.head = *(struct file**)f;
+    if(file_cache.count > 0)
+      file_cache.count--;
+  }
+  release(&file_cache.lock);
+
+  if(f == 0){
+    f = kmalloc(sizeof(*f));
+    if(f == 0)
+      return 0;
+  }
 
   acquiresleep(&file_global.lock);
   memset(f, 0, sizeof(*f));
@@ -124,8 +145,17 @@ fileclose(struct file *f)
     socket_close(ff.socket);
   }
 
-  // Phase 1A: Free the kmalloc'd file object
-  kmalloc_free(f);
+  // Cache file objects to avoid kmalloc page churn in descriptor-heavy paths.
+  acquire(&file_cache.lock);
+  if(file_cache.count < FILE_CACHE_MAX){
+    *(struct file**)f = file_cache.head;
+    file_cache.head = f;
+    file_cache.count++;
+    release(&file_cache.lock);
+  } else {
+    release(&file_cache.lock);
+    kmalloc_free(f);
+  }
 }
 
 // Get metadata about file f.

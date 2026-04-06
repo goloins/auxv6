@@ -11,7 +11,7 @@
 #include "fcntl.h"
 #include "param.h"
 
-#define KALLOCSTRESS_PROFILE "2026-04-03-r2"
+#define KALLOCSTRESS_PROFILE "2026-04-06-r3"
 #define PAGE_BYTES 4096
 
 #define PASS(name) do { dprintf(1, "[PASS] %s\n", name); passed++; } while(0)
@@ -21,6 +21,97 @@ static int passed;
 static int failed;
 static int perf_score;
 static int perf_score_max;
+
+struct pipe_sys_timing {
+  uint pipe_ticks;
+  uint fork_ticks;
+  uint read_ticks;
+  uint wait_ticks;
+  uint close_ticks;
+  int pipe_calls;
+  int fork_calls;
+  int read_calls;
+  int wait_calls;
+  int close_calls;
+};
+
+struct fork_sys_timing {
+  uint fork_ticks;
+  uint wait_ticks;
+  int fork_calls;
+  int wait_calls;
+};
+
+struct vmstat_sample {
+  int pages_free;
+  int cache_alloc_hits;
+  int cache_alloc_misses;
+  int global_refill_batches;
+  int global_refill_pages;
+  int global_drain_batches;
+  int global_drain_pages;
+  int ref_increments;
+  int deferred_frees;
+};
+
+struct schedstat_sample {
+  int passes;
+  int idle_halts;
+  int picks;
+  int wake_calls;
+  int wake_scanned;
+  int wake_matched;
+  int waitpid_loops;
+  int waitpid_scanned;
+};
+
+static void
+vmstat_sample_init(struct vmstat_sample *s)
+{
+  memset(s, 0xff, sizeof(*s));
+}
+
+static void
+print_pipe_sys_timing(struct pipe_sys_timing *tm)
+{
+  int pipe_avg_ms;
+  int fork_avg_ms;
+  int read_avg_ms;
+  int wait_avg_ms;
+  int close_avg_ms;
+
+  pipe_avg_ms = tm->pipe_calls ? (int)((tm->pipe_ticks * 10U) / (uint)tm->pipe_calls) : 0;
+  fork_avg_ms = tm->fork_calls ? (int)((tm->fork_ticks * 10U) / (uint)tm->fork_calls) : 0;
+  read_avg_ms = tm->read_calls ? (int)((tm->read_ticks * 10U) / (uint)tm->read_calls) : 0;
+  wait_avg_ms = tm->wait_calls ? (int)((tm->wait_ticks * 10U) / (uint)tm->wait_calls) : 0;
+  close_avg_ms = tm->close_calls ? (int)((tm->close_ticks * 10U) / (uint)tm->close_calls) : 0;
+
+  dprintf(1,
+          "[DIAG] pipe-sys: pipe=%u/%d fork=%u/%d read=%u/%d waitpid=%u/%d close=%u/%d ticks avg_ms={%d,%d,%d,%d,%d}\n",
+          tm->pipe_ticks, tm->pipe_calls,
+          tm->fork_ticks, tm->fork_calls,
+          tm->read_ticks, tm->read_calls,
+          tm->wait_ticks, tm->wait_calls,
+          tm->close_ticks, tm->close_calls,
+          pipe_avg_ms, fork_avg_ms, read_avg_ms, wait_avg_ms, close_avg_ms);
+}
+
+static void
+print_fork_sys_timing(const char *tag, struct fork_sys_timing *tm)
+{
+  int fork_avg_ms;
+  int wait_avg_ms;
+
+  fork_avg_ms = tm->fork_calls ? (int)((tm->fork_ticks * 10U) / (uint)tm->fork_calls) : 0;
+  wait_avg_ms = tm->wait_calls ? (int)((tm->wait_ticks * 10U) / (uint)tm->wait_calls) : 0;
+
+  dprintf(1,
+          "[DIAG] %s-sys: fork=%u/%d waitpid=%u/%d ticks avg_ms={%d,%d}\n",
+          tag,
+          tm->fork_ticks, tm->fork_calls,
+          tm->wait_ticks, tm->wait_calls,
+          fork_avg_ms, wait_avg_ms);
+}
 
 static int
 ops_per_sec(int ops, uint t0, uint t1)
@@ -33,12 +124,19 @@ static void
 perf_record(const char *name, const char *unit, int value, int target, int max_pts)
 {
   int pts = 0;
+  long long scaled;
+
+  if(max_pts <= 0)
+    max_pts = 1;
 
   if(target > 0){
     if(value >= target)
       pts = max_pts;
-    else
-      pts = (value * max_pts) / target;
+    else {
+      // Rounded fixed-point score to avoid truncation bias.
+      scaled = (long long)value * (long long)max_pts;
+      pts = (int)((scaled + (target / 2)) / target);
+    }
   }
 
   if(pts < 0) pts = 0;
@@ -104,6 +202,101 @@ read_memfree_kb(void)
   return find_kb_value(buf, "MemFree:");
 }
 
+static int
+read_vmstat_sample(struct vmstat_sample *s)
+{
+  char buf[2048];
+
+  vmstat_sample_init(s);
+  if(read_text("/proc/vmstat", buf, sizeof(buf)) < 0)
+    return -1;
+
+  s->pages_free = find_kb_value(buf, "pages_free");
+  s->cache_alloc_hits = find_kb_value(buf, "cache_alloc_hits");
+  s->cache_alloc_misses = find_kb_value(buf, "cache_alloc_misses");
+  s->global_refill_batches = find_kb_value(buf, "global_refill_batches");
+  s->global_refill_pages = find_kb_value(buf, "global_refill_pages");
+  s->global_drain_batches = find_kb_value(buf, "global_drain_batches");
+  s->global_drain_pages = find_kb_value(buf, "global_drain_pages");
+  s->ref_increments = find_kb_value(buf, "ref_increments");
+  s->deferred_frees = find_kb_value(buf, "deferred_frees");
+  return 0;
+}
+
+static int
+delta_or_na(int after, int before)
+{
+  if(after < 0 || before < 0)
+    return 0x7fffffff;
+  return after - before;
+}
+
+static void
+print_vmstat_delta(int run_idx, int nruns,
+                   struct vmstat_sample *before,
+                   struct vmstat_sample *after)
+{
+  int d_pages_free = delta_or_na(after->pages_free, before->pages_free);
+  int d_hits = delta_or_na(after->cache_alloc_hits, before->cache_alloc_hits);
+  int d_miss = delta_or_na(after->cache_alloc_misses, before->cache_alloc_misses);
+  int d_refill_b = delta_or_na(after->global_refill_batches, before->global_refill_batches);
+  int d_refill_p = delta_or_na(after->global_refill_pages, before->global_refill_pages);
+  int d_drain_b = delta_or_na(after->global_drain_batches, before->global_drain_batches);
+  int d_drain_p = delta_or_na(after->global_drain_pages, before->global_drain_pages);
+  int d_ref_inc = delta_or_na(after->ref_increments, before->ref_increments);
+  int d_def_free = delta_or_na(after->deferred_frees, before->deferred_frees);
+
+  dprintf(1,
+          "[DIAG] run-vmstat %d/%d: d_pages_free=%d d_hits=%d d_miss=%d d_refill_b=%d d_refill_p=%d d_drain_b=%d d_drain_p=%d d_ref_inc=%d d_def_free=%d\n",
+          run_idx, nruns,
+          d_pages_free, d_hits, d_miss,
+          d_refill_b, d_refill_p,
+          d_drain_b, d_drain_p,
+          d_ref_inc, d_def_free);
+}
+
+static int
+read_schedstat_sample(struct schedstat_sample *s)
+{
+  char buf[1024];
+
+  memset(s, 0xff, sizeof(*s));
+  if(read_text("/proc/schedstat", buf, sizeof(buf)) < 0)
+    return -1;
+
+  s->passes = find_kb_value(buf, "passes");
+  s->idle_halts = find_kb_value(buf, "idle_halts");
+  s->picks = find_kb_value(buf, "picks");
+  s->wake_calls = find_kb_value(buf, "wake_calls");
+  s->wake_scanned = find_kb_value(buf, "wake_scanned");
+  s->wake_matched = find_kb_value(buf, "wake_matched");
+  s->waitpid_loops = find_kb_value(buf, "waitpid_loops");
+  s->waitpid_scanned = find_kb_value(buf, "waitpid_scanned");
+  return 0;
+}
+
+static void
+print_schedstat_delta(int run_idx, int nruns,
+                      struct schedstat_sample *before,
+                      struct schedstat_sample *after)
+{
+  int d_passes = delta_or_na(after->passes, before->passes);
+  int d_idle = delta_or_na(after->idle_halts, before->idle_halts);
+  int d_picks = delta_or_na(after->picks, before->picks);
+  int d_wake_calls = delta_or_na(after->wake_calls, before->wake_calls);
+  int d_wake_scanned = delta_or_na(after->wake_scanned, before->wake_scanned);
+  int d_wake_matched = delta_or_na(after->wake_matched, before->wake_matched);
+  int d_wait_loops = delta_or_na(after->waitpid_loops, before->waitpid_loops);
+  int d_wait_scanned = delta_or_na(after->waitpid_scanned, before->waitpid_scanned);
+
+  dprintf(1,
+          "[DIAG] run-sched %d/%d: d_passes=%d d_idle=%d d_picks=%d d_wake_calls=%d d_wake_scanned=%d d_wake_matched=%d d_wait_loops=%d d_wait_scanned=%d\n",
+          run_idx, nruns,
+          d_passes, d_idle, d_picks,
+          d_wake_calls, d_wake_scanned, d_wake_matched,
+          d_wait_loops, d_wait_scanned);
+}
+
 // ---------------------------------------------------------------------------
 // T1: fork-copyuvm pressure
 // Repeatedly fork children that grow/touch private memory then exit.
@@ -118,9 +311,16 @@ test_fork_copyuvm_pressure(void)
   int i;
   int ok = 1;
   uint t0 = uptime();
+  uint ts;
+  struct fork_sys_timing tm;
+
+  memset(&tm, 0, sizeof(tm));
 
   for(i = 0; i < FORK_ROUNDS; i++){
+    ts = uptime();
     int pid = fork();
+    tm.fork_ticks += uptime() - ts;
+    tm.fork_calls++;
     if(pid < 0){
       ok = 0;
       break;
@@ -136,10 +336,15 @@ test_fork_copyuvm_pressure(void)
     }
 
     int st = 0;
+    ts = uptime();
     if(waitpid(pid, &st, 0) != pid || st != 0){
+      tm.wait_ticks += uptime() - ts;
+      tm.wait_calls++;
       ok = 0;
       break;
     }
+    tm.wait_ticks += uptime() - ts;
+    tm.wait_calls++;
   }
 
   if(ok)
@@ -151,6 +356,8 @@ test_fork_copyuvm_pressure(void)
               ops_per_sec(FORK_ROUNDS, t0, uptime()),
               180,
               40);
+
+  print_fork_sys_timing("fork", &tm);
 }
 
 // ---------------------------------------------------------------------------
@@ -169,21 +376,39 @@ test_pipe_page_churn(void)
   char wbuf[PIPE_MSG_SIZE];
   char rbuf[PIPE_MSG_SIZE];
   uint t0 = uptime();
+  uint ts;
+  struct pipe_sys_timing tm;
+
+  memset(&tm, 0, sizeof(tm));
 
   for(i = 0; i < PIPE_MSG_SIZE; i++)
     wbuf[i] = (char)(i & 0x7f);
 
   for(i = 0; i < PIPE_ROUNDS; i++){
     int pfd[2];
+    ts = uptime();
     if(pipe(pfd) < 0){
+      tm.pipe_ticks += uptime() - ts;
+      tm.pipe_calls++;
       ok = 0;
       break;
     }
+    tm.pipe_ticks += uptime() - ts;
+    tm.pipe_calls++;
 
+    ts = uptime();
     int pid = fork();
+    tm.fork_ticks += uptime() - ts;
+    tm.fork_calls++;
     if(pid < 0){
+      ts = uptime();
       close(pfd[0]);
+      tm.close_ticks += uptime() - ts;
+      tm.close_calls++;
+      ts = uptime();
       close(pfd[1]);
+      tm.close_ticks += uptime() - ts;
+      tm.close_calls++;
       ok = 0;
       break;
     }
@@ -198,14 +423,28 @@ test_pipe_page_churn(void)
       exit(0);
     }
 
+    ts = uptime();
     close(pfd[1]);
+    tm.close_ticks += uptime() - ts;
+    tm.close_calls++;
+
+    ts = uptime();
     if(read(pfd[0], rbuf, sizeof(rbuf)) != sizeof(rbuf))
       ok = 0;
+    tm.read_ticks += uptime() - ts;
+    tm.read_calls++;
+
+    ts = uptime();
     close(pfd[0]);
+    tm.close_ticks += uptime() - ts;
+    tm.close_calls++;
 
     int st = 0;
+    ts = uptime();
     if(waitpid(pid, &st, 0) != pid || st != 0)
       ok = 0;
+    tm.wait_ticks += uptime() - ts;
+    tm.wait_calls++;
 
     if(!ok)
       break;
@@ -220,6 +459,8 @@ test_pipe_page_churn(void)
               ops_per_sec(PIPE_ROUNDS, t0, uptime()),
               320,
               35);
+
+  print_pipe_sys_timing(&tm);
 }
 
 // ---------------------------------------------------------------------------
@@ -238,6 +479,10 @@ test_allocator_reclaim_sanity(void)
   int i;
   int ok = 1;
   uint t0 = uptime();
+  uint ts;
+  struct fork_sys_timing tm;
+
+  memset(&tm, 0, sizeof(tm));
 
   before = read_memfree_kb();
   if(before < 0){
@@ -246,7 +491,10 @@ test_allocator_reclaim_sanity(void)
   }
 
   for(i = 0; i < LEAK_CHECK_FORKS; i++){
+    ts = uptime();
     int pid = fork();
+    tm.fork_ticks += uptime() - ts;
+    tm.fork_calls++;
     if(pid < 0){
       ok = 0;
       break;
@@ -262,10 +510,15 @@ test_allocator_reclaim_sanity(void)
     }
 
     int st = 0;
+    ts = uptime();
     if(waitpid(pid, &st, 0) != pid || st != 0){
+      tm.wait_ticks += uptime() - ts;
+      tm.wait_calls++;
       ok = 0;
       break;
     }
+    tm.wait_ticks += uptime() - ts;
+    tm.wait_calls++;
   }
 
   after = read_memfree_kb();
@@ -290,6 +543,9 @@ test_allocator_reclaim_sanity(void)
               ops_per_sec(LEAK_CHECK_FORKS, t0, uptime()),
               160,
               25);
+
+  dprintf(1, "[DIAG] reclaim-mem: before=%dKB after=%dKB drop=%dKB\n", before, after, drop);
+  print_fork_sys_timing("reclaim", &tm);
 }
 
 #define MAX_RUNS 32
@@ -312,6 +568,10 @@ main(int argc, char *argv[])
   }
 
   int run_scores[MAX_RUNS];
+  struct vmstat_sample vm_before;
+  struct vmstat_sample vm_after;
+  struct schedstat_sample sc_before;
+  struct schedstat_sample sc_after;
   int total_passed = 0, total_failed_runs = 0;
 
   dprintf(1, "kallocstress: allocator-focused stress and regression checks\n");
@@ -325,9 +585,19 @@ main(int argc, char *argv[])
     else
       dprintf(1, "\n");
 
+    if(read_vmstat_sample(&vm_before) < 0)
+      vmstat_sample_init(&vm_before);
+    if(read_schedstat_sample(&sc_before) < 0)
+      memset(&sc_before, 0xff, sizeof(sc_before));
+
     test_fork_copyuvm_pressure();
     test_pipe_page_churn();
     test_allocator_reclaim_sanity();
+
+    if(read_vmstat_sample(&vm_after) < 0)
+      vmstat_sample_init(&vm_after);
+    if(read_schedstat_sample(&sc_after) < 0)
+      memset(&sc_after, 0xff, sizeof(sc_after));
 
     run_scores[r] = perf_score;
     total_passed += passed;
@@ -336,6 +606,8 @@ main(int argc, char *argv[])
     dprintf(1, "\nkallocstress score: %d/%d (target >= 75)\n",
             perf_score, perf_score_max);
     dprintf(1, "kallocstress results: %d passed, %d failed\n", passed, failed);
+        print_vmstat_delta(r + 1, nruns, &vm_before, &vm_after);
+    print_schedstat_delta(r + 1, nruns, &sc_before, &sc_after);
   }
 
   if(nruns > 1){

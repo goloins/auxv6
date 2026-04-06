@@ -101,6 +101,7 @@ fdtable_init(struct fdtable *ft)
   memset(ft->fdflags, 0, PGSIZE);
   ft->capacity = FDTABLE_INIT_CAPACITY;
   ft->nfds = 0;
+  ft->next_fd_hint = 0;
 }
 
 // Expand fdtable by doubling capacity (or add 256 slots, whichever is larger).
@@ -169,7 +170,6 @@ fdtable_free(struct fdtable *ft)
   if(ft == 0)
     return;
   
-  // Close all open files in this table
   for(i = 0; i < ft->nfds; i++){
     if(ft->entries[i]){
       fileclose(ft->entries[i]);
@@ -204,6 +204,7 @@ fdtable_dup(struct fdtable *parent_ft, struct fdtable *child_ft)
   memset(child_ft->fdflags, 0, child_ft->capacity);
   child_ft->capacity = parent_ft->capacity;
   child_ft->nfds = parent_ft->nfds;
+  child_ft->next_fd_hint = parent_ft->next_fd_hint;
 
   // Duplicate file references and copy flags (FD_CLOEXEC survives fork; exec clears)
   for(i = 0; i < parent_ft->nfds; i++){
@@ -263,6 +264,8 @@ fd_clear(int fd)
 
   curproc->fdtable->entries[fd] = 0;
   curproc->fdtable->fdflags[fd] = 0;
+  if(fd < curproc->fdtable->next_fd_hint)
+    curproc->fdtable->next_fd_hint = fd;
 
   // Keep nfds as a high-water mark without trailing holes.
   while(curproc->fdtable->nfds > 0 &&
@@ -582,6 +585,8 @@ static int
 fdalloc(struct file *f)
 {
   int fd;
+  int start;
+  int limit_scan;
   struct proc *curproc = myproc();
   int limit;
 
@@ -596,12 +601,34 @@ fdalloc(struct file *f)
       return -1;
   }
 
-  // Reuse the lowest available descriptor (POSIX-like behavior).
-  for(fd = 0; fd < limit; fd++){
+  start = curproc->fdtable->next_fd_hint;
+  if(start < 0 || start >= limit)
+    start = 0;
+  if(start >= curproc->fdtable->nfds)
+    start = 0;
+
+  // Prefer the hint region first, then wrap to preserve low-fd reuse.
+  for(fd = start; fd < limit; fd++){
     if(fd >= curproc->fdtable->nfds)
       curproc->fdtable->nfds = fd + 1;
     if(curproc->fdtable->entries[fd] == 0){
       curproc->fdtable->entries[fd] = f;
+      curproc->fdtable->next_fd_hint = fd + 1;
+      if(curproc->fdtable->next_fd_hint >= limit)
+        curproc->fdtable->next_fd_hint = 0;
+      return fd;
+    }
+  }
+
+  limit_scan = (start < limit) ? start : limit;
+  for(fd = 0; fd < limit_scan; fd++){
+    if(fd >= curproc->fdtable->nfds)
+      curproc->fdtable->nfds = fd + 1;
+    if(curproc->fdtable->entries[fd] == 0){
+      curproc->fdtable->entries[fd] = f;
+      curproc->fdtable->next_fd_hint = fd + 1;
+      if(curproc->fdtable->next_fd_hint >= limit)
+        curproc->fdtable->next_fd_hint = 0;
       return fd;
     }
   }
@@ -969,6 +996,8 @@ sys_write(void)
   int addr;
   uint uaddr;
   char *kbuf;
+  char kbuf_small[512];
+  int use_heap;
   int tot;
   int want;
   int r;
@@ -985,19 +1014,25 @@ sys_write(void)
     return -1;
 
   uaddr = (uint)addr;
-  kbuf = (char*)kmalloc(PGSIZE);
-  if(kbuf == 0)
-    return -1;
+  use_heap = (n > (int)sizeof(kbuf_small));
+  if(use_heap){
+    kbuf = (char*)kmalloc(PGSIZE);
+    if(kbuf == 0)
+      return -1;
+  } else {
+    kbuf = kbuf_small;
+  }
 
   r = -1;
   tot = 0;
   while(tot < n){
     want = n - tot;
-    if(want > PGSIZE)
-      want = PGSIZE;
+    if(want > (use_heap ? PGSIZE : (int)sizeof(kbuf_small)))
+      want = use_heap ? PGSIZE : (int)sizeof(kbuf_small);
 
     if(copyin(p->pgdir, kbuf, uaddr + (uint)tot, (uint)want) < 0){
-      kmalloc_free(kbuf);
+      if(use_heap)
+        kmalloc_free(kbuf);
       return (tot > 0) ? tot : -1;
     }
 
@@ -1010,7 +1045,8 @@ sys_write(void)
       break;
   }
 
-  kmalloc_free(kbuf);
+  if(use_heap)
+    kmalloc_free(kbuf);
   if(tot > 0)
     return tot;
   return r;

@@ -519,6 +519,64 @@ all page-copy work at fork time; children share physical pages read-only until
 they write (copy-on-write fault).  That is the real path to Linux/BSD parity
 here, not sparse pre-alloc skipping.
 
+## Perf Follow-On: Post-Stability Slope Reduction (2026-04-06)
+
+After VM/trap stability recovered from the page-table corruption incident,
+`kallocstress` moved from crash-dominated behavior to a performance-shape issue:
+`pipe-page-churn` stayed above threshold but showed a repeated run-to-run slope
+downward while `fork-copyuvm` and `allocator-reclaim` remained comparatively
+healthy.
+
+The following targeted optimizations landed in this tranche.
+
+### Landed
+
+1. `kernel/core/vm.c`
+    - Tuned kernel-half PDE sync cadence to sampled passes with periodic full
+       sweep, reducing context-switch overhead while preserving canonicalization.
+
+2. `kernel/core/proc.c`
+    - Shifted from repeated kstack free/realloc churn to cached slot reuse for
+       contiguous 8KB kstacks.
+
+3. `kernel/core/pipe.c`
+    - Replaced per-byte pipe movement with chunked copyin/copyout in hot read/write paths.
+    - Reduced wakeup pressure via transition-based signaling only when state
+       crosses empty/full boundaries.
+    - Added bounded `struct pipe` reuse cache to reduce allocator churn.
+
+4. `kernel/fs/file.c`
+    - Added bounded `struct file` reuse cache to reduce frequent object allocate/free
+       traffic on short-lived descriptor lifecycles.
+
+5. `include/proc.h` + `kernel/core/sysfile.c`
+    - Added fd allocation hint cursor (`next_fd_hint`) and hint-based `fdalloc`
+       start index.
+    - Fixed stale-high-hint behavior by clamping out-of-range hints back to zero
+       when beyond current fd high-water.
+
+6. `kernel/core/sysfile.c`
+    - Added `sys_write` small-buffer stack fast path so small writes avoid
+       page-backed heap allocation churn in syscall hot loops.
+
+7. `user/kallocstress.c`
+    - Added per-syscall timing diagnostics in `pipe-page-churn`
+       (`pipe`, `fork`, `read`, `waitpid`, `close`) and tightened score math
+       rounding/bounds.
+
+### Measured Direction
+
+- Absolute `pipe-page-churn` throughput improved significantly versus early
+   incident-era baseline.
+- Remaining issue is a residual downward slope across repeated runs; this is now
+   treated as a narrow syscall-path tuning task rather than allocator/VM collapse.
+
+### Current Narrowing Plan
+
+Use the new `[DIAG] pipe-sys` breakdown from `kallocstress -n 5` to identify the
+single syscall bucket that drifts monotonically across rounds, then patch that
+path specifically instead of applying broad subsystem tuning.
+
 Allocator/fork redesign reset (2026-04-04, post-revert retest):
 
 After reverting sparse fork, `kallocstress` improved from `6/100` to `31/100`,

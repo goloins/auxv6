@@ -514,6 +514,9 @@ void            proc_tick_loadavg(void);
 void            proc_get_loadavg(uint *la1, uint *la5, uint *la15);
 void            proc_count_active(int *nrunning, int *ntotal);
 void            proc_get_sched_stats(uint *passes, uint *idle_halts, uint *picks);
+void            proc_get_sched_latency_stats(uint *wake_calls, uint *wake_scanned,
+											 uint *wake_matched, uint *wait_loops,
+											 uint *wait_scanned);
 int             proc_deliver_signal(struct proc *p);
 void            proc_handle_signals_on_return(struct proc *p);
 struct cpu*     mycpu(void);

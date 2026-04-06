@@ -60,6 +60,7 @@ struct fdtable {
   uint8_t     *fdflags;        // Per-fd flags (FD_CLOEXEC etc.), indexed by fd
   int capacity;                // Total allocated slots
   int nfds;                    // Number of valid fd entries (high water mark)
+  int next_fd_hint;            // Next candidate index for fdalloc search
 };
 
 struct procinfo_k {

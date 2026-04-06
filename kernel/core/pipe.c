@@ -23,17 +23,57 @@ typedef char pipe_struct_size_guard[
   (sizeof(struct pipe) <= PGSIZE) ? 1 : -1
 ];
 
+struct {
+  struct spinlock lock;
+  struct pipe *head;
+  uint count;
+} pipe_cache;
+
+static volatile int pipe_cache_state; // 0=uninit,1=initing,2=ready
+
+#define PIPE_CACHE_MAX 256
+
+static void
+pipe_cache_init_once(void)
+{
+  int s;
+
+  s = pipe_cache_state;
+  if(s == 2)
+    return;
+  if(s == 0 && __sync_bool_compare_and_swap(&pipe_cache_state, 0, 1)){
+    initlock(&pipe_cache.lock, "pipe_cache");
+    __sync_synchronize();
+    pipe_cache_state = 2;
+    return;
+  }
+
+  while(pipe_cache_state != 2)
+    ;
+}
+
 int
 pipealloc(struct file **f0, struct file **f1)
 {
   struct pipe *p;
 
+  pipe_cache_init_once();
+
   p = 0;
   *f0 = *f1 = 0;
   if((*f0 = filealloc()) == 0 || (*f1 = filealloc()) == 0)
     goto bad;
-  if((p = (struct pipe*)kalloc()) == 0)
+  acquire(&pipe_cache.lock);
+  if(pipe_cache.head){
+    p = pipe_cache.head;
+    pipe_cache.head = *(struct pipe**)p;
+    if(pipe_cache.count > 0)
+      pipe_cache.count--;
+  }
+  release(&pipe_cache.lock);
+  if(p == 0 && (p = (struct pipe*)kalloc()) == 0)
     goto bad;
+  memset(p, 0, sizeof(*p));
   p->readopen = 1;
   p->writeopen = 1;
   p->nwrite = 0;
@@ -74,7 +114,17 @@ pipeclose(struct pipe *p, int writable)
   }
   if(p->readopen == 0 && p->writeopen == 0){
     release(&p->lock);
-    kfree((char*)p);
+    pipe_cache_init_once();
+    acquire(&pipe_cache.lock);
+    if(pipe_cache.count < PIPE_CACHE_MAX){
+      *(struct pipe**)p = pipe_cache.head;
+      pipe_cache.head = p;
+      pipe_cache.count++;
+      release(&pipe_cache.lock);
+    } else {
+      release(&pipe_cache.lock);
+      kfree((char*)p);
+    }
   } else
     release(&p->lock);
 }
@@ -84,6 +134,11 @@ int
 pipewrite(struct pipe *p, char *addr, int n)
 {
   int i;
+  int chunk;
+  int space;
+  int was_empty;
+  uint off;
+  uint until_wrap;
   struct proc *curproc = myproc();
   int user_src;
 
@@ -99,8 +154,9 @@ pipewrite(struct pipe *p, char *addr, int n)
     curproc->sig_pending |= SIGBIT(SIGPIPE);
     return -1;
   }
-  
-  for(i = 0; i < n; i++){
+
+  i = 0;
+  while(i < n){
     while(p->nwrite == p->nread + PIPE_CAPACITY){  //DOC: pipewrite-full
       if(p->readopen == 0 || curproc->killed){
         release(&p->lock);
@@ -111,18 +167,35 @@ pipewrite(struct pipe *p, char *addr, int n)
       wakeup(&p->nread);
       sleep(&p->nwrite, &p->lock);  //DOC: pipewrite-sleep
     }
+
+    was_empty = (p->nwrite == p->nread);
+
+    space = PIPE_CAPACITY - (int)(p->nwrite - p->nread);
+    chunk = n - i;
+    if(chunk > space)
+      chunk = space;
+
+    off = p->nwrite % PIPE_CAPACITY;
+    until_wrap = PIPE_CAPACITY - off;
+    if((uint)chunk > until_wrap)
+      chunk = (int)until_wrap;
+
     if(user_src){
-      char ch;
-      if(copyin(curproc->pgdir, &ch, (uint)(addr + i), 1) < 0){
+      if(copyin(curproc->pgdir, &p->data[off], (uint)(addr + i), chunk) < 0){
         release(&p->lock);
         return (i > 0) ? i : -1;
       }
-      p->data[p->nwrite++ % PIPE_CAPACITY] = ch;
     } else {
-      p->data[p->nwrite++ % PIPE_CAPACITY] = addr[i];
+      memmove(&p->data[off], addr + i, chunk);
     }
+
+    p->nwrite += chunk;
+    i += chunk;
+
+    // Only wake readers when data transitions from empty to available.
+    if(was_empty)
+      wakeup(&p->nread);
   }
-  wakeup(&p->nread);  //DOC: pipewrite-wakeup1
   release(&p->lock);
   return n;
 }
@@ -131,6 +204,11 @@ int
 piperead(struct pipe *p, char *addr, int n)
 {
   int i;
+  int chunk;
+  int avail;
+  int was_full;
+  uint off;
+  uint until_wrap;
   int user_dst;
   struct proc *curproc;
 
@@ -147,21 +225,38 @@ piperead(struct pipe *p, char *addr, int n)
     }
     sleep(&p->nread, &p->lock); //DOC: piperead-sleep
   }
-  for(i = 0; i < n; i++){  //DOC: piperead-copy
+  i = 0;
+  while(i < n){  //DOC: piperead-copy
     if(p->nread == p->nwrite)
       break;
+
+    avail = (int)(p->nwrite - p->nread);
+    chunk = n - i;
+    if(chunk > avail)
+      chunk = avail;
+
+    was_full = (p->nwrite == p->nread + PIPE_CAPACITY);
+
+    off = p->nread % PIPE_CAPACITY;
+    until_wrap = PIPE_CAPACITY - off;
+    if((uint)chunk > until_wrap)
+      chunk = (int)until_wrap;
+
     if(user_dst){
-      char ch;
-      ch = p->data[p->nread++ % PIPE_CAPACITY];
       release(&p->lock);
-      if(copyout(curproc->pgdir, (uint)(addr + i), &ch, 1) < 0)
+      if(copyout(curproc->pgdir, (uint)(addr + i), &p->data[off], chunk) < 0)
         return (i > 0) ? i : -1;
       acquire(&p->lock);
     } else {
-      addr[i] = p->data[p->nread++ % PIPE_CAPACITY];
+      memmove(addr + i, &p->data[off], chunk);
     }
+    p->nread += chunk;
+    i += chunk;
+
+      // Only wake writers when space transitions from full to available.
+      if(was_full)
+        wakeup(&p->nwrite);  //DOC: piperead-wakeup
   }
-  wakeup(&p->nwrite);  //DOC: piperead-wakeup
   release(&p->lock);
   return i;
 }

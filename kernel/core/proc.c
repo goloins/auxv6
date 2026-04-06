@@ -48,6 +48,11 @@ extern uchar apic_cpu_map[256];
 // cleared.  Checked without the ptable.lock in the timer ISR hotpath so
 // proc_check_alarms() can skip the full table scan when no alarms exist.
 static volatile int active_alarm_count;
+static volatile uint wakeup_calls;
+static volatile uint wakeup_scans;
+static volatile uint wakeup_hits;
+static volatile uint waitpid_loops;
+static volatile uint waitpid_scans;
 
 static struct proc *initproc;
 
@@ -59,19 +64,6 @@ proc_kstack_npages(void)
   if((KSTACKSIZE % PGSIZE) != 0)
     panic("KSTACKSIZE align");
   return KSTACKSIZE / PGSIZE;
-}
-
-static void
-proc_free_kstack(char *kstack)
-{
-  uint i;
-  uint npages;
-
-  if(kstack == 0)
-    return;
-  npages = proc_kstack_npages();
-  for(i = 0; i < npages; i++)
-    kfree(kstack + (i * PGSIZE));
 }
 // Phase 1A: Check if any process has an open file on the given device.
 // Called by fs.c when unmounting or checking device in-use status.
@@ -209,6 +201,20 @@ proc_get_sched_stats(uint *passes, uint *idle_halts, uint *picks)
   *passes = p;
   *idle_halts = h;
   *picks = k;
+}
+
+void
+proc_get_sched_latency_stats(uint *wake_calls,
+                             uint *wake_scanned,
+                             uint *wake_matched,
+                             uint *wait_loops,
+                             uint *wait_scanned)
+{
+  *wake_calls = wakeup_calls;
+  *wake_scanned = wakeup_scans;
+  *wake_matched = wakeup_hits;
+  *wait_loops = waitpid_loops;
+  *wait_scanned = waitpid_scans;
 }
 
 static int
@@ -848,18 +854,19 @@ found:
 
   release(&ptable.lock);
 
-  // Allocate per-process kernel stack as contiguous pages.
-  p->kstack = kalloc_contiguous(proc_kstack_npages());
+  // Allocate per-process kernel stack as contiguous pages on first use,
+  // then keep it cached with the proc slot to avoid churn/fragmentation.
   if(p->kstack == 0){
-    p->state = UNUSED;
-    return 0;
+    p->kstack = kalloc_contiguous(proc_kstack_npages());
+    if(p->kstack == 0){
+      p->state = UNUSED;
+      return 0;
+    }
   }
 
   // Phase 1A: Allocate dynamic file descriptor table
   p->fdtable = fdtable_alloc();
   if(p->fdtable == 0){
-    proc_free_kstack(p->kstack);
-    p->kstack = 0;
     p->state = UNUSED;
     return 0;
   }
@@ -973,8 +980,6 @@ fork(void)
 
   // Copy process state from proc.
   if((np->pgdir = copyuvm(curproc->pgdir, curproc->sz)) == 0){
-    proc_free_kstack(np->kstack);
-    np->kstack = 0;
     np->state = UNUSED;
     return -1;
   }
@@ -1011,8 +1016,6 @@ fork(void)
 
   // Phase 1A: Duplicate file descriptor table from parent
   if(fdtable_dup(curproc->fdtable, np->fdtable) < 0){
-    proc_free_kstack(np->kstack);
-    np->kstack = 0;
     fdtable_free(np->fdtable);
     np->fdtable = 0;
     freevm(np->pgdir);
@@ -1106,6 +1109,8 @@ proc_waitpid(int pid, int *status, int options)
   for(;;){
     // Scan through table looking for exited children.
     havekids = 0;
+    waitpid_loops++;
+    waitpid_scans += NPROC;
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       if(p->parent != curproc)
         continue;
@@ -1139,8 +1144,6 @@ proc_waitpid(int pid, int *status, int options)
         // Found one.
         foundpid = p->pid;
         st = p->xstatus;
-        proc_free_kstack(p->kstack);
-        p->kstack = 0;
         freevm(p->pgdir);
         p->pid = 0;
         p->ppid = 0;
@@ -1766,10 +1769,34 @@ static void
 wakeup1(void *chan)
 {
   struct proc *p;
+  char *base;
+  char *end;
+  char *c;
 
-  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
-    if(p->state == SLEEPING && p->chan == chan)
+  wakeup_calls++;
+  base = (char*)ptable.proc;
+  end = (char*)&ptable.proc[NPROC];
+  c = (char*)chan;
+
+  // wait()/waitpid() sleeps on the current proc pointer as channel.
+  // If chan is exactly a proc-table slot address, wake that slot directly
+  // and avoid an O(NPROC) full-table walk.
+  if(c >= base && c < end && ((uint)(c - base) % sizeof(struct proc)) == 0){
+    p = (struct proc*)chan;
+    wakeup_scans++;
+    if(p->state == SLEEPING && p->chan == chan){
       p->state = RUNNABLE;
+      wakeup_hits++;
+    }
+    return;
+  }
+
+  wakeup_scans += NPROC;
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+    if(p->state == SLEEPING && p->chan == chan){
+      p->state = RUNNABLE;
+      wakeup_hits++;
+    }
 }
 
 // Wake up all processes sleeping on chan.

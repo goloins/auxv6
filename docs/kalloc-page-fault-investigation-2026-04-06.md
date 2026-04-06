@@ -923,3 +923,100 @@ Expected effect:
 - Prevent process-teardown panic escalation from malformed-present PTEs.
 - Reduce repeated kernel-half bad-PDE spam loops by self-healing canonical drift
    at lookup time.
+
+## Context-Freeze Continuation Log (2026-04-06, later)
+
+This section captures the full next tranche after the prior notes, with emphasis
+on what is now stable, what changed for performance, and what remains open.
+
+### 1) Kernel-half PDE sync corrected from false-positive drift
+
+What changed:
+- Kernel-half canonicalization remained in `switchuvm()` but compare/repair was
+   corrected to ignore hardware-volatile page-directory bits (accessed/dirty).
+- Repair logic now compares only stable ownership/protection bits and merges
+   runtime volatile bits when restoring canonical values.
+
+Why:
+- Early sync implementation treated A/D drift as corruption and produced high
+   repair spam/noise.
+- This masked real signals and added avoidable per-switch work.
+
+Outcome:
+- Canonical sync became deterministic and low-noise, preserving diagnostics for
+   actual structure corruption.
+
+### 2) First-corruptor diagnostics expanded in VM paths
+
+What changed in `kernel/core/vm.c`:
+- Added first-divergence attribution logs for bad PDE/PTE sites.
+- Added local entry-window dumps around malformed entries to capture neighboring
+   slot state at first observation.
+- Added proximity diagnostics relating suspicious entries to pgdir/kstack regions.
+
+Observed signal that motivated this:
+- Repeated code-like raw values in page-table entries, including
+   `0x80118c93` and `0x80153e05`, indicating deterministic overwrite patterns
+   instead of random allocator noise.
+
+### 3) Kstack robustness upgrade (stability tranche)
+
+What changed:
+- `KSTACKSIZE` increased from 4096 to 8192 in `include/param.h`.
+- Per-proc kernel stacks moved to contiguous 8KB handling and later to cached
+   slot reuse in `kernel/core/proc.c`.
+
+Why:
+- Crash signatures and adjacency diagnostics suggested stack-pressure sensitivity
+   under mixed trap/scheduler pressure.
+
+Outcome:
+- Boot reliability improved materially; hard-fault frequency dropped.
+
+### 4) Performance tranches applied after stability recovery
+
+Goal:
+- Eliminate run-to-run degradation in `kallocstress` (`pipe-page-churn`) while
+   preserving correctness gains.
+
+Changes landed:
+1. `kernel/core/vm.c`
+    - Kernel-PDE sync pass tuned to sampled operation with periodic full sweep
+       instead of unconditional full-cost behavior.
+2. `kernel/core/pipe.c`
+    - Chunked copy path in `pipewrite`/`piperead` (less per-byte syscall-copy cost).
+    - Wakeups made transition-based (empty->non-empty, full->non-full) to reduce
+       global wakeup scan pressure.
+    - Added bounded recycled `struct pipe` cache.
+3. `kernel/fs/file.c`
+    - Added bounded recycled `struct file` cache.
+4. `kernel/core/sysfile.c` + `include/proc.h`
+    - Added `fdtable.next_fd_hint` and hint-based `fdalloc` scan start.
+    - Added hint clamp fix so stale high hints are reset when outside active fd range.
+5. `kernel/core/sysfile.c`
+    - Added small-write stack-buffer fast path in `sys_write` to avoid frequent
+       page-backed heap alloc/free churn for tiny writes.
+6. `user/kallocstress.c`
+    - Score calculation hardened (bounded/rounded math).
+    - Added per-syscall diagnostics for `pipe-page-churn`:
+       `pipe`, `fork`, `read`, `waitpid`, `close` timing breakdown.
+
+Current status after these tranches:
+- Absolute throughput improved dramatically versus pre-tranche baseline.
+- Remaining issue is a residual downward slope across repeated runs in
+   `pipe-page-churn`, now treated as a targeted micro-path tuning problem rather
+   than a correctness/stability failure.
+
+### 5) Immediate next diagnostic step (pending user run)
+
+Pending data collection:
+- Run the instrumented `kallocstress -n 5` and capture `[DIAG] pipe-sys ...`
+   lines.
+
+Decision gate:
+- Next patch will target the single syscall bucket that shows monotonic drift
+   (`pipe`, `fork`, `read`, `waitpid`, or `close`) rather than broad subsystem
+   tuning.
+
+This section is intentionally written as a context-preservation checkpoint so
+follow-on work can continue without losing provenance of already-landed fixes.

@@ -52,6 +52,7 @@ This document holds the detailed 2026-04 change history that was moved out of `d
 - Core text/crypto utility tranche landed: `uniq`, `sort`, `sum`, `sleep`, `yes`, `true`, `false`, `sync`, `touch`, `md5sum`, `sha1sum`, `sha224sum`, `sha256sum`, `sha384sum`, `sha512sum`, `base32`, `base64`, plus minimal `asroot` with `/bin/sudo` compatibility symlink.
 - Archive utility tranche landed: `tar` (ustar create/list/extract) and `gunzip`, backed by shared libc gzip helpers (`user/gzip.c`); `tar` supports gzip-compressed archive reads (`-z` and `.gz`/`.tgz` auto-detect) and create-mode gzip output (`tar -c -z`) via valid deflate stored blocks.
 - Allocator incident documentation landed for `lsblk`-triggered kernel trap-14 during NVMe/Btrfs bring-up: see `docs/kalloc-page-fault-investigation-2026-04-06.md` for symbolication, fault-path analysis, and debug plan.
+- Post-incident stabilization/perf tranche landed: canonical kernel-PDE sync corrected to ignore volatile HW bits, first-fault VM attribution/logging expanded, kernel-stack robustness upgraded (8KB contiguous + reuse cache), and `kallocstress` slope-reduction optimizations shipped across pipe/file/fd/sys_write hot paths (chunked pipe I/O, transition wakeups, object caches, fd hinting, small-write stack fast path) with new per-syscall diagnostics for residual `pipe-page-churn` drift.
 
 ## Past Changes (2026-03-30 to 2026-04-03)
 
