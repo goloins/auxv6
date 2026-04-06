@@ -19,12 +19,33 @@ static struct spinlock usb_lock;
 static struct usb_hc_probe usb_hc[USB_HC_MAX];
 static uint usb_hc_count;
 
+#define USB_DEV_CAND_MAX      64
+#define USB_DEV_SPEED_UNKNOWN 0
+#define USB_DEV_SPEED_LOW     1
+#define USB_DEV_SPEED_FULL    2
+#define USB_DEV_SPEED_HIGH    3
+#define USB_DEV_SPEED_SUPER   4
+
+struct usb_dev_candidate {
+  uchar hc_index;
+  uchar kind;
+  uchar port;
+  uchar present;
+  uchar enabled;
+  uchar speed;
+};
+
+static struct usb_dev_candidate usb_dev[USB_DEV_CAND_MAX];
+static uint usb_dev_count;
+
 static const struct usb_hc_ops usb_hc_ops_unknown = {
   .name = "unknown",
   .probe_regs = 0,
   .reset = 0,
   .halt = 0,
   .start = 0,
+  .scan_ports = 0,
+  .service_ports = 0,
 };
 
 static const struct usb_hc_ops usb_hc_ops_uhci = {
@@ -34,6 +55,7 @@ static const struct usb_hc_ops usb_hc_ops_uhci = {
   .halt = usb_uhci_halt,
   .start = usb_uhci_start,
   .scan_ports = usb_uhci_scan_ports,
+  .service_ports = usb_uhci_service_ports,
 };
 
 static const struct usb_hc_ops usb_hc_ops_ohci = {
@@ -43,6 +65,7 @@ static const struct usb_hc_ops usb_hc_ops_ohci = {
   .halt = usb_ohci_halt,
   .start = usb_ohci_start,
   .scan_ports = usb_ohci_scan_ports,
+  .service_ports = usb_ohci_service_ports,
 };
 
 static const struct usb_hc_ops usb_hc_ops_ehci = {
@@ -52,6 +75,7 @@ static const struct usb_hc_ops usb_hc_ops_ehci = {
   .halt = usb_ehci_halt,
   .start = usb_ehci_start,
   .scan_ports = usb_ehci_scan_ports,
+  .service_ports = usb_ehci_service_ports,
 };
 
 static const struct usb_hc_ops usb_hc_ops_xhci = {
@@ -61,6 +85,7 @@ static const struct usb_hc_ops usb_hc_ops_xhci = {
   .halt = usb_xhci_halt,
   .start = usb_xhci_start,
   .scan_ports = usb_xhci_scan_ports,
+  .service_ports = usb_xhci_service_ports,
 };
 
 static int
@@ -212,6 +237,67 @@ usb_hc_phase_name(uchar phase)
 }
 
 static const char*
+usb_dev_speed_name(uchar speed)
+{
+  switch(speed){
+  case USB_DEV_SPEED_LOW:
+    return "low";
+  case USB_DEV_SPEED_FULL:
+    return "full";
+  case USB_DEV_SPEED_HIGH:
+    return "high";
+  case USB_DEV_SPEED_SUPER:
+    return "super";
+  case USB_DEV_SPEED_UNKNOWN:
+  default:
+    return "unknown";
+  }
+}
+
+static void
+usb_collect_candidates(uint hc_index, struct usb_hc_probe *sc)
+{
+  uint n;
+
+  if(!sc || !sc->rh_present)
+    return;
+
+  for(n = 0; n < sc->rh_ports && n < 32; n++){
+    struct usb_dev_candidate *dc;
+    uint mask;
+    uint present;
+    uint enabled;
+
+    if(usb_dev_count >= USB_DEV_CAND_MAX)
+      break;
+
+    mask = (1U << n);
+    present = (sc->rh_connect_bits & mask) ? 1 : 0;
+    enabled = (sc->rh_enabled_bits & mask) ? 1 : 0;
+    if(!present && !enabled)
+      continue;
+
+    dc = &usb_dev[usb_dev_count++];
+    memset(dc, 0, sizeof(*dc));
+    dc->hc_index = (uchar)hc_index;
+    dc->kind = sc->kind;
+    dc->port = (uchar)(n + 1);
+    dc->present = (uchar)present;
+    dc->enabled = (uchar)enabled;
+    if(sc->rh_super_bits & mask)
+      dc->speed = USB_DEV_SPEED_SUPER;
+    else if(sc->rh_high_bits & mask)
+      dc->speed = USB_DEV_SPEED_HIGH;
+    else if(sc->rh_full_bits & mask)
+      dc->speed = USB_DEV_SPEED_FULL;
+    else if(sc->rh_low_bits & mask)
+      dc->speed = USB_DEV_SPEED_LOW;
+    else
+      dc->speed = USB_DEV_SPEED_UNKNOWN;
+  }
+}
+
+static const char*
 usb_hc_error_name(uint err)
 {
   switch(err){
@@ -271,7 +357,9 @@ usb_init(void)
 
   acquire(&usb_lock);
   memset(usb_hc, 0, sizeof(usb_hc));
+  memset(usb_dev, 0, sizeof(usb_dev));
   usb_hc_count = 0;
+  usb_dev_count = 0;
 
   ndev = pci_device_count();
   for(i = 0; i < ndev; i++){
@@ -352,6 +440,14 @@ usb_init(void)
                 else
                   sc->scan_successes++;
               }
+              if(ops->service_ports){
+                sc->service_attempts++;
+                if(ops->service_ports(sc, dev) < 0)
+                  sc->service_failures++;
+                else
+                  sc->service_successes++;
+              }
+              usb_collect_candidates(usb_hc_count - 1, sc);
             }
           }
         }
@@ -453,6 +549,10 @@ usb_procfs_dump(char *buf, uint max)
   if(usb_buf_putu(buf, max, &len, degraded) < 0) goto out;
   if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
 
+  if(usb_buf_puts(buf, max, &len, "usb_dev_count ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_dev_count) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
   for(i = 0; i < usb_hc_count; i++){
     struct usb_hc_probe *sc = &usb_hc[i];
 
@@ -535,11 +635,49 @@ usb_procfs_dump(char *buf, uint max)
     if(usb_buf_putu(buf, max, &len, sc->scan_successes) < 0) goto out;
     if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
     if(usb_buf_putu(buf, max, &len, sc->scan_failures) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " sv=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, sc->service_attempts) < 0) goto out;
+    if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, sc->service_successes) < 0) goto out;
+    if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, sc->service_failures) < 0) goto out;
     if(usb_buf_puts(buf, max, &len, " rh_connect=0x") < 0) goto out;
     if(usb_buf_puthex32(buf, max, &len, sc->rh_connect_bits) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " rh_enabled=0x") < 0) goto out;
+    if(usb_buf_puthex32(buf, max, &len, sc->rh_enabled_bits) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " rh_low=0x") < 0) goto out;
+    if(usb_buf_puthex32(buf, max, &len, sc->rh_low_bits) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " rh_full=0x") < 0) goto out;
+    if(usb_buf_puthex32(buf, max, &len, sc->rh_full_bits) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " rh_high=0x") < 0) goto out;
+    if(usb_buf_puthex32(buf, max, &len, sc->rh_high_bits) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " rh_super=0x") < 0) goto out;
+    if(usb_buf_puthex32(buf, max, &len, sc->rh_super_bits) < 0) goto out;
     if(usb_buf_puts(buf, max, &len, " failures=") < 0) goto out;
     if(usb_buf_putu(buf, max, &len, sc->init_failures) < 0) goto out;
 
+    if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+  }
+
+  for(i = 0; i < usb_dev_count; i++){
+    struct usb_dev_candidate *dc = &usb_dev[i];
+
+    if(usb_buf_puts(buf, max, &len, "dev") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, i) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " hc=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, dc->hc_index) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " kind=") < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, usb_hc_kind_name(dc->kind)) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " port=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, dc->port) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " present=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, dc->present) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " enabled=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, dc->enabled) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " speed=") < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, usb_dev_speed_name(dc->speed)) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " addr_ready=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, (dc->present && dc->enabled) ? 1 : 0) < 0) goto out;
     if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
   }
 

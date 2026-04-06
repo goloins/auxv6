@@ -184,7 +184,39 @@ usb_xhci_start(struct usb_hc_probe *sc, struct pci_dev *dev)
 /* Port register sets: opbase + 0x400 + n*0x10, PORTSC at port_base+0x0 (xHCI spec 5.4.8). */
 #define XHCI_OP_PORTSC_BASE  0x400
 #define XHCI_PORTSC_CCS      (1U << 0)    /* Current Connect Status */
+#define XHCI_PORTSC_PED      (1U << 1)    /* Port Enabled/Disabled */
+#define XHCI_PORTSC_PR       (1U << 4)    /* Port Reset */
 #define XHCI_PORTSC_CSC      (1U << 17)   /* Connect Status Change (RW1C) */
+#define XHCI_PORTSC_SPEED_SHIFT 10
+#define XHCI_PORTSC_SPEED_MASK  (0xFU << XHCI_PORTSC_SPEED_SHIFT)
+#define XHCI_PSIV_FULL       1U
+#define XHCI_PSIV_LOW        2U
+#define XHCI_PSIV_HIGH       3U
+#define XHCI_PSIV_SUPER      4U
+
+static void
+xhci_apply_speed(struct usb_hc_probe *sc, uint n, uint portsc)
+{
+  uint psiv;
+
+  psiv = (portsc & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT;
+  switch(psiv){
+  case XHCI_PSIV_LOW:
+    sc->rh_low_bits |= (1U << n);
+    break;
+  case XHCI_PSIV_FULL:
+    sc->rh_full_bits |= (1U << n);
+    break;
+  case XHCI_PSIV_HIGH:
+    sc->rh_high_bits |= (1U << n);
+    break;
+  case XHCI_PSIV_SUPER:
+    sc->rh_super_bits |= (1U << n);
+    break;
+  default:
+    break;
+  }
+}
 
 int
 usb_xhci_scan_ports(struct usb_hc_probe *sc, struct pci_dev *dev)
@@ -206,6 +238,10 @@ usb_xhci_scan_ports(struct usb_hc_probe *sc, struct pci_dev *dev)
 
   sc->rh_connect_bits = 0;
   sc->rh_change_bits = 0;
+  sc->rh_low_bits = 0;
+  sc->rh_full_bits = 0;
+  sc->rh_high_bits = 0;
+  sc->rh_super_bits = 0;
 
   for(n = 0; n < sc->rh_ports && n < 32; n++){
     uint portsc = xhci_read(regs, opbase + XHCI_OP_PORTSC_BASE + n * 0x10);
@@ -214,5 +250,53 @@ usb_xhci_scan_ports(struct usb_hc_probe *sc, struct pci_dev *dev)
     if(portsc & XHCI_PORTSC_CSC)
       sc->rh_change_bits |= (1U << n);
   }
+  return 0;
+}
+
+int
+usb_xhci_service_ports(struct usb_hc_probe *sc, struct pci_dev *dev)
+{
+  volatile uint *regs;
+  uint opbase;
+  uint n;
+
+  if(!sc || !sc->reg_probe_ok || sc->rh_ports == 0)
+    return 0;
+
+  regs = xhci_regs(dev);
+  if(!regs)
+    return -1;
+
+  opbase = (uint)sc->cap_length;
+  if(opbase < 0x10 || opbase > 0x80)
+    return -1;
+
+  sc->rh_enabled_bits = 0;
+  sc->rh_low_bits = 0;
+  sc->rh_full_bits = 0;
+  sc->rh_high_bits = 0;
+  sc->rh_super_bits = 0;
+
+  for(n = 0; n < sc->rh_ports && n < 32; n++){
+    uint off = opbase + XHCI_OP_PORTSC_BASE + n * 0x10;
+    uint portsc = xhci_read(regs, off);
+
+    if(!(portsc & XHCI_PORTSC_CCS))
+      continue;
+
+    portsc &= ~XHCI_PORTSC_CSC;
+    portsc |= XHCI_PORTSC_PR;
+    xhci_write(regs, off, portsc);
+
+    if(xhci_wait_bits(regs, off, XHCI_PORTSC_PR, 0) < 0)
+      continue;
+
+    microdelay(2000);
+    portsc = xhci_read(regs, off);
+    xhci_apply_speed(sc, n, portsc);
+    if(portsc & XHCI_PORTSC_PED)
+      sc->rh_enabled_bits |= (1U << n);
+  }
+
   return 0;
 }

@@ -84,7 +84,7 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_MODEMS_INO, "modems", 2048 },
   { PROCFS_BCACHE_HEALTH_INO, "bcache_health", 512 },
   { PROCFS_FIREWIRE_INO, "firewire", 2048 },
-  { PROCFS_USB_INO, "usb", 2048 },
+  { PROCFS_USB_INO, "usb", 4096 },
   { PROCFS_NFORCE_INO, "nforce", 2048 },
   { 0, 0, 0 }
 };

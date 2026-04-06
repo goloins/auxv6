@@ -157,6 +157,9 @@ usb_ohci_start(struct usb_hc_probe *sc, struct pci_dev *dev)
 /* HcRhPortStatus[n] at 0x54 + n*4 (OHCI spec 7.4.2). */
 #define OHCI_RH_PORT_STATUS  0x54
 #define OHCI_RH_CCS          (1U << 0)    /* CurrentConnectStatus */
+#define OHCI_RH_PES          (1U << 1)    /* PortEnableStatus */
+#define OHCI_RH_PRS          (1U << 4)    /* PortResetStatus */
+#define OHCI_RH_LSDA         (1U << 9)    /* LowSpeedDeviceAttached */
 #define OHCI_RH_CSC          (1U << 16)   /* ConnectStatusChange (RWC) */
 
 int
@@ -174,13 +177,63 @@ usb_ohci_scan_ports(struct usb_hc_probe *sc, struct pci_dev *dev)
 
   sc->rh_connect_bits = 0;
   sc->rh_change_bits = 0;
+  sc->rh_low_bits = 0;
+  sc->rh_full_bits = 0;
+  sc->rh_high_bits = 0;
+  sc->rh_super_bits = 0;
 
   for(n = 0; n < sc->rh_ports && n < 32; n++){
     uint ps = ohci_read(regs, OHCI_RH_PORT_STATUS + n * 4);
-    if(ps & OHCI_RH_CCS)
+    if(ps & OHCI_RH_CCS){
       sc->rh_connect_bits |= (1U << n);
+      if(ps & OHCI_RH_LSDA)
+        sc->rh_low_bits |= (1U << n);
+      else
+        sc->rh_full_bits |= (1U << n);
+    }
     if(ps & OHCI_RH_CSC)
       sc->rh_change_bits |= (1U << n);
   }
+  return 0;
+}
+
+int
+usb_ohci_service_ports(struct usb_hc_probe *sc, struct pci_dev *dev)
+{
+  volatile uint *regs;
+  uint n;
+
+  if(!sc || !sc->reg_probe_ok || sc->rh_ports == 0)
+    return 0;
+
+  regs = ohci_regs(dev);
+  if(!regs)
+    return -1;
+
+  sc->rh_enabled_bits = 0;
+  sc->rh_low_bits = 0;
+  sc->rh_full_bits = 0;
+  sc->rh_high_bits = 0;
+  sc->rh_super_bits = 0;
+
+  for(n = 0; n < sc->rh_ports && n < 32; n++){
+    uint off = OHCI_RH_PORT_STATUS + n * 4;
+    uint ps = ohci_read(regs, off);
+
+    if(!(ps & OHCI_RH_CCS))
+      continue;
+
+    ohci_write(regs, off, OHCI_RH_PRS);
+    microdelay(10000);
+
+    ps = ohci_read(regs, off);
+    if(ps & OHCI_RH_LSDA)
+      sc->rh_low_bits |= (1U << n);
+    else
+      sc->rh_full_bits |= (1U << n);
+    if(ps & OHCI_RH_PES)
+      sc->rh_enabled_bits |= (1U << n);
+  }
+
   return 0;
 }

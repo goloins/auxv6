@@ -144,6 +144,9 @@ usb_uhci_start(struct usb_hc_probe *sc, struct pci_dev *dev)
 #define UHCI_REG_PORTSC1     0x10
 #define UHCI_PORTSC_CCS      (1U << 0)   /* Current Connect Status */
 #define UHCI_PORTSC_CSC      (1U << 1)   /* Connect Status Change (RWC) */
+#define UHCI_PORTSC_PED      (1U << 2)   /* Port Enabled/Disabled */
+#define UHCI_PORTSC_LSDA     (1U << 8)   /* Low Speed Device Attached */
+#define UHCI_PORTSC_PR       (1U << 9)   /* Port Reset */
 
 int
 usb_uhci_scan_ports(struct usb_hc_probe *sc, struct pci_dev *dev)
@@ -159,13 +162,68 @@ usb_uhci_scan_ports(struct usb_hc_probe *sc, struct pci_dev *dev)
   iobase = uhci_iobase(sc);
   sc->rh_connect_bits = 0;
   sc->rh_change_bits = 0;
+  sc->rh_low_bits = 0;
+  sc->rh_full_bits = 0;
+  sc->rh_high_bits = 0;
+  sc->rh_super_bits = 0;
 
   for(n = 0; n < sc->rh_ports && n < 2; n++){
     ushort ps = inw(iobase + UHCI_REG_PORTSC1 + (ushort)(n * 2));
-    if(ps & UHCI_PORTSC_CCS)
+    if(ps & UHCI_PORTSC_CCS){
       sc->rh_connect_bits |= (1U << n);
+      if(ps & UHCI_PORTSC_LSDA)
+        sc->rh_low_bits |= (1U << n);
+      else
+        sc->rh_full_bits |= (1U << n);
+    }
     if(ps & UHCI_PORTSC_CSC)
       sc->rh_change_bits |= (1U << n);
   }
+  return 0;
+}
+
+int
+usb_uhci_service_ports(struct usb_hc_probe *sc, struct pci_dev *dev)
+{
+  ushort iobase;
+  uint n;
+
+  (void)dev;
+
+  if(!sc || !sc->reg_probe_ok || sc->rh_ports == 0)
+    return 0;
+
+  iobase = uhci_iobase(sc);
+  sc->rh_enabled_bits = 0;
+  sc->rh_low_bits = 0;
+  sc->rh_full_bits = 0;
+  sc->rh_high_bits = 0;
+  sc->rh_super_bits = 0;
+
+  for(n = 0; n < sc->rh_ports && n < 2; n++){
+    ushort off = (ushort)(UHCI_REG_PORTSC1 + n * 2);
+    ushort ps = inw(iobase + off);
+
+    if(!(ps & UHCI_PORTSC_CCS))
+      continue;
+
+    ps |= UHCI_PORTSC_PR;
+    outw(iobase + off, ps);
+    microdelay(10000);
+
+    ps = inw(iobase + off);
+    ps = (ushort)(ps & ~UHCI_PORTSC_PR);
+    outw(iobase + off, ps);
+    microdelay(2000);
+
+    ps = inw(iobase + off);
+    if(ps & UHCI_PORTSC_LSDA)
+      sc->rh_low_bits |= (1U << n);
+    else
+      sc->rh_full_bits |= (1U << n);
+    if(ps & UHCI_PORTSC_PED)
+      sc->rh_enabled_bits |= (1U << n);
+  }
+
   return 0;
 }
