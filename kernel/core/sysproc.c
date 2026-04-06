@@ -84,18 +84,25 @@ sys_waitpid(void)
   int pid;
   int options;
   int staddr;
-  int *status;
+  int st;
+  int ret;
+  struct proc *p;
 
   if(argint(0, &pid) < 0 || argint(1, &staddr) < 0 || argint(2, &options) < 0)
     return -1;
 
-  status = 0;
-  if(staddr != 0) {
-    if(argptr(1, (char**)&status, sizeof(int)) < 0)
-      return -1;
-  }
+  if(staddr == 0)
+    return proc_waitpid(pid, 0, options);
 
-  return proc_waitpid(pid, status, options);
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+
+  ret = proc_waitpid(pid, &st, options);
+  if(ret > 0 && copyout(p->pgdir, (uint)staddr, &st, sizeof(st)) < 0)
+    return -1;
+
+  return ret;
 }
 
 int
@@ -105,19 +112,26 @@ sys_wait4(void)
   int options;
   int staddr;
   int ruaddr;
-  int *status;
+  int st;
+  int ret;
+  struct proc *p;
 
   if(argint(0, &pid) < 0 || argint(1, &staddr) < 0 ||
      argint(2, &options) < 0 || argint(3, &ruaddr) < 0)
     return -1;
 
-  status = 0;
-  if(staddr != 0) {
-    if(argptr(1, (char**)&status, sizeof(int)) < 0)
-      return -1;
-  }
+  if(staddr == 0)
+    return proc_wait4(pid, 0, options, (uint)ruaddr);
 
-  return proc_wait4(pid, status, options, (uint)ruaddr);
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+
+  ret = proc_wait4(pid, &st, options, (uint)ruaddr);
+  if(ret > 0 && copyout(p->pgdir, (uint)staddr, &st, sizeof(st)) < 0)
+    return -1;
+
+  return ret;
 }
 
 int
@@ -127,19 +141,26 @@ sys_waitid(void)
   int id;
   int infoaddr;
   int options;
-  int *infop;
+  int info[4];
+  int ret;
+  struct proc *p;
 
   if(argint(0, &idtype) < 0 || argint(1, &id) < 0 ||
      argint(2, &infoaddr) < 0 || argint(3, &options) < 0)
     return -1;
 
-  infop = 0;
-  if(infoaddr != 0) {
-    if(argptr(2, (char**)&infop, sizeof(int) * 4) < 0)
-      return -1;
-  }
+  if(infoaddr == 0)
+    return proc_waitid(idtype, id, 0, options);
 
-  return proc_waitid(idtype, id, infop, options);
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+
+  ret = proc_waitid(idtype, id, info, options);
+  if(ret == 0 && copyout(p->pgdir, (uint)infoaddr, info, sizeof(info)) < 0)
+    return -1;
+
+  return ret;
 }
 
 int
@@ -560,11 +581,18 @@ sys_uptime(void)
 int
 sys_date(void)
 {
-  struct rtcdate *r;
+  int raddr;
+  struct rtcdate r;
+  struct proc *p;
 
-  if(argptr(0, (char**)&r, sizeof(*r)) < 0)
+  if(argint(0, &raddr) < 0)
     return -1;
-  cmostime(r);
+  cmostime(&r);
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+  if(copyout(p->pgdir, (uint)raddr, &r, sizeof(r)) < 0)
+    return -1;
   return 0;
 }
 
@@ -572,56 +600,79 @@ int
 sys_clock_gettime(void)
 {
   int clock_id;
-  struct timespec *tp;
+  int tpaddr;
+  struct timespec tp;
+  struct proc *p;
 
   if(argint(0, &clock_id) < 0)
     return -1;
-  if(argptr(1, (char**)&tp, sizeof(*tp)) < 0)
+  if(argint(1, &tpaddr) < 0)
+    return -1;
+
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
     return -1;
 
   if(clock_id == KTIME_CLOCK_MONOTONIC) {
-    ktime_get_monotonic(tp);
-    return 0;
-  }
-  if(clock_id == KTIME_CLOCK_REALTIME) {
-    ktime_get_realtime(tp);
-    return 0;
+    ktime_get_monotonic(&tp);
+  } else if(clock_id == KTIME_CLOCK_REALTIME) {
+    ktime_get_realtime(&tp);
+  } else {
+    return -1;
   }
 
-  return -1;
+  if(copyout(p->pgdir, (uint)tpaddr, &tp, sizeof(tp)) < 0)
+    return -1;
+  return 0;
 }
 
 int
 sys_clock_settime(void)
 {
   int clock_id;
-  struct timespec *tp;
+  int tpaddr;
+  struct timespec tp;
+  struct proc *p;
 
   if(argint(0, &clock_id) < 0)
     return -1;
-  if(argptr(1, (char**)&tp, sizeof(*tp)) < 0)
+  if(argint(1, &tpaddr) < 0)
     return -1;
   if(clock_id != KTIME_CLOCK_REALTIME)
     return -1;
   if(proc_getuid() != 0)
     return -1;
-  return ktime_set_realtime(tp);
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+  if(copyin(p->pgdir, &tp, (uint)tpaddr, sizeof(tp)) < 0)
+    return -1;
+  return ktime_set_realtime(&tp);
 }
 
 int
 sys_uname(void)
 {
-  char *buf;
+  int bufaddr;
   int size;
+  struct proc *p;
+  char kbuf[64];
 
   if(argint(1, &size) < 0)
     return -1;
   if(size <= 0)
     return -1;
-  if(argptr(0, &buf, size) < 0)
+  if(argint(0, &bufaddr) < 0)
     return -1;
 
-  safestrcpy(buf, "a/ux86 aux86 i686", size);
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+
+  safestrcpy(kbuf, "a/ux86 aux86 i686", sizeof(kbuf));
+  if(copyout(p->pgdir, (uint)bufaddr, kbuf,
+             (uint)(size < (int)sizeof(kbuf) ? size : (int)sizeof(kbuf))) < 0)
+    return -1;
   return 0;
 }
 
@@ -629,71 +680,80 @@ int
 sys_getrlimit(void)
 {
   int resource;
-  struct rlimit *rlp;
+  int rlpaddr;
+  struct rlimit krl;
   struct proc *p;
   rlim_t fixed_stack;
 
   if(argint(0, &resource) < 0)
     return -1;
-  if(argptr(1, (char**)&rlp, sizeof(*rlp)) < 0)
+  if(argint(1, &rlpaddr) < 0)
     return -1;
 
   p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
   fixed_stack = (rlim_t)(USER_STACK_PAGES * PGSIZE);
 
   switch(resource) {
   case RLIMIT_NOFILE:
-    rlp->rlim_cur = p ? (rlim_t)p->rlimit_nofile_cur : (rlim_t)NOFILE_DEFAULT;
-    rlp->rlim_max = p ? (rlim_t)p->rlimit_nofile_max : (rlim_t)NOFILE_HARD;
-    return 0;
+    krl.rlim_cur = (rlim_t)p->rlimit_nofile_cur;
+    krl.rlim_max = (rlim_t)p->rlimit_nofile_max;
+    break;
   case RLIMIT_STACK:
-    rlp->rlim_cur = fixed_stack;
-    rlp->rlim_max = fixed_stack;
-    return 0;
+    krl.rlim_cur = fixed_stack;
+    krl.rlim_max = fixed_stack;
+    break;
   case RLIMIT_CPU:
   case RLIMIT_FSIZE:
   case RLIMIT_DATA:
   case RLIMIT_CORE:
   case RLIMIT_RSS:
   case RLIMIT_AS:
-    rlp->rlim_cur = RLIM_INFINITY;
-    rlp->rlim_max = RLIM_INFINITY;
-    return 0;
+    krl.rlim_cur = RLIM_INFINITY;
+    krl.rlim_max = RLIM_INFINITY;
+    break;
   default:
     return -1;
   }
+
+  if(copyout(p->pgdir, (uint)rlpaddr, &krl, sizeof(krl)) < 0)
+    return -1;
+  return 0;
 }
 
 int
 sys_setrlimit(void)
 {
   int resource;
-  struct rlimit *rlp;
+  int rlpaddr;
+  struct rlimit rlp;
   struct proc *p;
   rlim_t fixed_stack;
 
   if(argint(0, &resource) < 0)
     return -1;
-  if(argptr(1, (char**)&rlp, sizeof(*rlp)) < 0)
-    return -1;
-
   p = myproc();
-  if(p == 0)
+  if(p == 0 || p->pgdir == 0)
     return -1;
-  if(rlp->rlim_cur > rlp->rlim_max)
+  if(argint(1, &rlpaddr) < 0)
+    return -1;
+  if(copyin(p->pgdir, &rlp, (uint)rlpaddr, sizeof(rlp)) < 0)
+    return -1;
+  if(rlp.rlim_cur > rlp.rlim_max)
     return -1;
 
   fixed_stack = (rlim_t)(USER_STACK_PAGES * PGSIZE);
 
   switch(resource) {
   case RLIMIT_NOFILE:
-    if(rlp->rlim_max > (rlim_t)NOFILE_HARD)
+    if(rlp.rlim_max > (rlim_t)NOFILE_HARD)
       return -1;
-    p->rlimit_nofile_cur = (uint)rlp->rlim_cur;
-    p->rlimit_nofile_max = (uint)rlp->rlim_max;
+    p->rlimit_nofile_cur = (uint)rlp.rlim_cur;
+    p->rlimit_nofile_max = (uint)rlp.rlim_max;
     return 0;
   case RLIMIT_STACK:
-    if(rlp->rlim_cur == fixed_stack && rlp->rlim_max == fixed_stack)
+    if(rlp.rlim_cur == fixed_stack && rlp.rlim_max == fixed_stack)
       return 0;
     return -1;
   default:

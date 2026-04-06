@@ -821,7 +821,9 @@ int
 sys_getdents(void)
 {
   struct file *f;
-  struct dirent *ents;
+  struct dirent *uents;
+  struct dirent *kents;
+  struct proc *p;
   struct dirent de;
   int max;
   int out;
@@ -831,10 +833,17 @@ sys_getdents(void)
     return -1;
   if(max < 0)
     return -1;
-  if(max > PGSIZE / sizeof(*ents))
+  if(max > PGSIZE / sizeof(*uents))
     return -1;
-  if(argptr(1, (char**)&ents, max * sizeof(*ents)) < 0)
+  if(argptr(1, (char**)&uents, max * sizeof(*uents)) < 0)
     return -1;
+
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+
+  if(max == 0)
+    return 0;
 
   if(f->type != FD_INODE)
     return -1;
@@ -846,21 +855,34 @@ sys_getdents(void)
   }
   iunlock(f->ip);
 
+  kents = (struct dirent*)kmalloc(max * sizeof(*kents));
+  if(kents == 0)
+    return -1;
+
   out = 0;
   while(out < max){
     r = fileread(f, (char*)&de, sizeof(de));
     if(r == 0)
       break;
-    if(r < 0)
+    if(r < 0){
+      kmalloc_free(kents);
       return (out > 0) ? out : -1;
+    }
     if(r != sizeof(de))
       break;
     if(de.inum == 0)
       continue;
     if(!vfs_dirent_visible(f->ip, &de))
       continue;
-    ents[out++] = de;
+    kents[out++] = de;
   }
+
+  if(out > 0 && copyout(p->pgdir, (uint)uents, kents, out * sizeof(*kents)) < 0){
+    kmalloc_free(kents);
+    return -1;
+  }
+
+  kmalloc_free(kents);
 
   return out;
 }
@@ -1622,16 +1644,41 @@ int
 sys_mountinfo(void)
 {
   struct vfs_mount_info *out;
+  struct vfs_mount_info *kout;
+  struct proc *p;
   int max;
+  int n;
 
   if(argint(1, &max) < 0)
     return -1;
   if(max <= 0)
     return -1;
+  if(max > VFS_MOUNTS_MAX)
+    max = VFS_MOUNTS_MAX;
   if(argptr(0, (char**)&out, max * sizeof(*out)) < 0)
     return -1;
 
-  return vfs_get_mounts(out, max);
+  kout = (struct vfs_mount_info*)kmalloc(max * sizeof(*kout));
+  if(kout == 0)
+    return -1;
+
+  n = vfs_get_mounts(kout, max);
+  if(n < 0){
+    kmalloc_free(kout);
+    return -1;
+  }
+
+  if(n > 0){
+    p = myproc();
+    if(p == 0 || p->pgdir == 0 ||
+       copyout(p->pgdir, (uint)out, kout, n * sizeof(*kout)) < 0){
+      kmalloc_free(kout);
+      return -1;
+    }
+  }
+
+  kmalloc_free(kout);
+  return n;
 }
 
 int
@@ -1954,6 +2001,8 @@ sys_poll(void)
   int nfds;
   int timeout_ms;
   struct kpollfd *ufds;
+  struct kpollfd *kfds;
+  struct proc *curproc;
   int timeout_ticks;
   uint start;
   uint now;
@@ -1963,16 +2012,27 @@ sys_poll(void)
     return -1;
   if(nfds < 0)
     return -1;
-  {
-    struct proc *curproc = myproc();
-    if(curproc == 0 || nfds > proc_fd_limit(curproc))
-      return -1;
-  }
+  curproc = myproc();
+  if(curproc == 0 || curproc->pgdir == 0 || nfds > proc_fd_limit(curproc))
+    return -1;
+
   if(nfds == 0)
     ufds = 0;
   else {
     if(argptr(0, (char**)&ufds, nfds * sizeof(*ufds)) < 0)
       return -1;
+  }
+
+  if(nfds == 0){
+    kfds = 0;
+  } else {
+    kfds = (struct kpollfd*)kmalloc(nfds * sizeof(*kfds));
+    if(kfds == 0)
+      return -1;
+    if(copyin(curproc->pgdir, kfds, (uint)ufds, nfds * sizeof(*kfds)) < 0){
+      kmalloc_free(kfds);
+      return -1;
+    }
   }
 
   if(timeout_ms < 0)
@@ -1985,19 +2045,48 @@ sys_poll(void)
   release(&tickslock);
 
   for(;;){
-    ready = poll_scan(ufds, nfds);
-    if(ready > 0)
+    ready = poll_scan(kfds, nfds);
+    if(ready > 0){
+      if(nfds > 0 && copyout(curproc->pgdir, (uint)ufds, kfds,
+                             nfds * sizeof(*kfds)) < 0){
+        if(kfds)
+          kmalloc_free(kfds);
+        return -1;
+      }
+      if(kfds)
+        kmalloc_free(kfds);
       return ready;
-    if(timeout_ms == 0)
+    }
+    if(timeout_ms == 0){
+      if(nfds > 0 && copyout(curproc->pgdir, (uint)ufds, kfds,
+                             nfds * sizeof(*kfds)) < 0){
+        if(kfds)
+          kmalloc_free(kfds);
+        return -1;
+      }
+      if(kfds)
+        kmalloc_free(kfds);
       return 0;
-    if(myproc()->killed)
+    }
+    if(myproc()->killed){
+      if(kfds)
+        kmalloc_free(kfds);
       return -1;
+    }
 
     if(timeout_ticks >= 0){
       acquire(&tickslock);
       now = ticks;
       if(now - start >= (uint)timeout_ticks){
         release(&tickslock);
+        if(nfds > 0 && copyout(curproc->pgdir, (uint)ufds, kfds,
+                               nfds * sizeof(*kfds)) < 0){
+          if(kfds)
+            kmalloc_free(kfds);
+          return -1;
+        }
+        if(kfds)
+          kmalloc_free(kfds);
         return 0;
       }
       sleep(&ticks, &tickslock);

@@ -1244,38 +1244,44 @@ int
 proc_sigaction(int signo, uint act_addr, uint oldact_addr)
 {
   struct proc *p;
-  uint *act;
-  uint *oldact;
+  uint act_local[3];
+  uint oldact_local[3];
+  int have_act;
+  int have_oldact;
 
   if(!valid_signo(signo))
     return -1;
 
   p = myproc();
-  if(p == 0)
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+
+  have_act = (act_addr != 0);
+  have_oldact = (oldact_addr != 0);
+
+  if(have_act && copyin(p->pgdir, act_local, act_addr, sizeof(act_local)) < 0)
     return -1;
 
   acquire(&ptable.lock);
 
-  if(oldact_addr != 0) {
-    oldact = (uint*)oldact_addr;
-    oldact[0] = p->sig_handler[signo];
-    oldact[1] = p->sig_actmask[signo];
-    oldact[2] = p->sig_actflags[signo];
+  if(have_oldact) {
+    oldact_local[0] = p->sig_handler[signo];
+    oldact_local[1] = p->sig_actmask[signo];
+    oldact_local[2] = p->sig_actflags[signo];
   }
 
   // SIGKILL/SIGSTOP keep fixed default actions.
-  if(act_addr != 0 && (signo == SIGKILL || signo == SIGSTOP)) {
+  if(have_act && (signo == SIGKILL || signo == SIGSTOP)) {
     release(&ptable.lock);
     return -1;
   }
 
-  if(act_addr != 0) {
-    act = (uint*)act_addr;
-    p->sig_handler[signo] = act[0];
-    p->sig_actmask[signo] = act[1];
-    p->sig_actflags[signo] = act[2];
+  if(have_act) {
+    p->sig_handler[signo] = act_local[0];
+    p->sig_actmask[signo] = act_local[1];
+    p->sig_actflags[signo] = act_local[2];
 
-    if(act[0] == 1)
+    if(act_local[0] == 1)
       p->sig_ignored |= SIGBIT(signo);
     else
       p->sig_ignored &= ~SIGBIT(signo);
@@ -1283,6 +1289,10 @@ proc_sigaction(int signo, uint act_addr, uint oldact_addr)
   }
 
   release(&ptable.lock);
+
+  if(have_oldact && copyout(p->pgdir, oldact_addr, oldact_local, sizeof(oldact_local)) < 0)
+    return -1;
+
   return 0;
 }
 
@@ -1296,19 +1306,16 @@ proc_sigprocmask(int how, uint set_addr, uint oldset_addr)
   sigset_t unblockable;
 
   p = myproc();
-  if(p == 0)
+  if(p == 0 || p->pgdir == 0)
     return -1;
 
   unblockable = SIGBIT(SIGKILL) | SIGBIT(SIGSTOP);
   set = 0;
-  if(set_addr != 0)
-    set = *(sigset_t*)set_addr;
+  if(set_addr != 0 && copyin(p->pgdir, &set, set_addr, sizeof(set)) < 0)
+    return -1;
 
   acquire(&ptable.lock);
   oldmask = p->sig_mask;
-
-  if(oldset_addr != 0)
-    *(sigset_t*)oldset_addr = oldmask;
 
   if(set_addr != 0) {
     if(how == SIG_BLOCK)
@@ -1326,6 +1333,10 @@ proc_sigprocmask(int how, uint set_addr, uint oldset_addr)
   }
 
   release(&ptable.lock);
+
+  if(oldset_addr != 0 && copyout(p->pgdir, oldset_addr, &oldmask, sizeof(oldmask)) < 0)
+    return -1;
+
   return 0;
 }
 
@@ -1430,31 +1441,37 @@ proc_tcgetattr(int fd, uint termios_addr)
 {
   struct proc *curproc;
   struct file *f;
+  struct termios kt;
+  int rc;
 
   curproc = myproc();
-  if(curproc == 0 || termios_addr == 0)
+  if(curproc == 0 || curproc->pgdir == 0 || termios_addr == 0)
     return -1;
   if(!proc_is_tty_fd(fd)) {
     return -1;
   }
 
-    f = curproc->fdtable->entries[fd];
+  f = curproc->fdtable->entries[fd];
   if(f == 0 || f->ip == 0)
     return -1;
 
   if(f->ip->major == CONSOLE) {
     if(curproc->tty < 0)
       return -1;
-    return console_get_termios(curproc->tty, (struct termios*)termios_addr);
+    rc = console_get_termios(curproc->tty, &kt);
+  } else if(f->ip->major == PTYDEV) {
+    rc = pty_get_termios_file(f, &kt);
+  } else if(f->ip->major == SERIALDEV) {
+    rc = serial_get_termios_file(f, &kt);
+  } else {
+    return -1;
   }
 
-  if(f->ip->major == PTYDEV)
-    return pty_get_termios_file(f, (struct termios*)termios_addr);
-
-  if(f->ip->major == SERIALDEV)
-    return serial_get_termios_file(f, (struct termios*)termios_addr);
-
-  return -1;
+  if(rc < 0)
+    return rc;
+  if(copyout(curproc->pgdir, termios_addr, &kt, sizeof(kt)) < 0)
+    return -1;
+  return 0;
 }
 
 int
@@ -1462,29 +1479,33 @@ proc_tcsetattr(int fd, int optional_actions, uint termios_addr)
 {
   struct proc *curproc;
   struct file *f;
+  struct termios kt;
 
   curproc = myproc();
-  if(curproc == 0 || termios_addr == 0)
+  if(curproc == 0 || curproc->pgdir == 0 || termios_addr == 0)
     return -1;
   if(!proc_is_tty_fd(fd)) {
     return -1;
   }
 
-    f = curproc->fdtable->entries[fd];
+  if(copyin(curproc->pgdir, &kt, termios_addr, sizeof(kt)) < 0)
+    return -1;
+
+  f = curproc->fdtable->entries[fd];
   if(f == 0 || f->ip == 0)
     return -1;
 
   if(f->ip->major == CONSOLE) {
     if(curproc->tty < 0)
       return -1;
-    return console_set_termios(curproc->tty, (const struct termios*)termios_addr, optional_actions);
+    return console_set_termios(curproc->tty, &kt, optional_actions);
   }
 
   if(f->ip->major == PTYDEV)
-    return pty_set_termios_file(f, (const struct termios*)termios_addr, optional_actions);
+    return pty_set_termios_file(f, &kt, optional_actions);
 
   if(f->ip->major == SERIALDEV)
-    return serial_set_termios_file(f, (const struct termios*)termios_addr, optional_actions);
+    return serial_set_termios_file(f, &kt, optional_actions);
 
   return -1;
 }

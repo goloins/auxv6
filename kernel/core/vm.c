@@ -276,6 +276,19 @@ deallocuvm(pde_t *pgdir, uint oldsz, uint newsz)
   pte_t *pte;
   uint a;
 
+  if(pgdir == 0)
+    panic("deallocuvm: no pgdir");
+  if(((uint)pgdir % PGSIZE) != 0){
+    cprintf("deallocuvm: unaligned pgdir=%p oldsz=%u newsz=%u\n",
+            pgdir, oldsz, newsz);
+    panic("deallocuvm pgdir align");
+  }
+  if((uint)pgdir < KERNBASE || !kaddr_writable_current_pgdir((char*)pgdir)){
+    cprintf("deallocuvm: unmapped pgdir=%p oldsz=%u newsz=%u\n",
+            pgdir, oldsz, newsz);
+    panic("deallocuvm pgdir map");
+  }
+
   if(newsz >= oldsz)
     return oldsz;
 
@@ -371,8 +384,17 @@ kaddr_writable_current_pgdir(char *kva)
   else
     pgdir = kpgdir;
 
-  if(pgdir == 0)
+  if(pgdir == 0){
+    /*
+     * Early boot runs before kvmalloc() publishes kpgdir. During that phase,
+     * entrypgdir maps only the bootstrap high window [KERNBASE,
+     * KERNBASE+BOOT_EARLY_PHYSTOP). Treat that range as writable so debug
+     * guards do not create false bootloop panics before full VM bring-up.
+     */
+    if((uint)kva >= KERNBASE && (uint)kva < (KERNBASE + BOOT_EARLY_PHYSTOP))
+      return 1;
     return 0;
+  }
 
   pte = walkpgdir(pgdir, kva, 0);
   if(pte == 0 || ((*pte & PTE_P) == 0))
@@ -435,15 +457,22 @@ int
 uvm_release_pte(uint *pte)
 {
   uint pa;
+  uint raw;
 
   if(pte == 0)
     return -1;
   if((*pte & PTE_P) == 0)
     return 0;
 
+  raw = *pte;
   pa = PTE_ADDR(*pte);
   if(pa == 0)
     return -1;
+  if(pa >= PHYSTOP || pa >= KERNBASE){
+    cprintf("uvm_release_pte: bad pa pte=%p raw=%x pa=%x flags=%x\n",
+            pte, raw, pa, PTE_FLAGS(raw));
+    panic("uvm_release_pte pa");
+  }
 
   // Phase 3 scaffolding: release through allocator refcount path so
   // shared-page teardown is safe when COW mappings are introduced.

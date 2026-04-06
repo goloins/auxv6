@@ -1354,48 +1354,123 @@ int
 sys_netifinfo(void)
 {
   struct netif_info *out;
+  struct netif_info *kout;
+  struct proc *p;
   int max;
+  int n;
 
   if(argint(1, &max) < 0)
     return -1;
   if(max <= 0)
     return -1;
+  if(max > MAXNETIF)
+    max = MAXNETIF;
   if(argptr(0, (char**)&out, max * sizeof(*out)) < 0)
     return -1;
 
-  return if_dump(out, max);
+  kout = (struct netif_info*)kmalloc(max * sizeof(*kout));
+  if(kout == 0)
+    return -1;
+
+  n = if_dump(kout, max);
+  if(n < 0){
+    kmalloc_free(kout);
+    return -1;
+  }
+
+  if(n > 0){
+    p = myproc();
+    if(p == 0 || p->pgdir == 0 ||
+       copyout(p->pgdir, (uint)out, kout, n * sizeof(*kout)) < 0){
+      kmalloc_free(kout);
+      return -1;
+    }
+  }
+
+  kmalloc_free(kout);
+  return n;
 }
 
 int
 sys_routeinfo(void)
 {
   struct route_info *out;
+  struct route_info *kout;
+  struct proc *p;
   int max;
+  int n;
 
   if(argint(1, &max) < 0)
     return -1;
   if(max <= 0)
     return -1;
+  if(max > NET_ROUTE_TABLE_MAX)
+    max = NET_ROUTE_TABLE_MAX;
   if(argptr(0, (char**)&out, max * sizeof(*out)) < 0)
     return -1;
 
-  return route_dump(out, max);
+  kout = (struct route_info*)kmalloc(max * sizeof(*kout));
+  if(kout == 0)
+    return -1;
+
+  n = route_dump(kout, max);
+  if(n < 0){
+    kmalloc_free(kout);
+    return -1;
+  }
+
+  if(n > 0){
+    p = myproc();
+    if(p == 0 || p->pgdir == 0 ||
+       copyout(p->pgdir, (uint)out, kout, n * sizeof(*kout)) < 0){
+      kmalloc_free(kout);
+      return -1;
+    }
+  }
+
+  kmalloc_free(kout);
+  return n;
 }
 
 int
 sys_arpinfo(void)
 {
   struct arp_info *out;
+  struct arp_info *kout;
+  struct proc *p;
   int max;
+  int n;
 
   if(argint(1, &max) < 0)
     return -1;
   if(max <= 0)
     return -1;
+  if(max > NET_ARP_CACHE_MAX)
+    max = NET_ARP_CACHE_MAX;
   if(argptr(0, (char**)&out, max * sizeof(*out)) < 0)
     return -1;
 
-  return arp_dump(out, max);
+  kout = (struct arp_info*)kmalloc(max * sizeof(*kout));
+  if(kout == 0)
+    return -1;
+
+  n = arp_dump(kout, max);
+  if(n < 0){
+    kmalloc_free(kout);
+    return -1;
+  }
+
+  if(n > 0){
+    p = myproc();
+    if(p == 0 || p->pgdir == 0 ||
+       copyout(p->pgdir, (uint)out, kout, n * sizeof(*kout)) < 0){
+      kmalloc_free(kout);
+      return -1;
+    }
+  }
+
+  kmalloc_free(kout);
+  return n;
 }
 
 int
@@ -1521,15 +1596,22 @@ int
 sys_setsockopt(void)
 {
   int sockfd, level, optname, optlen;
-  char *optval;
+  int optval_raw;
+  uint optval_u;
   struct socket *s;
   int v;
+  struct proc *p;
 
   if(argint(0, &sockfd) < 0 || argint(1, &level) < 0 || argint(2, &optname) < 0)
     return -1;
   if(argint(4, &optlen) < 0 || optlen <= 0 || optlen > 64)
     return -1;
-  if(argptr(3, &optval, optlen) < 0)
+  if(argint(3, &optval_raw) < 0)
+    return -1;
+  optval_u = (uint)optval_raw;
+
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
     return -1;
 
   s = getfd_socket(sockfd);
@@ -1540,7 +1622,8 @@ sys_setsockopt(void)
     if(optname == IP_TTL) {
       if(optlen < (int)sizeof(int))
         return -1;
-      memmove(&v, optval, sizeof(int));
+      if(copyin(p->pgdir, &v, optval_u, sizeof(int)) < 0)
+        return -1;
       if(v < 1 || v > 255)
         return -1;
       acquire(&socket_lock);
@@ -1554,7 +1637,8 @@ sys_setsockopt(void)
     if(optname == SO_REUSEADDR) {
       if(optlen < (int)sizeof(int))
         return -1;
-      memmove(&v, optval, sizeof(int));
+      if(copyin(p->pgdir, &v, optval_u, sizeof(int)) < 0)
+        return -1;
       acquire(&socket_lock);
       s->reuseaddr = v ? 1 : 0;
       release(&socket_lock);
@@ -1569,21 +1653,28 @@ sys_setsockopt(void)
 int
 sys_getsockopt(void)
 {
-  int sockfd, level, optname, optlen_raw;
-  char *optval;
-  int *optlenp;
+  int sockfd, level, optname, optval_raw, optlenp_raw;
+  uint optval_u;
+  uint optlenp_u;
+  int optlen;
+  int outv;
   struct socket *s;
+  struct proc *p;
 
   if(argint(0, &sockfd) < 0 || argint(1, &level) < 0 || argint(2, &optname) < 0)
     return -1;
-  // arg3 = optval pointer, arg4 = optlen pointer
-  if(argint(4, &optlen_raw) < 0)
+  if(argint(3, &optval_raw) < 0 || argint(4, &optlenp_raw) < 0)
     return -1;
-  if(argptr(4, (char**)&optlenp, sizeof(int)) < 0)
+
+  optval_u = (uint)optval_raw;
+  optlenp_u = (uint)optlenp_raw;
+
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
     return -1;
-  if(*optlenp < (int)sizeof(int))
+  if(copyin(p->pgdir, &optlen, optlenp_u, sizeof(int)) < 0)
     return -1;
-  if(argptr(3, &optval, sizeof(int)) < 0)
+  if(optlen < (int)sizeof(int))
     return -1;
 
   s = getfd_socket(sockfd);
@@ -1592,24 +1683,28 @@ sys_getsockopt(void)
 
   if(level == IPPROTO_IP) {
     if(optname == IP_TTL) {
-      int v;
       acquire(&socket_lock);
-      v = (int)s->ttl;
+      outv = (int)s->ttl;
       release(&socket_lock);
-      memmove(optval, &v, sizeof(int));
-      *optlenp = sizeof(int);
+      if(copyout(p->pgdir, optval_u, &outv, sizeof(int)) < 0)
+        return -1;
+      optlen = sizeof(int);
+      if(copyout(p->pgdir, optlenp_u, &optlen, sizeof(int)) < 0)
+        return -1;
       return 0;
     }
   }
 
   if(level == SOL_SOCKET) {
     if(optname == SO_REUSEADDR) {
-      int v;
       acquire(&socket_lock);
-      v = (int)s->reuseaddr;
+      outv = (int)s->reuseaddr;
       release(&socket_lock);
-      memmove(optval, &v, sizeof(int));
-      *optlenp = sizeof(int);
+      if(copyout(p->pgdir, optval_u, &outv, sizeof(int)) < 0)
+        return -1;
+      optlen = sizeof(int);
+      if(copyout(p->pgdir, optlenp_u, &optlen, sizeof(int)) < 0)
+        return -1;
       return 0;
     }
   }
@@ -1682,20 +1777,27 @@ sys_shutdown(void)
 int
 sys_getsockname(void)
 {
-  int sockfd, addrlen_raw;
+  int sockfd;
+  int addr_raw;
+  int addrlenp_raw;
   struct socket *s;
-  struct sockaddr_in *addr;
-  int *addrlenp;
+  struct sockaddr_in kaddr;
+  int klen;
+  struct proc *p;
 
   if(argint(0, &sockfd) < 0)
     return -1;
-  if(argint(2, &addrlen_raw) < 0)
+  if(argint(1, &addr_raw) < 0)
     return -1;
-  if(addrlen_raw < (int)sizeof(struct sockaddr_in))
+  if(argint(2, &addrlenp_raw) < 0)
     return -1;
-  if(argptr(1, (char**)&addr, sizeof(struct sockaddr_in)) < 0)
+
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
     return -1;
-  if(argptr(2, (char**)&addrlenp, sizeof(int)) < 0)
+  if(copyin(p->pgdir, &klen, (uint)addrlenp_raw, sizeof(int)) < 0)
+    return -1;
+  if(klen < (int)sizeof(struct sockaddr_in))
     return -1;
 
   s = getfd_socket(sockfd);
@@ -1703,10 +1805,14 @@ sys_getsockname(void)
     return -1;
 
   acquire(&socket_lock);
-  memmove(addr, &s->local_addr, sizeof(struct sockaddr_in));
+  memmove(&kaddr, &s->local_addr, sizeof(kaddr));
   release(&socket_lock);
 
-  *addrlenp = (int)sizeof(struct sockaddr_in);
+  if(copyout(p->pgdir, (uint)addr_raw, &kaddr, sizeof(kaddr)) < 0)
+    return -1;
+  klen = (int)sizeof(struct sockaddr_in);
+  if(copyout(p->pgdir, (uint)addrlenp_raw, &klen, sizeof(klen)) < 0)
+    return -1;
   return 0;
 }
 
@@ -1714,20 +1820,27 @@ sys_getsockname(void)
 int
 sys_getpeername(void)
 {
-  int sockfd, addrlen_raw;
+  int sockfd;
+  int addr_raw;
+  int addrlenp_raw;
   struct socket *s;
-  struct sockaddr_in *addr;
-  int *addrlenp;
+  struct sockaddr_in kaddr;
+  int klen;
+  struct proc *p;
 
   if(argint(0, &sockfd) < 0)
     return -1;
-  if(argint(2, &addrlen_raw) < 0)
+  if(argint(1, &addr_raw) < 0)
     return -1;
-  if(addrlen_raw < (int)sizeof(struct sockaddr_in))
+  if(argint(2, &addrlenp_raw) < 0)
     return -1;
-  if(argptr(1, (char**)&addr, sizeof(struct sockaddr_in)) < 0)
+
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
     return -1;
-  if(argptr(2, (char**)&addrlenp, sizeof(int)) < 0)
+  if(copyin(p->pgdir, &klen, (uint)addrlenp_raw, sizeof(int)) < 0)
+    return -1;
+  if(klen < (int)sizeof(struct sockaddr_in))
     return -1;
 
   s = getfd_socket(sockfd);
@@ -1739,10 +1852,14 @@ sys_getpeername(void)
     release(&socket_lock);
     return -1;
   }
-  memmove(addr, &s->remote_addr, sizeof(struct sockaddr_in));
+  memmove(&kaddr, &s->remote_addr, sizeof(kaddr));
   release(&socket_lock);
 
-  *addrlenp = (int)sizeof(struct sockaddr_in);
+  if(copyout(p->pgdir, (uint)addr_raw, &kaddr, sizeof(kaddr)) < 0)
+    return -1;
+  klen = (int)sizeof(struct sockaddr_in);
+  if(copyout(p->pgdir, (uint)addrlenp_raw, &klen, sizeof(klen)) < 0)
+    return -1;
   return 0;
 }
 

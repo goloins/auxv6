@@ -105,6 +105,11 @@ kalloc_free_run_valid(struct run *r)
   if(meta->refcount != 0)
     return 0;
 
+  // Guard against stale/corrupt pointers that pass range tests but are
+  // not mapped in the current kernel page-table context.
+  if(!kaddr_writable_current_pgdir((char*)r))
+    return 0;
+
   return 1;
 }
 
@@ -288,8 +293,17 @@ kfree(char *v)
   struct kpage_meta *meta;
   uint refs;
 
-  if((uint)v % PGSIZE || v < end || V2P(v) >= PHYSTOP)
+  if((uint)v % PGSIZE || v < end || V2P(v) >= PHYSTOP){
+    uint pa_probe;
+
+    if((uint)v >= KERNBASE)
+      pa_probe = V2P(v);
+    else
+      pa_probe = 0xffffffffU;
+    cprintf("kfree: invalid ptr v=%p pa=%x end=%p phystop=%p caller=%p use_lock=%d\n",
+            v, pa_probe, end, P2V(PHYSTOP), __builtin_return_address(0), kmem.use_lock);
     panic("kfree");
+  }
 
   pa = V2P(v);
   meta = kpage_meta_pa(pa);

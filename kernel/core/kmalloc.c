@@ -44,6 +44,22 @@ kmalloc(uint size)
   if(base == 0)
     return 0;
 
+  // If this fails, allocator metadata or current kernel mappings are corrupt.
+  // Fail with context before touching potentially unmapped memory.
+  if(!kaddr_writable_current_pgdir(base)){
+    cprintf("kmalloc: base not writable base=%p npages=%u req=%u\n",
+            base, npages, size);
+    panic("kmalloc base unmapped");
+  }
+  if(npages > 1){
+    char *last = base + (npages - 1) * PGSIZE;
+    if(!kaddr_writable_current_pgdir(last)){
+      cprintf("kmalloc: tail not writable base=%p tail=%p npages=%u req=%u\n",
+              base, last, npages, size);
+      panic("kmalloc span unmapped");
+    }
+  }
+
   h = (struct kmalloc_hdr*)base;
   h->magic = KMALLOC_MAGIC;
   h->npages = npages;
