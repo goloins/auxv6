@@ -7,11 +7,43 @@
 
 #define TUNTEST_TIMEOUT_MS 1000
 #define TUNTEST_PAYLOAD "auxv6-tuntest"
+#define ETHERTYPE_ARP 0x0806
+#define ARP_HW_ETHER 1
+#define ARP_PROTO_IP 0x0800
+#define ARP_OP_REQUEST 1
+#define ARP_OP_REPLY 2
 
 struct tuntest_echo_pkt {
   struct ip_hdr ip;
   struct icmp_hdr icmp;
   char payload[sizeof(TUNTEST_PAYLOAD)];
+} __attribute__((packed));
+
+struct tuntest_eth_hdr {
+  uchar dst[ETH_ADDR_LEN];
+  uchar src[ETH_ADDR_LEN];
+  ushort type;
+} __attribute__((packed));
+
+struct tuntest_arp_hdr {
+  ushort htype;
+  ushort ptype;
+  uchar hlen;
+  uchar plen;
+  ushort oper;
+} __attribute__((packed));
+
+struct tuntest_arp_eth_ipv4 {
+  struct tuntest_arp_hdr hdr;
+  uchar sha[ETH_ADDR_LEN];
+  uchar spa[4];
+  uchar tha[ETH_ADDR_LEN];
+  uchar tpa[4];
+} __attribute__((packed));
+
+struct tuntest_tap_arp_pkt {
+  struct tuntest_eth_hdr eth;
+  struct tuntest_arp_eth_ipv4 arp;
 } __attribute__((packed));
 
 static void
@@ -21,6 +53,8 @@ usage(void)
   dprintf(2, "       tuntest poll-empty <ifname> [timeout-ms]\n");
   dprintf(2, "       tuntest icmp-self <ifname> <local-ip> <peer-ip>\n");
   dprintf(2, "       tuntest run-all <ifname> <local-ip> <peer-ip>\n");
+  dprintf(2, "       tuntest tap-arp-self <ifname> <local-ip> <peer-ip>\n");
+  dprintf(2, "       tuntest run-all-tap <ifname> <local-ip> <peer-ip>\n");
   exit(1);
 }
 
@@ -75,6 +109,14 @@ parse_ipv4(const char *s, uint *out)
     return -1;
   *out = ip;
   return 0;
+}
+
+static int
+mode_from_ifname(const char *ifname)
+{
+  if(ifname && strncmp(ifname, "tap", 3) == 0)
+    return IFF_TAP;
+  return IFF_TUN;
 }
 
 static void
@@ -132,7 +174,7 @@ load_netdev_counters(const char *ifname, uint *rx_pkts, uint *tx_pkts)
 }
 
 static int
-open_bound_tun(const char *ifname, struct ifreq *ifr)
+open_bound_mode(const char *ifname, int mode, struct ifreq *ifr)
 {
   int fd;
 
@@ -141,7 +183,7 @@ open_bound_tun(const char *ifname, struct ifreq *ifr)
     return -1;
 
   memset(ifr, 0, sizeof(*ifr));
-  ifr->ifr_flags = (short)(IFF_TUN | IFF_NO_PI);
+  ifr->ifr_flags = (short)(mode | IFF_NO_PI);
   strncpy(ifr->ifr_name, ifname, sizeof(ifr->ifr_name) - 1);
   ifr->ifr_name[sizeof(ifr->ifr_name) - 1] = 0;
   if(ioctl(fd, TUNSETIFF, ifr) < 0){
@@ -189,7 +231,7 @@ run_nonblock_empty(const char *ifname)
   int flags;
   int n;
 
-  fd = open_bound_tun(ifname, &ifr);
+  fd = open_bound_mode(ifname, mode_from_ifname(ifname), &ifr);
   if(fd < 0) {
     dprintf(2, "tuntest: bind failed for %s\n", ifname);
     return -1;
@@ -221,7 +263,7 @@ run_poll_empty(const char *ifname, int timeout_ms)
   int fd;
   int ready;
 
-  fd = open_bound_tun(ifname, &ifr);
+  fd = open_bound_mode(ifname, mode_from_ifname(ifname), &ifr);
   if(fd < 0) {
     dprintf(2, "tuntest: bind failed for %s\n", ifname);
     return -1;
@@ -350,7 +392,7 @@ run_icmp_self(const char *ifname, uint local_ip, uint peer_ip)
     return -1;
   }
 
-  fd = open_bound_tun(ifname, &ifr);
+  fd = open_bound_mode(ifname, IFF_TUN, &ifr);
   if(fd < 0) {
     dprintf(2, "tuntest: bind failed for %s\n", ifname);
     return -1;
@@ -409,6 +451,161 @@ run_icmp_self(const char *ifname, uint local_ip, uint peer_ip)
   return 0;
 }
 
+static void
+encode_ipv4_be(uchar out[4], uint ip)
+{
+  uint be;
+
+  be = net_htonl(ip);
+  memmove(out, &be, sizeof(be));
+}
+
+static int
+validate_tap_arp_reply(char *buf, int n, uint local_ip, uint peer_ip,
+                       const uchar *src_mac)
+{
+  struct tuntest_tap_arp_pkt *pkt;
+  uint spa;
+  uint tpa;
+
+  if(n < (int)sizeof(struct tuntest_tap_arp_pkt))
+    return -1;
+
+  pkt = (struct tuntest_tap_arp_pkt*)buf;
+  if(net_ntohs(pkt->eth.type) != ETHERTYPE_ARP)
+    return -1;
+  if(memcmp(pkt->eth.dst, src_mac, ETH_ADDR_LEN) != 0)
+    return -1;
+
+  if(net_ntohs(pkt->arp.hdr.htype) != ARP_HW_ETHER ||
+     net_ntohs(pkt->arp.hdr.ptype) != ARP_PROTO_IP ||
+     pkt->arp.hdr.hlen != ETH_ADDR_LEN ||
+     pkt->arp.hdr.plen != 4)
+    return -1;
+  if(net_ntohs(pkt->arp.hdr.oper) != ARP_OP_REPLY)
+    return -1;
+  if(memcmp(pkt->arp.tha, src_mac, ETH_ADDR_LEN) != 0)
+    return -1;
+
+  memmove(&spa, pkt->arp.spa, sizeof(spa));
+  memmove(&tpa, pkt->arp.tpa, sizeof(tpa));
+  spa = net_ntohl(spa);
+  tpa = net_ntohl(tpa);
+  if(spa != local_ip || tpa != peer_ip)
+    return -1;
+
+  return 0;
+}
+
+static int
+run_tap_arp_self(const char *ifname, uint local_ip, uint peer_ip)
+{
+  static const uchar bcast_mac[ETH_ADDR_LEN] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+  static const uchar src_mac[ETH_ADDR_LEN] = {0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee};
+  struct ifreq ifr;
+  struct pollfd pfd;
+  struct netifinfo before;
+  struct netifinfo after;
+  struct tuntest_tap_arp_pkt pkt;
+  char buf[MBUF_SIZE];
+  char lip[20];
+  char pip[20];
+  uint before_rx;
+  uint before_tx;
+  uint after_rx;
+  uint after_tx;
+  int fd;
+  int n;
+  int ready;
+
+  if(load_ifinfo(ifname, &before) < 0) {
+    dprintf(2, "tuntest: interface %s not found\n", ifname);
+    return -1;
+  }
+  if(before.if_addr != local_ip) {
+    format_ipv4(before.if_addr, lip, sizeof(lip));
+    format_ipv4(local_ip, pip, sizeof(pip));
+    dprintf(2, "tuntest: %s has addr %s, expected %s\n", ifname, lip, pip);
+    return -1;
+  }
+  if(load_netdev_counters(ifname, &before_rx, &before_tx) < 0) {
+    dprintf(2, "tuntest: failed to read /proc/net_dev counters for %s\n", ifname);
+    return -1;
+  }
+
+  fd = open_bound_mode(ifname, IFF_TAP, &ifr);
+  if(fd < 0) {
+    dprintf(2, "tuntest: bind failed for %s\n", ifname);
+    return -1;
+  }
+
+  memset(&pkt, 0, sizeof(pkt));
+  memmove(pkt.eth.dst, bcast_mac, ETH_ADDR_LEN);
+  memmove(pkt.eth.src, src_mac, ETH_ADDR_LEN);
+  pkt.eth.type = net_htons(ETHERTYPE_ARP);
+
+  pkt.arp.hdr.htype = net_htons(ARP_HW_ETHER);
+  pkt.arp.hdr.ptype = net_htons(ARP_PROTO_IP);
+  pkt.arp.hdr.hlen = ETH_ADDR_LEN;
+  pkt.arp.hdr.plen = 4;
+  pkt.arp.hdr.oper = net_htons(ARP_OP_REQUEST);
+  memmove(pkt.arp.sha, src_mac, ETH_ADDR_LEN);
+  encode_ipv4_be(pkt.arp.spa, peer_ip);
+  encode_ipv4_be(pkt.arp.tpa, local_ip);
+
+  n = write(fd, &pkt, sizeof(pkt));
+  if(n != (int)sizeof(pkt)) {
+    dprintf(2, "tuntest: tap arp request write failed (%d)\n", n);
+    close(fd);
+    return -1;
+  }
+
+  pfd.fd = fd;
+  pfd.events = POLLIN;
+  pfd.revents = 0;
+  ready = poll(&pfd, 1, TUNTEST_TIMEOUT_MS);
+  if(ready <= 0 || (pfd.revents & POLLIN) == 0) {
+    dprintf(2, "tuntest: timed out waiting for ARP reply revents=0x%x\n",
+            pfd.revents);
+    close(fd);
+    return -1;
+  }
+
+  n = read(fd, buf, sizeof(buf));
+  close(fd);
+  if(n < 0) {
+    dprintf(2, "tuntest: read failed for ARP reply\n");
+    return -1;
+  }
+  if(validate_tap_arp_reply(buf, n, local_ip, peer_ip, src_mac) < 0) {
+    dprintf(2, "tuntest: malformed ARP reply on %s\n", ifname);
+    return -1;
+  }
+
+  if(load_ifinfo(ifname, &after) < 0) {
+    dprintf(2, "tuntest: interface %s disappeared\n", ifname);
+    return -1;
+  }
+  if(load_netdev_counters(ifname, &after_rx, &after_tx) < 0) {
+    dprintf(2, "tuntest: failed to read /proc/net_dev counters for %s\n", ifname);
+    return -1;
+  }
+  if(after_tx < before_tx + 1 || after_rx < before_rx + 1) {
+    dprintf(2,
+            "tuntest: counters did not advance tx %u->%u rx %u->%u\n",
+            before_tx, after_tx, before_rx, after_rx);
+    return -1;
+  }
+
+  format_ipv4(local_ip, lip, sizeof(lip));
+  format_ipv4(peer_ip, pip, sizeof(pip));
+  dprintf(1,
+          "PASS tap-arp-self %s local=%s peer=%s tx %u->%u rx %u->%u\n",
+          ifname, lip, pip,
+          before_tx, after_tx, before_rx, after_rx);
+  return 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -454,6 +651,29 @@ main(int argc, char **argv)
     if(run_icmp_self(argv[2], local_ip, peer_ip) < 0)
       exit(1);
     dprintf(1, "PASS run-all %s\n", argv[2]);
+    exit(0);
+  }
+
+  if(strcmp(argv[1], "tap-arp-self") == 0) {
+    if(argc != 5)
+      usage();
+    if(parse_ipv4(argv[3], &local_ip) < 0 || parse_ipv4(argv[4], &peer_ip) < 0)
+      usage();
+    exit(run_tap_arp_self(argv[2], local_ip, peer_ip) == 0 ? 0 : 1);
+  }
+
+  if(strcmp(argv[1], "run-all-tap") == 0) {
+    if(argc != 5)
+      usage();
+    if(parse_ipv4(argv[3], &local_ip) < 0 || parse_ipv4(argv[4], &peer_ip) < 0)
+      usage();
+    if(run_nonblock_empty(argv[2]) < 0)
+      exit(1);
+    if(run_poll_empty(argv[2], 0) < 0)
+      exit(1);
+    if(run_tap_arp_self(argv[2], local_ip, peer_ip) < 0)
+      exit(1);
+    dprintf(1, "PASS run-all-tap %s\n", argv[2]);
     exit(0);
   }
 

@@ -37,6 +37,9 @@ This document holds the detailed 2026-04 change history that was moved out of `d
 - exFAT, btrfs, and ufs2 read-only first tranches are in-tree with documented scope boundaries.
 - User stack growth (Area 5) is complete and guest validated (`stackgrowtest` 3/3 pass).
 - TUN/TAP Phase 1 follow-on landed: nonpersistent tun close now unregisters interface state cleanly, `tuntest` is in-tree for nonblock/poll/ICMP self validation, and guest-visible `tun0` creation now lines up with `ifconfig`/`/proc/net_dev` semantics.
+- TUN/TAP guest validation checkpoint passed end-to-end: `tuntest run-all` is green in guest and `tuntapctl destroy tun0` now removes interface state from both `ifconfig` and `/proc/net_dev`.
+- TUN/TAP Phase 2 tranche started: TAP userspace write ingress now feeds `ether_input`, `tuntest` gained `tap-arp-self` plus `run-all-tap`, and first-pass L2 ARP self-validation is now in-tree.
+- TAP Phase 2 guest checkpoint is now green: `tuntest tap-arp-self` and `tuntest run-all-tap` both pass on `tap0`, counters advance in `/proc/net_dev`, and `tuntapctl destroy tap0` removes interface state cleanly from `ifconfig` and `/proc/net_dev`.
 
 ## Past Changes (2026-03-30 to 2026-04-03)
 
@@ -58,8 +61,7 @@ This document holds the detailed 2026-04 change history that was moved out of `d
 ## Known Regressions and Constraints (Tracked)
 
 - `NFILE` global table was fully antiquated by the P1-A tranche (replaced by per-process dynamic `fdtable`, `NOFILE_DEFAULT`/`NOFILE_HARD` policy). The former `NFILE=1024` trap-14 boundary is a moot historical note; the crash path no longer exists.
-- TUN/TAP is partially landed (Phase 0 + early Phase 1 foundations); TAP/L2 parity and full soak signoff remain pending.
-- Guest validation (2026-04-05): `/dev/net/tun` is present under `/dev/net`, `devman -s` is idempotent for device creation, and `tuntapctl create tun tun0` succeeds in-guest (`tun0 mode=tun flags=0x1001`).
+- TUN/TAP is partially landed (Phase 1 is guest validated; Phase 2 TAP ingress + ARP self-test are guest validated); broader TAP/L2 parity and full soak signoff remain pending.
 - exFAT device-selection parity in `sys_mount` remains an open integration item.
 
 ## Cross-References

@@ -726,6 +726,7 @@ tuntap_filewrite(struct file *f, char *src, int n)
   int mode;
   struct ifnet *ifp;
   struct mbuf *m;
+  int min_tap_frame;
 
   if(f == 0 || src == 0 || n < 0 || n > MBUF_SIZE)
     return -1;
@@ -747,7 +748,10 @@ tuntap_filewrite(struct file *f, char *src, int n)
   ifp = &tuntap_state.units[ui].ifp;
   release(&tuntap_state.lock);
 
-  if(mode != IFF_TUN)
+  min_tap_frame = 14;
+  if(mode != IFF_TUN && mode != IFF_TAP)
+    return -1;
+  if(mode == IFF_TAP && n < min_tap_frame)
     return -1;
 
   m = mbuf_alloc();
@@ -757,7 +761,10 @@ tuntap_filewrite(struct file *f, char *src, int n)
     memmove(m->data, src, (uint)n);
   m->len = (uint)n;
   m->rcvif = ifp;
-  ip_input(ifp, m);
+  if(mode == IFF_TAP)
+    ether_input(ifp, m);
+  else
+    ip_input(ifp, m);
   return n;
 }
 

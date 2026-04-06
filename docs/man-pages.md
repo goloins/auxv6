@@ -89,7 +89,7 @@ Generated: 2026-04-05
 | termcheck | targetfs/usr/share/man/termcheck.md | 2026-04-01 | user/termcheck.c | source-derived usage/options |
 | termdemo | targetfs/usr/share/man/termdemo.md | 2026-04-01 | user/termdemo.c | source-derived usage/options |
 | time | targetfs/usr/share/man/time.md | 2026-04-02 | user/time.c | source-derived usage/options |
-| tuntest | targetfs/usr/share/man/tuntest.md | 2026-04-05 | user/tuntest.c | tun Phase-1 regression utility for nonblock, poll, and ICMP self-test coverage |
+| tuntest | targetfs/usr/share/man/tuntest.md | 2026-04-05 | user/tuntest.c | tun/tap regression utility: empty-queue readiness, tun ICMP self-test, and tap ARP self-test coverage |
 | tuntapctl | targetfs/usr/share/man/tuntapctl.md | 2026-04-05 | user/tuntapctl.c | baseline `/dev/net/tun` control utility for create/get/persist/owner/group |
 | umount | targetfs/usr/share/man/umount.md | 2026-04-01 | user/umount.c | source-derived usage/options |
 | uname | targetfs/usr/share/man/uname.md | 2026-04-01 | user/uname.c | source-derived usage/options |

@@ -219,9 +219,9 @@ Intentional limitations still present in Phase 0:
 - Control-plane semantics are implemented, but no advanced Linux extensions beyond the baseline ioctl subset are exposed.
 - TAP packet ingress path is still deferred (Phase 2 target).
 
-### Phase 1 tranche start snapshot (2026-04-05)
+### Phase 1 completion snapshot (2026-04-05)
 
-Started now:
+Completed now:
 
 - Per-unit ifnet registration is wired during successful `TUNSETIFF` binding.
 - Kernel egress path enqueues frames into per-unit queues through ifnet `if_output`.
@@ -229,14 +229,44 @@ Started now:
 - `O_NONBLOCK` is now tracked for tun file descriptors via `fcntl(F_SETFL/F_GETFL)` and respected by queue reads.
 - Nonpersistent close semantics now unregister tun interfaces from the ifnet list and release their unit state, so destroy/teardown behavior is testable instead of purely cosmetic.
 - An in-tree regression utility now exists (`tuntest`) covering empty nonblocking reads, empty-queue poll readiness, and an end-to-end tun ICMP self-test that injects an echo request and validates the queued reply.
+- Guest validation confirms end-to-end behavior: create/configure/test/destroy on `tun0` passes, including `tuntest run-all` and interface removal from `ifconfig` plus `/proc/net_dev` after destroy.
 
-Current Phase 1 limitations (expected at tranche start):
+Phase 1 tranche-start limitations (historical context):
 
 - No TAP ingress handling yet (writes are tun-only for now).
 - Queue model is intentionally simple (single queue, fixed depth, no multiqueue).
 - Regression coverage is still first-pass only: no soak loops, mixed-interface stress, or TAP/L2 validation yet.
 
-This is the intended first landing for Phase 1: real tun data path foundations without broadening scope prematurely.
+This closes the intended Phase 1 objective: real tun data path foundations with verified teardown behavior.
+
+### Phase 2 tranche start snapshot (2026-04-05)
+
+Started now:
+
+- TAP userspace write path now accepts Ethernet frames and injects them into `ether_input`.
+- TAP ingress has minimum-frame validation at driver boundary (rejects frames shorter than Ethernet header length).
+- `tuntest` now includes a TAP ARP self-test (`tap-arp-self`) that:
+  - writes a broadcast ARP request frame into TAP,
+  - waits for and validates kernel ARP reply frame fields,
+  - verifies `/proc/net_dev` counter advancement.
+- `tuntest run-all-tap` provides first-pass TAP regression sequencing (empty nonblock + empty poll + ARP self-test).
+
+Current Phase 2 limitations (expected at tranche start):
+
+- TAP validation is currently ARP-focused; broader IPv4 forwarding/bridge-like scenarios remain follow-on.
+- No soak/stress loops yet for TAP under sustained load.
+- Queue model remains single-queue/fixed-depth.
+
+### Phase 2 guest validation checkpoint (2026-04-05)
+
+Validated in guest:
+
+- `devman -s` remains idempotent before TAP tests.
+- `tuntapctl create tap tap0` succeeds and interface state is visible via `ifconfig`.
+- `tuntest tap-arp-self tap0 <local-ip> <peer-ip>` passes.
+- `tuntest run-all-tap tap0 <local-ip> <peer-ip>` passes end-to-end.
+- `/proc/net_dev` counters advance as expected during TAP self-tests.
+- `tuntapctl destroy tap0` removes the interface from both `ifconfig` and `/proc/net_dev`.
 
 ## Risk Register
 
