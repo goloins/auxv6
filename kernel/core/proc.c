@@ -59,6 +59,15 @@ static volatile uint wakeup_other_calls;
 static volatile int active_tick_sleepers;
 static struct proc *tick_sleepq_head;
 
+#define CHAN_WAIT_HASH_SIZE 256
+static uint chan_wait_hash[CHAN_WAIT_HASH_SIZE];
+
+static inline uint
+chan_wait_hash_idx(void *chan)
+{
+  return (((uint)chan) >> 2) & (CHAN_WAIT_HASH_SIZE - 1);
+}
+
 static struct proc *initproc;
 
 int nextpid = 1;
@@ -1793,6 +1802,7 @@ sleep(void *chan, struct spinlock *lk)
 {
   struct proc *p = myproc();
   int slept_on_ticks;
+  uint hidx;
   
   if(p == 0)
     panic("sleep");
@@ -1812,6 +1822,8 @@ sleep(void *chan, struct spinlock *lk)
   }
   // Go to sleep.
   slept_on_ticks = (chan == &ticks);
+  hidx = chan_wait_hash_idx(chan);
+  chan_wait_hash[hidx]++;
   if(slept_on_ticks)
     tick_sleepq_add_locked(p);
   p->chan = chan;
@@ -1821,6 +1833,8 @@ sleep(void *chan, struct spinlock *lk)
 
   if(slept_on_ticks)
     tick_sleepq_remove_locked(p);
+  if(chan_wait_hash[hidx] > 0)
+    chan_wait_hash[hidx]--;
 
   // Tidy up.
   p->chan = 0;
@@ -1870,6 +1884,11 @@ wakeup1(void *chan)
   base = (char*)ptable.proc;
   end = (char*)&ptable.proc[NPROC];
   c = (char*)chan;
+
+  // Fast reject: when no sleepers hash to this channel bucket, a full
+  // table scan cannot find a match.
+  if(chan_wait_hash[chan_wait_hash_idx(chan)] == 0)
+    return;
 
   // wait()/waitpid() sleeps on the current proc pointer as channel.
   // If chan is exactly a proc-table slot address, wake that slot directly

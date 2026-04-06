@@ -52,6 +52,16 @@ struct vmstat_sample {
   int global_drain_pages;
   int ref_increments;
   int deferred_frees;
+  int vm_sync_calls;
+  int vm_sync_full_calls;
+  int vm_sync_entries;
+  int vm_pde_repairs;
+  int vm_master_repairs;
+  int vm_bad_pte_drops;
+  int pipe_read_sleeps;
+  int pipe_write_sleeps;
+  int pipe_wake_readers;
+  int pipe_wake_writers;
 };
 
 struct schedstat_sample {
@@ -223,6 +233,16 @@ read_vmstat_sample(struct vmstat_sample *s)
   s->global_drain_pages = find_kb_value(buf, "global_drain_pages");
   s->ref_increments = find_kb_value(buf, "ref_increments");
   s->deferred_frees = find_kb_value(buf, "deferred_frees");
+  s->vm_sync_calls = find_kb_value(buf, "vm_sync_calls");
+  s->vm_sync_full_calls = find_kb_value(buf, "vm_sync_full_calls");
+  s->vm_sync_entries = find_kb_value(buf, "vm_sync_entries");
+  s->vm_pde_repairs = find_kb_value(buf, "vm_pde_repairs");
+  s->vm_master_repairs = find_kb_value(buf, "vm_master_repairs");
+  s->vm_bad_pte_drops = find_kb_value(buf, "vm_bad_pte_drops");
+  s->pipe_read_sleeps = find_kb_value(buf, "pipe_read_sleeps");
+  s->pipe_write_sleeps = find_kb_value(buf, "pipe_write_sleeps");
+  s->pipe_wake_readers = find_kb_value(buf, "pipe_wake_readers");
+  s->pipe_wake_writers = find_kb_value(buf, "pipe_wake_writers");
   return 0;
 }
 
@@ -248,14 +268,34 @@ print_vmstat_delta(int run_idx, int nruns,
   int d_drain_p = delta_or_na(after->global_drain_pages, before->global_drain_pages);
   int d_ref_inc = delta_or_na(after->ref_increments, before->ref_increments);
   int d_def_free = delta_or_na(after->deferred_frees, before->deferred_frees);
+    int d_vm_sync_calls = delta_or_na(after->vm_sync_calls, before->vm_sync_calls);
+    int d_vm_sync_full = delta_or_na(after->vm_sync_full_calls, before->vm_sync_full_calls);
+    int d_vm_sync_entries = delta_or_na(after->vm_sync_entries, before->vm_sync_entries);
+    int d_vm_repairs = delta_or_na(after->vm_pde_repairs, before->vm_pde_repairs);
+    int d_vm_master_repairs = delta_or_na(after->vm_master_repairs, before->vm_master_repairs);
+    int d_vm_bad_pte = delta_or_na(after->vm_bad_pte_drops, before->vm_bad_pte_drops);
+    int d_pipe_read_sleeps = delta_or_na(after->pipe_read_sleeps, before->pipe_read_sleeps);
+    int d_pipe_write_sleeps = delta_or_na(after->pipe_write_sleeps, before->pipe_write_sleeps);
+    int d_pipe_wake_readers = delta_or_na(after->pipe_wake_readers, before->pipe_wake_readers);
+    int d_pipe_wake_writers = delta_or_na(after->pipe_wake_writers, before->pipe_wake_writers);
 
-  dprintf(1,
-          "[DIAG] run-vmstat %d/%d: d_pages_free=%d d_hits=%d d_miss=%d d_refill_b=%d d_refill_p=%d d_drain_b=%d d_drain_p=%d d_ref_inc=%d d_def_free=%d\n",
-          run_idx, nruns,
-          d_pages_free, d_hits, d_miss,
-          d_refill_b, d_refill_p,
-          d_drain_b, d_drain_p,
-          d_ref_inc, d_def_free);
+    dprintf(1,
+      "[DIAG] run-vmstat %d/%d a: free=%d hits=%d miss=%d refill_b=%d refill_p=%d drain_b=%d drain_p=%d\n",
+      run_idx, nruns,
+      d_pages_free, d_hits, d_miss,
+      d_refill_b, d_refill_p,
+      d_drain_b, d_drain_p);
+    dprintf(1,
+      "[DIAG] run-vmstat %d/%d b: ref_inc=%d def_free=%d vm_sync=%d vm_sync_full=%d vm_sync_ent=%d vm_repairs=%d vm_master_repairs=%d vm_bad_pte=%d\n",
+      run_idx, nruns,
+      d_ref_inc, d_def_free,
+      d_vm_sync_calls, d_vm_sync_full, d_vm_sync_entries,
+      d_vm_repairs, d_vm_master_repairs, d_vm_bad_pte);
+    dprintf(1,
+      "[DIAG] run-vmstat %d/%d c: pipe_read_sleep=%d pipe_write_sleep=%d pipe_wake_r=%d pipe_wake_w=%d\n",
+      run_idx, nruns,
+      d_pipe_read_sleeps, d_pipe_write_sleeps,
+      d_pipe_wake_readers, d_pipe_wake_writers);
 }
 
 static int
@@ -298,11 +338,14 @@ print_schedstat_delta(int run_idx, int nruns,
     int d_wake_proc = delta_or_na(after->wake_proc_calls, before->wake_proc_calls);
     int d_wake_other = delta_or_na(after->wake_other_calls, before->wake_other_calls);
 
-  dprintf(1,
-      "[DIAG] run-sched %d/%d: d_passes=%d d_idle=%d d_picks=%d d_wake_calls=%d d_wake_scanned=%d d_wake_matched=%d d_wait_loops=%d d_wait_scanned=%d d_wake_ticks=%d d_wake_proc=%d d_wake_other=%d\n",
-          run_idx, nruns,
-          d_passes, d_idle, d_picks,
-          d_wake_calls, d_wake_scanned, d_wake_matched,
+    dprintf(1,
+      "[DIAG] run-sched %d/%d a: passes=%d idle=%d picks=%d wake_calls=%d wake_scanned=%d wake_matched=%d\n",
+      run_idx, nruns,
+      d_passes, d_idle, d_picks,
+      d_wake_calls, d_wake_scanned, d_wake_matched);
+    dprintf(1,
+      "[DIAG] run-sched %d/%d b: wait_loops=%d wait_scanned=%d wake_ticks=%d wake_proc=%d wake_other=%d\n",
+      run_idx, nruns,
       d_wait_loops, d_wait_scanned,
       d_wake_ticks, d_wake_proc, d_wake_other);
 }

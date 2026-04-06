@@ -755,7 +755,22 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     return procfs_copy_data(dst, off, n, buf, len);
   }
   if(ip->inum == PROCFS_VMSTAT_INO){
+    uint vm_sync_calls;
+    uint vm_sync_full_calls;
+    uint vm_sync_entries;
+    uint vm_pde_repairs;
+    uint vm_master_repairs;
+    uint vm_bad_pte_drops;
+    uint pipe_read_sleeps;
+    uint pipe_write_sleeps;
+    uint pipe_wake_readers;
+    uint pipe_wake_writers;
+
     kalloc_stats(&kstats);
+    vm_get_sync_stats(&vm_sync_calls, &vm_sync_full_calls, &vm_sync_entries,
+                      &vm_pde_repairs, &vm_master_repairs, &vm_bad_pte_drops);
+    pipe_get_stats(&pipe_read_sleeps, &pipe_write_sleeps,
+                   &pipe_wake_readers, &pipe_wake_writers);
 
     len = 0;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "pages_total ", kstats.total_pages) < 0)
@@ -787,6 +802,26 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "ref_increments ", kstats.ref_increments) < 0)
       return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "deferred_frees ", kstats.deferred_frees) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_sync_calls ", vm_sync_calls) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_sync_full_calls ", vm_sync_full_calls) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_sync_entries ", vm_sync_entries) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_pde_repairs ", vm_pde_repairs) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_master_repairs ", vm_master_repairs) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_bad_pte_drops ", vm_bad_pte_drops) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "pipe_read_sleeps ", pipe_read_sleeps) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "pipe_write_sleeps ", pipe_write_sleeps) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "pipe_wake_readers ", pipe_wake_readers) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "pipe_wake_writers ", pipe_wake_writers) < 0)
       return -1;
     return procfs_copy_data(dst, off, n, buf, len);
   }

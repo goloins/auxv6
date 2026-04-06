@@ -16,6 +16,9 @@ static uint vm_kernel_pde_repairs;
 static uint vm_kernel_pde_master_repairs;
 static uint vm_bad_entry_window_logs;
 static uint vm_kernel_pde_sync_cursor;
+static uint vm_kernel_pde_sync_calls;
+static uint vm_kernel_pde_sync_full_calls;
+static uint vm_kernel_pde_sync_entries;
 static pde_t vm_kernel_pde_ref[NPDENTRIES];
 static int vm_kernel_pde_ref_ready;
 static uchar vm_kernel_pde_master_reported[NPDENTRIES];
@@ -150,6 +153,8 @@ vm_sync_kernel_pdes(pde_t *pgdir)
   if(pgdir == 0 || kpgdir == 0)
     return;
 
+  vm_kernel_pde_sync_calls++;
+
   span = NPDENTRIES - PDX(KERNBASE);
   if(span == 0)
     return;
@@ -158,11 +163,13 @@ vm_sync_kernel_pdes(pde_t *pgdir)
      (vm_kernel_pde_sync_cursor % VM_PDE_SYNC_FULL_INTERVAL) == 0){
     start = PDX(KERNBASE);
     end = NPDENTRIES;
+    vm_kernel_pde_sync_full_calls++;
   } else {
     start = PDX(KERNBASE) + (vm_kernel_pde_sync_cursor % span);
     end = start + 1;
   }
   vm_kernel_pde_sync_cursor++;
+  vm_kernel_pde_sync_entries += (end - start);
 
   repaired = 0;
   master_repaired = 0;
@@ -194,6 +201,28 @@ vm_sync_kernel_pdes(pde_t *pgdir)
               repaired, vm_kernel_pde_repairs, pgdir);
     }
   }
+}
+
+void
+vm_get_sync_stats(uint *sync_calls,
+                  uint *sync_full_calls,
+                  uint *sync_entries,
+                  uint *pgdir_repairs,
+                  uint *master_repairs,
+                  uint *bad_pte_drops)
+{
+  if(sync_calls)
+    *sync_calls = vm_kernel_pde_sync_calls;
+  if(sync_full_calls)
+    *sync_full_calls = vm_kernel_pde_sync_full_calls;
+  if(sync_entries)
+    *sync_entries = vm_kernel_pde_sync_entries;
+  if(pgdir_repairs)
+    *pgdir_repairs = vm_kernel_pde_repairs;
+  if(master_repairs)
+    *master_repairs = vm_kernel_pde_master_repairs;
+  if(bad_pte_drops)
+    *bad_pte_drops = vm_bad_pte_drops;
 }
 
 // Set up CPU's kernel segment descriptors.

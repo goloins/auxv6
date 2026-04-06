@@ -63,6 +63,9 @@ int             bwrite_ok(struct buf*);
 int             bcache_health_check(char *out, int max);
 
 // blockdev.c
+void            vm_get_sync_stats(uint *sync_calls, uint *sync_full_calls,
+								  uint *sync_entries, uint *pgdir_repairs,
+								  uint *master_repairs, uint *bad_pte_drops);
 void            bdevinit(void);
 int             bdev_register(uint dev, const struct bdevsw *ops);
 int             bdev_register_part(uint dev, uint parent, uint start, uint nblocks);
@@ -475,6 +478,8 @@ int             piperead(struct pipe*, char*, int);
 int             pipewrite(struct pipe*, char*, int);
 int             pipe_readable(struct pipe*);
 int             pipe_writable(struct pipe*);
+void            pipe_get_stats(uint *read_sleeps, uint *write_sleeps,
+							   uint *wake_readers, uint *wake_writers);
 
 //PAGEBREAK: 16
 // proc.c

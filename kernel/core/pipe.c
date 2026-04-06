@@ -31,6 +31,11 @@ struct {
 
 static volatile int pipe_cache_state; // 0=uninit,1=initing,2=ready
 
+static volatile uint pipe_read_sleep_calls;
+static volatile uint pipe_write_sleep_calls;
+static volatile uint pipe_wakeup_readers;
+static volatile uint pipe_wakeup_writers;
+
 #define PIPE_CACHE_MAX 256
 
 static void
@@ -50,6 +55,18 @@ pipe_cache_init_once(void)
 
   while(pipe_cache_state != 2)
     ;
+}
+
+void
+pipe_get_stats(uint *read_sleeps,
+               uint *write_sleeps,
+               uint *wake_readers,
+               uint *wake_writers)
+{
+  *read_sleeps = pipe_read_sleep_calls;
+  *write_sleeps = pipe_write_sleep_calls;
+  *wake_readers = pipe_wakeup_readers;
+  *wake_writers = pipe_wakeup_writers;
 }
 
 int
@@ -107,9 +124,11 @@ pipeclose(struct pipe *p, int writable)
   acquire(&p->lock);
   if(writable){
     p->writeopen = 0;
+    pipe_wakeup_readers++;
     wakeup(&p->nread);
   } else {
     p->readopen = 0;
+    pipe_wakeup_writers++;
     wakeup(&p->nwrite);
   }
   if(p->readopen == 0 && p->writeopen == 0){
@@ -164,6 +183,8 @@ pipewrite(struct pipe *p, char *addr, int n)
           curproc->sig_pending |= SIGBIT(SIGPIPE);
         return -1;
       }
+      pipe_write_sleep_calls++;
+      pipe_wakeup_readers++;
       wakeup(&p->nread);
       sleep(&p->nwrite, &p->lock);  //DOC: pipewrite-sleep
     }
@@ -193,8 +214,10 @@ pipewrite(struct pipe *p, char *addr, int n)
     i += chunk;
 
     // Only wake readers when data transitions from empty to available.
-    if(was_empty)
+    if(was_empty){
+      pipe_wakeup_readers++;
       wakeup(&p->nread);
+    }
   }
   release(&p->lock);
   return n;
@@ -223,6 +246,7 @@ piperead(struct pipe *p, char *addr, int n)
       release(&p->lock);
       return -1;
     }
+    pipe_read_sleep_calls++;
     sleep(&p->nread, &p->lock); //DOC: piperead-sleep
   }
   i = 0;
@@ -254,8 +278,10 @@ piperead(struct pipe *p, char *addr, int n)
     i += chunk;
 
     // Only wake writers when space transitions from full to available.
-    if(was_full)
+    if(was_full){
+      pipe_wakeup_writers++;
       wakeup(&p->nwrite);  //DOC: piperead-wakeup
+    }
   }
   release(&p->lock);
   return i;
