@@ -47,6 +47,22 @@ struct {
   struct buf *hash[BCACHE_HASH_SIZE];
 } bcache;
 
+static int
+bcache_bufptr_valid(struct buf *b)
+{
+  uint off;
+
+  if(b == 0)
+    return 0;
+  if(b < bcache.buf || b >= bcache.buf + NBUF)
+    return 0;
+
+  off = (uint)(b - bcache.buf);
+  if(off >= NBUF)
+    return 0;
+  return 1;
+}
+
 void
 binit(void)
 {
@@ -84,6 +100,11 @@ bget(uint dev, uint blockno)
   // Is the block already cached?  O(1) hash lookup instead of O(NBUF).
   h = BHASH(dev, blockno);
   for(b = bcache.hash[h]; b != 0; b = b->hash_next){
+    if(!bcache_bufptr_valid(b)){
+      cprintf("bget: corrupt hash[%d]=%p (dev=%d block=%d)\n", h, b, dev, blockno);
+      bcache.hash[h] = 0;
+      break;
+    }
     if(b->dev == dev && b->blockno == blockno){
       b->refcnt++;
       release(&bcache.lock);
@@ -101,8 +122,15 @@ bget(uint dev, uint blockno)
       if(b->flags & B_INHASH){
         uint old_h = BHASH(b->dev, b->blockno);
         pp = &bcache.hash[old_h];
-        while(*pp && *pp != b)
+        while(*pp && *pp != b){
+          if(!bcache_bufptr_valid(*pp)){
+            cprintf("bget: corrupt chain hash[%d]=%p while evicting %p\n", old_h, *pp, b);
+            bcache.hash[old_h] = 0;
+            pp = &bcache.hash[old_h];
+            break;
+          }
           pp = &(*pp)->hash_next;
+        }
         if(*pp)
           *pp = b->hash_next;
       }
@@ -194,6 +222,126 @@ bwrite(struct buf *b)
     return;
   }
   b->flags &= ~B_ERROR;
+}
+
+// Walk the entire bcache under lock and audit structural invariants.
+// Writes a NUL-terminated human-readable report into buf[max].
+// Returns number of bytes written (not counting NUL), or -1 on overflow.
+// Safe to call from any context that can acquire bcache.lock.
+int
+bcache_health_check(char *out, int max)
+{
+  int pos = 0;
+  uint i;
+
+  // --- helpers -----------------------------------------------------------
+#define _put_str(s) do { \
+    const char *_p = (s); \
+    while(*_p && pos < max - 1) out[pos++] = *_p++; \
+  } while(0)
+#define _put_uint(v) do { \
+    uint _v = (v); \
+    char _tmp[12]; int _n = 0; \
+    if(_v == 0) { _tmp[_n++] = '0'; } \
+    else { while(_v){ _tmp[_n++] = '0' + (_v % 10); _v /= 10; } } \
+    for(int _i = _n-1; _i >= 0; _i--) { if(pos < max-1) out[pos++] = _tmp[_i]; } \
+  } while(0)
+#define _kv_u(k, v) do { _put_str(k); _put_uint(v); if(pos < max-1) out[pos++] = '\n'; } while(0)
+
+  // tallies
+  uint hash_entries    = 0;
+  uint hash_corrupt    = 0;    // bad pointer in hash chains
+  uint hash_cycles     = 0;    // chain longer than NBUF (cycle detection)
+  uint lru_entries     = 0;
+  uint lru_corrupt     = 0;    // bad pointer in LRU list
+  uint lru_cycles      = 0;    // cycle in LRU list
+  uint refcnt_nonzero  = 0;    // bufs currently pinned
+  uint dirty_count     = 0;
+  uint valid_count     = 0;
+  uint inhash_count    = 0;
+  uint error_count     = 0;
+  uint double_hash     = 0;    // same buf appears in >1 hash bucket
+
+  // per-buf seen bitmap (1 bit per buf, NBUF <= 200 so 32 bytes)
+  uint seen[(NBUF + 31) / 32];
+  memset(seen, 0, sizeof(seen));
+
+  acquire(&bcache.lock);
+
+  // --- audit hash chains -------------------------------------------------
+  for(i = 0; i < BCACHE_HASH_SIZE; i++){
+    struct buf *b = bcache.hash[i];
+    uint depth = 0;
+
+    while(b != 0){
+      if(!bcache_bufptr_valid(b)){
+        hash_corrupt++;
+        break;
+      }
+      uint idx = (uint)(b - bcache.buf);
+      if(seen[idx >> 5] & (1u << (idx & 31))){
+        double_hash++;    // already counted from another chain / earlier in this one
+      } else {
+        seen[idx >> 5] |= (1u << (idx & 31));
+        hash_entries++;
+        if(b->flags & B_DIRTY)   dirty_count++;
+        if(b->flags & B_VALID)   valid_count++;
+        if(b->flags & B_INHASH)  inhash_count++;
+        if(b->flags & B_ERROR)   error_count++;
+        if(b->refcnt > 0)        refcnt_nonzero++;
+      }
+      b = b->hash_next;
+      if(++depth > NBUF){ hash_cycles++; break; }
+    }
+  }
+
+  // --- audit LRU list ----------------------------------------------------
+  memset(seen, 0, sizeof(seen));
+  {
+    struct buf *b;
+    uint depth = 0;
+
+    for(b = bcache.head.next; b != &bcache.head; b = b->next){
+      if(!bcache_bufptr_valid(b)){
+        lru_corrupt++;
+        break;
+      }
+      uint idx = (uint)(b - bcache.buf);
+      if(seen[idx >> 5] & (1u << (idx & 31))){
+        lru_cycles++;
+        break;
+      }
+      seen[idx >> 5] |= (1u << (idx & 31));
+      lru_entries++;
+      if(++depth > NBUF){ lru_cycles++; break; }
+    }
+  }
+
+  release(&bcache.lock);
+
+  // --- format output -----------------------------------------------------
+  _kv_u("bcache_hash_entries ",   hash_entries);
+  _kv_u("bcache_hash_corrupt ",   hash_corrupt);
+  _kv_u("bcache_hash_cycles ",    hash_cycles);
+  _kv_u("bcache_double_hash ",    double_hash);
+  _kv_u("bcache_lru_entries ",    lru_entries);
+  _kv_u("bcache_lru_corrupt ",    lru_corrupt);
+  _kv_u("bcache_lru_cycles ",     lru_cycles);
+  _kv_u("bcache_refcnt_nonzero ", refcnt_nonzero);
+  _kv_u("bcache_dirty ",          dirty_count);
+  _kv_u("bcache_valid ",          valid_count);
+  _kv_u("bcache_inhash ",         inhash_count);
+  _kv_u("bcache_error_bufs ",     error_count);
+  _kv_u("bcache_nbuf ",           (uint)NBUF);
+
+#undef _put_str
+#undef _put_uint
+#undef _kv_u
+
+  if(pos >= max)
+    return -1;
+  out[pos] = 0;
+  return pos;
 }
 
 // Release a locked buffer.

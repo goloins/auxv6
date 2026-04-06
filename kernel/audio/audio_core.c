@@ -607,6 +607,9 @@ audio_filewrite(struct file *f, char *src, int n)
   if(n < 0)
     return -1;
 
+  /* Service pending AC97 completions even when IRQ delivery is absent. */
+  audio_intel_ac97_poll();
+
   acquire(&audio_core.lock);
   s = audio_stream_find_locked(f);
   if(s == 0){
@@ -683,6 +686,7 @@ audio_filewrite(struct file *f, char *src, int n)
   audio_core.recoveries = s->recoveries;
 
   release(&audio_core.lock);
+  audio_intel_ac97_poll();
   return copied;
 }
 
@@ -1305,6 +1309,7 @@ int
 audio_procfs_stats(char *buf, int max)
 {
   int len;
+  int ac97_ok;
   uint ioctl_calls;
   uint write_calls;
   uint bytes_written;
@@ -1312,6 +1317,16 @@ audio_procfs_stats(char *buf, int max)
   uint late_wakeups;
   uint period_misses;
   uint recoveries;
+  uint32_t ac97_irq_count;
+  uint32_t ac97_poll_count;
+  uint32_t ac97_bcis_count;
+  uint32_t ac97_lvbci_count;
+  uint32_t ac97_fifoe_count;
+  uint32_t ac97_civ;
+  uint32_t ac97_lvi;
+  uint32_t ac97_picb;
+  uint32_t ac97_cr;
+  uint32_t ac97_sr;
 
   if(buf == 0 || max <= 0)
     return -1;
@@ -1325,6 +1340,27 @@ audio_procfs_stats(char *buf, int max)
   period_misses = audio_core.period_misses;
   recoveries = audio_core.recoveries;
   release(&audio_core.lock);
+
+  ac97_irq_count = 0;
+  ac97_poll_count = 0;
+  ac97_bcis_count = 0;
+  ac97_lvbci_count = 0;
+  ac97_fifoe_count = 0;
+  ac97_civ = 0;
+  ac97_lvi = 0;
+  ac97_picb = 0;
+  ac97_cr = 0;
+  ac97_sr = 0;
+  ac97_ok = (audio_intel_ac97_debug_snapshot(&ac97_irq_count,
+                                              &ac97_poll_count,
+                                              &ac97_bcis_count,
+                                              &ac97_lvbci_count,
+                                              &ac97_fifoe_count,
+                                              &ac97_civ,
+                                              &ac97_lvi,
+                                              &ac97_picb,
+                                              &ac97_cr,
+                                              &ac97_sr) == 0);
 
   len = 0;
   if(audio_buf_puts(buf, max, &len, "ioctl_calls ") < 0)
@@ -1369,6 +1405,76 @@ audio_procfs_stats(char *buf, int max)
     return -1;
   if(audio_buf_putc(buf, max, &len, '\n') < 0)
     return -1;
+
+  if(audio_buf_puts(buf, max, &len, "ac97_present ") < 0)
+    return -1;
+  if(audio_buf_putu(buf, max, &len, ac97_ok ? 1U : 0U) < 0)
+    return -1;
+  if(audio_buf_putc(buf, max, &len, '\n') < 0)
+    return -1;
+
+  if(ac97_ok){
+    if(audio_buf_puts(buf, max, &len, "ac97_irq_count ") < 0)
+      return -1;
+    if(audio_buf_putu(buf, max, &len, ac97_irq_count) < 0)
+      return -1;
+    if(audio_buf_putc(buf, max, &len, '\n') < 0)
+      return -1;
+
+    if(audio_buf_puts(buf, max, &len, "ac97_poll_count ") < 0)
+      return -1;
+    if(audio_buf_putu(buf, max, &len, ac97_poll_count) < 0)
+      return -1;
+    if(audio_buf_putc(buf, max, &len, '\n') < 0)
+      return -1;
+
+    if(audio_buf_puts(buf, max, &len, "ac97_bcis_count ") < 0)
+      return -1;
+    if(audio_buf_putu(buf, max, &len, ac97_bcis_count) < 0)
+      return -1;
+    if(audio_buf_putc(buf, max, &len, '\n') < 0)
+      return -1;
+
+    if(audio_buf_puts(buf, max, &len, "ac97_lvbci_count ") < 0)
+      return -1;
+    if(audio_buf_putu(buf, max, &len, ac97_lvbci_count) < 0)
+      return -1;
+    if(audio_buf_putc(buf, max, &len, '\n') < 0)
+      return -1;
+
+    if(audio_buf_puts(buf, max, &len, "ac97_fifoe_count ") < 0)
+      return -1;
+    if(audio_buf_putu(buf, max, &len, ac97_fifoe_count) < 0)
+      return -1;
+    if(audio_buf_putc(buf, max, &len, '\n') < 0)
+      return -1;
+
+    if(audio_buf_puts(buf, max, &len, "ac97_civ ") < 0)
+      return -1;
+    if(audio_buf_putu(buf, max, &len, ac97_civ) < 0)
+      return -1;
+    if(audio_buf_puts(buf, max, &len, " ac97_lvi ") < 0)
+      return -1;
+    if(audio_buf_putu(buf, max, &len, ac97_lvi) < 0)
+      return -1;
+    if(audio_buf_puts(buf, max, &len, " ac97_picb ") < 0)
+      return -1;
+    if(audio_buf_putu(buf, max, &len, ac97_picb) < 0)
+      return -1;
+    if(audio_buf_putc(buf, max, &len, '\n') < 0)
+      return -1;
+
+    if(audio_buf_puts(buf, max, &len, "ac97_cr ") < 0)
+      return -1;
+    if(audio_buf_putu(buf, max, &len, ac97_cr) < 0)
+      return -1;
+    if(audio_buf_puts(buf, max, &len, " ac97_sr ") < 0)
+      return -1;
+    if(audio_buf_putu(buf, max, &len, ac97_sr) < 0)
+      return -1;
+    if(audio_buf_putc(buf, max, &len, '\n') < 0)
+      return -1;
+  }
 
   return len;
 }
@@ -1550,4 +1656,87 @@ audio_register_hw_device(uint16_t vendor_id, uint16_t device_id,
           driver_name ? driver_name : "audio-hw",
           card, device, direction, vendor_id, device_id, hw_profile);
   return 0;
+}
+
+/*
+ * audio_hw_period_advance - called from a hardware DMA interrupt handler.
+ *
+ * Copies up to `n` bytes from the first active running stream's ring buffer
+ * into `dst` (the driver's DMA bounce buffer), advances hw_ptr by that many
+ * bytes, and wakes any processes sleeping in audio_filewrite() waiting for
+ * ring space.  If no running stream exists or the ring is empty, `dst` is
+ * zero-filled (silence/underrun).
+ *
+ * Must be called from interrupt context; acquires audio_core.lock briefly.
+ * Returns the number of bytes placed in dst (always == n).
+ */
+int
+audio_hw_period_advance(char *dst, int n)
+{
+  struct audio_stream *s;
+  uint32_t used;
+  uint32_t consume;
+  int i;
+  int found;
+
+  if(dst == 0 || n <= 0)
+    return 0;
+
+  acquire(&audio_core.lock);
+
+  /* Find the first active running stream. */
+  found = 0;
+  for(i = 0; i < AUDIO_STREAM_MAX; i++){
+    if(!audio_streams[i].in_use)
+      continue;
+    if(audio_streams[i].stream_state != AUDIO_ST_RUNNING)
+      continue;
+    found = 1;
+    s = &audio_streams[i];
+    break;
+  }
+
+  if(!found){
+    release(&audio_core.lock);
+    memset(dst, 0, n);
+    return n;
+  }
+
+  used = audio_stream_used_bytes(s);
+  if(used == 0){
+    /* Underrun: silence. */
+    s->xruns++;
+    release(&audio_core.lock);
+    memset(dst, 0, n);
+    return n;
+  }
+
+  /* Copy bytes out of the ring into the DMA bounce buffer. */
+  consume = (uint32_t)n;
+  if(consume > used)
+    consume = used;
+
+  /* Handle ring wrap. */
+  if(s->ring_head + consume <= s->ring_size){
+    memmove(dst, &s->ring[s->ring_head], consume);
+  } else {
+    uint32_t first = s->ring_size - s->ring_head;
+    memmove(dst, &s->ring[s->ring_head], first);
+    memmove(dst + first, &s->ring[0], consume - first);
+  }
+
+  /* Zero-pad if we came up short (partial underrun). */
+  if(consume < (uint32_t)n)
+    memset(dst + consume, 0, (uint32_t)n - consume);
+
+  s->ring_head = (s->ring_head + consume) % s->ring_size;
+  s->hw_ptr_bytes += consume;
+  audio_stream_update_queue_frames(s);
+
+  audio_core.hw_ptr_frames = s->hw_ptr_bytes / (audio_stream_frame_bytes(s) > 0 ? audio_stream_frame_bytes(s) : 1);
+  audio_core.bytes_written += consume;
+
+  wakeup(&s->ring_head);
+  release(&audio_core.lock);
+  return n;
 }

@@ -6,6 +6,7 @@
 #include "param.h"
 #include "defs.h"
 #include "stat.h"
+#include "memlayout.h"
 #include "fs.h"
 #include "vfs.h"
 #include "spinlock.h"
@@ -180,7 +181,16 @@ fileread(struct file *f, char *addr, int n)
           if(de.inum == 0)
             de.inum = 1;
           de.name[0] = '.';
-          memmove(addr, &de, sizeof(de));
+          if((uint)addr < KERNBASE){
+            struct proc *p = myproc();
+            if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)addr, &de, sizeof(de)) < 0){
+              iput(mountpoint);
+              iunlock(f->ip);
+              return -1;
+            }
+          } else {
+            memmove(addr, &de, sizeof(de));
+          }
           f->off += sizeof(de);
           iput(mountpoint);
           iunlock(f->ip);
@@ -197,7 +207,16 @@ fileread(struct file *f, char *addr, int n)
             de.inum = 1;
           de.name[0] = '.';
           de.name[1] = '.';
-          memmove(addr, &de, sizeof(de));
+          if((uint)addr < KERNBASE){
+            struct proc *p = myproc();
+            if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)addr, &de, sizeof(de)) < 0){
+              iput(mountpoint);
+              iunlock(f->ip);
+              return -1;
+            }
+          } else {
+            memmove(addr, &de, sizeof(de));
+          }
           f->off += sizeof(de);
           iput(mountpoint);
           iunlock(f->ip);

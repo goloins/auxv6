@@ -60,6 +60,7 @@ int             bread_ok(uint, uint, struct buf**);
 void            brelse(struct buf*);
 void            bwrite(struct buf*);
 int             bwrite_ok(struct buf*);
+int             bcache_health_check(char *out, int max);
 
 // blockdev.c
 void            bdevinit(void);
@@ -181,6 +182,19 @@ void            audio_creative_xfi_init(void);
 int             audio_is_ioctl(int request);
 int             audio_ioctl_arg_size(int request);
 int             audio_ioctl_file(struct file *f, int request, uint arg);
+int             audio_hw_period_advance(char *dst, int n);
+int             audio_register_hw_device(uint16_t vendor_id, uint16_t device_id, uint16_t card, uint16_t device, uint16_t direction, uint32_t flags, uint32_t hw_profile, const char *driver_name);
+int             audio_intel_ac97_debug_snapshot(uint32_t *irq_count,
+												uint32_t *poll_count,
+												uint32_t *bcis_count,
+												uint32_t *lvbci_count,
+												uint32_t *fifoe_count,
+												uint32_t *civ,
+												uint32_t *lvi,
+												uint32_t *picb,
+												uint32_t *cr,
+												uint32_t *sr);
+void            audio_intel_ac97_poll(void);
 int             audio_open(struct file *f, int minor, int omode);
 void            audio_close(struct file *f);
 int             audio_filewrite(struct file *f, char *src, int n);
@@ -190,11 +204,6 @@ void            audio_poll_events(struct file *f, int *rd, int *wr, int *err);
 int             audio_procfs_summary(char *buf, int max);
 int             audio_procfs_stats(char *buf, int max);
 int             audio_procfs_clients(char *buf, int max);
-int             audio_register_hw_device(uint16_t vendor_id, uint16_t device_id,
-										 uint16_t card, uint16_t device,
-										 uint16_t direction, uint32_t flags,
-										 uint32_t hw_profile,
-										 const char *driver_name);
 
 // tuntap.c
 void            tuntap_init(void);

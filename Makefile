@@ -569,6 +569,9 @@ _gfxperf: user/gfxperf
 _kallocstress: user/kallocstress
 	cp user/kallocstress _kallocstress
 
+_bcachestress: user/bcachestress
+	cp user/bcachestress _bcachestress
+
 _sigtest: user/sigtest
 	cp user/sigtest _sigtest
 
@@ -626,6 +629,9 @@ _audiostat: user/audiostat
 
 _audiotest: user/audiotest
 	cp user/audiotest _audiotest
+
+_audiotone: user/audiotone
+	cp user/audiotone _audiotone
 
 _audiopollstress: user/audiopollstress
 	cp user/audiopollstress _audiopollstress
@@ -753,6 +759,7 @@ UPROGS=\
 	_fsperf\
 	_gfxperf\
 	_kallocstress\
+	_bcachestress\
 	_sigtest\
 	_stackgrowtest\
 	_fdtest\
@@ -773,6 +780,7 @@ UPROGS=\
 	_audioctl\
 	_audiostat\
 	_audiotest\
+	_audiotone\
 	_audiopollstress\
 	_audiod\
 	_audiodctl\
@@ -895,12 +903,12 @@ clean:
 	user/6get \
 	user/abrowse \
 	user/lsof user/which user/file \
-	user/audioctl user/audiostat user/audiotest user/audiopollstress user/audiod user/audiodctl \
+	user/audioctl user/audiostat user/audiotest user/audiotone user/audiopollstress user/audiod user/audiodctl \
 	user/server7 \
 	user/top \
 	user/date user/time user/killall user/halt \
 	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/stackgrowtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/dmesg user/tail user/lspci user/v6init user/testdaemon \
-	user/schedperf user/fsperf user/gfxperf user/kallocstress
+	user/schedperf user/fsperf user/gfxperf user/kallocstress user/bcachestress
 
 # make a printout
 FILES = $(shell grep -v '^\#' tools/runoff.list)
@@ -1145,6 +1153,22 @@ endif
 
 qemu-nox: aux.bootkern $(EXT2IMG)
 	$(QEMU) -nographic -drive file=aux.bootkern,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
+# Audio-enabled QEMU boot path using AC97 (supported by in-tree intel-ac97 probe).
+# Run guest-side flow: audiotone -> audiodctl track-loop.
+qemu-audiotest: aux.bootkern $(EXT2IMG)
+	QEMU_AUDIO_DRV=coreaudio $(QEMU) -serial mon:stdio \
+		-drive file=aux.bootkern,index=0,media=disk,format=raw \
+		-drive file=$(EXT2IMG),index=2,media=disk,format=raw \
+		-audiodev coreaudio,id=snd0 -device AC97,audiodev=snd0 \
+		$(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
+qemu-nox-audiotest: aux.bootkern $(EXT2IMG)
+	QEMU_AUDIO_DRV=coreaudio $(QEMU) -nographic \
+		-drive file=aux.bootkern,index=0,media=disk,format=raw \
+		-drive file=$(EXT2IMG),index=2,media=disk,format=raw \
+		-audiodev coreaudio,id=snd0 -device AC97,audiodev=snd0 \
+		$(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 qemu-fat: aux.bootkern $(EXT2IMG) $(FATIMG)
 	$(QEMU) -serial mon:stdio -drive file=aux.bootkern,index=0,media=disk,format=raw -drive file=$(EXT2IMG),index=2,media=disk,format=raw $(FATQEMU) $(QEMUNETOPTS) $(QEMUGFXOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)

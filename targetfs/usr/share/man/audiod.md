@@ -56,6 +56,10 @@ The daemon checks the control file path during its loop and applies one-shot com
 - `set <rate> <channels> <format> <period_frames> <periods> <buffer_frames>`
 - `set-write <bytes>`
 - `set-timeout <ms>`
+- `track-load <slot> <path>` — load a raw PCM file into mixer slot 0–7 and play once.
+- `track-loop <slot> <path>` — same but loops indefinitely.
+- `track-stop <slot>` — stop and release a mixer slot.
+- `track-gain <slot> <shift>` — set per-slot right-shift gain (0=full, 1=half, … max 15).
 
 ## Exit Status
 - `0` clean shutdown

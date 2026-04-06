@@ -18,6 +18,27 @@ struct run {
   struct run *next;
 };
 
+static int
+kalloc_runptr_valid(struct run *r)
+{
+  if(r == 0)
+    return 0;
+  if(((uint)r % PGSIZE) != 0)
+    return 0;
+  if((char*)r < end)
+    return 0;
+  if(V2P((char*)r) >= PHYSTOP)
+    return 0;
+  return 1;
+}
+
+static void
+kalloc_panic_bad_run(const char *where, struct run *r)
+{
+  cprintf("%s: bad run ptr=%p end=%p phystop=%p\n", where, r, end, P2V(PHYSTOP));
+  panic("kalloc freelist corruption");
+}
+
 struct kpage_meta {
   uint refcount;
   uint flags;
@@ -130,6 +151,8 @@ kalloc_refill_local(struct cpu *c)
   n = 0;
   while(kmem.freelist && n < goal){
     r = kmem.freelist;
+    if(!kalloc_runptr_valid(r))
+      kalloc_panic_bad_run("kalloc_refill_local pop", r);
     kmem.freelist = r->next;
     batch[n++] = r;
   }
@@ -166,6 +189,8 @@ kalloc_drain_local(struct cpu *c)
   acquire(&kmem.lock);
   for(i = 0; i < drain && c->kfree_cache_count > 0; i++){
     p = c->kfree_cache[--c->kfree_cache_count];
+    if(!kalloc_runptr_valid(p))
+      kalloc_panic_bad_run("kalloc_drain_local push", p);
     p->next = kmem.freelist;
     kmem.freelist = p;
   }
@@ -244,6 +269,8 @@ kfree(char *v)
 #endif
 
   r = (struct run*)v;
+  if(!kalloc_runptr_valid(r))
+    kalloc_panic_bad_run("kfree entry", r);
 
   // Early boot: single CPU, no locking, no per-CPU caches.
   if(!kmem.use_lock){
@@ -263,6 +290,8 @@ kfree(char *v)
     acquire(&kmem.lock);
     if(c->kfree_cache_count > 0){
       struct run *p = c->kfree_cache[--c->kfree_cache_count];
+      if(!kalloc_runptr_valid(p))
+        kalloc_panic_bad_run("kfree emergency drain", p);
       p->next = kmem.freelist;
       kmem.freelist = p;
       kmem.global_drain_batches++;
@@ -294,6 +323,8 @@ kalloc(void)
   if(!kmem.use_lock){
     r = kmem.freelist;
     if(r){
+      if(!kalloc_runptr_valid(r))
+        kalloc_panic_bad_run("kalloc early pop", r);
       kmem.freelist = r->next;
       if(kmem.free_pages > 0)
         kmem.free_pages--;
@@ -317,6 +348,8 @@ kalloc(void)
     kalloc_refill_local(c);
   if(c->kfree_cache_count > 0){
     r = c->kfree_cache[--c->kfree_cache_count];
+    if(!kalloc_runptr_valid(r))
+      kalloc_panic_bad_run("kalloc cache pop", r);
     kmem.cache_alloc_hits++;
     __sync_fetch_and_sub(&kmem.free_pages, 1);
     pa = V2P((char*)r);
@@ -333,6 +366,8 @@ kalloc(void)
 
   if(kalloc_refill_local(c) > 0 && c->kfree_cache_count > 0){
     r = c->kfree_cache[--c->kfree_cache_count];
+    if(!kalloc_runptr_valid(r))
+      kalloc_panic_bad_run("kalloc refill pop", r);
     __sync_fetch_and_sub(&kmem.free_pages, 1);
     pa = V2P((char*)r);
     meta = kpage_meta_pa(pa);

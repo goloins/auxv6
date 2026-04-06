@@ -18,6 +18,8 @@ Generated: 2026-04-05
 | audiodctl | targetfs/usr/share/man/audiodctl.md | 2026-04-05 | user/audiodctl.c | Stage-2 audiod runtime control helper (mailbox command writer) |
 | audiostat | targetfs/usr/share/man/audiostat.md | 2026-04-05 | user/audiostat.c | Stage-1 audio procfs summary/counter/clients reader |
 | audiotest | targetfs/usr/share/man/audiotest.md | 2026-04-05 | user/audiotest.c | Stage-0 audio write-path/xrun recovery exerciser |
+| audiotone | targetfs/usr/share/man/audiotone.md | 2026-04-05 | user/audiotone.c | deterministic S16_LE square-wave generator for audiod track tests |
+| bcachestress | targetfs/usr/share/man/bcachestress.md | 2026-04-05 | user/bcachestress.c | concurrent fs I/O stress utility with /proc/bcache_health fail-fast checks and vmstat/meminfo context dump |
 | arp | targetfs/usr/share/man/arp.md | 2026-04-01 | user/arp.c | source-derived usage/options |
 | cat | targetfs/usr/share/man/cat.md | 2026-04-01 | user/cat.c | source-derived usage/options |
 | chgrp | targetfs/usr/share/man/chgrp.md | 2026-04-01 | user/chgrp.c | source-derived usage/options |

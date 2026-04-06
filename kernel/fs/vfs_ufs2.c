@@ -1,7 +1,9 @@
 #include "types.h"
 #include "defs.h"
 #include "param.h"
+#include "memlayout.h"
 #include "mmu.h"
+#include "proc.h"
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "vfs.h"
@@ -123,7 +125,10 @@ ufs2_data_for_dev(uint dev)
 static int
 ufs2_dev_read(uint dev, uint off, char *dst, uint n)
 {
+  struct proc *p;
   uint done;
+
+  p = myproc();
 
   done = 0;
   while(done < n){
@@ -140,7 +145,14 @@ ufs2_dev_read(uint dev, uint off, char *dst, uint n)
 
     if(bread_ok(dev, blockno, &b) < 0)
       return -1;
-    memmove(dst + done, (char*)b->data + boff, take);
+    if((uint)(dst + done) < KERNBASE){
+      if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)(dst + done), (char*)b->data + boff, take) < 0){
+        brelse(b);
+        return -1;
+      }
+    } else {
+      memmove(dst + done, (char*)b->data + boff, take);
+    }
     brelse(b);
     done += take;
   }
@@ -239,12 +251,15 @@ static int
 ufs2_read_data(struct ufs2_mount_data *md, struct ufs2_dinode *dip,
                char *dst, uint off, uint n)
 {
+  struct proc *p;
   uint done;
 
   if(md == 0 || dip == 0 || dst == 0)
     return -1;
   if(n == 0)
     return 0;
+
+  p = myproc();
 
   done = 0;
   while(done < n){
@@ -263,7 +278,13 @@ ufs2_read_data(struct ufs2_mount_data *md, struct ufs2_dinode *dip,
     if(ufs2_lbn_to_blkno(md, dip, lbn, &blkno) < 0)
       return (done > 0) ? (int)done : -1;
     if(blkno == 0){
-      memset(dst + done, 0, take);
+      if((uint)(dst + done) < KERNBASE){
+        static char zpg[4096];
+        if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)(dst + done), zpg, take) < 0)
+          return (done > 0) ? (int)done : -1;
+      } else {
+        memset(dst + done, 0, take);
+      }
       done += take;
       continue;
     }
@@ -494,7 +515,15 @@ ufs2_read(struct inode *ip, char *dst, uint64_t off, uint n)
             for(i = 0; i < de->d_namlen && i < DIRSIZ - 1; i++)
               out.name[i] = de->d_name[i];
             out.name[i] = 0;
-            memmove(dst + emitted, &out, sizeof(out));
+            if((uint)(dst + emitted) < KERNBASE){
+              struct proc *p = myproc();
+              if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)(dst + emitted), &out, sizeof(out)) < 0){
+                kfree(dirbuf);
+                return (emitted > 0) ? (int)emitted : -1;
+              }
+            } else {
+              memmove(dst + emitted, &out, sizeof(out));
+            }
             emitted += sizeof(out);
           } else {
             target--;

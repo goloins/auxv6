@@ -1,6 +1,8 @@
 #include "types.h"
 #include "defs.h"
 #include "param.h"
+#include "memlayout.h"
+#include "proc.h"
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "fs.h"
@@ -48,8 +50,13 @@ blockdev_read(struct inode *ip, char *dst, uint64_t off, int n)
 {
   uint total;
   uint limit;
+  struct proc *p;
 
   if(ip == 0 || dst == 0 || ip->minor < 0 || ip->minor >= NDEV)
+    return -1;
+
+  p = ((uint)dst < KERNBASE) ? myproc() : 0;
+  if((uint)dst < KERNBASE && (p == 0 || p->pgdir == 0))
     return -1;
 
   limit = bdev_nblocks(ip->minor) * BSIZE;
@@ -72,7 +79,14 @@ blockdev_read(struct inode *ip, char *dst, uint64_t off, int n)
 
     if(bread_ok(ip->minor, blockno, &bp) < 0)
       return -1;
-    memmove(dst + total, bp->data + blockoff, chunk);
+    if((uint)(dst + total) < KERNBASE){
+      if(copyout(p->pgdir, (uint)(dst + total), bp->data + blockoff, chunk) < 0){
+        brelse(bp);
+        return -1;
+      }
+    } else {
+      memmove(dst + total, bp->data + blockoff, chunk);
+    }
     brelse(bp);
 
     total += chunk;
@@ -87,8 +101,13 @@ blockdev_write(struct inode *ip, char *src, uint64_t off, int n)
 {
   uint total;
   uint limit;
+  struct proc *p;
 
   if(ip == 0 || src == 0 || ip->minor < 0 || ip->minor >= NDEV)
+    return -1;
+
+  p = ((uint)src < KERNBASE) ? myproc() : 0;
+  if((uint)src < KERNBASE && (p == 0 || p->pgdir == 0))
     return -1;
 
   limit = bdev_nblocks(ip->minor) * BSIZE;
@@ -111,7 +130,14 @@ blockdev_write(struct inode *ip, char *src, uint64_t off, int n)
 
     if(bread_ok(ip->minor, blockno, &bp) < 0)
       return -1;
-    memmove(bp->data + blockoff, src + total, chunk);
+    if((uint)(src + total) < KERNBASE){
+      if(copyin(p->pgdir, bp->data + blockoff, (uint)(src + total), chunk) < 0){
+        brelse(bp);
+        return -1;
+      }
+    } else {
+      memmove(bp->data + blockoff, src + total, chunk);
+    }
     if(bwrite_ok(bp) < 0){
       brelse(bp);
       return -1;

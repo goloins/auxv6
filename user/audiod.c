@@ -14,6 +14,19 @@
 #define MAX_WRITE_CHUNK 4096
 #define CTRL_MAX 192
 
+#define AUDIOD_MAX_TRACKS  8
+#define TRACK_PATH_MAX    128
+
+struct track {
+  int     active;
+  int     src_fd;
+  int     loop;
+  uint8_t gain_shift;
+  char    path[TRACK_PATH_MAX];
+};
+
+static struct track tracks[AUDIOD_MAX_TRACKS];
+
 static volatile sig_atomic_t keep_running = 1;
 
 static void
@@ -129,6 +142,122 @@ reconfigure_stream(int fd, struct audio_stream_params *params)
   return 0;
 }
 
+static void
+tracks_init(void)
+{
+  int i;
+  for(i = 0; i < AUDIOD_MAX_TRACKS; i++){
+    tracks[i].active    = 0;
+    tracks[i].src_fd    = -1;
+    tracks[i].loop      = 0;
+    tracks[i].gain_shift = 0;
+    tracks[i].path[0]   = 0;
+  }
+}
+
+static void
+tracks_close_all(void)
+{
+  int i;
+  for(i = 0; i < AUDIOD_MAX_TRACKS; i++){
+    if(tracks[i].src_fd >= 0){
+      close(tracks[i].src_fd);
+      tracks[i].src_fd = -1;
+    }
+    tracks[i].active = 0;
+  }
+}
+
+/* Read n bytes from track t.  Returns bytes read; deactivates slot on EOF. */
+static int
+track_read_chunk(struct track *t, uint8_t *buf, int n)
+{
+  int got;
+  int total;
+
+  if(t->src_fd < 0)
+    return 0;
+
+  total = 0;
+  while(total < n){
+    got = read(t->src_fd, buf + total, n - total);
+    if(got < 0){
+      close(t->src_fd);
+      t->src_fd = -1;
+      t->active = 0;
+      return total;
+    }
+    if(got == 0){
+      if(t->loop){
+        lseek(t->src_fd, 0, SEEK_SET);
+        continue;
+      }
+      close(t->src_fd);
+      t->src_fd = -1;
+      t->active = 0;
+      return total;
+    }
+    total += got;
+  }
+  return total;
+}
+
+/*
+ * Mix all active tracks (S16_LE only) into outbuf and write to hw_fd.
+ * Falls back to writing silence for other formats or when no tracks active.
+ */
+static int
+mix_write_hw(int hw_fd, int write_bytes, int sample_fmt, uint8_t *outbuf,
+             uint8_t *inbuf, int32_t *mix_acc)
+{
+  int i;
+  int j;
+  int ns;
+  int got;
+  int any;
+  int32_t v;
+  int16_t s;
+
+  if(sample_fmt != AUDIO_FMT_S16_LE || write_bytes < 2){
+    memset(outbuf, 0, write_bytes);
+    return write(hw_fd, outbuf, write_bytes);
+  }
+
+  ns = write_bytes / 2;
+
+  any = 0;
+  for(i = 0; i < AUDIOD_MAX_TRACKS; i++)
+    if(tracks[i].active && tracks[i].src_fd >= 0)
+      any = 1;
+
+  if(!any){
+    memset(outbuf, 0, write_bytes);
+    return write(hw_fd, outbuf, write_bytes);
+  }
+
+  memset(mix_acc, 0, sizeof(int32_t) * (size_t)ns);
+
+  for(i = 0; i < AUDIOD_MAX_TRACKS; i++){
+    if(!tracks[i].active || tracks[i].src_fd < 0)
+      continue;
+    got = track_read_chunk(&tracks[i], inbuf, write_bytes);
+    for(j = 0; j < got / 2; j++){
+      s = (int16_t)((uint16_t)inbuf[2*j] | ((uint16_t)inbuf[2*j+1] << 8));
+      mix_acc[j] += (int32_t)s >> tracks[i].gain_shift;
+    }
+  }
+
+  for(i = 0; i < ns; i++){
+    v = mix_acc[i];
+    if(v >  32767) v =  32767;
+    if(v < -32768) v = -32768;
+    outbuf[2*i]   = (uint8_t)((uint32_t)v & 0xFF);
+    outbuf[2*i+1] = (uint8_t)(((uint32_t)v >> 8) & 0xFF);
+  }
+
+  return write(hw_fd, outbuf, write_bytes);
+}
+
 static char*
 next_tok(char **pp)
 {
@@ -188,6 +317,7 @@ static void
 emit_status(int fd, int writes, int recoveries, struct audio_stream_params *params)
 {
   struct audio_stream_status st;
+  int i;
 
   memset(&st, 0, sizeof(st));
   st.abi_version = AUDIO_ABI_VERSION;
@@ -212,6 +342,12 @@ emit_status(int fd, int writes, int recoveries, struct audio_stream_params *para
           (int)params->period_frames,
           (int)params->periods,
           (int)params->buffer_frames);
+
+  for(i = 0; i < AUDIOD_MAX_TRACKS; i++){
+    if(tracks[i].active)
+      dprintf(1, "audiod:   track[%d] src=%s loop=%d gain_shift=%d\n",
+              i, tracks[i].path, tracks[i].loop, (int)tracks[i].gain_shift);
+  }
 }
 
 static void
@@ -300,6 +436,73 @@ control_try_apply(const char *ctl_path, int fd,
     return;
   }
 
+  if(strcmp(cmd, "track-load") == 0 || strcmp(cmd, "track-loop") == 0){
+    int slot;
+    char *pathp;
+    int do_loop;
+    int tfd;
+
+    do_loop = strcmp(cmd, "track-loop") == 0;
+    if(parse_int_tok(&p, &slot) < 0 || slot < 0 || slot >= AUDIOD_MAX_TRACKS){
+      dprintf(2, "audiod: control %s: invalid slot\n", cmd);
+      return;
+    }
+    pathp = next_tok(&p);
+    if(pathp == 0 || pathp[0] == 0){
+      dprintf(2, "audiod: control %s: missing path\n", cmd);
+      return;
+    }
+    tfd = open(pathp, O_RDONLY);
+    if(tfd < 0){
+      dprintf(2, "audiod: control %s: cannot open %s\n", cmd, pathp);
+      return;
+    }
+    if(tracks[slot].src_fd >= 0)
+      close(tracks[slot].src_fd);
+    tracks[slot].active    = 1;
+    tracks[slot].src_fd    = tfd;
+    tracks[slot].loop      = do_loop;
+    tracks[slot].gain_shift = 0;
+    memmove(tracks[slot].path, pathp, TRACK_PATH_MAX - 1);
+    tracks[slot].path[TRACK_PATH_MAX - 1] = 0;
+    if(verbose)
+      dprintf(1, "audiod: track[%d] loaded %s loop=%d\n", slot, pathp, do_loop);
+    return;
+  }
+
+  if(strcmp(cmd, "track-stop") == 0){
+    int slot;
+    if(parse_int_tok(&p, &slot) < 0 || slot < 0 || slot >= AUDIOD_MAX_TRACKS){
+      dprintf(2, "audiod: control track-stop: invalid slot\n");
+      return;
+    }
+    if(tracks[slot].src_fd >= 0){
+      close(tracks[slot].src_fd);
+      tracks[slot].src_fd = -1;
+    }
+    tracks[slot].active = 0;
+    if(verbose)
+      dprintf(1, "audiod: track[%d] stopped\n", slot);
+    return;
+  }
+
+  if(strcmp(cmd, "track-gain") == 0){
+    int slot;
+    int shift;
+    if(parse_int_tok(&p, &slot) < 0 || slot < 0 || slot >= AUDIOD_MAX_TRACKS){
+      dprintf(2, "audiod: control track-gain: invalid slot\n");
+      return;
+    }
+    if(parse_int_tok(&p, &shift) < 0 || shift < 0 || shift > 15){
+      dprintf(2, "audiod: control track-gain: invalid shift (0-15)\n");
+      return;
+    }
+    tracks[slot].gain_shift = (uint8_t)shift;
+    if(verbose)
+      dprintf(1, "audiod: track[%d] gain_shift=%d\n", slot, shift);
+    return;
+  }
+
   dprintf(2, "audiod: control unknown command '%s'\n", cmd);
 }
 
@@ -313,6 +516,8 @@ main(int argc, char **argv)
   struct pollfd pfd;
   struct audio_stream_status st;
   uchar writebuf[MAX_WRITE_CHUNK];
+  uint8_t *mix_inbuf;
+  int32_t *mix_acc;
   int fd;
   int foreground;
   int verbose;
@@ -331,6 +536,8 @@ main(int argc, char **argv)
   timeout_ms = DEFAULT_POLL_TIMEOUT_MS;
   writes = 0;
   recoveries = 0;
+  mix_inbuf = 0;
+  mix_acc = 0;
 
   memset(&params, 0, sizeof(params));
   params.abi_version = AUDIO_ABI_VERSION;
@@ -408,15 +615,31 @@ main(int argc, char **argv)
   if(!foreground && daemonize_self() < 0)
     exit(1);
 
+  tracks_init();
+  mix_inbuf = (uint8_t*)malloc(MAX_WRITE_CHUNK);
+  mix_acc = (int32_t*)malloc(sizeof(int32_t) * (MAX_WRITE_CHUNK / 2));
+  if(mix_inbuf == 0 || mix_acc == 0){
+    dprintf(2, "audiod: mixer buffer alloc failed\n");
+    if(mix_inbuf)
+      free(mix_inbuf);
+    if(mix_acc)
+      free(mix_acc);
+    exit(1);
+  }
+
   fd = open(devpath, O_RDWR);
   if(fd < 0){
     dprintf(2, "audiod: open %s failed\n", devpath);
+    free(mix_inbuf);
+    free(mix_acc);
     exit(1);
   }
 
   if(configure_stream(fd, &params) < 0){
     dprintf(2, "audiod: failed to configure/start stream on %s\n", devpath);
     close(fd);
+    free(mix_inbuf);
+    free(mix_acc);
     exit(1);
   }
 
@@ -473,7 +696,8 @@ main(int argc, char **argv)
     if(!(pfd.revents & POLLOUT))
       continue;
 
-    wn = write(fd, writebuf, (size_t)write_bytes);
+    wn = mix_write_hw(fd, write_bytes, (int)params.sample_format, writebuf,
+              mix_inbuf, mix_acc);
     if(wn < 0){
       memset(&st, 0, sizeof(st));
       st.abi_version = AUDIO_ABI_VERSION;
@@ -499,7 +723,10 @@ main(int argc, char **argv)
 
   (void)ioctl(fd, AUDIO_IOC_DRAIN, 0);
   (void)ioctl(fd, AUDIO_IOC_STOP, 0);
+  tracks_close_all();
   close(fd);
+  free(mix_inbuf);
+  free(mix_acc);
 
   if(verbose)
     dprintf(1, "audiod: exiting (writes=%d recoveries=%d rc=%d)\n", writes, recoveries, rc);

@@ -1,6 +1,7 @@
 #include "types.h"
 #include "defs.h"
 #include "param.h"
+#include "memlayout.h"
 #include "mmu.h"
 #include "proc.h"
 #include "fs.h"
@@ -84,6 +85,11 @@ pipewrite(struct pipe *p, char *addr, int n)
 {
   int i;
   struct proc *curproc = myproc();
+  int user_src;
+
+  user_src = ((uint)addr < KERNBASE);
+  if(user_src && (curproc == 0 || curproc->pgdir == 0))
+    return -1;
 
   acquire(&p->lock);
   
@@ -105,7 +111,16 @@ pipewrite(struct pipe *p, char *addr, int n)
       wakeup(&p->nread);
       sleep(&p->nwrite, &p->lock);  //DOC: pipewrite-sleep
     }
-    p->data[p->nwrite++ % PIPE_CAPACITY] = addr[i];
+    if(user_src){
+      char ch;
+      if(copyin(curproc->pgdir, &ch, (uint)(addr + i), 1) < 0){
+        release(&p->lock);
+        return (i > 0) ? i : -1;
+      }
+      p->data[p->nwrite++ % PIPE_CAPACITY] = ch;
+    } else {
+      p->data[p->nwrite++ % PIPE_CAPACITY] = addr[i];
+    }
   }
   wakeup(&p->nread);  //DOC: pipewrite-wakeup1
   release(&p->lock);
@@ -116,6 +131,13 @@ int
 piperead(struct pipe *p, char *addr, int n)
 {
   int i;
+  int user_dst;
+  struct proc *curproc;
+
+  user_dst = ((uint)addr < KERNBASE);
+  curproc = user_dst ? myproc() : 0;
+  if(user_dst && (curproc == 0 || curproc->pgdir == 0))
+    return -1;
 
   acquire(&p->lock);
   while(p->nread == p->nwrite && p->writeopen){  //DOC: pipe-empty
@@ -128,7 +150,16 @@ piperead(struct pipe *p, char *addr, int n)
   for(i = 0; i < n; i++){  //DOC: piperead-copy
     if(p->nread == p->nwrite)
       break;
-    addr[i] = p->data[p->nread++ % PIPE_CAPACITY];
+    if(user_dst){
+      char ch;
+      ch = p->data[p->nread++ % PIPE_CAPACITY];
+      release(&p->lock);
+      if(copyout(curproc->pgdir, (uint)(addr + i), &ch, 1) < 0)
+        return (i > 0) ? i : -1;
+      acquire(&p->lock);
+    } else {
+      addr[i] = p->data[p->nread++ % PIPE_CAPACITY];
+    }
   }
   wakeup(&p->nwrite);  //DOC: piperead-wakeup
   release(&p->lock);

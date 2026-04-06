@@ -1,6 +1,8 @@
 #include "types.h"
 #include "defs.h"
 #include "param.h"
+#include "memlayout.h"
+#include "proc.h"
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "vfs.h"
@@ -11,6 +13,8 @@
 #define TMPFS_PAGE_SIZE 4096
 #define TMPFS_NAME_MAX DIRSIZ
 #define TMPFS_DHASH_SIZE 32
+
+static char tmpfs_zero_page[TMPFS_PAGE_SIZE];
 
 struct tmpfs_dirent {
   char name[TMPFS_NAME_MAX + 1];
@@ -303,6 +307,8 @@ static int
 tmpfs_read_pages(struct tmpfs_node *node, char *dst, uint off, uint n)
 {
   uint done;
+  int user_dst;
+  struct proc *p;
 
   if(node == 0 || dst == 0)
     return -1;
@@ -310,6 +316,11 @@ tmpfs_read_pages(struct tmpfs_node *node, char *dst, uint off, uint n)
     return 0;
   if(off + n > node->size)
     n = node->size - off;
+
+  user_dst = ((uint)dst < KERNBASE);
+  p = user_dst ? myproc() : 0;
+  if(user_dst && (p == 0 || p->pgdir == 0))
+    return -1;
 
   done = 0;
   while(done < n){
@@ -325,10 +336,19 @@ tmpfs_read_pages(struct tmpfs_node *node, char *dst, uint off, uint n)
     struct tmpfs_page *page;
 
     page = tmpfs_page_lookup(node, page_index);
-    if(page == 0 || page->data == 0)
-      memset(dst + done, 0, chunk);
-    else
-      memmove(dst + done, page->data + page_off, chunk);
+    if(user_dst){
+      char *src;
+      src = (page == 0 || page->data == 0)
+          ? tmpfs_zero_page
+          : (page->data + page_off);
+      if(copyout(p->pgdir, (uint)(dst + done), src, chunk) < 0)
+        return -1;
+    } else {
+      if(page == 0 || page->data == 0)
+        memset(dst + done, 0, chunk);
+      else
+        memmove(dst + done, page->data + page_off, chunk);
+    }
     done += chunk;
   }
 
@@ -341,6 +361,8 @@ tmpfs_write_pages(struct tmpfs_mount_data *md, struct tmpfs_node *node,
 {
   uint new_size;
   uint done;
+  int user_src;
+  struct proc *p;
 
   if(md == 0 || node == 0 || src == 0)
     return -1;
@@ -352,6 +374,11 @@ tmpfs_write_pages(struct tmpfs_mount_data *md, struct tmpfs_node *node,
     if(md->used_bytes + delta > md->max_bytes)
       return -1;
   }
+
+  user_src = ((uint)src < KERNBASE);
+  p = user_src ? myproc() : 0;
+  if(user_src && (p == 0 || p->pgdir == 0))
+    return -1;
 
   done = 0;
   while(done < n){
@@ -367,7 +394,12 @@ tmpfs_write_pages(struct tmpfs_mount_data *md, struct tmpfs_node *node,
       chunk = n - done;
     if(tmpfs_page_get(node, page_index, &page) < 0)
       return -1;
-    memmove(page->data + page_off, src + done, chunk);
+    if(user_src){
+      if(copyin(p->pgdir, page->data + page_off, (uint)(src + done), chunk) < 0)
+        return -1;
+    } else {
+      memmove(page->data + page_off, src + done, chunk);
+    }
     done += chunk;
   }
 
@@ -636,6 +668,7 @@ tmpfs_read(struct inode *ip, char *dst, uint64_t off, uint n)
   struct dirent de;
   struct tmpfs_dirent *cur;
   uint idx;
+  struct proc *p;
 
   if(ip == 0 || dst == 0)
     return -1;
@@ -661,7 +694,13 @@ tmpfs_read(struct inode *ip, char *dst, uint64_t off, uint n)
 
     de.inum = (ushort)cur->node->inum;
     safestrcpy(de.name, cur->name, sizeof(de.name));
-    memmove(dst, &de, sizeof(de));
+    if((uint)dst < KERNBASE){
+      p = myproc();
+      if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)dst, &de, sizeof(de)) < 0)
+        return -1;
+    } else {
+      memmove(dst, &de, sizeof(de));
+    }
     return sizeof(de);
   }
 

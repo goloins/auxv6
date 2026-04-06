@@ -15,6 +15,8 @@
 #include "types.h"
 #include "defs.h"
 #include "param.h"
+#include "memlayout.h"
+#include "proc.h"
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "vfs.h"
@@ -174,6 +176,8 @@ isofs_read_bytes(struct isofs_mount_data *mp, uint lba, uint offset, void *buf, 
     uint byte_offset;
     char *sector_buf;
     uint done;
+    struct proc *p;
+    int user_dst;
     
     /* Calculate absolute offset from LBA */
     uint abs_offset = lba * ISO_SECTOR_SIZE + offset;
@@ -183,6 +187,13 @@ isofs_read_bytes(struct isofs_mount_data *mp, uint lba, uint offset, void *buf, 
     sector_buf = kalloc();
     if(sector_buf == 0)
         return -1;
+
+    user_dst = ((uint)buf < KERNBASE);
+    p = user_dst ? myproc() : 0;
+    if(user_dst && (p == 0 || p->pgdir == 0)){
+        kfree(sector_buf);
+        return -1;
+    }
     
     /* Read sectors, handling partial reads */
     done = 0;
@@ -202,7 +213,14 @@ isofs_read_bytes(struct isofs_mount_data *mp, uint lba, uint offset, void *buf, 
         if(to_read > avail)
             to_read = avail;
         
-        memmove((char*)buf + done, sector_buf + copy_start, to_read);
+        if(user_dst){
+            if(copyout(p->pgdir, (uint)((char*)buf + done), sector_buf + copy_start, to_read) < 0){
+                kfree(sector_buf);
+                return -1;
+            }
+        } else {
+            memmove((char*)buf + done, sector_buf + copy_start, to_read);
+        }
         done += to_read;
         start_sector++;
         byte_offset = 0;
@@ -396,7 +414,15 @@ isofs_read(struct inode *ip, char *dst, uint64_t off, uint n)
                 if(i > 0 && de.name[i-1] == '.')
                     de.name[i-1] = 0;
                 
-                memmove(dst + written, &de, sizeof(de));
+                if((uint)(dst + written) < KERNBASE){
+                    struct proc *p = myproc();
+                    if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)(dst + written), &de, sizeof(de)) < 0){
+                        kfree(sector_buf);
+                        return (written > 0) ? (int)written : -1;
+                    }
+                } else {
+                    memmove(dst + written, &de, sizeof(de));
+                }
                 written += sizeof(de);
             }
             

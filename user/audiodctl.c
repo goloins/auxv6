@@ -112,12 +112,16 @@ audiod_is_running(void)
 static void
 usage(void)
 {
-  dprintf(2,
-          "usage:\n"
-          "  audiodctl [ctl-path] status\n"
-          "  audiodctl [ctl-path] set <rate> <channels> <format> <period_frames> <periods> <buffer_frames>\n"
-          "  audiodctl [ctl-path] set-write <bytes>\n"
-          "  audiodctl [ctl-path] set-timeout <ms>\n");
+    dprintf(2,
+      "usage:\n"
+      "  audiodctl [ctl-path] status\n"
+      "  audiodctl [ctl-path] set <rate> <channels> <format> <period_frames> <periods> <buffer_frames>\n"
+      "  audiodctl [ctl-path] set-write <bytes>\n"
+      "  audiodctl [ctl-path] set-timeout <ms>\n"
+      "  audiodctl [ctl-path] track-load <slot> <path>   (play raw PCM file once)\n"
+      "  audiodctl [ctl-path] track-loop <slot> <path>   (loop raw PCM file)\n"
+      "  audiodctl [ctl-path] track-stop <slot>\n"
+      "  audiodctl [ctl-path] track-gain <slot> <shift>  (0=full, 1=half, ...)\n");
   exit(1);
 }
 
@@ -176,6 +180,18 @@ main(int argc, char **argv)
     if(ai + 1 >= argc)
       usage();
     dprintf(fd, "set-timeout %s\n", argv[ai + 1]);
+  } else if(strcmp(cmd, "track-load") == 0 || strcmp(cmd, "track-loop") == 0){
+    if(ai + 2 >= argc)
+      usage();
+    dprintf(fd, "%s %s %s\n", cmd, argv[ai + 1], argv[ai + 2]);
+  } else if(strcmp(cmd, "track-stop") == 0){
+    if(ai + 1 >= argc)
+      usage();
+    dprintf(fd, "track-stop %s\n", argv[ai + 1]);
+  } else if(strcmp(cmd, "track-gain") == 0){
+    if(ai + 2 >= argc)
+      usage();
+    dprintf(fd, "track-gain %s %s\n", argv[ai + 1], argv[ai + 2]);
   } else {
     usage();
   }

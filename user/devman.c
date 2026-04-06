@@ -17,6 +17,8 @@
 #include "fcntl.h"
 #include "string.h"
 #include "dirent.h"
+#include "audio.h"
+#include "audio_ioctl.h"
 
 #define MAX_DEVICES 256
 #define MAX_LINE 256
@@ -414,6 +416,45 @@ devman_enumerate_block_devices(void)
   }
 }
 
+/*
+ * Returns 1 if the kernel audio subsystem has at least one real (non-null)
+ * hardware device registered, 0 otherwise.  Creates /dev/audioctl temporarily
+ * if it does not already exist so the ioctl can be issued.
+ */
+static int
+devman_has_real_audio_hw(void)
+{
+  struct audio_enum_devices req;
+  int fd;
+  int created;
+  int result;
+
+  created = 0;
+  if(mknod("/dev/audioctl", M_IFCHR | 0600, AUDIODEV, 0) == 0)
+    created = 1;
+
+  fd = open("/dev/audioctl", O_RDONLY);
+  if(fd < 0){
+    if(created)
+      unlink("/dev/audioctl");
+    return 0;
+  }
+
+  memset(&req, 0, sizeof(req));
+  req.abi_version = AUDIO_ABI_VERSION;
+  req.struct_size = sizeof(req);
+  req.max_entries = 0;
+  req.entries_ptr = 0;
+
+  result = 0;
+  if(ioctl(fd, AUDIO_IOC_ENUM_DEVICES, &req) == 0)
+    result = (req.num_entries >= 2) ? 1 : 0;
+
+  close(fd);
+  /* Leave the node in place — the main enumeration pass will own it. */
+  return result;
+}
+
 static void
 devman_enumerate_pty_devices(void)
 {
@@ -474,7 +515,7 @@ devman_enumerate_pty_devices(void)
     ndevices++;
   }
 
-  /* Audio control + default playback endpoint */
+  /* Audio control node — always present (null device is always registered). */
   if(ndevices < MAX_DEVICES) {
     strcpy(devices[ndevices].path, "/dev/audioctl");
     devices[ndevices].major = AUDIODEV;
@@ -482,7 +523,8 @@ devman_enumerate_pty_devices(void)
     devices[ndevices].type = M_IFCHR;
     ndevices++;
   }
-  if(ndevices < MAX_DEVICES) {
+  /* Playback endpoint — only if real hardware was detected by the kernel. */
+  if(ndevices < MAX_DEVICES && devman_has_real_audio_hw()) {
     strcpy(devices[ndevices].path, "/dev/pcmC0D0p");
     devices[ndevices].major = AUDIODEV;
     devices[ndevices].minor = 1;

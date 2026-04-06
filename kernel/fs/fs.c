@@ -13,6 +13,7 @@
 #include "defs.h"
 #include "param.h"
 #include "stat.h"
+#include "memlayout.h"
 #include "mmu.h"
 #include "proc.h"
 #include "spinlock.h"
@@ -662,6 +663,7 @@ readi(struct inode *ip, char *dst, uint64_t off, uint n)
 {
   uint tot, m;
   struct buf *bp;
+  struct proc *p;
 
   if(ip->dev == PROCFSDEV)
     return procfs_readi(ip, dst, off, n);
@@ -677,10 +679,19 @@ readi(struct inode *ip, char *dst, uint64_t off, uint n)
   if(off + n > ip->size)
     n = ip->size - off;
 
+  p = myproc();
+
   for(tot=0; tot<n; tot+=m, off+=m, dst+=m){
     bp = fs_bread_checked(ip->dev, bmap(ip, off/BSIZE));
     m = min(n - tot, BSIZE - off%BSIZE);
-    memmove(dst, bp->data + off%BSIZE, m);
+    if((uint)dst < KERNBASE){
+      if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)dst, bp->data + off%BSIZE, m) < 0){
+        brelse(bp);
+        return -1;
+      }
+    } else {
+      memmove(dst, bp->data + off%BSIZE, m);
+    }
     brelse(bp);
   }
   return n;
@@ -694,6 +705,7 @@ writei(struct inode *ip, char *src, uint64_t off, uint n)
 {
   uint tot, m;
   struct buf *bp;
+  struct proc *p;
 
   if(ip->dev == PROCFSDEV)
     return -1;
@@ -709,10 +721,19 @@ writei(struct inode *ip, char *src, uint64_t off, uint n)
   if(off + n > MAXFILE*BSIZE)
     return -1;
 
+  p = myproc();
+
   for(tot=0; tot<n; tot+=m, off+=m, src+=m){
     bp = fs_bread_checked(ip->dev, bmap(ip, off/BSIZE));
     m = min(n - tot, BSIZE - off%BSIZE);
-    memmove(bp->data + off%BSIZE, src, m);
+    if((uint)src < KERNBASE){
+      if(p == 0 || p->pgdir == 0 || copyin(p->pgdir, bp->data + off%BSIZE, (uint)src, m) < 0){
+        brelse(bp);
+        return -1;
+      }
+    } else {
+      memmove(bp->data + off%BSIZE, src, m);
+    }
     log_write(bp);
     brelse(bp);
   }

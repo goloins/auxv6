@@ -1,6 +1,7 @@
 #include "types.h"
 #include "defs.h"
 #include "param.h"
+#include "memlayout.h"
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "stat.h"
@@ -709,8 +710,17 @@ tuntap_fileread(struct file *f, char *dst, int n)
   r = u->rxq[idx].len;
   if(r > n)
     r = n;
-  if(r > 0)
-    memmove(dst, u->rxq[idx].data, (uint)r);
+  if(r > 0){
+    if((uint)dst < KERNBASE){
+      struct proc *p = myproc();
+      if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)dst, u->rxq[idx].data, (uint)r) < 0){
+        release(&tuntap_state.lock);
+        return -1;
+      }
+    } else {
+      memmove(dst, u->rxq[idx].data, (uint)r);
+    }
+  }
   u->rx_r++;
   u->ifp.if_ipackets++;
   u->ifp.if_ibytes += (uint)r;
@@ -757,8 +767,17 @@ tuntap_filewrite(struct file *f, char *src, int n)
   m = mbuf_alloc();
   if(m == 0)
     return -1;
-  if(n > 0)
-    memmove(m->data, src, (uint)n);
+  if(n > 0){
+    if((uint)src < KERNBASE){
+      struct proc *p = myproc();
+      if(p == 0 || p->pgdir == 0 || copyin(p->pgdir, m->data, (uint)src, (uint)n) < 0){
+        mbuf_free(m);
+        return -1;
+      }
+    } else {
+      memmove(m->data, src, (uint)n);
+    }
+  }
   m->len = (uint)n;
   m->rcvif = ifp;
   if(mode == IFF_TAP)

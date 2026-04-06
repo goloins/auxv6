@@ -118,7 +118,9 @@ user/file
 user/audioctl
 user/audiostat
 user/audiotest
+user/audiotone
 user/audiopollstress
+user/bcachestress
 user/audiod
 user/audiodctl
 user/lockprobe

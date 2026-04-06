@@ -1,6 +1,7 @@
 #include "types.h"
 #include "x86.h"
 #include "mmu.h"
+#include "memlayout.h"
 #include "defs.h"
 #include "param.h"
 #include "proc.h"
@@ -356,6 +357,13 @@ pty_fileread(struct file *f, char *dst, int n)
   int peer_refs;
   int rc;
   int send_ttin;
+  int user_dst;
+  struct proc *pcur;
+
+  user_dst = ((uint)dst < KERNBASE);
+  pcur = user_dst ? myproc() : 0;
+  if(user_dst && (pcur == 0 || pcur->pgdir == 0))
+    return -1;
 
   if(pty_lookup_file(f, &pty) < 0)
     return -1;
@@ -394,6 +402,39 @@ pty_fileread(struct file *f, char *dst, int n)
     return 0;
   }
 
+  if(user_dst){
+    char kbuf[256];
+    int total;
+
+    total = 0;
+    while(total < n){
+      int want;
+
+      want = n - total;
+      if(want > (int)sizeof(kbuf))
+        want = sizeof(kbuf);
+      rc = pty_chan_read(in, kbuf, want);
+      if(rc <= 0)
+        break;
+
+      release(&ptys.lock);
+      if(copyout(pcur->pgdir, (uint)(dst + total), kbuf, rc) < 0)
+        return (total > 0) ? total : -1;
+      total += rc;
+
+      acquire(&ptys.lock);
+      if(!pty->allocated){
+        release(&ptys.lock);
+        return (total > 0) ? total : -1;
+      }
+    }
+
+    release(&ptys.lock);
+    if(total > 0)
+      return total;
+    return rc;
+  }
+
   rc = pty_chan_read(in, dst, n);
   release(&ptys.lock);
   return rc;
@@ -407,6 +448,13 @@ pty_filewrite(struct file *f, char *src, int n)
   int peer_refs;
   int rc;
   int send_ttou;
+  int user_src;
+  struct proc *pcur;
+
+  user_src = ((uint)src < KERNBASE);
+  pcur = user_src ? myproc() : 0;
+  if(user_src && (pcur == 0 || pcur->pgdir == 0))
+    return -1;
 
   if(pty_lookup_file(f, &pty) < 0)
     return -1;
@@ -443,6 +491,34 @@ pty_filewrite(struct file *f, char *src, int n)
   if(peer_refs == 0){
     release(&ptys.lock);
     return -1;
+  }
+
+  if(user_src){
+    char kbuf[256];
+    int total;
+
+    total = 0;
+    while(total < n){
+      int want;
+
+      want = n - total;
+      if(want > (int)sizeof(kbuf))
+        want = sizeof(kbuf);
+      if(copyin(pcur->pgdir, kbuf, (uint)(src + total), (uint)want) < 0){
+        release(&ptys.lock);
+        return (total > 0) ? total : -1;
+      }
+      rc = pty_chan_write(out, kbuf, want);
+      if(rc <= 0)
+        break;
+      total += rc;
+      if(rc < want)
+        break;
+    }
+    release(&ptys.lock);
+    if(total > 0)
+      return total;
+    return rc;
   }
 
   rc = pty_chan_write(out, src, n);

@@ -5,7 +5,9 @@
 #include "types.h"
 #include "defs.h"
 #include "param.h"
+#include "memlayout.h"
 #include "mmu.h"
+#include "proc.h"
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "fs.h"
@@ -281,7 +283,10 @@ ext2_decode_dev(uint raw, short *major, short *minor)
 static int
 ext2_dev_read(uint dev, uint off, char *dst, uint n)
 {
+  struct proc *p;
   uint done;
+
+  p = myproc();
 
   done = 0;
   while(done < n){
@@ -298,7 +303,14 @@ ext2_dev_read(uint dev, uint off, char *dst, uint n)
 
     if(bread_ok(dev, blockno, &b) < 0)
       return -1;
-    memmove(dst + done, (char*)b->data + boff, take);
+    if((uint)(dst + done) < KERNBASE){
+      if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)(dst + done), (char*)b->data + boff, take) < 0){
+        brelse(b);
+        return -1;
+      }
+    } else {
+      memmove(dst + done, (char*)b->data + boff, take);
+    }
     brelse(b);
 
     done += take;
@@ -310,7 +322,10 @@ ext2_dev_read(uint dev, uint off, char *dst, uint n)
 static int
 ext2_dev_write(uint dev, uint off, char *src, uint n)
 {
+  struct proc *p;
   uint done;
+
+  p = myproc();
 
   done = 0;
   while(done < n){
@@ -327,7 +342,14 @@ ext2_dev_write(uint dev, uint off, char *src, uint n)
 
     if(bread_ok(dev, blockno, &b) < 0)
       return -1;
-    memmove((char*)b->data + boff, src + done, take);
+    if((uint)(src + done) < KERNBASE){
+      if(p == 0 || p->pgdir == 0 || copyin(p->pgdir, (char*)b->data + boff, (uint)(src + done), take) < 0){
+        brelse(b);
+        return -1;
+      }
+    } else {
+      memmove((char*)b->data + boff, src + done, take);
+    }
     if(bwrite_ok(b) < 0){
       brelse(b);
       return -1;
@@ -1394,6 +1416,7 @@ static int
 ext2_read_data(struct ext2_mount_data *data, struct ext2_inode *dip,
                char *dst, uint off, uint n)
 {
+  struct proc *p;
   uint done;
 
   if(data == 0 || dip == 0 || dst == 0)
@@ -1402,6 +1425,8 @@ ext2_read_data(struct ext2_mount_data *data, struct ext2_inode *dip,
     return 0;
   if(off + n > dip->i_size)
     n = dip->i_size - off;
+
+  p = myproc();
 
   done = 0;
   while(done < n){
@@ -1421,7 +1446,13 @@ ext2_read_data(struct ext2_mount_data *data, struct ext2_inode *dip,
       return (done == 0) ? -1 : (int)done;
     if(blockno == 0){
       // Sparse hole: ext2 semantics are zero-filled reads, not early EOF.
-      memset(dst + done, 0, chunk);
+      if((uint)(dst + done) < KERNBASE){
+        static char zpg[4096];
+        if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)(dst + done), zpg, chunk) < 0)
+          return (done == 0) ? -1 : (int)done;
+      } else {
+        memset(dst + done, 0, chunk);
+      }
       done += chunk;
       continue;
     }
@@ -1495,7 +1526,13 @@ ext2_read_dirents(struct ext2_mount_data *data, struct ext2_inode *dip,
         if(cpy > DIRSIZ)
           cpy = DIRSIZ;
         memmove(de.name, nm, cpy);
-        memmove(dst + produced, &de, sizeof(de));
+        if((uint)(dst + produced) < KERNBASE){
+          struct proc *p = myproc();
+          if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)(dst + produced), &de, sizeof(de)) < 0)
+            return (produced == 0) ? -1 : (int)produced;
+        } else {
+          memmove(dst + produced, &de, sizeof(de));
+        }
         produced += sizeof(de);
       }
       cur_index++;

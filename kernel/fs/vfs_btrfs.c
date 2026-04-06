@@ -1,10 +1,12 @@
 #include "types.h"
 #include "defs.h"
 #include "param.h"
+#include "memlayout.h"
 #include "stat.h"
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "mmu.h"
+#include "proc.h"
 #include "fs.h"
 #include "file.h"
 #include "buf.h"
@@ -1337,7 +1339,13 @@ btrfs_read(struct inode *ip, char *dst, uint64_t off, uint n)
       (void)ftype;
     }
 
-    memmove(dst + written, &de, sizeof(de));
+    if((uint)(dst + written) < KERNBASE){
+      struct proc *p = myproc();
+      if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)(dst + written), &de, sizeof(de)) < 0)
+        return (written > 0) ? (int)written : -1;
+    } else {
+      memmove(dst + written, &de, sizeof(de));
+    }
     written += sizeof(de);
     idx++;
   }

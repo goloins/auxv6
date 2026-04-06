@@ -1,12 +1,14 @@
 #include "types.h"
 #include "defs.h"
 #include "param.h"
+#include "memlayout.h"
 #include "stat.h"
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "date.h"
 #include "fs.h"
 #include "file.h"
+#include "proc.h"
 #include "buf.h"
 #include "vfs.h"
 
@@ -1225,9 +1227,14 @@ msdos_read_file_data(struct inode *ip, char *dst, uint64_t off, uint n)
   uint skip;
   uint within;
   uint done;
+  struct proc *p;
   uint off32;
 
   if(ip == 0 || dst == 0)
+    return -1;
+
+  p = ((uint)dst < KERNBASE) ? myproc() : 0;
+  if((uint)dst < KERNBASE && (p == 0 || p->pgdir == 0))
     return -1;
 
   md = msdos_data_for_dev(ip->dev);
@@ -1293,7 +1300,14 @@ msdos_read_file_data(struct inode *ip, char *dst, uint64_t off, uint n)
       b = msdos_bread(md, csec + sec_idx);
       if(b == 0)
         return (done == 0 && copied == 0) ? -1 : (int)(done + copied);
-      memmove(dst + done + copied, b->data + sec_off, chunk);
+      if((uint)(dst + done + copied) < KERNBASE){
+        if(copyout(p->pgdir, (uint)(dst + done + copied), b->data + sec_off, chunk) < 0){
+          brelse(b);
+          return (done == 0 && copied == 0) ? -1 : (int)(done + copied);
+        }
+      } else {
+        memmove(dst + done + copied, b->data + sec_off, chunk);
+      }
       brelse(b);
       copied += chunk;
     }
@@ -2052,7 +2066,13 @@ msdos_read(struct inode *ip, char *dst, uint64_t off, uint n)
     if(cpy > DIRSIZ)
       cpy = DIRSIZ;
     memmove(de.name, nm, cpy);
-    memmove(dst, &de, sizeof(de));
+    if((uint)dst < KERNBASE){
+      struct proc *p = myproc();
+      if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)dst, &de, sizeof(de)) < 0)
+        return -1;
+    } else {
+      memmove(dst, &de, sizeof(de));
+    }
     return sizeof(de);
   }
 
@@ -2078,8 +2098,13 @@ msdos_write_file_data(struct inode *ip, char *src, uint64_t off, uint n)
   uint within;
   uint done;
   uint off32;
+  struct proc *p;
 
   if(ip == 0 || src == 0)
+    return -1;
+
+  p = ((uint)src < KERNBASE) ? myproc() : 0;
+  if((uint)src < KERNBASE && (p == 0 || p->pgdir == 0))
     return -1;
 
   old_first_cluster = ip->addrs[0];
@@ -2185,7 +2210,14 @@ msdos_write_file_data(struct inode *ip, char *src, uint64_t off, uint n)
       b = msdos_bread(md, csec + sec_idx);
       if(b == 0)
         return (done == 0 && copied == 0) ? -1 : (int)(done + copied);
-      memmove(b->data + sec_off, src + done + copied, chunk);
+      if((uint)(src + done + copied) < KERNBASE){
+        if(copyin(p->pgdir, b->data + sec_off, (uint)(src + done + copied), chunk) < 0){
+          brelse(b);
+          return (done == 0 && copied == 0) ? -1 : (int)(done + copied);
+        }
+      } else {
+        memmove(b->data + sec_off, src + done + copied, chunk);
+      }
       bwrite(b);
       brelse(b);
       copied += chunk;

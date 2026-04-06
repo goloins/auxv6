@@ -1,6 +1,7 @@
 #include "types.h"
 #include "defs.h"
 #include "param.h"
+#include "memlayout.h"
 #include "mmu.h"
 #include "proc.h"
 #include "stat.h"
@@ -42,6 +43,7 @@
 #define PROCFS_SERIAL_TTY_INO 25   /* /proc/serial_tty — ttyS line capabilities/state */
 #define PROCFS_AUDIO_CLIENTS_INO 26 /* /proc/audio_clients — active audio stream table */
 #define PROCFS_MODEMS_INO     27   /* /proc/modems — discovered modem devices */
+#define PROCFS_BCACHE_HEALTH_INO 28  /* /proc/bcache_health — buffer-cache integrity check */
 #define PROCFS_VERSION_STR  "a/ux86 aux86 i686\n"
 
 struct procfs_inode {
@@ -77,6 +79,7 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_AUDIO_CLIENTS_INO, "audio_clients", 2048 },
   { PROCFS_SERIAL_TTY_INO, "serial_tty", 512 },
   { PROCFS_MODEMS_INO, "modems", 2048 },
+  { PROCFS_BCACHE_HEALTH_INO, "bcache_health", 512 },
   { 0, 0, 0 }
 };
 
@@ -248,11 +251,22 @@ procfs_write_uint(char *buf, uint value)
 static int
 procfs_copy_data(char *dst, uint off, uint n, char *src, uint len)
 {
+  struct proc *p;
+
   if(off >= len)
     return 0;
   if(off + n > len)
     n = len - off;
-  memmove(dst, src + off, n);
+
+  if((uint)dst < KERNBASE){
+    p = myproc();
+    if(p == 0 || p->pgdir == 0)
+      return -1;
+    if(copyout(p->pgdir, (uint)dst, src + off, n) < 0)
+      return -1;
+  } else {
+    memmove(dst, src + off, n);
+  }
   return n;
 }
 
@@ -354,6 +368,10 @@ procfs_fill_inode(struct inode *ip, uint inum)
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
     ip->size = 2048;
+  } else if(inum == PROCFS_BCACHE_HEALTH_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
+    ip->size = 512;
   } else {
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
@@ -1062,6 +1080,12 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
   }
   if(ip->inum == PROCFS_MODEMS_INO){
     int r = modem_procfs_dump(buf, sizeof(buf));
+    if(r < 0)
+      return -1;
+    return procfs_copy_data(dst, off, n, buf, (uint)r);
+  }
+  if(ip->inum == PROCFS_BCACHE_HEALTH_INO){
+    int r = bcache_health_check(buf, sizeof(buf));
     if(r < 0)
       return -1;
     return procfs_copy_data(dst, off, n, buf, (uint)r);
