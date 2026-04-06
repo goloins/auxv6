@@ -115,6 +115,17 @@ user/tail
 user/lsof
 user/which
 user/file
+user/uniq
+user/sort
+user/sum
+user/sleep
+user/yes
+user/boolean
+user/sync
+user/touch
+user/hashsum
+user/baseenc
+user/asroot
 user/audioctl
 user/audiostat
 user/audiotest

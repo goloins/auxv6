@@ -334,7 +334,7 @@ tags: $(OBJS) kernel/boot/entryother.S user/_init
 kernel/core/vectors.S: tools/vectors.pl
 	./tools/vectors.pl > kernel/core/vectors.S
 
-LIBC_OBJS = user/ulib.o user/string.o user/errstr.o user/umalloc.o user/tty.o user/inet.o user/fmt.o user/dirent.o user/fnmatch.o user/glob.o user/ftw.o user/fts.o user/locale.o user/pwdgrp.o user/env.o user/conf.o user/path.o user/tempfile.o user/timecore.o user/resource.o user/netdb.o user/stdlib.o user/posix_fs.o user/posix.o user/stdio.o user/regex.o user/calloc.o user/libterm.o
+LIBC_OBJS = user/ulib.o user/string.o user/errstr.o user/umalloc.o user/tty.o user/inet.o user/fmt.o user/dirent.o user/fnmatch.o user/glob.o user/ftw.o user/fts.o user/locale.o user/pwdgrp.o user/env.o user/conf.o user/path.o user/tempfile.o user/timecore.o user/resource.o user/netdb.o user/stdlib.o user/posix_fs.o user/posix.o user/stdio.o user/regex.o user/calloc.o user/libterm.o user/checksum.o
 LIBAUXV6_OBJS = user/crt0.o user/usys.o user/printf.o user/resolve.o
 ULIB = $(LIBC_OBJS) $(LIBAUXV6_OBJS)
 
@@ -631,6 +631,60 @@ _which: user/which
 _file: user/file
 	cp user/file _file
 
+_uniq: user/uniq
+	cp user/uniq _uniq
+
+_sort: user/sort
+	cp user/sort _sort
+
+_sum: user/sum
+	cp user/sum _sum
+
+_sleep: user/sleep
+	cp user/sleep _sleep
+
+_yes: user/yes
+	cp user/yes _yes
+
+_true: user/boolean
+	cp user/boolean _true
+
+_false: user/boolean
+	cp user/boolean _false
+
+_sync: user/sync
+	cp user/sync _sync
+
+_touch: user/touch
+	cp user/touch _touch
+
+_md5sum: user/hashsum
+	cp user/hashsum _md5sum
+
+_sha1sum: user/hashsum
+	cp user/hashsum _sha1sum
+
+_sha224sum: user/hashsum
+	cp user/hashsum _sha224sum
+
+_sha256sum: user/hashsum
+	cp user/hashsum _sha256sum
+
+_sha384sum: user/hashsum
+	cp user/hashsum _sha384sum
+
+_sha512sum: user/hashsum
+	cp user/hashsum _sha512sum
+
+_base32: user/baseenc
+	cp user/baseenc _base32
+
+_base64: user/baseenc
+	cp user/baseenc _base64
+
+_asroot: user/asroot
+	cp user/asroot _asroot
+
 _audioctl: user/audioctl
 	cp user/audioctl _audioctl
 
@@ -794,6 +848,24 @@ UPROGS=\
 	_lsof\
 	_which\
 	_file\
+	_uniq\
+	_sort\
+	_sum\
+	_sleep\
+	_yes\
+	_true\
+	_false\
+	_sync\
+	_touch\
+	_md5sum\
+	_sha1sum\
+	_sha224sum\
+	_sha256sum\
+	_sha384sum\
+	_sha512sum\
+	_base32\
+	_base64\
+	_asroot\
 	_audioctl\
 	_audiostat\
 	_audiotest\
@@ -920,6 +992,7 @@ clean:
 	user/6get \
 	user/abrowse \
 	user/lsof user/which user/file \
+	user/uniq user/sort user/sum user/sleep user/yes user/boolean user/sync user/touch user/hashsum user/baseenc user/asroot \
 	user/audioctl user/audiostat user/audiotest user/audiotone user/audiopollstress user/audiod user/audiodctl \
 	user/server7 \
 	user/top \

@@ -49,6 +49,7 @@ This document holds the detailed 2026-04 change history that was moved out of `d
 - FireWire/IEEE 1394 OHCI scaffold progressed: boot-time PCI probe/attach, controller phase-state tracking (`init/ready/resetting/degraded`), IRQ + polled event paths, generation-guarded async context queue scaffold, timeout reaping, and expanded `/proc/firewire` queue-health telemetry.
 - NVIDIA nForce MCP79 Ethernet (10de:0ab0) tranche landed: PCI attach, BAR0 MMIO map, descriptor-ring polling TX/RX datapath, INTx path with polling fallback, and truthful link-state updates (no forced-RUNNING attach state).
 - nForce observability follow-on landed: new `/proc/nforce` node with per-interface mode/link/irq plus TX/RX/link transition counters to validate IRQ-vs-poll behavior quickly in guest.
+- Core text/crypto utility tranche landed: `uniq`, `sort`, `sum`, `sleep`, `yes`, `true`, `false`, `sync`, `touch`, `md5sum`, `sha1sum`, `sha224sum`, `sha256sum`, `sha384sum`, `sha512sum`, `base32`, `base64`, plus minimal `asroot` with `/bin/sudo` compatibility symlink.
 
 ## Past Changes (2026-03-30 to 2026-04-03)
 

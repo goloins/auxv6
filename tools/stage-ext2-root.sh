@@ -107,6 +107,10 @@ for src in "$@"; do
     _chgrp)
       install -m 0755 "$src" "$rootdir/sbin/chgrp"
       ;;
+    _asroot)
+      install -m 0755 "$src" "$rootdir/bin/asroot"
+      ln -sf asroot "$rootdir/bin/sudo"
+      ;;
     _dmesg)
       install -m 0755 "$src" "$rootdir/sbin/dmesg"
       ;;

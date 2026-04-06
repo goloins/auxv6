@@ -179,6 +179,8 @@ extern int sys_getpeername(void);
 extern int sys_getrlimit(void);
 extern int sys_setrlimit(void);
 extern int sys_lseek64(void);
+extern int sys_truncate(void);
+extern int sys_ftruncate(void);
 
 static int (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -278,6 +280,8 @@ static int (*syscalls[])(void) = {
 [SYS_getrlimit] sys_getrlimit,
 [SYS_setrlimit] sys_setrlimit,
 [SYS_lseek64]   sys_lseek64,
+[SYS_truncate]  sys_truncate,
+[SYS_ftruncate] sys_ftruncate,
 };
 
 void

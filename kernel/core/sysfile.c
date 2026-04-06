@@ -2241,6 +2241,113 @@ sys_lseek(void)
   return (int)(uint)(newoff & 0xffffffff);
 }
 
+int
+sys_truncate(void)
+{
+  char *path;
+  int len_lo, len_hi;
+  int64_t len;
+  struct inode *ip;
+  const struct vnode_ops *ops;
+
+  if(argstr(0, &path) < 0 || argint(1, &len_lo) < 0 || argint(2, &len_hi) < 0)
+    return -1;
+
+  len = ((int64_t)(uint)len_hi << 32) | (uint)len_lo;
+  if(len < 0)
+    return -1;
+
+  begin_op();
+  ip = vfs_resolve(path);
+  if(ip == 0){
+    end_op();
+    return -1;
+  }
+
+  ilock(ip);
+  if(iaccess(ip, IACC_WRITE) < 0){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  if((uint64_t)len == ip->size){
+    iunlockput(ip);
+    end_op();
+    return 0;
+  }
+
+  if(len != 0){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  ops = vfs_dev_vops(ip->dev);
+  if(ops == 0 || ops->truncate == 0 || ops->truncate(ip) < 0){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  iunlockput(ip);
+  end_op();
+  return 0;
+}
+
+int
+sys_ftruncate(void)
+{
+  int len_lo, len_hi;
+  int64_t len;
+  struct file *f;
+  const struct vnode_ops *ops;
+
+  if(argfd(0, 0, &f) < 0 || argint(1, &len_lo) < 0 || argint(2, &len_hi) < 0)
+    return -1;
+
+  len = ((int64_t)(uint)len_hi << 32) | (uint)len_lo;
+  if(len < 0)
+    return -1;
+
+  if(f->type != FD_INODE || f->ip == 0)
+    return -1;
+
+  begin_op();
+  ilock(f->ip);
+  if(iaccess(f->ip, IACC_WRITE) < 0){
+    iunlock(f->ip);
+    end_op();
+    return -1;
+  }
+
+  if((uint64_t)len == f->ip->size){
+    iunlock(f->ip);
+    end_op();
+    return 0;
+  }
+
+  if(len != 0){
+    iunlock(f->ip);
+    end_op();
+    return -1;
+  }
+
+  ops = vfs_dev_vops(f->ip->dev);
+  if(ops == 0 || ops->truncate == 0 || ops->truncate(f->ip) < 0){
+    iunlock(f->ip);
+    end_op();
+    return -1;
+  }
+
+  if(f->off > f->ip->size)
+    f->off = f->ip->size;
+
+  iunlock(f->ip);
+  end_op();
+  return 0;
+}
+
 // _llseek / lseek64 — 64-bit seek with Linux-compatible 5-arg ABI:
 //   arg0: fd
 //   arg1: offset_high  (high 32 bits of 64-bit offset)

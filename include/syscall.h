@@ -96,3 +96,5 @@
 #define SYS_setrlimit 95
 #define SYS_rmdir 96
 #define SYS_lseek64 97
+#define SYS_truncate 98
+#define SYS_ftruncate 99
