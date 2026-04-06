@@ -40,6 +40,8 @@ OBJS = \
 	kernel/driver/pci.o\
 	kernel/driver/modem.o\
 	kernel/driver/firewire.o\
+	kernel/driver/wifi.o\
+	kernel/driver/ieee802154.o\
 	kernel/driver/usb.o\
 	kernel/driver/usb_uhci.o\
 	kernel/driver/usb_ohci.o\

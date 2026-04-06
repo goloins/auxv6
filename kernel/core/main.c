@@ -28,6 +28,8 @@ main(void)
   pci_init();      // PCI bus enumeration
   modem_init();    // modem-class PCI probe stubs
   firewire_init(); // firewire/IEEE1394 PCI probe stubs
+  wifi_init();     // 802.11 Wi-Fi PCI probe scaffold
+  ieee802154_init(); // 802.15.4 WPAN scaffold (backburner; USB attach pending)
   usb_init();      // usb host-controller discovery scaffold
   virtio_gpu_init(); // virtio-gpu subsystem
   intel_gfx_init();  // intel display-class PCI probe stub
