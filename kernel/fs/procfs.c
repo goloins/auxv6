@@ -46,6 +46,7 @@
 #define PROCFS_BCACHE_HEALTH_INO 28  /* /proc/bcache_health — buffer-cache integrity check */
 #define PROCFS_FIREWIRE_INO   29   /* /proc/firewire — discovered IEEE1394 controllers */
 #define PROCFS_USB_INO        30   /* /proc/usb — discovered USB host controllers */
+#define PROCFS_NFORCE_INO     31   /* /proc/nforce — nForce driver counters */
 #define PROCFS_VERSION_STR  "a/ux86 aux86 i686\n"
 
 struct procfs_inode {
@@ -84,6 +85,7 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_BCACHE_HEALTH_INO, "bcache_health", 512 },
   { PROCFS_FIREWIRE_INO, "firewire", 2048 },
   { PROCFS_USB_INO, "usb", 2048 },
+  { PROCFS_NFORCE_INO, "nforce", 2048 },
   { 0, 0, 0 }
 };
 
@@ -381,6 +383,10 @@ procfs_fill_inode(struct inode *ip, uint inum)
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
     ip->size = 2048;
   } else if(inum == PROCFS_USB_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
+    ip->size = 2048;
+  } else if(inum == PROCFS_NFORCE_INO){
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
     ip->size = 2048;
@@ -1110,6 +1116,12 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
   }
   if(ip->inum == PROCFS_USB_INO){
     int r = usb_procfs_dump(buf, sizeof(buf));
+    if(r < 0)
+      return -1;
+    return procfs_copy_data(dst, off, n, buf, (uint)r);
+  }
+  if(ip->inum == PROCFS_NFORCE_INO){
+    int r = nforce_procfs_dump(buf, sizeof(buf));
     if(r < 0)
       return -1;
     return procfs_copy_data(dst, off, n, buf, (uint)r);

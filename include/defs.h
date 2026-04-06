@@ -748,6 +748,7 @@ void            firewire_init(void);
 int             firewire_procfs_dump(char *buf, uint max);
 void            usb_init(void);
 int             usb_procfs_dump(char *buf, uint max);
+int             nforce_procfs_dump(char *buf, uint max);
 void            arp_input(struct ifnet*, struct mbuf*);
 int             ether_output(struct ifnet*, struct mbuf*, const uchar*, ushort);
 int             ether_output_ip(struct ifnet*, struct mbuf*, uint);

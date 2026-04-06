@@ -46,6 +46,8 @@ This document holds the detailed 2026-04 change history that was moved out of `d
 - TUN/TAP Phase 2 tranche started: TAP userspace write ingress now feeds `ether_input`, `tuntest` gained `tap-arp-self` plus `run-all-tap`, and first-pass L2 ARP self-validation is now in-tree.
 - TAP Phase 2 guest checkpoint is now green: `tuntest tap-arp-self` and `tuntest run-all-tap` both pass on `tap0`, counters advance in `/proc/net_dev`, and `tuntapctl destroy tap0` removes interface state cleanly from `ifconfig` and `/proc/net_dev`.
 - FireWire/IEEE 1394 OHCI scaffold progressed: boot-time PCI probe/attach, controller phase-state tracking (`init/ready/resetting/degraded`), IRQ + polled event paths, generation-guarded async context queue scaffold, timeout reaping, and expanded `/proc/firewire` queue-health telemetry.
+- NVIDIA nForce MCP79 Ethernet (10de:0ab0) tranche landed: PCI attach, BAR0 MMIO map, descriptor-ring polling TX/RX datapath, INTx path with polling fallback, and truthful link-state updates (no forced-RUNNING attach state).
+- nForce observability follow-on landed: new `/proc/nforce` node with per-interface mode/link/irq plus TX/RX/link transition counters to validate IRQ-vs-poll behavior quickly in guest.
 
 ## Past Changes (2026-03-30 to 2026-04-03)
 

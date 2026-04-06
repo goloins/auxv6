@@ -7,6 +7,38 @@ network audit pass.
 
 ## Bugs Fixed
 
+### nForce MCP79 (10de:0ab0): initial auxv6 driver tranche with truthful link state and INTx fallback
+
+**Files:** `kernel/driver/nforce.c`, `kernel/net/device.c`, `include/defs.h`, `Makefile`
+
+Added initial support for NVIDIA nForce MCP79 Ethernet (PCI ID `10de:0ab0`) using
+the auxv6 `ifnet` model:
+
+- PCI probe/match and BAR0 MMIO mapping.
+- Descriptor-ring polling TX/RX datapath.
+- INTx interrupt handler for RX/TX completion and link events.
+- Polling fallback when IRQ registration is unavailable.
+- Truthful link-state reporting using hardware status instead of forcing
+  `IFF_RUNNING` at attach time.
+
+The current tranche intentionally defers MSI/MSI-X, checksum offloads, and
+deeper PHY-specific tuning.
+
+### nForce observability: `/proc/nforce` per-interface counters
+
+**Files:** `kernel/driver/nforce.c`, `kernel/fs/procfs.c`
+
+Added a new procfs node, `/proc/nforce`, to expose per-interface nForce driver
+telemetry for fast guest-side validation:
+
+- mode (`intx` or `poll` fallback), IRQ line, and current link state.
+- IRQ activity (`irq_events`, `irq_spurious`) and poll cadence (`poll_calls`).
+- TX/RX datapath counters (`tx_submit`, `tx_complete`, `rx_deliver`, `rx_drop`).
+- Link transition counters (`link_up`, `link_down`).
+
+This makes it straightforward to confirm that interrupt delivery is working and
+to detect fallback behavior or link flaps without adding temporary debug prints.
+
 ### virtio-net: No poll fallback when IRQ delivery is delayed or missed
 
 **File:** `kernel/driver/virtio_net.c`
