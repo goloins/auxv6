@@ -4,7 +4,7 @@
 // traditional POSIX lower bound (32767 = 2^15-1) while giving headroom well
 // above NPROC=128.  Raise if NPROC is ever increased significantly.
 #define PID_MAX     32767
-#define KSTACKSIZE 4096  // size of per-process kernel stack
+#define KSTACKSIZE 8192  // size of per-process kernel stack (2 pages)
 #define NCPU          8  // maximum number of CPUs
 #define KALLOC_CPU_CACHE 32  // per-CPU cached free pages before global flush
 // Phase 2 allocator policy: explicit per-CPU watermarks + batched global moves.

@@ -52,6 +52,27 @@ static volatile int active_alarm_count;
 static struct proc *initproc;
 
 int nextpid = 1;
+
+static uint
+proc_kstack_npages(void)
+{
+  if((KSTACKSIZE % PGSIZE) != 0)
+    panic("KSTACKSIZE align");
+  return KSTACKSIZE / PGSIZE;
+}
+
+static void
+proc_free_kstack(char *kstack)
+{
+  uint i;
+  uint npages;
+
+  if(kstack == 0)
+    return;
+  npages = proc_kstack_npages();
+  for(i = 0; i < npages; i++)
+    kfree(kstack + (i * PGSIZE));
+}
 // Phase 1A: Check if any process has an open file on the given device.
 // Called by fs.c when unmounting or checking device in-use status.
 int
@@ -827,8 +848,9 @@ found:
 
   release(&ptable.lock);
 
-  // Allocate kernel stack.
-  if((p->kstack = kalloc()) == 0){
+  // Allocate per-process kernel stack as contiguous pages.
+  p->kstack = kalloc_contiguous(proc_kstack_npages());
+  if(p->kstack == 0){
     p->state = UNUSED;
     return 0;
   }
@@ -836,7 +858,7 @@ found:
   // Phase 1A: Allocate dynamic file descriptor table
   p->fdtable = fdtable_alloc();
   if(p->fdtable == 0){
-    kfree(p->kstack);
+    proc_free_kstack(p->kstack);
     p->kstack = 0;
     p->state = UNUSED;
     return 0;
@@ -951,7 +973,7 @@ fork(void)
 
   // Copy process state from proc.
   if((np->pgdir = copyuvm(curproc->pgdir, curproc->sz)) == 0){
-    kfree(np->kstack);
+    proc_free_kstack(np->kstack);
     np->kstack = 0;
     np->state = UNUSED;
     return -1;
@@ -989,7 +1011,7 @@ fork(void)
 
   // Phase 1A: Duplicate file descriptor table from parent
   if(fdtable_dup(curproc->fdtable, np->fdtable) < 0){
-    kfree(np->kstack);
+    proc_free_kstack(np->kstack);
     np->kstack = 0;
     fdtable_free(np->fdtable);
     np->fdtable = 0;
@@ -1117,7 +1139,7 @@ proc_waitpid(int pid, int *status, int options)
         // Found one.
         foundpid = p->pid;
         st = p->xstatus;
-        kfree(p->kstack);
+        proc_free_kstack(p->kstack);
         p->kstack = 0;
         freevm(p->pgdir);
         p->pid = 0;

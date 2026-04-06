@@ -14,11 +14,67 @@ pde_t *kpgdir;  // for use in scheduler()
 static uint vm_bad_pte_drops;
 static uint vm_kernel_pde_repairs;
 static uint vm_kernel_pde_master_repairs;
+static uint vm_bad_entry_window_logs;
+static uint vm_kernel_pde_sync_cursor;
 static pde_t vm_kernel_pde_ref[NPDENTRIES];
 static int vm_kernel_pde_ref_ready;
 static uchar vm_kernel_pde_master_reported[NPDENTRIES];
 
 static pde_t vm_pde_stable(pde_t pde);
+
+static void
+vm_log_proc_stack_context(const char *tag, void *entry_page)
+{
+  struct proc *p;
+  uint kbase;
+  uint ktop;
+  uint ep;
+
+  p = myproc();
+  if(p == 0){
+    cprintf("%s: proc=none\n", tag);
+    return;
+  }
+
+  kbase = (uint)p->kstack;
+  ktop = kbase + KSTACKSIZE;
+  ep = (uint)entry_page;
+  cprintf("%s: pid=%d pgdir=%p kstack=[%p,%p) entry_page=%p tf=%p frame=%p\n",
+          tag, p->pid, p->pgdir, (void*)kbase, (void*)ktop,
+          (void*)ep, p->tf, __builtin_frame_address(0));
+  if(ep + PGSIZE == kbase || ktop + PGSIZE == ep || (ep >= kbase && ep < ktop)){
+    cprintf("%s: stack_pgdir_proximity_detected pid=%d entry_page=%p kstack_base=%p\n",
+            tag, p->pid, (void*)ep, (void*)kbase);
+  }
+}
+
+static void
+vm_dump_entry_window(uint *entry, const char *tag)
+{
+  uint base;
+  uint idx;
+  uint lo;
+  uint hi;
+  uint i;
+
+  if(entry == 0)
+    return;
+  // Keep this bounded; this runs only on malformed-entry paths.
+  if(vm_bad_entry_window_logs >= 32)
+    return;
+  vm_bad_entry_window_logs++;
+
+  base = (uint)entry & ~(PGSIZE - 1);
+  idx = ((uint)entry - base) / sizeof(uint);
+  lo = (idx >= 4) ? (idx - 4) : 0;
+  hi = (idx + 4 < NPTENTRIES) ? (idx + 4) : (NPTENTRIES - 1);
+
+  cprintf("%s: entry=%p page=%p idx=%u cpu=%d cr3=%x\n",
+          tag, entry, (void*)base, idx, cpuid(), rcr3());
+  vm_log_proc_stack_context(tag, (void*)base);
+  for(i = lo; i <= hi; i++)
+    cprintf("  [%u]=%x\n", i, ((uint*)base)[i]);
+}
 
 static void
 vm_log_kernel_pde_divergence_once(uint idx, pde_t cur, pde_t want, pde_t *pgdir)
@@ -44,6 +100,7 @@ vm_log_kernel_pde_divergence_once(uint idx, pde_t cur, pde_t want, pde_t *pgdir)
 
 // x86 sets Accessed/Dirty in paging entries at runtime.
 #define VM_PDE_VOLATILE_BITS (0x020 | 0x040)
+#define VM_PDE_SYNC_FULL_INTERVAL 64
 
 static pde_t
 vm_pde_stable(pde_t pde)
@@ -83,6 +140,9 @@ static void
 vm_sync_kernel_pdes(pde_t *pgdir)
 {
   uint i;
+  uint start;
+  uint end;
+  uint span;
   uint repaired;
   uint master_repaired;
   pde_t want;
@@ -90,16 +150,30 @@ vm_sync_kernel_pdes(pde_t *pgdir)
   if(pgdir == 0 || kpgdir == 0)
     return;
 
+  span = NPDENTRIES - PDX(KERNBASE);
+  if(span == 0)
+    return;
+
+  if(!vm_kernel_pde_ref_ready ||
+     (vm_kernel_pde_sync_cursor % VM_PDE_SYNC_FULL_INTERVAL) == 0){
+    start = PDX(KERNBASE);
+    end = NPDENTRIES;
+  } else {
+    start = PDX(KERNBASE) + (vm_kernel_pde_sync_cursor % span);
+    end = start + 1;
+  }
+  vm_kernel_pde_sync_cursor++;
+
   repaired = 0;
   master_repaired = 0;
-  for(i = PDX(KERNBASE); i < NPDENTRIES; i++){
+  for(i = start; i < end; i++){
     want = vm_kernel_pde_canonical(i);
     if(vm_pde_stable(kpgdir[i]) != vm_pde_stable(want)){
       vm_log_kernel_pde_divergence_once(i, kpgdir[i], want, pgdir);
       kpgdir[i] = vm_pde_merge_runtime_bits(kpgdir[i], want);
       master_repaired++;
     }
-    if(vm_pde_stable(pgdir[i]) != vm_pde_stable(want)){
+    if(pgdir != kpgdir && vm_pde_stable(pgdir[i]) != vm_pde_stable(want)){
       pgdir[i] = vm_pde_merge_runtime_bits(pgdir[i], want);
       repaired++;
     }
@@ -158,6 +232,7 @@ walkpgdir(pde_t *pgdir, const void *va, int alloc)
     if(pa == 0 || pa >= PHYSTOP || pa >= KERNBASE){
       cprintf("walkpgdir: bad pde pgdir=%p va=%p pde=%p raw=%x pa=%x\n",
               pgdir, va, pde, *pde, pa);
+      vm_dump_entry_window((uint*)pde, "walkpgdir_bad_pde_window");
       if(!alloc){
         // Kernel-half PDEs are canonical and shared; repair drift in place.
         if((uint)va >= KERNBASE && kpgdir != 0 && PDX(va) >= PDX(KERNBASE)){
@@ -654,10 +729,15 @@ uvm_release_pte(uint *pte)
     return -2;
   }
   if(pa >= PHYSTOP || pa >= KERNBASE || !kpage_is_managed(pa)){
+    struct proc *p;
+
     vm_bad_pte_drops++;
+    p = myproc();
     if((vm_bad_pte_drops & 0x3f) == 1){
-      cprintf("uvm_release_pte: drop bad pte=%p raw=%x pa=%x flags=%x drops=%u\n",
-              pte, raw, pa, PTE_FLAGS(raw), vm_bad_pte_drops);
+      cprintf("uvm_release_pte: drop bad pte=%p raw=%x pa=%x flags=%x drops=%u pid=%d pgdir=%p\n",
+              pte, raw, pa, PTE_FLAGS(raw), vm_bad_pte_drops,
+              p ? p->pid : -1, p ? p->pgdir : 0);
+      vm_dump_entry_window(pte, "uvm_release_bad_pte_window");
     }
     *pte = 0;
     return -2;
