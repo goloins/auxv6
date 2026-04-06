@@ -40,6 +40,11 @@ OBJS = \
 	kernel/driver/pci.o\
 	kernel/driver/modem.o\
 	kernel/driver/firewire.o\
+	kernel/driver/usb.o\
+	kernel/driver/usb_uhci.o\
+	kernel/driver/usb_ohci.o\
+	kernel/driver/usb_ehci.o\
+	kernel/driver/usb_xhci.o\
 	kernel/driver/conexant_hsf.o\
 	kernel/driver/agere_lt.o\
 	kernel/driver/smartlink.o\

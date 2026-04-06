@@ -144,7 +144,12 @@
 
 /* Serial Bus Subclasses / Prog IF */
 #define PCI_SUBCLASS_SERIAL_FIREWIRE 0x00
+#define PCI_SUBCLASS_SERIAL_USB      0x03
 #define PCI_PROGIF_IEEE1394_OHCI 0x10
+#define PCI_PROGIF_USB_UHCI      0x00
+#define PCI_PROGIF_USB_OHCI      0x10
+#define PCI_PROGIF_USB_EHCI      0x20
+#define PCI_PROGIF_USB_XHCI      0x30
 
 /* Known Vendor IDs */
 #define PCI_VENDOR_INTEL    0x8086
