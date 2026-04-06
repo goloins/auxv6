@@ -790,6 +790,7 @@ void            mlx4_en_init(void);
 void            mlx5e_init(void);
 void            ena_init(void);
 void            alx_init(void);
+void            nforce_init(void);
 void            vmxnet3_init(void);
 void            netvsc_init(void);
 

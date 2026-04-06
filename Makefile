@@ -82,6 +82,7 @@ OBJS = \
 	kernel/driver/mlx5e.o\
 	kernel/driver/ena.o\
 	kernel/driver/alx.o\
+	kernel/driver/nforce.o\
 	kernel/driver/vmxnet3.o\
 	kernel/driver/netvsc.o\
 	kernel/driver/loop.o\

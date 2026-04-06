@@ -48,6 +48,7 @@ netdev_init(void)
 	mlx5e_init();
 	ena_init();
 	alx_init();
+	nforce_init();
 	vmxnet3_init();
 	netvsc_init();
 }
