@@ -28,7 +28,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | Signal handling | 95% | Full userspace delivery, alarm(), SIGPIPE, hardware fault mapping |
 | Bootstrapping / init | 85% | VFS-launched init, rc scripts, runlevels, telinit, shebang exec, early-runlevel `devman` bootstrap, and dedicated server7 boot profile |
 | Memory management | 83% | Virtual memory, page tables, kalloc/kfree, and a landed per-CPU allocator-cache hardening pass |
-| PCI subsystem | 80% | Bus 0 enumeration, BAR decode/mapping, helper APIs, `lspci`; MSI/MSI-X still missing |
+| PCI subsystem | 86% | Bus 0 enumeration, BAR decode/mapping, helper APIs, `lspci`, and core MSI/MSI-X kernel prerequisites (capability discovery, vector allocation API, high-vector trap dispatch) are now in-tree; driver migration and MSI-X multi-queue adoption remain |
 | DMA support | 78% | Page-based DMA allocation with physical address tracking, alignment support, and multi-page framebuffer-friendly backing |
 | Loop devices | 88% | 8 block devices; setup validation hardened, busy-teardown guard, extended status (offset + mounted flag), `looptest` regression suite, 256 MB rootfs |
 | ISO 9660 | 85% | Working read-only implementation with VFS integration and loop-mount testing |
@@ -132,6 +132,7 @@ Primary goal: hold the current kernel/userland gains as the stable baseline whil
 - Rolling implementation log: `docs/CHANGELOG-2026-04.md`
 - Kernel perf/COW architecture and validation: `docs/allocator-vm-refactor-blueprint.md`, `docs/kernel-perf-hardening.md`
 - Storage backends: `docs/nvme-driver.md`, `docs/msdosfs.md`, `docs/exfat-driver.md`, `docs/btrfs-driver.md`, `docs/ufs2-driver.md`
+- PCI interrupt modernization (MSI/MSI-X): `docs/pci-msi-msix-tranche-plan.md`
 - TUN/TAP design and execution phases: `docs/tuntap-design-and-phase-plan.md`
 - NFS status and scope: `docs/nfs-v3-integration.md`
 - Libc/POSIX tranche inventory: `docs/libc-posix-unified-tranche-inventory.md`

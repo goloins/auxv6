@@ -65,6 +65,44 @@
 #define PCI_CMD_FASTB2B     0x0200
 #define PCI_CMD_INT_DISABLE 0x0400
 
+/* PCI Status Register bits */
+#define PCI_STATUS_CAP_LIST 0x0010
+
+/* PCI Capability IDs */
+#define PCI_CAP_ID_MSI      0x05
+#define PCI_CAP_ID_MSIX     0x11
+
+/* MSI capability control bits */
+#define PCI_MSI_CTRL_ENABLE     0x0001
+#define PCI_MSI_CTRL_MMC_SHIFT  1
+#define PCI_MSI_CTRL_MMC_MASK   0x000E
+#define PCI_MSI_CTRL_MME_SHIFT  4
+#define PCI_MSI_CTRL_MME_MASK   0x0070
+#define PCI_MSI_CTRL_64BIT      0x0080
+#define PCI_MSI_CTRL_PVMASK     0x0100
+
+/* MSI-X capability control bits */
+#define PCI_MSIX_CTRL_ENABLE    0x8000
+#define PCI_MSIX_CTRL_MASKALL   0x4000
+#define PCI_MSIX_CTRL_TSIZE_MASK 0x07FF
+
+/* MSI-X table layout */
+#define PCI_MSIX_TABLE_BIR_MASK 0x00000007
+#define PCI_MSIX_TABLE_OFF_MASK 0xFFFFFFF8
+
+/* PCI interrupt mode */
+#define PCI_IRQ_MODE_INTX   0
+#define PCI_IRQ_MODE_MSI    1
+#define PCI_IRQ_MODE_MSIX   2
+
+/* Generic interrupt-vector allocation flags */
+#define PCI_IRQ_F_INTX      0x01
+#define PCI_IRQ_F_MSI       0x02
+#define PCI_IRQ_F_MSIX      0x04
+#define PCI_IRQ_F_ALL       (PCI_IRQ_F_INTX | PCI_IRQ_F_MSI | PCI_IRQ_F_MSIX)
+
+#define PCI_IRQ_MAX_VECTORS 32
+
 /* PCI Header Type */
 #define PCI_TYPE_DEVICE     0x00
 #define PCI_TYPE_BRIDGE     0x01
@@ -158,6 +196,11 @@ struct pci_dev {
     uint32_t  bar[6];         /* Base Address Registers */
     uint32_t  bar_size[6];    /* Size of each BAR region */
     uint8_t   bar_type[6];    /* Type flags for each BAR */
+    uint8_t   msi_cap_off;    /* MSI capability offset (0 if absent) */
+    uint8_t   msix_cap_off;   /* MSI-X capability offset (0 if absent) */
+    uint8_t   irq_mode;       /* PCI_IRQ_MODE_* */
+    uint8_t   irq_nvec;       /* Number of allocated vectors */
+    uint8_t   irq_vectors[PCI_IRQ_MAX_VECTORS]; /* trap.c IRQ indexes */
     void     *driver_data;    /* Driver-private data */
 };
 
@@ -222,6 +265,7 @@ void     pci_enable_mem(struct pci_dev *dev);
 void     pci_disable_interrupts(struct pci_dev *dev);
 void     pci_disable_msi(struct pci_dev *dev);
 void     pci_enable_interrupts(struct pci_dev *dev);
+int      pci_find_capability(struct pci_dev *dev, uint8_t cap_id);
 
 /* Device lookup */
 struct pci_dev *pci_find_device(uint16_t vendor, uint16_t device);
@@ -236,6 +280,10 @@ void     pci_unregister_driver(struct pci_driver *drv);
 /* Interrupt handling */
 int      pci_get_irq(struct pci_dev *dev);
 void     pci_enable_irq(struct pci_dev *dev, int cpu);
+int      pci_irq_alloc_vectors(struct pci_dev *dev, int min_vec, int max_vec, int flags);
+void     pci_irq_free_vectors(struct pci_dev *dev);
+int      pci_irq_vector(struct pci_dev *dev, int index);
+int      pci_irq_mode(struct pci_dev *dev);
 
 /* Debug */
 void     pci_dump_devices(void);

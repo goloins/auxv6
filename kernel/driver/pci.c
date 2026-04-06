@@ -26,6 +26,7 @@
 #include "x86.h"
 #include "spinlock.h"
 #include "pci.h"
+#include "traps.h"
 
 /* PCI device table (discovered devices) */
 static struct pci_dev pci_devices[PCI_MAX_DEVICES];
@@ -37,6 +38,96 @@ static int pci_ndrivers = 0;
 
 /* PCI subsystem lock */
 static struct spinlock pci_lock;
+static struct spinlock pci_irqvec_lock;
+
+/* Use high IDT vectors for MSI/MSI-X to avoid legacy ISA IRQ overlap. */
+#define PCI_MSI_IRQ_BASE    64   /* trap vector 96 */
+#define PCI_MSI_IRQ_LIMIT   224  /* trap vector 255 */
+
+/* One bit per trap.c IRQ index in [PCI_MSI_IRQ_BASE, PCI_MSI_IRQ_LIMIT). */
+static uint32_t pci_irqvec_bitmap[(PCI_MSI_IRQ_LIMIT + 31) / 32];
+
+static int
+pci_irqvec_alloc_locked(void)
+{
+    for (int irq = PCI_MSI_IRQ_BASE; irq < PCI_MSI_IRQ_LIMIT; irq++) {
+        int word = irq >> 5;
+        uint32_t bit = 1U << (irq & 31);
+        if ((pci_irqvec_bitmap[word] & bit) == 0) {
+            pci_irqvec_bitmap[word] |= bit;
+            return irq;
+        }
+    }
+    return -1;
+}
+
+static void
+pci_irqvec_free_locked(int irq)
+{
+    if (irq < PCI_MSI_IRQ_BASE || irq >= PCI_MSI_IRQ_LIMIT)
+        return;
+    pci_irqvec_bitmap[irq >> 5] &= ~(1U << (irq & 31));
+}
+
+static int
+pci_alloc_irq_slots(uint8_t *out, int count)
+{
+    int i;
+
+    if (count <= 0 || count > PCI_IRQ_MAX_VECTORS)
+        return -1;
+
+    acquire(&pci_irqvec_lock);
+    for (i = 0; i < count; i++) {
+        int irq = pci_irqvec_alloc_locked();
+        if (irq < 0)
+            break;
+        out[i] = (uint8_t)irq;
+    }
+    if (i != count) {
+        while (--i >= 0)
+            pci_irqvec_free_locked((int)out[i]);
+        release(&pci_irqvec_lock);
+        return -1;
+    }
+    release(&pci_irqvec_lock);
+    return 0;
+}
+
+static void
+pci_free_irq_slots(uint8_t *vec, int count)
+{
+    if (count <= 0)
+        return;
+    acquire(&pci_irqvec_lock);
+    for (int i = 0; i < count; i++)
+        pci_irqvec_free_locked((int)vec[i]);
+    release(&pci_irqvec_lock);
+}
+
+static uint8_t
+pci_pick_dest_apicid(int cpu)
+{
+    (void)cpu;
+    return (uint8_t)lapicid();
+}
+
+static void
+pci_disable_msix_function(struct pci_dev *dev, uint8_t cap)
+{
+    uint16_t mc = pci_read16(dev, cap + 2);
+    mc &= ~(uint16_t)PCI_MSIX_CTRL_ENABLE;
+    mc |= (uint16_t)PCI_MSIX_CTRL_MASKALL;
+    pci_write16(dev, cap + 2, mc);
+}
+
+static void
+pci_disable_msi_function(struct pci_dev *dev, uint8_t cap)
+{
+    uint16_t mc = pci_read16(dev, cap + 2);
+    mc &= ~(uint16_t)PCI_MSI_CTRL_ENABLE;
+    pci_write16(dev, cap + 2, mc);
+}
 
 /*
  * PCI Configuration Space Address Format (for 0xCF8):
@@ -240,6 +331,9 @@ pci_probe_function(uint8_t bus, uint8_t slot, uint8_t func)
     dev->header_type = pci_config_read8(bus, slot, func, PCI_HEADER_TYPE) & 0x7F;
     dev->irq_line = pci_config_read8(bus, slot, func, PCI_INTERRUPT_LINE);
     dev->irq_pin = pci_config_read8(bus, slot, func, PCI_INTERRUPT_PIN);
+    dev->irq_mode = PCI_IRQ_MODE_INTX;
+    dev->irq_nvec = 1;
+    dev->irq_vectors[0] = dev->irq_line;
     
     /* Decode BARs (only for standard devices, not bridges) */
     if (dev->header_type == PCI_TYPE_DEVICE) {
@@ -254,6 +348,34 @@ pci_probe_function(uint8_t bus, uint8_t slot, uint8_t func)
     
     pci_ndevices++;
     return 1;
+}
+
+int
+pci_find_capability(struct pci_dev *dev, uint8_t cap_id)
+{
+    uint16_t status;
+    uint8_t cap;
+    int limit;
+
+    if (!dev)
+        return 0;
+
+    status = pci_read16(dev, PCI_STATUS);
+    if ((status & PCI_STATUS_CAP_LIST) == 0)
+        return 0;
+
+    cap = pci_read8(dev, PCI_CAPABILITIES) & 0xFC;
+    limit = 48;
+    while (cap && limit-- > 0) {
+        uint8_t id = pci_read8(dev, cap);
+        uint8_t next = pci_read8(dev, cap + 1) & 0xFC;
+        if (id == cap_id)
+            return cap;
+        if (next == cap)
+            break;
+        cap = next;
+    }
+    return 0;
 }
 
 /*
@@ -295,6 +417,8 @@ void
 pci_init(void)
 {
     initlock(&pci_lock, "pci");
+    initlock(&pci_irqvec_lock, "pci-irqvec");
+    memset(pci_irqvec_bitmap, 0, sizeof(pci_irqvec_bitmap));
     pci_ndevices = 0;
     pci_ndrivers = 0;
     
@@ -430,45 +554,233 @@ pci_enable_interrupts(struct pci_dev *dev)
 void
 pci_disable_msi(struct pci_dev *dev)
 {
-    /* Capability pointer at 0x34; low two bits reserved, must be masked */
-    uint8_t cap = pci_read8(dev, PCI_CAPABILITIES) & 0xFC;
+    uint8_t cap;
     uint16_t cmd = pci_read16(dev, PCI_COMMAND);
     uint16_t status = pci_read16(dev, PCI_STATUS);
-    int limit = 48; /* PCI config space is 256 bytes; cap on iterations */
 
     NVMEDBG("pci: %d:%d.%d disable_msi start cap=%x cmd=%x status=%x\n",
-            dev->bus, dev->slot, dev->func, cap, cmd, status);
+            dev->bus, dev->slot, dev->func,
+            pci_read8(dev, PCI_CAPABILITIES) & 0xFC, cmd, status);
 
-    while (cap && limit-- > 0) {
-        uint8_t id = pci_read8(dev, cap);
-        uint8_t next = pci_read8(dev, cap + 1) & 0xFC;
+    cap = (uint8_t)pci_find_capability(dev, PCI_CAP_ID_MSI);
+    if (cap)
+        pci_disable_msi_function(dev, cap);
+    cap = (uint8_t)pci_find_capability(dev, PCI_CAP_ID_MSIX);
+    if (cap)
+        pci_disable_msix_function(dev, cap);
 
-        NVMEDBG("pci: %d:%d.%d cap@%x id=%x next=%x\n",
-                dev->bus, dev->slot, dev->func, cap, id, next);
-
-        if (id == 0x05) {
-            /* MSI: Message Control at cap+2, bit 0 = MSI Enable */
-            uint16_t mc = pci_read16(dev, cap + 2);
-            NVMEDBG("pci: %d:%d.%d msi mc=%x -> %x\n",
-                    dev->bus, dev->slot, dev->func, mc,
-                    (uint16_t)(mc & ~(uint16_t)(1 << 0)));
-            mc &= ~(uint16_t)(1 << 0);
-            pci_write16(dev, cap + 2, mc);
-        } else if (id == 0x11) {
-            /* MSI-X: Message Control at cap+2, bit 15 = MSI-X Enable */
-            uint16_t mc = pci_read16(dev, cap + 2);
-            NVMEDBG("pci: %d:%d.%d msix mc=%x -> %x\n",
-                    dev->bus, dev->slot, dev->func, mc,
-                    (uint16_t)(mc & ~(uint16_t)(1 << 15)));
-            mc &= ~(uint16_t)(1 << 15);
-            pci_write16(dev, cap + 2, mc);
-        }
-        cap = next;
-    }
+    dev->msi_cap_off = (uint8_t)pci_find_capability(dev, PCI_CAP_ID_MSI);
+    dev->msix_cap_off = (uint8_t)pci_find_capability(dev, PCI_CAP_ID_MSIX);
 
     NVMEDBG("pci: %d:%d.%d disable_msi done cmd=%x status=%x\n",
             dev->bus, dev->slot, dev->func,
             pci_read16(dev, PCI_COMMAND), pci_read16(dev, PCI_STATUS));
+}
+
+static int
+pci_try_enable_msix(struct pci_dev *dev, int min_vec, int max_vec, uint8_t dest_apicid)
+{
+    uint8_t cap;
+    uint16_t mc;
+    int table_nvec;
+    int grant;
+    uint32_t table;
+    int bir;
+    uint32_t table_off;
+    volatile uint32_t *table_base;
+    uint32_t msg_addr_low;
+    uint32_t msg_addr_hi;
+
+    cap = dev->msix_cap_off;
+    if (!cap)
+        cap = (uint8_t)pci_find_capability(dev, PCI_CAP_ID_MSIX);
+    if (!cap)
+        return -1;
+
+    mc = pci_read16(dev, cap + 2);
+    table_nvec = (mc & PCI_MSIX_CTRL_TSIZE_MASK) + 1;
+    grant = max_vec;
+    if (grant > table_nvec)
+        grant = table_nvec;
+    if (grant < min_vec)
+        return -1;
+    if (grant > PCI_IRQ_MAX_VECTORS)
+        grant = PCI_IRQ_MAX_VECTORS;
+
+    if (pci_alloc_irq_slots(dev->irq_vectors, grant) < 0)
+        return -1;
+
+    table = pci_read32(dev, cap + 4);
+    bir = table & PCI_MSIX_TABLE_BIR_MASK;
+    table_off = table & PCI_MSIX_TABLE_OFF_MASK;
+    table_base = (volatile uint32_t *)pci_map_bar(dev, bir);
+    if (!table_base) {
+        pci_free_irq_slots(dev->irq_vectors, grant);
+        return -1;
+    }
+
+    msg_addr_low = 0xFEE00000U | ((uint32_t)dest_apicid << 12);
+    msg_addr_hi = 0;
+
+    /* Mask MSI-X function while programming table entries. */
+    mc |= (uint16_t)PCI_MSIX_CTRL_MASKALL;
+    mc &= ~(uint16_t)PCI_MSIX_CTRL_ENABLE;
+    pci_write16(dev, cap + 2, mc);
+
+    for (int i = 0; i < grant; i++) {
+        volatile uint32_t *entry =
+            (volatile uint32_t *)((uint8_t *)table_base + table_off + i * 16);
+        uint32_t vector = (uint32_t)(T_IRQ0 + dev->irq_vectors[i]);
+
+        /* message address low/high, message data, vector control(masked). */
+        entry[0] = msg_addr_low;
+        entry[1] = msg_addr_hi;
+        entry[2] = vector & 0xFF;
+        entry[3] = 1;
+    }
+
+    /* Enable MSI-X globally, then unmask selected entries. */
+    mc = pci_read16(dev, cap + 2);
+    mc |= (uint16_t)PCI_MSIX_CTRL_ENABLE;
+    mc &= ~(uint16_t)PCI_MSIX_CTRL_MASKALL;
+    pci_write16(dev, cap + 2, mc);
+
+    for (int i = 0; i < grant; i++) {
+        volatile uint32_t *entry =
+            (volatile uint32_t *)((uint8_t *)table_base + table_off + i * 16);
+        entry[3] = 0;
+    }
+
+    pci_disable_interrupts(dev);
+    dev->msix_cap_off = cap;
+    dev->irq_mode = PCI_IRQ_MODE_MSIX;
+    dev->irq_nvec = (uint8_t)grant;
+    return grant;
+}
+
+static int
+pci_try_enable_msi(struct pci_dev *dev, int min_vec, int max_vec, uint8_t dest_apicid)
+{
+    uint8_t cap;
+    uint16_t mc;
+    uint8_t data_off;
+    uint32_t msg_addr_low;
+
+    if (min_vec > 1)
+        return -1;
+    if (max_vec < 1)
+        return -1;
+
+    cap = dev->msi_cap_off;
+    if (!cap)
+        cap = (uint8_t)pci_find_capability(dev, PCI_CAP_ID_MSI);
+    if (!cap)
+        return -1;
+
+    if (pci_alloc_irq_slots(dev->irq_vectors, 1) < 0)
+        return -1;
+
+    mc = pci_read16(dev, cap + 2);
+    msg_addr_low = 0xFEE00000U | ((uint32_t)dest_apicid << 12);
+
+    pci_write32(dev, cap + 4, msg_addr_low);
+    data_off = (mc & PCI_MSI_CTRL_64BIT) ? 12 : 8;
+    if (mc & PCI_MSI_CTRL_64BIT)
+        pci_write32(dev, cap + 8, 0);
+
+    pci_write16(dev, cap + data_off, (uint16_t)((T_IRQ0 + dev->irq_vectors[0]) & 0xFF));
+
+    mc &= ~(uint16_t)PCI_MSI_CTRL_MME_MASK;
+    mc |= (uint16_t)PCI_MSI_CTRL_ENABLE;
+    pci_write16(dev, cap + 2, mc);
+
+    pci_disable_interrupts(dev);
+    dev->msi_cap_off = cap;
+    dev->irq_mode = PCI_IRQ_MODE_MSI;
+    dev->irq_nvec = 1;
+    return 1;
+}
+
+int
+pci_irq_alloc_vectors(struct pci_dev *dev, int min_vec, int max_vec, int flags)
+{
+    int ret;
+    uint8_t dest_apicid;
+
+    if (!dev || min_vec <= 0 || max_vec <= 0 || min_vec > max_vec)
+        return -1;
+
+    if (max_vec > PCI_IRQ_MAX_VECTORS)
+        max_vec = PCI_IRQ_MAX_VECTORS;
+
+    pci_irq_free_vectors(dev);
+    dev->msi_cap_off = (uint8_t)pci_find_capability(dev, PCI_CAP_ID_MSI);
+    dev->msix_cap_off = (uint8_t)pci_find_capability(dev, PCI_CAP_ID_MSIX);
+
+    if (flags == 0)
+        flags = PCI_IRQ_F_ALL;
+    dest_apicid = pci_pick_dest_apicid(0);
+
+    if (flags & PCI_IRQ_F_MSIX) {
+        ret = pci_try_enable_msix(dev, min_vec, max_vec, dest_apicid);
+        if (ret > 0)
+            return ret;
+    }
+
+    if (flags & PCI_IRQ_F_MSI) {
+        ret = pci_try_enable_msi(dev, min_vec, max_vec, dest_apicid);
+        if (ret > 0)
+            return ret;
+    }
+
+    if ((flags & PCI_IRQ_F_INTX) && min_vec <= 1 && dev->irq_line > 0 && dev->irq_line < 255) {
+        dev->irq_mode = PCI_IRQ_MODE_INTX;
+        dev->irq_nvec = 1;
+        dev->irq_vectors[0] = dev->irq_line;
+        pci_enable_interrupts(dev);
+        return 1;
+    }
+
+    dev->irq_mode = PCI_IRQ_MODE_INTX;
+    dev->irq_nvec = 0;
+    return -1;
+}
+
+void
+pci_irq_free_vectors(struct pci_dev *dev)
+{
+    if (!dev)
+        return;
+
+    if (dev->irq_mode == PCI_IRQ_MODE_MSIX && dev->msix_cap_off)
+        pci_disable_msix_function(dev, dev->msix_cap_off);
+    if (dev->irq_mode == PCI_IRQ_MODE_MSI && dev->msi_cap_off)
+        pci_disable_msi_function(dev, dev->msi_cap_off);
+
+    if ((dev->irq_mode == PCI_IRQ_MODE_MSIX || dev->irq_mode == PCI_IRQ_MODE_MSI) &&
+        dev->irq_nvec > 0)
+        pci_free_irq_slots(dev->irq_vectors, dev->irq_nvec);
+
+    dev->irq_mode = PCI_IRQ_MODE_INTX;
+    dev->irq_nvec = 1;
+    dev->irq_vectors[0] = dev->irq_line;
+    pci_enable_interrupts(dev);
+}
+
+int
+pci_irq_vector(struct pci_dev *dev, int index)
+{
+    if (!dev || index < 0 || index >= dev->irq_nvec)
+        return -1;
+    return dev->irq_vectors[index];
+}
+
+int
+pci_irq_mode(struct pci_dev *dev)
+{
+    if (!dev)
+        return PCI_IRQ_MODE_INTX;
+    return dev->irq_mode;
 }
 
 /*
@@ -576,6 +888,8 @@ pci_unregister_driver(struct pci_driver *drv)
 int
 pci_get_irq(struct pci_dev *dev)
 {
+    if (dev->irq_nvec > 0)
+        return dev->irq_vectors[0];
     return dev->irq_line;
 }
 

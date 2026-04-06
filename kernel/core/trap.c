@@ -12,7 +12,7 @@
 // Dynamic IRQ handler table
 // Indexed by IRQ number (0-15 for legacy PIC, 0-23 for IOAPIC)
 // Supports shared interrupts with a chain of handlers
-#define MAX_IRQ 24
+#define MAX_IRQ (256 - T_IRQ0)
 #define MAX_HANDLERS_PER_IRQ 8
 
 typedef void (*irq_handler_t)(int irq, void *arg);
