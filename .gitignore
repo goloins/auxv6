@@ -120,6 +120,7 @@ user/audiostat
 user/audiotest
 user/audiopollstress
 user/audiod
+user/audiodctl
 user/lockprobe
 user/server7
 user/date

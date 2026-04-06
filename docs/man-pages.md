@@ -15,6 +15,7 @@ Generated: 2026-04-05
 | ahcitest | targetfs/usr/share/man/ahcitest.md | 2026-04-02 | user/ahcitest.c | AHCI regression binary |
 | audioctl | targetfs/usr/share/man/audioctl.md | 2026-04-05 | user/audioctl.c | Stage-0 audio ioctl control/query utility |
 | audiod | targetfs/usr/share/man/audiod.md | 2026-04-05 | user/audiod.c | Stage-2 audio daemon scaffold (single native sink service loop) |
+| audiodctl | targetfs/usr/share/man/audiodctl.md | 2026-04-05 | user/audiodctl.c | Stage-2 audiod runtime control helper (mailbox command writer) |
 | audiostat | targetfs/usr/share/man/audiostat.md | 2026-04-05 | user/audiostat.c | Stage-1 audio procfs summary/counter/clients reader |
 | audiotest | targetfs/usr/share/man/audiotest.md | 2026-04-05 | user/audiotest.c | Stage-0 audio write-path/xrun recovery exerciser |
 | arp | targetfs/usr/share/man/arp.md | 2026-04-01 | user/arp.c | source-derived usage/options |

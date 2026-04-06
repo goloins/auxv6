@@ -239,8 +239,13 @@ Status (2026-04-05):
 - Started (Tranche 1 landed): `audiod` now has a minimal daemon lifecycle
   and single-sink poll loop that configures one native PCM playback stream,
   writes silence on writable readiness, and performs xrun recovery.
+- Tranche 2 landed: `audiod` now accepts one-shot local control commands
+  (status, stream set-params reconfigure, write size, poll timeout) and
+  `audiodctl` can submit those commands via a mailbox file path.
 - Detailed behavior and limits are tracked in
   `docs/audio-stage2-tranche1-daemon-scaffold.md`.
+- Control-path behavior is tracked in
+  `docs/audio-stage2-tranche2-control-path.md`.
 
 Implementation tasks:
 

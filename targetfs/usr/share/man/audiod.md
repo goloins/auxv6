@@ -5,7 +5,7 @@ audiod - Stage-2 audio daemon scaffold for native PCM sink servicing
 
 ## Synopsis
 ```sh
-audiod [-f] [-v] [-d pcm-dev] [-r rate] [-c channels] [-F format]
+audiod [-f] [-v] [-d pcm-dev] [-C ctl-path] [-r rate] [-c channels] [-F format]
        [-p period_frames] [-n periods] [-b buffer_frames]
        [-w write_bytes] [-t poll_timeout_ms]
 ```
@@ -18,6 +18,7 @@ Current behavior is intentionally minimal:
 - starts the stream
 - runs a poll-driven loop that writes silent frames when writable
 - performs xrun recovery (`RESET_XRUN` + `PREPARE` + `START`)
+- consumes one-shot control commands from a local control file
 
 This tranche establishes daemon lifecycle and steady sink servicing. It does not yet provide multi-client mixing/routing.
 
@@ -25,6 +26,7 @@ This tranche establishes daemon lifecycle and steady sink servicing. It does not
 - `-f`: run in foreground (default is daemon mode via double-fork).
 - `-v`: verbose status logging.
 - `-d pcm-dev`: PCM device path (default `/dev/pcmC0D0p`).
+- `-C ctl-path`: control file path (default `/tmp/audiod.ctl`).
 - `-r rate`: sample rate (default `48000`).
 - `-c channels`: channel count (default `2`).
 - `-F format`: sample format enum value (default `0` = `AUDIO_FMT_S16_LE`).
@@ -41,14 +43,26 @@ audiod -f -v
 
 # Daemon mode with explicit stream params
 audiod -r 48000 -c 2 -F 0 -p 256 -n 4 -b 1024
+
+# Read commands from custom control mailbox path
+audiod -f -v -C /tmp/audiod.ctl
 ```
+
+## Runtime Control Commands
+
+The daemon checks the control file path during its loop and applies one-shot commands:
+
+- `status`
+- `set <rate> <channels> <format> <period_frames> <periods> <buffer_frames>`
+- `set-write <bytes>`
+- `set-timeout <ms>`
 
 ## Exit Status
 - `0` clean shutdown
 - `1` open/configure/poll/write/recovery failure
 
 ## See Also
-audioctl(1), audiostat(1), audiotest(1), poll(2), ioctl(2)
+audiodctl(1), audioctl(1), audiostat(1), audiotest(1), poll(2), ioctl(2)
 
 ## Source Audit
 - Source file: user/audiod.c

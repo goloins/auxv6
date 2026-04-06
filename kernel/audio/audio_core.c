@@ -248,7 +248,15 @@ audio_stream_used_bytes(const struct audio_stream *s)
 static uint32_t
 audio_stream_free_bytes(const struct audio_stream *s)
 {
-  return s->ring_size - audio_stream_used_bytes(s);
+  uint32_t used;
+
+  if(s->ring_size == 0)
+    return 0;
+  used = audio_stream_used_bytes(s);
+  /* Reserve one byte so tail never wraps to head, keeping full != empty. */
+  if(used >= s->ring_size - 1)
+    return 0;
+  return s->ring_size - 1 - used;
 }
 
 static void

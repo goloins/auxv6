@@ -23,10 +23,12 @@ This keeps the kernel small and deterministic while enabling modern multi-applic
 - Audio stream descriptors now honor runtime `O_NONBLOCK` toggles through `fcntl(F_SETFL)` and report state via `F_GETFL`.
 - Default audio endpoint node policy is now wired in devman for `/dev/audioctl` and `/dev/pcmC0D0p`.
 - Stage 2 has started with a minimal `audiod` daemon scaffold that configures one native playback stream and services it from a poll-driven loop with xrun recovery.
+- Stage 2 control-path follow-on landed: `audiod` now accepts one-shot runtime commands via a local mailbox file, and `audiodctl` can trigger status and live reconfigure changes.
 - Detailed Stage-1 tranche-1 runtime behavior is documented in `docs/audio-stage1-tranche1-runtime.md`.
 - Detailed Stage-1 tranche-2 readiness behavior is documented in `docs/audio-stage1-tranche2-readiness.md`.
 - Detailed Stage-1 tranche-3 observability behavior is documented in `docs/audio-stage1-tranche3-observability.md`.
 - Detailed Stage-2 tranche-1 daemon behavior is documented in `docs/audio-stage2-tranche1-daemon-scaffold.md`.
+- Detailed Stage-2 tranche-2 control behavior is documented in `docs/audio-stage2-tranche2-control-path.md`.
 
 ---
 
