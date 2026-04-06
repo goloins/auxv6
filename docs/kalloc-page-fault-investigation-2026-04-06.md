@@ -1020,3 +1020,58 @@ Decision gate:
 
 This section is intentionally written as a context-preservation checkpoint so
 follow-on work can continue without losing provenance of already-landed fixes.
+
+## Diagnostic Continuation: Wakeup-Scan Attribution (2026-04-06, latest)
+
+Additional `kallocstress` profiling (profile `2026-04-06-r3`) produced a
+stronger signal:
+
+1. `pipe-page-churn` still trends downward across sequential runs, including
+   batches that start near/above target and later settle near target floor.
+2. `fork-copyuvm` and `allocator-reclaim` remain comparatively stable and do
+   not show a matching monotonic collapse.
+3. `/proc/vmstat` per-run deltas remain broadly flat (`d_hits`,
+   refill/drain batches/pages, and `d_pages_free`), arguing against an allocator
+   state leak/drift as the primary driver.
+4. Per-syscall diagnostics keep concentrating drift in `read` time within
+   `pipe-page-churn` rounds.
+
+### Additional observability landed
+
+1. `kernel/core/proc.c` + `kernel/fs/procfs.c`
+   - Added scheduler-latency counters exported through `/proc/schedstat`:
+     - `wake_calls`, `wake_scanned`, `wake_matched`
+     - `waitpid_loops`, `waitpid_scanned`
+2. `user/kallocstress.c`
+   - Added per-run `/proc/schedstat` delta printing (`[DIAG] run-sched ...`).
+
+Observed from those counters:
+- Wakeup scan volume is very high and consistent with repeated full-table scans.
+- This aligns with a scheduler/wakeup overhead contribution to read-path latency
+  growth under repeated pipe churn.
+
+### Regression encountered and corrected
+
+An attempted optimization gated timer `wakeup(&ticks)` with a sleeper count
+tracked only by `sys_sleep()`. This caused a boot/runlevel regression because
+many kernel paths sleep on `&ticks` outside `sys_sleep` (socket/audio/console/
+serial/sysfile paths).
+
+Fix sequence:
+1. Immediate rollback restored unconditional timer wakeups (boot stability back).
+2. Replaced the unsafe model with a global/safe model:
+   - track tick sleepers in generic `sleep()` when `chan == &ticks`,
+   - gate timer `wakeup(&ticks)` using that global count.
+
+This preserves correctness (all tick sleepers covered) while retaining the
+intended reduction of pointless wakeup scans when no tick sleepers exist.
+
+### Current working state
+
+- Kernel and userland builds are clean after the safe tick-sleeper model.
+- `kallocstress` profile marker was bumped to `2026-04-06-r4` to disambiguate
+  latest diagnostic binaries.
+- Next immediate validation is the post-`r4` profile run to confirm:
+  1. runlevel remains stable,
+  2. `d_wake_calls`/`d_wake_scanned` decline,
+  3. `pipe-page-churn` read-latency slope flattens.

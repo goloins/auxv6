@@ -117,6 +117,8 @@ struct proc {
   struct trapframe *tf;        // Trap frame for current syscall
   struct context *context;     // swtch() here to run process
   void *chan;                  // If non-zero, sleeping on chan
+  struct proc *tick_next;      // Next entry in tick-sleeper queue
+  int on_tickq;                // 1 when queued on tick-sleeper queue
   int killed;                  // If non-zero, have been killed
   int xstatus;                 // Wait status consumed at reap
   int wait_event;              // One-shot event: stopped/continued

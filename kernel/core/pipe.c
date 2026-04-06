@@ -253,9 +253,9 @@ piperead(struct pipe *p, char *addr, int n)
     p->nread += chunk;
     i += chunk;
 
-      // Only wake writers when space transitions from full to available.
-      if(was_full)
-        wakeup(&p->nwrite);  //DOC: piperead-wakeup
+    // Only wake writers when space transitions from full to available.
+    if(was_full)
+      wakeup(&p->nwrite);  //DOC: piperead-wakeup
   }
   release(&p->lock);
   return i;

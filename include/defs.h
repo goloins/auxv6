@@ -517,6 +517,9 @@ void            proc_get_sched_stats(uint *passes, uint *idle_halts, uint *picks
 void            proc_get_sched_latency_stats(uint *wake_calls, uint *wake_scanned,
 											 uint *wake_matched, uint *wait_loops,
 											 uint *wait_scanned);
+void            proc_get_wakeup_class_stats(uint *ticks_calls, uint *proc_calls,
+											uint *other_calls);
+int             proc_has_tick_sleepers(void);
 int             proc_deliver_signal(struct proc *p);
 void            proc_handle_signals_on_return(struct proc *p);
 struct cpu*     mycpu(void);

@@ -1295,10 +1295,15 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     uint wake_matched;
     uint wait_loops;
     uint wait_scanned;
+    uint wake_ticks_calls;
+    uint wake_proc_calls;
+    uint wake_other_calls;
 
     proc_get_sched_stats(&passes, &idle_halts, &picks);
     proc_get_sched_latency_stats(&wake_calls, &wake_scanned, &wake_matched,
                                  &wait_loops, &wait_scanned);
+    proc_get_wakeup_class_stats(&wake_ticks_calls, &wake_proc_calls,
+                  &wake_other_calls);
 
     len = 0;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "passes ", passes) < 0)
@@ -1316,6 +1321,12 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "waitpid_loops ", wait_loops) < 0)
       return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "waitpid_scanned ", wait_scanned) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "wake_ticks_calls ", wake_ticks_calls) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "wake_proc_calls ", wake_proc_calls) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "wake_other_calls ", wake_other_calls) < 0)
       return -1;
     return procfs_copy_data(dst, off, n, buf, len);
   }

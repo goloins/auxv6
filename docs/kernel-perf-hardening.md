@@ -577,6 +577,38 @@ Use the new `[DIAG] pipe-sys` breakdown from `kallocstress -n 5` to identify the
 single syscall bucket that drifts monotonically across rounds, then patch that
 path specifically instead of applying broad subsystem tuning.
 
+### Follow-On Attribution and Safe Tick-Wakeup Model (2026-04-06, later)
+
+Subsequent profiling confirmed that allocator-side counters remain mostly flat
+while `pipe-page-churn` throughput still decays across repeated runs.  The most
+consistent drift moved through read-side latency rather than broad allocator
+collapse.
+
+To isolate scheduler contribution, `/proc/schedstat` and `kallocstress` were
+extended with wakeup/wait-scan diagnostics:
+
+- `wake_calls`, `wake_scanned`, `wake_matched`
+- `waitpid_loops`, `waitpid_scanned`
+- later wakeup class attribution (`wake_ticks_calls`, `wake_proc_calls`,
+   `wake_other_calls`)
+
+Findings from this tranche:
+- Wakeup scan traffic remained high enough to justify reducing avoidable timer
+   wakeup scans.
+
+Attempt/fix note:
+1. Initial tick-wakeup gating based only on `sys_sleep` bookkeeping caused a
+    boot/runlevel regression (missed non-`sys_sleep` tick waiters).
+2. Final landed model tracks tick sleepers in generic `sleep()` for
+    `chan == &ticks` and gates timer `wakeup(&ticks)` from that global count.
+
+This keeps correctness for all tick-channel sleepers while still targeting
+unnecessary full-table wakeup scans when the tick channel is unused.
+
+Current checkpoint:
+- Build-clean state with profile tag advanced to `2026-04-06-r4` for unambiguous
+   post-change measurement.
+
 Allocator/fork redesign reset (2026-04-04, post-revert retest):
 
 After reverting sparse fork, `kallocstress` improved from `6/100` to `31/100`,

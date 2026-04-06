@@ -11,7 +11,7 @@
 #include "fcntl.h"
 #include "param.h"
 
-#define KALLOCSTRESS_PROFILE "2026-04-06-r3"
+#define KALLOCSTRESS_PROFILE "2026-04-06-r4"
 #define PAGE_BYTES 4096
 
 #define PASS(name) do { dprintf(1, "[PASS] %s\n", name); passed++; } while(0)
@@ -63,6 +63,9 @@ struct schedstat_sample {
   int wake_matched;
   int waitpid_loops;
   int waitpid_scanned;
+  int wake_ticks_calls;
+  int wake_proc_calls;
+  int wake_other_calls;
 };
 
 static void
@@ -272,6 +275,9 @@ read_schedstat_sample(struct schedstat_sample *s)
   s->wake_matched = find_kb_value(buf, "wake_matched");
   s->waitpid_loops = find_kb_value(buf, "waitpid_loops");
   s->waitpid_scanned = find_kb_value(buf, "waitpid_scanned");
+  s->wake_ticks_calls = find_kb_value(buf, "wake_ticks_calls");
+  s->wake_proc_calls = find_kb_value(buf, "wake_proc_calls");
+  s->wake_other_calls = find_kb_value(buf, "wake_other_calls");
   return 0;
 }
 
@@ -288,13 +294,17 @@ print_schedstat_delta(int run_idx, int nruns,
   int d_wake_matched = delta_or_na(after->wake_matched, before->wake_matched);
   int d_wait_loops = delta_or_na(after->waitpid_loops, before->waitpid_loops);
   int d_wait_scanned = delta_or_na(after->waitpid_scanned, before->waitpid_scanned);
+    int d_wake_ticks = delta_or_na(after->wake_ticks_calls, before->wake_ticks_calls);
+    int d_wake_proc = delta_or_na(after->wake_proc_calls, before->wake_proc_calls);
+    int d_wake_other = delta_or_na(after->wake_other_calls, before->wake_other_calls);
 
   dprintf(1,
-          "[DIAG] run-sched %d/%d: d_passes=%d d_idle=%d d_picks=%d d_wake_calls=%d d_wake_scanned=%d d_wake_matched=%d d_wait_loops=%d d_wait_scanned=%d\n",
+      "[DIAG] run-sched %d/%d: d_passes=%d d_idle=%d d_picks=%d d_wake_calls=%d d_wake_scanned=%d d_wake_matched=%d d_wait_loops=%d d_wait_scanned=%d d_wake_ticks=%d d_wake_proc=%d d_wake_other=%d\n",
           run_idx, nruns,
           d_passes, d_idle, d_picks,
           d_wake_calls, d_wake_scanned, d_wake_matched,
-          d_wait_loops, d_wait_scanned);
+      d_wait_loops, d_wait_scanned,
+      d_wake_ticks, d_wake_proc, d_wake_other);
 }
 
 // ---------------------------------------------------------------------------

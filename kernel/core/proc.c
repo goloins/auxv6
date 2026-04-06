@@ -53,6 +53,11 @@ static volatile uint wakeup_scans;
 static volatile uint wakeup_hits;
 static volatile uint waitpid_loops;
 static volatile uint waitpid_scans;
+static volatile uint wakeup_ticks_calls;
+static volatile uint wakeup_proc_calls;
+static volatile uint wakeup_other_calls;
+static volatile int active_tick_sleepers;
+static struct proc *tick_sleepq_head;
 
 static struct proc *initproc;
 
@@ -64,6 +69,45 @@ proc_kstack_npages(void)
   if((KSTACKSIZE % PGSIZE) != 0)
     panic("KSTACKSIZE align");
   return KSTACKSIZE / PGSIZE;
+}
+
+// ptable.lock must be held.
+static void
+tick_sleepq_add_locked(struct proc *p)
+{
+  if(p == 0 || p->on_tickq)
+    return;
+  p->tick_next = tick_sleepq_head;
+  tick_sleepq_head = p;
+  p->on_tickq = 1;
+  active_tick_sleepers++;
+}
+
+// ptable.lock must be held.
+static void
+tick_sleepq_remove_locked(struct proc *p)
+{
+  struct proc **pp;
+
+  if(p == 0 || !p->on_tickq)
+    return;
+
+  for(pp = &tick_sleepq_head; *pp; pp = &(*pp)->tick_next){
+    if(*pp != p)
+      continue;
+    *pp = p->tick_next;
+    p->tick_next = 0;
+    p->on_tickq = 0;
+    if(active_tick_sleepers > 0)
+      active_tick_sleepers--;
+    return;
+  }
+
+  // Queue membership bit was set but node was not linked.
+  p->tick_next = 0;
+  p->on_tickq = 0;
+  if(active_tick_sleepers > 0)
+    active_tick_sleepers--;
 }
 // Phase 1A: Check if any process has an open file on the given device.
 // Called by fs.c when unmounting or checking device in-use status.
@@ -215,6 +259,20 @@ proc_get_sched_latency_stats(uint *wake_calls,
   *wake_matched = wakeup_hits;
   *wait_loops = waitpid_loops;
   *wait_scanned = waitpid_scans;
+}
+
+void
+proc_get_wakeup_class_stats(uint *ticks_calls, uint *proc_calls, uint *other_calls)
+{
+  *ticks_calls = wakeup_ticks_calls;
+  *proc_calls = wakeup_proc_calls;
+  *other_calls = wakeup_other_calls;
+}
+
+int
+proc_has_tick_sleepers(void)
+{
+  return active_tick_sleepers > 0;
 }
 
 static int
@@ -648,6 +706,7 @@ pinit(void)
 {
   initlock(&ptable.lock, "ptable");
   lockdep_set_rank(&ptable.lock, LOCK_RANK_PTABLE, "ptable");
+  tick_sleepq_head = 0;
 }
 
 // Combined signal dispatch called at every trap/syscall return to userspace.
@@ -798,6 +857,8 @@ allocproc(void)
 
 found:
   p->state = EMBRYO;
+  p->tick_next = 0;
+  p->on_tickq = 0;
 
   // Assign a unique PID.  nextpid is bumped monotonically; when it would
   // exceed PID_MAX we wrap back to 2 (preserving PID 1 for init) and scan
@@ -1159,6 +1220,8 @@ proc_waitpid(int pid, int *status, int options)
         p->wait_status = 0;
         p->parent = 0;
         p->name[0] = 0;
+        p->tick_next = 0;
+        p->on_tickq = 0;
         p->killed = 0;
         p->sig_pending = 0;
         p->sig_caught = 0;
@@ -1729,6 +1792,7 @@ void
 sleep(void *chan, struct spinlock *lk)
 {
   struct proc *p = myproc();
+  int slept_on_ticks;
   
   if(p == 0)
     panic("sleep");
@@ -1747,10 +1811,16 @@ sleep(void *chan, struct spinlock *lk)
     release(lk);
   }
   // Go to sleep.
+  slept_on_ticks = (chan == &ticks);
+  if(slept_on_ticks)
+    tick_sleepq_add_locked(p);
   p->chan = chan;
   p->state = SLEEPING;
 
   sched();
+
+  if(slept_on_ticks)
+    tick_sleepq_remove_locked(p);
 
   // Tidy up.
   p->chan = 0;
@@ -1772,8 +1842,31 @@ wakeup1(void *chan)
   char *base;
   char *end;
   char *c;
+  struct proc *next;
+  uint scanned;
 
   wakeup_calls++;
+  if(chan == &ticks)
+    wakeup_ticks_calls++;
+
+  if(chan == &ticks){
+    scanned = 0;
+    p = tick_sleepq_head;
+    while(p){
+      next = p->tick_next;
+      scanned++;
+      if(p->state == SLEEPING && p->chan == chan){
+        p->state = RUNNABLE;
+        wakeup_hits++;
+      }
+      // Whether matched or stale, remove from tick queue.
+      tick_sleepq_remove_locked(p);
+      p = next;
+    }
+    wakeup_scans += scanned;
+    return;
+  }
+
   base = (char*)ptable.proc;
   end = (char*)&ptable.proc[NPROC];
   c = (char*)chan;
@@ -1782,6 +1875,7 @@ wakeup1(void *chan)
   // If chan is exactly a proc-table slot address, wake that slot directly
   // and avoid an O(NPROC) full-table walk.
   if(c >= base && c < end && ((uint)(c - base) % sizeof(struct proc)) == 0){
+    wakeup_proc_calls++;
     p = (struct proc*)chan;
     wakeup_scans++;
     if(p->state == SLEEPING && p->chan == chan){
@@ -1791,6 +1885,8 @@ wakeup1(void *chan)
     return;
   }
 
+  if(chan != &ticks)
+    wakeup_other_calls++;
   wakeup_scans += NPROC;
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
     if(p->state == SLEEPING && p->chan == chan){
