@@ -421,19 +421,120 @@ Definition of done for next bump:
 - libc/POSIX portability tranche scope now remaining: writable `fmemopen` semantics if required by real callers, fuller `perror` parity, and broader address-family/name-service work beyond the current truthful IPv4 `netdb` subset.
 - threads: real kernel/libc thread support remains to be designed and implemented; placeholder pthread typedefs are not runtime support.
 - Headers: fuller socket-family declarations/constants and any broader resolver interfaces only when their backing is real.
+- TUN/TAP support is currently absent end-to-end: no tun/tap char device major/minor, no `/dev/net/tun` control node, no `TUNSETIFF`/`TUNSETPERSIST`/`TUNSETOWNER` ioctl surface, no IFF_TUN/IFF_TAP packet-mode semantics, no userspace-facing per-interface create/destroy/bring-up control, and no bridge-style L2 integration path for TAP.
+
+### TUN/TAP Full-Support Tranche (new)
+
+Goal: deliver Linux-compatible-enough `/dev/net/tun` semantics for portable tooling while integrating cleanly with the existing `ifnet` + mbuf datapath.
+
+Detailed design and phase execution notes: `docs/tuntap-design-and-phase-plan.md`.
+
+Scope targets (all required for full support):
+1. Kernel device layer:
+  - add a dedicated char-device major for tun/tap in `include/file.h` and register read/write handlers in `devsw[]`
+  - add kernel driver (`kernel/driver/tuntap.c`) with per-unit state, lock discipline, RX/TX queues, blocking/nonblocking read-write behavior, and open/close lifetime rules
+  - wire `sys_open`/`fileclose` device hooks in `kernel/core/sysfile.c` + `kernel/fs/file.c` similarly to PTY/audio special handling
+2. Control plane + ABI:
+  - add `sys/ioctl.h` request set for tun/tap (`TUNSETIFF`, `TUNGETIFF`, `TUNSETPERSIST`, `TUNSETOWNER`, `TUNSETGROUP` baseline)
+  - remove tty-only ioctl gating for relevant non-tty ioctls by introducing per-device ioctl dispatch in `sys_ioctl` (`kernel/core/sysproc.c`) so tun/tap control works without tty checks
+  - add interface flags/constants (`IFF_TUN`, `IFF_TAP`, `IFF_NO_PI` baseline) and any required struct definitions for userspace parity
+3. Net stack integration:
+  - instantiate dynamic `ifnet` entries for tun/tap units and register through existing `if_register()`
+  - implement tun path (L3 frames in/out) and tap path (full Ethernet frames, including ARP/IP ingress to `ether_input`)
+  - ensure egress path from `if_output` reaches userspace queues, and ingress userspace writes are fed back through proper stack entry points
+  - define link-state and MTU policy, and ensure route/ARP behavior remains coherent for virtual interfaces
+4. Userspace + node management:
+  - create `/dev/net/tun` via `devman` default inventory and ensure `/dev/net` directory bootstrap works reliably
+  - add a minimal `ip tuntap`-style utility (or extend existing `ip`) for create/delete/up/down, owner/group/persist toggles, and mode selection (tun vs tap)
+  - update headers (`include/socket.h`, `include/sys/ioctl.h`, `include/auxv6/user.h` as needed) so ports can compile against the exposed API
+5. Poll/select and observability parity:
+  - integrate tun/tap readiness into `poll`/`select` device readiness paths in `kernel/core/sysfile.c`
+  - extend procfs/network visibility so tun/tap links, counters, and mode appear in existing net observability tools (`/proc/net_dev`, `netinfo`, `ifconfig`)
+6. Validation and compatibility:
+  - add dedicated regression utility (e.g., `tuntest`) covering blocking/nonblocking I/O, poll behavior, lifecycle, multi-unit concurrency, and teardown/reopen
+  - add guest smoke scripts that configure tun/tap, pass IPv4 packets through tun, pass Ethernet/ARP+IPv4 through tap, and verify no regressions in existing NIC/loopback flows
+  - document support boundaries explicitly (Linux-compat subset, unsupported ioctls/features, persistence semantics)
+
+#### Phase-based execution plan
+
+Current tranche status (2026-04-05):
+- Phase 0 hardening is in progress and materially landed (ioctl route + ownership checks + named-create policy + `/dev/net/tun` devman path + `tuntapctl` utility).
+- Phase 1 has started with initial tun datapath foundations (ifnet registration, queue-backed tun reads, tun write ingress to IP path, and `O_NONBLOCK` handling).
+
+Phase 0: ABI and control-plane scaffolding
+- Add ioctl definitions and userspace-visible structs/flags for the baseline API subset (`TUNSETIFF`, `TUNGETIFF`, `TUNSETPERSIST`, `TUNSETOWNER`, `TUNSETGROUP`; `IFF_TUN`, `IFF_TAP`, `IFF_NO_PI`).
+- Add tun/tap device-major allocation and kernel driver skeleton (`init`, open/close hooks, per-unit table, lock skeleton, queue skeleton) without datapath enablement.
+- Refactor `sys_ioctl` dispatch to support non-tty device ioctls through per-device routing while preserving existing tty/audio behavior.
+
+Definition of done:
+- Kernel builds clean with tun/tap driver compiled in and no regressions in tty/audio ioctl handling.
+- `devman` can create `/dev/net/tun` and node appears with stable major/minor after boot scan.
+- Unsupported/placeholder tun ioctls fail predictably with explicit errors (no panic, no silent success).
+
+Phase 1: TUN (L3) functional datapath
+- Implement tun unit lifecycle (create/bind via `TUNSETIFF`, close semantics, optional persist bit).
+- Implement userspace read/write queue semantics for L3 packets, including blocking and `O_NONBLOCK` behavior.
+- Register tun interfaces as dynamic `ifnet` instances and connect ingress/egress with IP path (`ip_input`/`if_output` routing expectations).
+- Integrate tun readiness into `poll`/`select` paths and add basic interface counters/link-state exposure.
+
+Definition of done:
+- Userspace can create `tun0`, assign address, install route, inject/receive IPv4 packets, and tear down cleanly.
+- Nonblocking and blocking I/O behavior matches documented semantics under `poll`/`select`.
+- Existing virtio/e1000/loopback networking flows stay green in smoke tests.
+
+Phase 2: TAP (L2) functional datapath
+- Extend interface mode support to TAP and implement full Ethernet frame ingress/egress through userspace queues.
+- Feed tap ingress into `ether_input` and preserve ARP + IPv4 behavior end-to-end.
+- Define and enforce MTU/header constraints and no-PI behavior for tap frames.
+
+Definition of done:
+- Userspace can create `tap0`, exchange Ethernet frames, and complete ARP + IPv4 ping flow through tap path.
+- Frame validation/drop policy is deterministic and observable (error counters increment correctly).
+- No regressions in existing physical NIC drivers and loopback packet handling.
+
+Phase 3: Lifecycle, ownership, and persistence hardening
+- Implement owner/group permissions for control and data fds, including reopen behavior for persistent devices.
+- Finalize close/reopen semantics for persistent vs non-persistent units and multi-opener edge cases.
+- Add robust teardown paths (device delete while references exist, process-exit cleanup, namespace-less global state consistency).
+
+Definition of done:
+- Ownership and persistence semantics are stable across repeated create/open/close/delete cycles.
+- Multi-process access rules are enforced and tested (expected allow/deny matrix documented).
+- No resource leaks or stuck interfaces after stress loops.
+
+Phase 4: Tooling, observability, and compatibility polish
+- Add/extend userspace control tool (`ip tuntap` style) for mode selection, create/delete, up/down, owner/group, persist.
+- Extend `ifconfig`, `netinfo`, and `/proc/net_dev` visibility to clearly report tun/tap mode and counters.
+- Add docs/manpages and a compatibility matrix for implemented vs unsupported Linux tun ioctls/features.
+
+Definition of done:
+- End-to-end user workflow is documented and reproducible from a clean boot using in-tree tools only.
+- Observability surfaces clearly show tun/tap state, traffic counters, and error counters.
+- Compatibility boundaries are explicit so ported tools can fail fast and predictably when using unsupported ioctls.
+
+Phase 5: Regression suite and soak signoff
+- Add `tuntest` coverage for ioctl contract, queue semantics, blocking/nonblocking behavior, poll/select readiness, and teardown races.
+- Add network smoke scripts for tun (L3) and tap (L2) including ARP/IP flows and mixed-interface coexistence.
+- Run long soak loops and mixed stress with existing network tests to ensure no starvation, deadlocks, or memory leaks.
+
+Definition of done:
+- Tun/tap regression suite passes consistently across repeated boots.
+- Existing network regression baselines remain green with tun/tap enabled.
+- Tranche is marked production-ready with documented residual limitations only.
 
 ---
 
 ## Recommended Low-Level Continuations
 
-1. **Finish NVMe interrupt-driven completion path** — the polled model works but an IRQ handler would allow concurrent I/O without blocking the CPU; the `irq_register` infrastructure is already in place.
-2. **Start the thread groundwork slice** so the current portability baseline can grow into real pthread support instead of placeholder types.
-3. **Expand procfs with `/proc/net`, `/proc/sockets`, and filtered fd views** to make perf/network/storage debugging cheaper.
-4. **Wire exFAT device selection parity in `sys_mount`** so `exfat` mounts use the same dev-override/default-device behavior as `msdosfs`/`btrfs`/`ufs2`.
-5. **Polish virtio-net link-state and diagnostics** now that poll/IRQ instrumentation exists.
-6. **Tighten the remaining stdio/runtime truthfulness edges (`fmemopen` writable semantics only if needed, `perror` parity)** before treating the portability tranche as stable.
-7. **Start Phase A of the audio subsystem** using `docs/audio-subsystem-design.md`: land kernel audio core + ioctl ABI + null backend + `audiod` minimal mixer loop before hardware-driver bring-up.
-8. **Set OSS compatibility as the first post-stability audio target**: after native audio Phase A/B stability, prioritize `/dev/dsp` + `/dev/mixer` first-class support before PulseAudio/sndio/ALSA shims. Detailed staged execution now lives in `docs/audio-subsystem-implementation-plan.md`, with Stage 0 ABI/ioctl and OSS mapping contract details in `docs/audio-stage0-contract-pack.md`.
+1. **Execute the TUN/TAP full-support tranche** (see above): ship `/dev/net/tun`, ioctl/API compatibility subset, tun+tap datapath integration, userspace control tooling, poll/select readiness, and regression coverage.
+2. **Finish NVMe interrupt-driven completion path** — the polled model works but an IRQ handler would allow concurrent I/O without blocking the CPU; the `irq_register` infrastructure is already in place.
+3. **Start the thread groundwork slice** so the current portability baseline can grow into real pthread support instead of placeholder types.
+4. **Expand procfs with `/proc/net`, `/proc/sockets`, and filtered fd views** to make perf/network/storage debugging cheaper.
+5. **Wire exFAT device selection parity in `sys_mount`** so `exfat` mounts use the same dev-override/default-device behavior as `msdosfs`/`btrfs`/`ufs2`.
+6. **Polish virtio-net link-state and diagnostics** now that poll/IRQ instrumentation exists.
+7. **Tighten the remaining stdio/runtime truthfulness edges (`fmemopen` writable semantics only if needed, `perror` parity)** before treating the portability tranche as stable.
+8. **Start Phase A of the audio subsystem** using `docs/audio-subsystem-design.md`: land kernel audio core + ioctl ABI + null backend + `audiod` minimal mixer loop before hardware-driver bring-up.
+9. **Set OSS compatibility as the first post-stability audio target**: after native audio Phase A/B stability, prioritize `/dev/dsp` + `/dev/mixer` first-class support before PulseAudio/sndio/ALSA shims. Detailed staged execution now lives in `docs/audio-subsystem-implementation-plan.md`, with Stage 0 ABI/ioctl and OSS mapping contract details in `docs/audio-stage0-contract-pack.md`.
 
 ---
 

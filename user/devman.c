@@ -25,6 +25,7 @@
 #define MAX_RULES 32
 #define SERIALDEV 4
 #define AUDIODEV 5
+#define TUNTAPDEV 6
 
 struct devman_device {
   char path[MAX_PATH];
@@ -489,6 +490,15 @@ devman_enumerate_pty_devices(void)
     ndevices++;
   }
 
+  /* TUN/TAP control endpoint */
+  if(ndevices < MAX_DEVICES) {
+    strcpy(devices[ndevices].path, "/dev/net/tun");
+    devices[ndevices].major = TUNTAPDEV;
+    devices[ndevices].minor = 0;
+    devices[ndevices].type = M_IFCHR;
+    ndevices++;
+  }
+
   /* Console and standard char devices */
   if(ndevices < MAX_DEVICES) {
     strcpy(devices[ndevices].path, "/dev/console");
@@ -644,6 +654,7 @@ devman_remove_managed_nodes(void)
 
   devman_remove_node("/dev/audioctl");
   devman_remove_node("/dev/pcmC0D0p");
+  devman_remove_node("/dev/net/tun");
 
   devman_remove_node("/dev/console");
   devman_remove_node("/dev/null");

@@ -51,6 +51,28 @@
 
 #define TCFLSH      0x540B
 
+/* Linux-compatible /dev/net/tun baseline ioctl subset */
+#define TUNSETIFF      0x400454ca
+#define TUNSETPERSIST  0x400454cb
+#define TUNSETOWNER    0x400454cc
+#define TUNSETGROUP    0x400454ce
+#define TUNGETIFF      0x800454d2
+
+/* Linux-compatible ifreq flags used with TUNSETIFF/TUNGETIFF */
+#define IFF_TUN        0x0001
+#define IFF_TAP        0x0002
+#define IFF_NO_PI      0x1000
+
+#ifndef IFNAMSIZ
+#define IFNAMSIZ 16
+#endif
+
+struct ifreq {
+	char ifr_name[IFNAMSIZ];
+	short ifr_flags;
+	char ifr_pad[14];
+};
+
 int ioctl(int fd, int request, ...);
 
 #endif /* AUXV6_SYS_IOCTL_H */

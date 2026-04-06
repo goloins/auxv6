@@ -54,6 +54,7 @@ extern struct devsw devsw[];
 #define PTYDEV 3
 #define SERIALDEV 4
 #define AUDIODEV 5
+#define TUNTAPDEV 6
 #define PTY_MAX_UNITS 16
 #define PTY_MINOR_PTMX 0
 #define PTY_MINOR_SLAVE_BASE 1

@@ -651,7 +651,9 @@ struct cpu*
 mycpu(void)
 {
   uchar apicid;
+  uchar apicid2;
   uchar idx;
+  int i;
 
   if(readeflags()&FL_IF)
     panic("mycpu called with interrupts enabled\n");
@@ -659,8 +661,35 @@ mycpu(void)
   // O(1) reverse lookup through the table built at mpinit().
   apicid = (uchar)lapicid();
   idx = apic_cpu_map[apicid];
-  if(idx == 0xff)
-    panic("unknown apicid\n");
+  if(idx != 0xff)
+    return &cpus[idx];
+
+  // Recover if the reverse map entry was clobbered at runtime.
+  for(i = 0; i < ncpu; i++){
+    if(cpus[i].apicid == apicid){
+      apic_cpu_map[apicid] = (uchar)i;
+      return &cpus[i];
+    }
+  }
+
+  // Retry once: some virtualized environments can transiently report a
+  // bad APIC ID read under heavy interrupt load.
+  apicid2 = (uchar)lapicid();
+  if(apicid2 != apicid){
+    idx = apic_cpu_map[apicid2];
+    if(idx != 0xff)
+      return &cpus[idx];
+    for(i = 0; i < ncpu; i++){
+      if(cpus[i].apicid == apicid2){
+        apic_cpu_map[apicid2] = (uchar)i;
+        return &cpus[i];
+      }
+    }
+  }
+
+  cprintf("mycpu: apic lookup failed apicid=%d retry=%d ncpu=%d\n",
+          apicid, apicid2, ncpu);
+  panic("unknown apicid\n");
   return &cpus[idx];
 }
 

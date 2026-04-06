@@ -9,8 +9,13 @@
 #include "termios.h"
 #include "signal.h"
 #include "spinlock.h"
+#include "sleeplock.h"
+#include "stat.h"
+#include "fs.h"
+#include "file.h"
 #include "sys/resource.h"
 #include "sys/time.h"
+#include "sys/ioctl.h"
 
 #ifndef CONSOLE
 #define CONSOLE 1
@@ -23,6 +28,9 @@
 #endif
 #ifndef AUDIODEV
 #define AUDIODEV 5
+#endif
+#ifndef TUNTAPDEV
+#define TUNTAPDEV 6
 #endif
 
 #define KTIME_CLOCK_REALTIME  0
@@ -722,6 +730,23 @@ sys_setrlimit(void)
       if(argptr(2, &arg_ptr, arg_size) < 0)
         return -1;
       return audio_ioctl_file(f, request, (uint)arg_ptr);
+    }
+
+    if(tuntap_is_ioctl(request)){
+      if(!(f->type == FD_INODE && f->ip && f->ip->type == T_DEV &&
+           f->ip->major == TUNTAPDEV))
+        return -1;
+      arg_size = tuntap_ioctl_arg_size(request);
+      if(arg_size <= 0)
+        return -1;
+      if(arg_size == (int)sizeof(int)){
+        if(argint(2, &arg_int) < 0)
+          return -1;
+        return tuntap_ioctl_file(f, request, (uint)arg_int);
+      }
+      if(argptr(2, &arg_ptr, arg_size) < 0)
+        return -1;
+      return tuntap_ioctl_file(f, request, (uint)arg_ptr);
     }
 
     if(!proc_is_tty_fd(fd))

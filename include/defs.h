@@ -135,7 +135,8 @@ uint            console_gfx_stats_flush_pixels(void);
 int             console_gfx_debug_snapshot(struct console_gfx_debug_info *out);
 int             console_ioctl(int fd, int request, uint arg);
 int             console_kmsg_read(char *dst, int max);
-void            panic(char*) __attribute__((noreturn));
+void            panic_impl(const char*, const char*) __attribute__((noreturn));
+#define         panic(s) panic_impl(__func__, s)
 
 // kalloc.c
 char*           kalloc(void);
@@ -194,6 +195,19 @@ int             audio_register_hw_device(uint16_t vendor_id, uint16_t device_id,
 										 uint16_t direction, uint32_t flags,
 										 uint32_t hw_profile,
 										 const char *driver_name);
+
+// tuntap.c
+void            tuntap_init(void);
+int             tuntap_open(struct file *f, int minor, int omode);
+void            tuntap_close(struct file *f);
+int             tuntap_is_ioctl(int request);
+int             tuntap_ioctl_arg_size(int request);
+int             tuntap_ioctl_file(struct file *f, int request, uint arg);
+void            tuntap_poll_events(struct file *f, int *rd, int *wr, int *err);
+int             tuntap_fileread(struct file *f, char *dst, int n);
+int             tuntap_filewrite(struct file *f, char *src, int n);
+int             tuntap_set_nonblock(struct file *f, int enabled);
+int             tuntap_get_nonblock(struct file *f);
 
 // Master debug flag - set to 1 to enable boot diagnostics and subsystem logging.
 // Controlled via -DAUXV6_DEBUG=1 or by editing here.

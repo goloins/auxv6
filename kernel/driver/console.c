@@ -2121,15 +2121,15 @@ cprintf(char *fmt, ...)
 }
 
 void
-panic(char *s)
+panic_impl(const char *func, const char *s)
 {
   int i;
   uint pcs[10];
 
   cli();
   cons.locking = 0;
-  cprintf("lapicid %d: panic: ", lapicid());
-  cprintf(s);
+  cprintf("lapicid %d: panic: %s: ", lapicid(), func ? func : "?");
+  cprintf((char*)s);
   cprintf("\n");
   getcallerpcs(&s, pcs);
   for(i = 0; i < 10; i++)

@@ -615,6 +615,19 @@ fd_ready_events(struct file *f)
         events |= POLLERR | POLLHUP;
       break;
     }
+    if(f->ip && f->ip->type == T_DEV && f->ip->major == TUNTAPDEV){
+      rd = 0;
+      wr = 0;
+      err = 0;
+      tuntap_poll_events(f, &rd, &wr, &err);
+      if(f->readable && rd)
+        events |= POLLIN;
+      if(f->writable && wr)
+        events |= POLLOUT;
+      if(err)
+        events |= POLLERR | POLLHUP;
+      break;
+    }
     if(f->readable)
       events |= POLLIN;
     if(f->writable)
@@ -1412,6 +1425,14 @@ sys_open(void)
 
   if(ip->type == T_DEV && ip->major == AUDIODEV){
     if(audio_open(f, ip->minor, omode) < 0){
+      fd_clear(fd);
+      fileclose(f);
+      return -1;
+    }
+  }
+
+  if(ip->type == T_DEV && ip->major == TUNTAPDEV){
+    if(tuntap_open(f, ip->minor, omode) < 0){
       fd_clear(fd);
       fileclose(f);
       return -1;
@@ -2361,6 +2382,11 @@ sys_fcntl(void)
       if(audio_get_nonblock(f) > 0)
         flags |= O_NONBLOCK;
     }
+    if(f->type == FD_INODE && f->ip && f->ip->type == T_DEV &&
+       f->ip->major == TUNTAPDEV){
+      if(tuntap_get_nonblock(f) > 0)
+        flags |= O_NONBLOCK;
+    }
     return flags;
 
   case 4: // F_SETFL - set file status flags (audio O_NONBLOCK tracked)
@@ -2369,6 +2395,11 @@ sys_fcntl(void)
     if(f->type == FD_INODE && f->ip && f->ip->type == T_DEV &&
        f->ip->major == AUDIODEV && f->ip->minor != 0){
       if(audio_set_nonblock(f, (arg & O_NONBLOCK) != 0) < 0)
+        return -1;
+    }
+    if(f->type == FD_INODE && f->ip && f->ip->type == T_DEV &&
+       f->ip->major == TUNTAPDEV){
+      if(tuntap_set_nonblock(f, (arg & O_NONBLOCK) != 0) < 0)
         return -1;
     }
     return 0;

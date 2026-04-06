@@ -33,6 +33,7 @@ main(void)
   ptyinit();       // pseudo-terminal endpoints
   serialinit();    // serial tty chardev endpoints
   audio_init();    // audio char-device skeleton and ioctl entrypoints
+  tuntap_init();   // tun/tap char-device scaffold (/dev/net/tun)
   uartinit();      // serial port
   pinit();         // process table
   tvinit();        // trap vectors

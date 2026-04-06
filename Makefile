@@ -3,6 +3,7 @@ OBJS = \
 	kernel/fs/bio.o\
 	kernel/driver/console.o\
 	kernel/driver/pty.o\
+	kernel/driver/tuntap.o\
 	kernel/audio/audio_core.o\
 	kernel/driver/audio_pci.o\
 	kernel/driver/audio_pci_common.o\
@@ -529,6 +530,9 @@ _rarp: user/rarp
 _ip: user/ip
 	cp user/ip _ip
 
+_tuntapctl: user/tuntapctl
+	cp user/tuntapctl _tuntapctl
+
 _v6dhcpd: user/v6dhcpd
 	cp user/v6dhcpd _v6dhcpd
 
@@ -726,6 +730,7 @@ UPROGS=\
 	_arp\
 	_rarp\
 	_ip\
+	_tuntapctl\
 	_v6dhcpd\
 	_ntpd\
 	_passwd\

@@ -90,6 +90,8 @@ fileclose(struct file *f)
       serial_close(&ff);
     if(ff.ip && ff.ip->type == T_DEV && ff.ip->major == AUDIODEV)
       audio_close(&ff);
+    if(ff.ip && ff.ip->type == T_DEV && ff.ip->major == TUNTAPDEV)
+      tuntap_close(&ff);
     begin_op();
     iput(ff.ip);
     end_op();
@@ -148,6 +150,11 @@ fileread(struct file *f, char *addr, int n)
       VFSDBG("vfs: fileread dev=%d ino=%d r=%d off=%d\n",
              f->ip->dev, f->ip->inum, n, (int)f->off);
       return pty_fileread(f, addr, n);
+    }
+
+    if(f->ip->type == T_DEV && f->ip->major == TUNTAPDEV){
+      iunlock(f->ip);
+      return tuntap_fileread(f, addr, n);
     }
 
     if(f->ip->type == T_DEV){
@@ -258,6 +265,8 @@ filewrite(struct file *f, char *addr, int n)
       return pty_filewrite(f, addr, n);
     if(f->ip->type == T_DEV && f->ip->major == AUDIODEV)
       return audio_filewrite(f, addr, n);
+    if(f->ip->type == T_DEV && f->ip->major == TUNTAPDEV)
+      return tuntap_filewrite(f, addr, n);
 
     if(f->ip->type == T_DEV){
       ilock(f->ip);
