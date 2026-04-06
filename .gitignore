@@ -119,6 +119,7 @@ user/audioctl
 user/audiostat
 user/audiotest
 user/audiopollstress
+user/audiod
 user/lockprobe
 user/server7
 user/date

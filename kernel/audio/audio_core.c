@@ -356,13 +356,10 @@ void
 audio_close(struct file *f)
 {
   int i;
+  int active;
   char *ring;
 
-  if(f == 0 || f->type != FD_INODE || f->ip == 0)
-    return;
-  if(f->ip->type != T_DEV || f->ip->major != AUDIODEV)
-    return;
-  if(!audio_is_stream_minor(f->ip->minor))
+  if(f == 0)
     return;
 
   ring = 0;
@@ -377,6 +374,22 @@ audio_close(struct file *f)
     wakeup(&audio_streams[i].ring_head);
     memset(&audio_streams[i], 0, sizeof(audio_streams[i]));
     break;
+  }
+
+  active = 0;
+  for(i = 0; i < AUDIO_STREAM_MAX; i++){
+    if(audio_streams[i].in_use)
+      active = 1;
+  }
+  if(!active){
+    audio_core.stream_state = AUDIO_ST_NEW;
+    audio_core.hw_ptr_frames = 0;
+    audio_core.sw_ptr_frames = 0;
+    audio_core.queued_frames = 0;
+    audio_core.xruns = 0;
+    audio_core.late_wakeups = 0;
+    audio_core.period_misses = 0;
+    audio_core.recoveries = 0;
   }
   release(&audio_core.lock);
 

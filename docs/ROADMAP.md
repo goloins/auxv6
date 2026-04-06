@@ -55,7 +55,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | exFAT | 35% | Initial read-only backend parser is in-tree (boot-sector validation, entry-set traversal, case-insensitive lookup, regular-file reads), but the mount device-selection path still needs parity wiring in `sys_mount`; write/allocate/truncate/rename metadata paths and robust seeded-image tooling remain out of scope |
 | Btrfs | 35% | Initial read-only VFS backend landed (`btrfs` mount type): single-device volumes, metadata-tree traversal, directory lookup/readdir, regular-file reads, and symlink reads; write paths, compression/RAID/multi-device, and many advanced features remain out of scope |
 | UFS2/FFS | 28% | Initial read-only VFS backend landed (`ufs2`/`ffs` mount type): superblock probe, inode/directory traversal, direct/single-indirect file reads, and symlink reads with conservative format assumptions; write paths and broader on-disk compatibility hardening remain out of scope |
-| Audio subsystem | 38% | Stage-0 ABI/core is in-tree with ioctl + procfs surfaces and PCI-family probe stubs; Stage-1 tranches 1-3 are now landed with per-fd stream objects/ring buffers, blocking + `O_NONBLOCK` PCM write semantics, poll/select readiness wiring, and `/proc/audio_clients` observability via `audiostat`; capture/hardware backends and OSS compatibility remain follow-on |
+| Audio subsystem | 42% | Stage-0 ABI/core is in-tree with ioctl + procfs surfaces and PCI-family probe stubs; Stage-1 tranches 1-3 are now landed with per-fd stream objects/ring buffers, blocking + `O_NONBLOCK` PCM write semantics, poll/select readiness wiring, and `/proc/audio_clients` observability via `audiostat`; Stage-2 tranche 1 is landed with a minimal `audiod` daemon scaffold (single-sink poll loop + xrun recovery); capture/hardware backends and broader policy compatibility remain follow-on |
 | Device hotplug/eventing | None | Planned kernel event path for live node add/remove beyond boot-time `devman -s` |
 
 ---
@@ -68,7 +68,7 @@ Highlights are now summarized here and tracked in detail in `docs/CHANGELOG-2026
 - Storage and filesystem coverage broadened: NVMe/AHCI hardening, FAT32 validation, plus initial read-only btrfs/ufs2/exfat tracks.
 - Networking and observability matured: broader NIC coverage, link-state visibility, and procfs instrumentation growth.
 - Userland/admin ergonomics advanced: `top`, `abrowse`, `man`, `which`, `lsof`, `file`, and richer docs/man coverage.
-- Audio Stage-1 tranches 1-3 are landed with stream lifecycle, readiness, and observability wired.
+- Audio Stage-1 tranches 1-3 are landed with stream lifecycle, readiness, and observability wired, and Stage-2 tranche 1 has started with a minimal `audiod` daemon scaffold.
 
 For full chronology and implementation-level detail, see `docs/CHANGELOG-2026-04.md`.
 
@@ -136,7 +136,7 @@ Primary goal: hold the current kernel/userland gains as the stable baseline whil
 - NFS status and scope: `docs/nfs-v3-integration.md`
 - Libc/POSIX tranche inventory: `docs/libc-posix-unified-tranche-inventory.md`
 - Graphics/server7 and framebuffer notes: `docs/graphics-subsystem-design.md`, `docs/framebuffer-implementation-vt-summary.md`
-- Audio staged roadmap: `docs/audio-subsystem-implementation-plan.md`, `docs/audio-stage0-contract-pack.md`, `docs/audio-stage1-tranche1-runtime.md`, `docs/audio-stage1-tranche2-readiness.md`, `docs/audio-stage1-tranche3-observability.md`
+- Audio staged roadmap: `docs/audio-subsystem-implementation-plan.md`, `docs/audio-stage0-contract-pack.md`, `docs/audio-stage1-tranche1-runtime.md`, `docs/audio-stage1-tranche2-readiness.md`, `docs/audio-stage1-tranche3-observability.md`, `docs/audio-stage2-tranche1-daemon-scaffold.md`
 - Descriptor-limit modernization and rationale: `docs/death-of-xv6.md`
 
 ---

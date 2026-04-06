@@ -16,6 +16,9 @@ This document holds the detailed 2026-04 change history that was moved out of `d
 - Audio Stage-1 tranche 2 landed: poll/select readiness wiring for AUDIODEV stream descriptors.
 - Audio Stage-1 tranche 3 landed: `/proc/audio_clients` observability and `audiostat` integration.
 - Audio follow-on runtime fixes landed: `fcntl(F_SETFL/F_GETFL)` now toggles/reports stream `O_NONBLOCK`; `/proc/audio_clients` now includes owner pid.
+- Audio Stage-2 tranche 1 landed: `audiod` minimal daemon scaffold (single-sink poll loop, silence writes, and xrun recovery) with build/manpage/docs integration.
+- Audio close-path leak fix landed: stream slots are now released correctly on fd close/exit by matching the original file-object owner identity, fixing stale `/proc/audio_clients` entries after `audiod`/`audioctl` exit.
+- Audio procfs summary fix landed: when the last stream closes, `/proc/audio` now resets global stream-state/queue counters instead of reporting stale values from prior runs.
 - Framebuffer bring-up and console performance advanced: DMA framebuffer allocation now reserves contiguous runs from freelist; tty upward scroll reuses existing framebuffer pixels instead of near-full rerender.
 - Locking modernization landed: spinlock acquire-timeout + nested-acquire panic behavior, lock-failure owner diagnostics, and lockdep-lite rank checks/diagnostics under debug flags.
 - Console locking split into domain-specific locks (`input_lock`, `tty_lock`, `gfx_lock`); login-path mismatch regression was fixed.

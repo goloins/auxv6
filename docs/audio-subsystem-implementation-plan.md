@@ -234,6 +234,14 @@ Goal:
 
 - Provide first userspace policy/mixing layer over native playback.
 
+Status (2026-04-05):
+
+- Started (Tranche 1 landed): `audiod` now has a minimal daemon lifecycle
+  and single-sink poll loop that configures one native PCM playback stream,
+  writes silence on writable readiness, and performs xrun recovery.
+- Detailed behavior and limits are tracked in
+  `docs/audio-stage2-tranche1-daemon-scaffold.md`.
+
 Implementation tasks:
 
 1. Daemon lifecycle

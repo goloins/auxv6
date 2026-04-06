@@ -89,7 +89,7 @@ fileclose(struct file *f)
     if(ff.ip && ff.ip->type == T_DEV && ff.ip->major == SERIALDEV)
       serial_close(&ff);
     if(ff.ip && ff.ip->type == T_DEV && ff.ip->major == AUDIODEV)
-      audio_close(&ff);
+      audio_close(f);
     if(ff.ip && ff.ip->type == T_DEV && ff.ip->major == TUNTAPDEV)
       tuntap_close(f);
     begin_op();
