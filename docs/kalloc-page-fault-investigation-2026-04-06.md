@@ -869,3 +869,57 @@ Interpretation:
    still receiving code-like corrupt writes.
 3. The new one-shot fatal latch succeeded in exposing the true first fault site
    before triple-fault noise.
+
+## New Boot Batch (Post-LAPIC EOI fallback)
+
+### Reported behavior shift
+
+- System now reaches login/shell more reliably, with successful short stress runs
+   observed (`kallocstress` and `kmemstress` passes on some boots).
+- Remaining failures are now concentrated in allocator/VM corruption containment
+   paths rather than immediate LAPIC EOI page-fault panics.
+
+### Key observed signatures
+
+1. Boot 1
+    - `uvm_release_pte: drop bad pte ... raw=80153e05 ...`
+    - followed by panic: `deallocuvm: deallocuvm`.
+
+2. Boot 2/6
+    - `kalloc_refill_local: drop bad global run=...`
+    - intermittent shell/login bounce; one run panicked in `kfree unmanaged`.
+
+3. Boots 2/3/4/5 and later repeats
+    - repeated:
+       `walkpgdir: bad pde ... va=fee000b0 ... raw=80118c93 pa=80118000`
+    - repeated `freevm: skip bad pde ...` code-like raw values persisted.
+
+4. Successful run examples
+    - `kallocstress -n 5` summary improved (reported avg around 69-87 depending run).
+    - `kmemstress` short runs complete (`fail_total=0`).
+
+Interpretation:
+- Stability improved materially, but upstream structure corruption producer still
+   exists and continues to write code-like values into PDE/PTE slots.
+
+## Follow-up Fixes Applied After This Batch
+
+1. `kernel/core/vm.c` deallocation hardening
+    - `deallocuvm()` no longer panics on residual negative release codes from
+       malformed-present PTEs; it now quarantines (`*pte=0`) and counts as bad-drop.
+
+2. `kernel/core/vm.c` malformed present PTE handling
+    - `uvm_release_pte()` now treats `pa==0` as corruption quarantine (`-2`) with
+       throttled diagnostic, instead of returning generic `-1` that could escalate
+       to panic in teardown paths.
+
+3. `kernel/core/vm.c` kernel-half PDE drift repair in read-only walk
+    - In `walkpgdir()` when a bad present PDE is encountered on kernel-half VA and
+       `alloc==0`, code now repairs the PDE from canonical `kpgdir` and retries
+       translation, reducing repeated bad-PDE churn for kernel mappings such as
+       `0xfee000b0`.
+
+Expected effect:
+- Prevent process-teardown panic escalation from malformed-present PTEs.
+- Reduce repeated kernel-half bad-PDE spam loops by self-healing canonical drift
+   at lookup time.

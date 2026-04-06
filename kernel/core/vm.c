@@ -76,8 +76,20 @@ walkpgdir(pde_t *pgdir, const void *va, int alloc)
     if(pa == 0 || pa >= PHYSTOP || pa >= KERNBASE){
       cprintf("walkpgdir: bad pde pgdir=%p va=%p pde=%p raw=%x pa=%x\n",
               pgdir, va, pde, *pde, pa);
-      if(!alloc)
+      if(!alloc){
+        // Kernel-half PDEs are canonical and shared; repair drift in place.
+        if((uint)va >= KERNBASE && kpgdir != 0 && PDX(va) >= PDX(KERNBASE)){
+          *pde = kpgdir[PDX(va)];
+          if((*pde & PTE_P) != 0){
+            pa = PTE_ADDR(*pde);
+            if(pa != 0 && pa < PHYSTOP && pa < KERNBASE){
+              pgtab = (pte_t*)P2V(pa);
+              return &pgtab[PTX(va)];
+            }
+          }
+        }
         return 0;
+      }
       *pde = 0;
       pgtab = (pte_t*)kalloc();
       if(pgtab == 0)
@@ -364,8 +376,11 @@ deallocuvm(pde_t *pgdir, uint oldsz, uint newsz)
         bad++;
         continue;
       }
-      if(rel < 0)
-        panic("deallocuvm");
+      if(rel < 0){
+        bad++;
+        *pte = 0;
+        continue;
+      }
     }
   }
   if(bad > 0)
@@ -545,8 +560,15 @@ uvm_release_pte(uint *pte)
 
   raw = *pte;
   pa = PTE_ADDR(*pte);
-  if(pa == 0)
-    return -1;
+  if(pa == 0){
+    vm_bad_pte_drops++;
+    if((vm_bad_pte_drops & 0x3f) == 1){
+      cprintf("uvm_release_pte: drop zero-pa pte=%p raw=%x flags=%x drops=%u\n",
+              pte, raw, PTE_FLAGS(raw), vm_bad_pte_drops);
+    }
+    *pte = 0;
+    return -2;
+  }
   if(pa >= PHYSTOP || pa >= KERNBASE || !kpage_is_managed(pa)){
     vm_bad_pte_drops++;
     if((vm_bad_pte_drops & 0x3f) == 1){
