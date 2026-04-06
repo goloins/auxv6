@@ -16,6 +16,31 @@ static uint vm_kernel_pde_repairs;
 static uint vm_kernel_pde_master_repairs;
 static pde_t vm_kernel_pde_ref[NPDENTRIES];
 static int vm_kernel_pde_ref_ready;
+static uchar vm_kernel_pde_master_reported[NPDENTRIES];
+
+static pde_t vm_pde_stable(pde_t pde);
+
+static void
+vm_log_kernel_pde_divergence_once(uint idx, pde_t cur, pde_t want, pde_t *pgdir)
+{
+  uint pcs[8];
+  int j;
+
+  if(idx >= NPDENTRIES)
+    return;
+  if(vm_kernel_pde_master_reported[idx])
+    return;
+
+  vm_kernel_pde_master_reported[idx] = 1;
+  getcallerpcs(&pgdir, pcs);
+  cprintf("vm_pde_diverge: idx=%u va=%p cur=%x want=%x stable_cur=%x stable_want=%x cpu=%d cr3=%x pgdir=%p\n",
+          idx, (void*)(idx << PDXSHIFT), cur, want,
+          vm_pde_stable(cur), vm_pde_stable(want), cpuid(), rcr3(), pgdir);
+  cprintf("vm_pde_diverge_pcs:");
+  for(j = 0; j < 8; j++)
+    cprintf(" %p", pcs[j]);
+  cprintf("\n");
+}
 
 // x86 sets Accessed/Dirty in paging entries at runtime.
 #define VM_PDE_VOLATILE_BITS (0x020 | 0x040)
@@ -70,6 +95,7 @@ vm_sync_kernel_pdes(pde_t *pgdir)
   for(i = PDX(KERNBASE); i < NPDENTRIES; i++){
     want = vm_kernel_pde_canonical(i);
     if(vm_pde_stable(kpgdir[i]) != vm_pde_stable(want)){
+      vm_log_kernel_pde_divergence_once(i, kpgdir[i], want, pgdir);
       kpgdir[i] = vm_pde_merge_runtime_bits(kpgdir[i], want);
       master_repaired++;
     }
