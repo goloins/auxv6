@@ -38,9 +38,36 @@ static struct inode* vfs_resolve_parent(char *path, char *name);
 static int remove_path(char *path, int dironly);
 static int tmpfs_alloc_dev(void);
 static int nfs_alloc_dev(void);
+static int copyinstr_user(uint uaddr, char *dst, int dstsz);
 // Phase 1A: fdtable functions
 static int fdtable_expand(struct fdtable*);
 static void fdtable_init(struct fdtable*);
+
+static int
+copyinstr_user(uint uaddr, char *dst, int dstsz)
+{
+  struct proc *p;
+  int i;
+  char c;
+
+  if(dst == 0 || dstsz <= 0)
+    return -1;
+
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+
+  for(i = 0; i < dstsz; i++){
+    if(copyin(p->pgdir, &c, uaddr + (uint)i, 1) < 0)
+      return -1;
+    dst[i] = c;
+    if(c == 0)
+      return 0;
+  }
+
+  dst[dstsz - 1] = 0;
+  return -1;
+}
 
 int
 proc_fd_limit(struct proc *p)
@@ -809,19 +836,64 @@ int
 sys_read(void)
 {
   struct file *f;
+  struct proc *p;
   int n;
-  char *p;
+  int addr;
+  uint uaddr;
+  char *kbuf;
+  int tot;
+  int want;
+  int r;
 
-  if(argfd(0, 0, &f) < 0 || argint(2, &n) < 0 || argptr(1, &p, n) < 0)
+  if(argfd(0, 0, &f) < 0 || argint(1, &addr) < 0 || argint(2, &n) < 0)
     return -1;
-  return fileread(f, p, n);
+  if(n < 0)
+    return -1;
+  if(n == 0)
+    return 0;
+
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+
+  uaddr = (uint)addr;
+  kbuf = (char*)kmalloc(PGSIZE);
+  if(kbuf == 0)
+    return -1;
+
+  r = -1;
+  tot = 0;
+  while(tot < n){
+    want = n - tot;
+    if(want > PGSIZE)
+      want = PGSIZE;
+
+    r = fileread(f, kbuf, want);
+    if(r <= 0)
+      break;
+
+    if(copyout(p->pgdir, uaddr + (uint)tot, kbuf, (uint)r) < 0){
+      kmalloc_free(kbuf);
+      return (tot > 0) ? tot : -1;
+    }
+
+    tot += r;
+    if(r < want)
+      break;
+  }
+
+  kmalloc_free(kbuf);
+  if(tot > 0)
+    return tot;
+  return r;
 }
 
 int
 sys_getdents(void)
 {
   struct file *f;
-  struct dirent *uents;
+  int uents_addr;
+  uint uents_u;
   struct dirent *kents;
   struct proc *p;
   struct dirent de;
@@ -833,10 +905,11 @@ sys_getdents(void)
     return -1;
   if(max < 0)
     return -1;
-  if(max > PGSIZE / sizeof(*uents))
+  if(max > PGSIZE / sizeof(struct dirent))
     return -1;
-  if(argptr(1, (char**)&uents, max * sizeof(*uents)) < 0)
+  if(argint(1, &uents_addr) < 0)
     return -1;
+  uents_u = (uint)uents_addr;
 
   p = myproc();
   if(p == 0 || p->pgdir == 0)
@@ -877,7 +950,7 @@ sys_getdents(void)
     kents[out++] = de;
   }
 
-  if(out > 0 && copyout(p->pgdir, (uint)uents, kents, out * sizeof(*kents)) < 0){
+  if(out > 0 && copyout(p->pgdir, uents_u, kents, out * sizeof(*kents)) < 0){
     kmalloc_free(kents);
     return -1;
   }
@@ -891,12 +964,56 @@ int
 sys_write(void)
 {
   struct file *f;
+  struct proc *p;
   int n;
-  char *p;
+  int addr;
+  uint uaddr;
+  char *kbuf;
+  int tot;
+  int want;
+  int r;
 
-  if(argfd(0, 0, &f) < 0 || argint(2, &n) < 0 || argptr(1, &p, n) < 0)
+  if(argfd(0, 0, &f) < 0 || argint(1, &addr) < 0 || argint(2, &n) < 0)
     return -1;
-  return filewrite(f, p, n);
+  if(n < 0)
+    return -1;
+  if(n == 0)
+    return 0;
+
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+
+  uaddr = (uint)addr;
+  kbuf = (char*)kmalloc(PGSIZE);
+  if(kbuf == 0)
+    return -1;
+
+  r = -1;
+  tot = 0;
+  while(tot < n){
+    want = n - tot;
+    if(want > PGSIZE)
+      want = PGSIZE;
+
+    if(copyin(p->pgdir, kbuf, uaddr + (uint)tot, (uint)want) < 0){
+      kmalloc_free(kbuf);
+      return (tot > 0) ? tot : -1;
+    }
+
+    r = filewrite(f, kbuf, want);
+    if(r <= 0)
+      break;
+
+    tot += r;
+    if(r < want)
+      break;
+  }
+
+  kmalloc_free(kbuf);
+  if(tot > 0)
+    return tot;
+  return r;
 }
 
 int
@@ -916,11 +1033,20 @@ int
 sys_fstat(void)
 {
   struct file *f;
-  struct stat *st;
+  struct stat st;
+  int staddr;
+  struct proc *p;
 
-  if(argfd(0, 0, &f) < 0 || argptr(1, (void*)&st, sizeof(*st)) < 0)
+  if(argfd(0, 0, &f) < 0 || argint(1, &staddr) < 0)
     return -1;
-  return filestat(f, st);
+  if(filestat(f, &st) < 0)
+    return -1;
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+  if(copyout(p->pgdir, (uint)staddr, &st, sizeof(st)) < 0)
+    return -1;
+  return 0;
 }
 
 // stat by path — does not require read permission on the target itself,
@@ -931,10 +1057,12 @@ sys_stat(void)
   char *path;
   const struct vnode_ops *ops;
   int rc;
-  struct stat *st;
+  struct stat st;
+  int staddr;
+  struct proc *p;
   struct inode *ip;
 
-  if(argstr(0, &path) < 0 || argptr(1, (void*)&st, sizeof(*st)) < 0)
+  if(argstr(0, &path) < 0 || argint(1, &staddr) < 0)
     return -1;
 //big win here
   begin_op();
@@ -945,14 +1073,22 @@ sys_stat(void)
   ilock(ip);
   ops = vfs_dev_vops(ip->dev);
   if(ops && ops->stat){
-    rc = ops->stat(ip, st);
+    rc = ops->stat(ip, &st);
   } else {
     rc = 0;
-    stati(ip, st);
+    stati(ip, &st);
   }
   iunlockput(ip);
   end_op();
-  return rc;
+  if(rc < 0)
+    return rc;
+
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+  if(copyout(p->pgdir, (uint)staddr, &st, sizeof(st)) < 0)
+    return -1;
+  return 0;
 }
 
 // Create the path new as a link to the same inode as old.
@@ -1538,13 +1674,14 @@ sys_chdir(void)
 int
 sys_getcwd(void)
 {
-  char *buf;
+  int bufaddr;
   int size;
   char path[128];
+  struct proc *p;
 
   if(argint(1, &size) < 0)
     return -1;
-  if(size <= 1 || argptr(0, &buf, size) < 0)
+  if(size <= 1 || argint(0, &bufaddr) < 0)
     return -1;
 
   begin_op();
@@ -1556,7 +1693,12 @@ sys_getcwd(void)
 
   if(strlen(path) + 1 > (uint)size)
     return -1;
-  memmove(buf, path, strlen(path) + 1);
+
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+  if(copyout(p->pgdir, (uint)bufaddr, path, strlen(path) + 1) < 0)
+    return -1;
   return 0;
 }
 
@@ -1643,7 +1785,8 @@ sys_chown(void)
 int
 sys_mountinfo(void)
 {
-  struct vfs_mount_info *out;
+  int out_addr;
+  uint out_u;
   struct vfs_mount_info *kout;
   struct proc *p;
   int max;
@@ -1655,8 +1798,9 @@ sys_mountinfo(void)
     return -1;
   if(max > VFS_MOUNTS_MAX)
     max = VFS_MOUNTS_MAX;
-  if(argptr(0, (char**)&out, max * sizeof(*out)) < 0)
+  if(argint(0, &out_addr) < 0)
     return -1;
+  out_u = (uint)out_addr;
 
   kout = (struct vfs_mount_info*)kmalloc(max * sizeof(*kout));
   if(kout == 0)
@@ -1671,7 +1815,7 @@ sys_mountinfo(void)
   if(n > 0){
     p = myproc();
     if(p == 0 || p->pgdir == 0 ||
-       copyout(p->pgdir, (uint)out, kout, n * sizeof(*kout)) < 0){
+       copyout(p->pgdir, out_u, kout, n * sizeof(*kout)) < 0){
       kmalloc_free(kout);
       return -1;
     }
@@ -1724,22 +1868,25 @@ sys_fsfault(void)
 int
 sys_mount(void)
 {
-  char *path, *fstype;
+  int path_addr;
+  int fstype_addr;
   int flags;
-  char *data;
+  int data_addr;
+  uint data_u;
   char *data_buf;
   int datalen;
   int mount_flags;
   int has_dev_override;
   int dev_override;
   int dev;
+  struct proc *p;
   struct vfs *fs;
   char path_buf[256];
   char fstype_buf[256];
 
-  if(argstr(0, &path) < 0)
+  if(argint(0, &path_addr) < 0)
     return -1;
-  if(argstr(1, &fstype) < 0)
+  if(argint(1, &fstype_addr) < 0)
     return -1;
   if(argint(2, &flags) < 0)
     return -1;
@@ -1748,18 +1895,19 @@ sys_mount(void)
   if(datalen < 0)
     return -1;
 
-  // Copy strings to kernel space
-  safestrcpy(path_buf, path, sizeof(path_buf));
-  safestrcpy(fstype_buf, fstype, sizeof(fstype_buf));
-  data = 0;
+  // Copy strings to kernel space from user virtual addresses.
+  if(copyinstr_user((uint)path_addr, path_buf, sizeof(path_buf)) < 0)
+    return -1;
+  if(copyinstr_user((uint)fstype_addr, fstype_buf, sizeof(fstype_buf)) < 0)
+    return -1;
+  data_u = 0;
   data_buf = 0;
   if(datalen > 0){
     if(datalen > MOUNT_DATA_MAX)
       return -1;
-    if(argptr(3, &data, datalen) < 0)
+    if(argint(3, &data_addr) < 0)
       return -1;
-    memmove(data_buf, data, datalen);
-    data_buf[datalen] = 0;
+    data_u = (uint)data_addr;
   }
 
   has_dev_override = MNT_HASDEV(flags);
@@ -1880,12 +2028,21 @@ sys_mount(void)
 
   // Stage mount data on heap (one page max) to avoid large stack buffers.
   if(datalen > 0){
+    p = myproc();
+    if(p == 0 || p->pgdir == 0){
+      kfree((void*)fs);
+      return -1;
+    }
     data_buf = (char*)kmalloc((uint)(datalen + 1));
     if(data_buf == 0){
       kfree((void*)fs);
       return -1;
     }
-    memmove(data_buf, data, datalen);
+    if(copyin(p->pgdir, data_buf, data_u, (uint)datalen) < 0){
+      kmalloc_free(data_buf);
+      kfree((void*)fs);
+      return -1;
+    }
     data_buf[datalen] = 0;
   }
 
@@ -1933,14 +2090,14 @@ nfs_alloc_dev(void)
 int
 sys_umount(void)
 {
-  char *path;
+  int path_addr;
   char path_buf[256];
 
-  if(argstr(0, &path) < 0)
+  if(argint(0, &path_addr) < 0)
     return -1;
 
-  // Copy path to kernel space
-  safestrcpy(path_buf, path, sizeof(path_buf));
+  if(copyinstr_user((uint)path_addr, path_buf, sizeof(path_buf)) < 0)
+    return -1;
 
   return vfs_unmount(path_buf);
 }
@@ -1950,6 +2107,8 @@ sys_exec(void)
 {
   char *path, *argv[EXEC_ARGC_MAX];
   int i;
+  int j;
+  int bad;
   uint uargv, uarg;
 
   if(argstr(0, &path) < 0 || argint(1, (int*)&uargv) < 0){
@@ -1968,17 +2127,43 @@ sys_exec(void)
     if(fetchstr(uarg, &argv[i]) < 0)
       return -1;
   }
+
+  // Intermittent init/runlevel corruption triage:
+  // if dash script argv contains non-printable bytes, dump raw bytes.
+  if(argv[0] && strcmp(path, "/bin/dash") == 0 && argv[1]){
+    bad = 0;
+    for(j = 0; argv[1][j] && j < 64; j++){
+      char c = argv[1][j];
+      if(c < 32 || c > 126){
+        bad = 1;
+        break;
+      }
+    }
+    if(bad){
+      cprintf("sys_exec: dash argv1 suspect ptr=%p path=%s\n", argv[1], path);
+      cprintf("sys_exec: argv1 bytes:");
+      for(j = 0; j < 32 && argv[1][j]; j++)
+        cprintf(" %02x", (uchar)argv[1][j]);
+      cprintf("\n");
+    }
+  }
+
   return exec(path, argv);
 }
 
 int
 sys_pipe(void)
 {
-  int *fd;
+  int fdaddr;
+  int kfds[2];
   struct file *rf, *wf;
   int fd0, fd1;
+  struct proc *p;
 
-  if(argptr(0, (void*)&fd, 2*sizeof(fd[0])) < 0)
+  if(argint(0, &fdaddr) < 0)
+    return -1;
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
     return -1;
   if(pipealloc(&rf, &wf) < 0)
     return -1;
@@ -1990,8 +2175,15 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
-  fd[0] = fd0;
-  fd[1] = fd1;
+  kfds[0] = fd0;
+  kfds[1] = fd1;
+  if(copyout(p->pgdir, (uint)fdaddr, kfds, sizeof(kfds)) < 0){
+    fd_clear(fd0);
+    fd_clear(fd1);
+    fileclose(rf);
+    fileclose(wf);
+    return -1;
+  }
   return 0;
 }
 
@@ -2000,7 +2192,8 @@ sys_poll(void)
 {
   int nfds;
   int timeout_ms;
-  struct kpollfd *ufds;
+  int ufds_addr;
+  uint ufds_u;
   struct kpollfd *kfds;
   struct proc *curproc;
   int timeout_ticks;
@@ -2017,10 +2210,11 @@ sys_poll(void)
     return -1;
 
   if(nfds == 0)
-    ufds = 0;
+    ufds_u = 0;
   else {
-    if(argptr(0, (char**)&ufds, nfds * sizeof(*ufds)) < 0)
+    if(argint(0, &ufds_addr) < 0)
       return -1;
+    ufds_u = (uint)ufds_addr;
   }
 
   if(nfds == 0){
@@ -2029,7 +2223,7 @@ sys_poll(void)
     kfds = (struct kpollfd*)kmalloc(nfds * sizeof(*kfds));
     if(kfds == 0)
       return -1;
-    if(copyin(curproc->pgdir, kfds, (uint)ufds, nfds * sizeof(*kfds)) < 0){
+    if(copyin(curproc->pgdir, kfds, ufds_u, nfds * sizeof(*kfds)) < 0){
       kmalloc_free(kfds);
       return -1;
     }
@@ -2047,7 +2241,7 @@ sys_poll(void)
   for(;;){
     ready = poll_scan(kfds, nfds);
     if(ready > 0){
-      if(nfds > 0 && copyout(curproc->pgdir, (uint)ufds, kfds,
+      if(nfds > 0 && copyout(curproc->pgdir, ufds_u, kfds,
                              nfds * sizeof(*kfds)) < 0){
         if(kfds)
           kmalloc_free(kfds);
@@ -2058,7 +2252,7 @@ sys_poll(void)
       return ready;
     }
     if(timeout_ms == 0){
-      if(nfds > 0 && copyout(curproc->pgdir, (uint)ufds, kfds,
+      if(nfds > 0 && copyout(curproc->pgdir, ufds_u, kfds,
                              nfds * sizeof(*kfds)) < 0){
         if(kfds)
           kmalloc_free(kfds);
@@ -2079,7 +2273,7 @@ sys_poll(void)
       now = ticks;
       if(now - start >= (uint)timeout_ticks){
         release(&tickslock);
-        if(nfds > 0 && copyout(curproc->pgdir, (uint)ufds, kfds,
+        if(nfds > 0 && copyout(curproc->pgdir, ufds_u, kfds,
                                nfds * sizeof(*kfds)) < 0){
           if(kfds)
             kmalloc_free(kfds);
@@ -2674,15 +2868,30 @@ int
 sys_readlink(void)
 {
   char *path;
-  char *buf;
+  int bufaddr;
+  char *kbuf;
   int bufsiz;
   const struct vnode_ops *ops;
   struct inode *ip;
   int n;
+  struct proc *p;
 
   if(argstr(0, &path) < 0 || argint(2, &bufsiz) < 0)
     return -1;
-  if(argptr(1, &buf, bufsiz) < 0)
+  if(bufsiz < 0)
+    return -1;
+  if(argint(1, &bufaddr) < 0)
+    return -1;
+
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+
+  if(bufsiz == 0)
+    return 0;
+
+  kbuf = (char*)kmalloc(bufsiz);
+  if(kbuf == 0)
     return -1;
 
   begin_op();
@@ -2690,6 +2899,7 @@ sys_readlink(void)
   ip = vfs_namei(path);
   if(ip == 0){
     end_op();
+    kmalloc_free(kbuf);
     return -1;
   }
 
@@ -2699,6 +2909,7 @@ sys_readlink(void)
   if(ip->type != T_SYMLINK){
     iunlockput(ip);
     end_op();
+    kmalloc_free(kbuf);
     return -1;
   }
 
@@ -2706,12 +2917,20 @@ sys_readlink(void)
   if(ops == 0 || ops->readlink == 0){
     iunlockput(ip);
     end_op();
+    kmalloc_free(kbuf);
     return -1;
   }
 
-  n = ops->readlink(ip, buf, bufsiz);
+  n = ops->readlink(ip, kbuf, bufsiz);
   iunlockput(ip);
   end_op();
+
+  if(n > 0 && copyout(p->pgdir, (uint)bufaddr, kbuf, n) < 0){
+    kmalloc_free(kbuf);
+    return -1;
+  }
+
+  kmalloc_free(kbuf);
   return n;
 }
 
@@ -2723,10 +2942,12 @@ sys_lstat(void)
   char *path;
   const struct vnode_ops *ops;
   int rc;
-  struct stat *st;
+  struct stat st;
+  int staddr;
+  struct proc *p;
   struct inode *ip;
 
-  if(argstr(0, &path) < 0 || argptr(1, (void*)&st, sizeof(*st)) < 0)
+  if(argstr(0, &path) < 0 || argint(1, &staddr) < 0)
     return -1;
 
   begin_op();
@@ -2738,14 +2959,22 @@ sys_lstat(void)
   ilock(ip);
   ops = vfs_dev_vops(ip->dev);
   if(ops && ops->stat){
-    rc = ops->stat(ip, st);
+    rc = ops->stat(ip, &st);
   } else {
     rc = 0;
-    stati(ip, st);
+    stati(ip, &st);
   }
   iunlockput(ip);
   end_op();
-  return rc;
+  if(rc < 0)
+    return rc;
+
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+  if(copyout(p->pgdir, (uint)staddr, &st, sizeof(st)) < 0)
+    return -1;
+  return 0;
 }
 
 int
@@ -2800,21 +3029,40 @@ int
 sys_loopstatus(void)
 {
   int loopnum;
-  uint *backing_inum;
-  uint *offset;
-  uint *nblocks;
-  uint *flags;
+  int backing_inum_addr;
+  int offset_addr;
+  int nblocks_addr;
+  int flags_addr;
+  uint backing_inum;
+  uint offset;
+  uint nblocks;
+  uint flags;
+  struct proc *p;
 
   if(argint(0, &loopnum) < 0)
     return -1;
-  if(argptr(1, (void*)&backing_inum, sizeof(*backing_inum)) < 0)
+  if(argint(1, &backing_inum_addr) < 0)
     return -1;
-  if(argptr(2, (void*)&offset, sizeof(*offset)) < 0)
+  if(argint(2, &offset_addr) < 0)
     return -1;
-  if(argptr(3, (void*)&nblocks, sizeof(*nblocks)) < 0)
+  if(argint(3, &nblocks_addr) < 0)
     return -1;
-  if(argptr(4, (void*)&flags, sizeof(*flags)) < 0)
+  if(argint(4, &flags_addr) < 0)
     return -1;
 
-  return loop_status(loopnum, backing_inum, offset, nblocks, flags);
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+
+  if(loop_status(loopnum, &backing_inum, &offset, &nblocks, &flags) < 0)
+    return -1;
+  if(copyout(p->pgdir, (uint)backing_inum_addr, &backing_inum, sizeof(backing_inum)) < 0)
+    return -1;
+  if(copyout(p->pgdir, (uint)offset_addr, &offset, sizeof(offset)) < 0)
+    return -1;
+  if(copyout(p->pgdir, (uint)nblocks_addr, &nblocks, sizeof(nblocks)) < 0)
+    return -1;
+  if(copyout(p->pgdir, (uint)flags_addr, &flags, sizeof(flags)) < 0)
+    return -1;
+  return 0;
 }

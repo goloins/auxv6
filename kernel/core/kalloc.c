@@ -98,7 +98,14 @@ kalloc_free_run_valid(struct run *r)
 
   pa = V2P((char*)r);
   meta = kpage_meta_pa(pa);
-  if(meta == 0 || (meta->flags & KPAGE_MANAGED) == 0)
+  if(meta == 0)
+    return 0;
+
+  // If current pgdir has broken kernel mappings, avoid touching metadata.
+  if(!kaddr_writable_current_pgdir((char*)meta))
+    return 0;
+
+  if((meta->flags & KPAGE_MANAGED) == 0)
     return 0;
   if((meta->flags & KPAGE_FREE) == 0)
     return 0;
@@ -131,6 +138,7 @@ struct {
   uint ref_increments;
   uint deferred_frees;
   uint invalid_cache_drops;
+  uint invalid_global_drops;
   uint duplicate_frees;
 } kmem;
 
@@ -197,8 +205,20 @@ kalloc_refill_local(struct cpu *c)
   n = 0;
   while(kmem.freelist && n < goal){
     r = kmem.freelist;
-    if(!kalloc_free_run_valid(r))
-      kalloc_panic_bad_run("kalloc_refill_local pop", r);
+    if(!kalloc_free_run_valid(r)){
+      kmem.invalid_global_drops++;
+      if((kmem.invalid_global_drops & 0x3f) == 1)
+        cprintf("kalloc_refill_local: drop bad global run=%p drops=%u\n",
+                r, kmem.invalid_global_drops);
+
+      // If we can safely read the run header, unlink this node and continue.
+      // Otherwise bail out of refill to avoid dereferencing poisoned memory.
+      if(kaddr_writable_current_pgdir((char*)r))
+        kmem.freelist = r->next;
+      else
+        kmem.freelist = 0;
+      continue;
+    }
     kmem.freelist = r->next;
     batch[n++] = r;
   }
@@ -307,7 +327,8 @@ kfree(char *v)
 
   pa = V2P(v);
   meta = kpage_meta_pa(pa);
-  if(meta == 0 || (meta->flags & KPAGE_MANAGED) == 0)
+  if(meta == 0 || !kaddr_writable_current_pgdir((char*)meta) ||
+     (meta->flags & KPAGE_MANAGED) == 0)
     panic("kfree unmanaged");
 
   /*
@@ -405,7 +426,8 @@ kalloc(void)
         kmem.free_pages--;
       pa = V2P((char*)r);
       meta = kpage_meta_pa(pa);
-      if(meta == 0 || (meta->flags & KPAGE_MANAGED) == 0)
+      if(meta == 0 || !kaddr_writable_current_pgdir((char*)meta) ||
+         (meta->flags & KPAGE_MANAGED) == 0)
         panic("kalloc early unmanaged");
       meta->flags &= ~KPAGE_FREE;
       meta->refcount = 1;
@@ -427,7 +449,8 @@ kalloc(void)
     __sync_fetch_and_sub(&kmem.free_pages, 1);
     pa = V2P((char*)r);
     meta = kpage_meta_pa(pa);
-    if(meta == 0 || (meta->flags & KPAGE_MANAGED) == 0)
+    if(meta == 0 || !kaddr_writable_current_pgdir((char*)meta) ||
+       (meta->flags & KPAGE_MANAGED) == 0)
       panic("kalloc cache unmanaged");
     meta->flags &= ~KPAGE_FREE;
     meta->refcount = 1;
@@ -446,7 +469,8 @@ kalloc(void)
     __sync_fetch_and_sub(&kmem.free_pages, 1);
     pa = V2P((char*)r);
     meta = kpage_meta_pa(pa);
-    if(meta == 0 || (meta->flags & KPAGE_MANAGED) == 0)
+    if(meta == 0 || !kaddr_writable_current_pgdir((char*)meta) ||
+       (meta->flags & KPAGE_MANAGED) == 0)
       panic("kalloc refill unmanaged");
     meta->flags &= ~KPAGE_FREE;
     meta->refcount = 1;

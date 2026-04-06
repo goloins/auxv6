@@ -642,7 +642,14 @@ proc_handle_signals_on_return(struct proc *p)
 // Must be called with interrupts disabled
 int
 cpuid() {
-  return mycpu()-cpus;
+  struct cpu *c;
+  int id;
+
+  pushcli();
+  c = mycpu();
+  id = c - cpus;
+  popcli();
+  return id;
 }
 
 // Must be called with interrupts disabled to avoid the caller being
@@ -658,11 +665,20 @@ mycpu(void)
   if(readeflags()&FL_IF)
     panic("mycpu called with interrupts enabled\n");
 
+  // Early bootstrap path: before SMP tables are fully usable, route all
+  // calls to CPU0 to avoid spurious panics that hide real boot output.
+  if(ncpu <= 1)
+    return &cpus[0];
+
   // O(1) reverse lookup through the table built at mpinit().
   apicid = (uchar)lapicid();
   idx = apic_cpu_map[apicid];
-  if(idx != 0xff)
-    return &cpus[idx];
+  if(idx != 0xff){
+    if((int)idx < ncpu && cpus[idx].apicid == apicid)
+      return &cpus[idx];
+    // Reverse map entry exists but is stale/corrupted; rebuild below.
+    apic_cpu_map[apicid] = 0xff;
+  }
 
   // Recover if the reverse map entry was clobbered at runtime.
   for(i = 0; i < ncpu; i++){
@@ -677,8 +693,11 @@ mycpu(void)
   apicid2 = (uchar)lapicid();
   if(apicid2 != apicid){
     idx = apic_cpu_map[apicid2];
-    if(idx != 0xff)
-      return &cpus[idx];
+    if(idx != 0xff){
+      if((int)idx < ncpu && cpus[idx].apicid == apicid2)
+        return &cpus[idx];
+      apic_cpu_map[apicid2] = 0xff;
+    }
     for(i = 0; i < ncpu; i++){
       if(cpus[i].apicid == apicid2){
         apic_cpu_map[apicid2] = (uchar)i;

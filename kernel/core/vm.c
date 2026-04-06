@@ -11,6 +11,34 @@
 
 extern char data[];  // defined by kernel.ld
 pde_t *kpgdir;  // for use in scheduler()
+static uint vm_bad_pte_drops;
+static uint vm_kernel_pde_repairs;
+
+static void
+vm_sync_kernel_pdes(pde_t *pgdir)
+{
+  uint i;
+  uint repaired;
+
+  if(pgdir == 0 || kpgdir == 0)
+    return;
+
+  repaired = 0;
+  for(i = PDX(KERNBASE); i < NPDENTRIES; i++){
+    if(pgdir[i] != kpgdir[i]){
+      pgdir[i] = kpgdir[i];
+      repaired++;
+    }
+  }
+
+  if(repaired > 0){
+    vm_kernel_pde_repairs += repaired;
+    if((vm_kernel_pde_repairs & 0x3f) == repaired){
+      cprintf("vm_sync_kernel_pdes: repaired=%u total=%u pgdir=%p\n",
+              repaired, vm_kernel_pde_repairs, pgdir);
+    }
+  }
+}
 
 // Set up CPU's kernel segment descriptors.
 // Run once on entry on each CPU.
@@ -40,10 +68,25 @@ walkpgdir(pde_t *pgdir, const void *va, int alloc)
 {
   pde_t *pde;
   pte_t *pgtab;
+  uint pa;
 
   pde = &pgdir[PDX(va)];
   if(*pde & PTE_P){
-    pgtab = (pte_t*)P2V(PTE_ADDR(*pde));
+    pa = PTE_ADDR(*pde);
+    if(pa == 0 || pa >= PHYSTOP || pa >= KERNBASE){
+      cprintf("walkpgdir: bad pde pgdir=%p va=%p pde=%p raw=%x pa=%x\n",
+              pgdir, va, pde, *pde, pa);
+      *pde = 0;
+      if(!alloc)
+        return 0;
+      pgtab = (pte_t*)kalloc();
+      if(pgtab == 0)
+        return 0;
+      memset(pgtab, 0, PGSIZE);
+      *pde = V2P(pgtab) | PTE_P | PTE_W | PTE_U;
+    } else {
+      pgtab = (pte_t*)P2V(pa);
+    }
   } else {
     if(!alloc || (pgtab = (pte_t*)kalloc()) == 0)
       return 0;
@@ -174,6 +217,9 @@ switchuvm(struct proc *p)
   if(p->pgdir == 0)
     panic("switchuvm: no pgdir");
 
+  // Enforce canonical kernel-half mappings for every process before switch.
+  vm_sync_kernel_pdes(p->pgdir);
+
   pushcli();
   mycpu()->gdt[SEG_TSS] = SEG16(STS_T32A, &mycpu()->ts,
                                 sizeof(mycpu()->ts)-1, 0);
@@ -274,6 +320,8 @@ int
 deallocuvm(pde_t *pgdir, uint oldsz, uint newsz)
 {
   pte_t *pte;
+  int rel;
+  int bad;
   uint a;
 
   if(pgdir == 0)
@@ -292,16 +340,25 @@ deallocuvm(pde_t *pgdir, uint oldsz, uint newsz)
   if(newsz >= oldsz)
     return oldsz;
 
+  bad = 0;
   a = PGROUNDUP(newsz);
   for(; a  < oldsz; a += PGSIZE){
     pte = walkpgdir(pgdir, (char*)a, 0);
     if(!pte)
       a = PGADDR(PDX(a) + 1, 0, 0) - PGSIZE;
     else if((*pte & PTE_P) != 0){
-      if(uvm_release_pte(pte) < 0)
+      rel = uvm_release_pte(pte);
+      if(rel == -2){
+        bad++;
+        continue;
+      }
+      if(rel < 0)
         panic("deallocuvm");
     }
   }
+  if(bad > 0)
+    cprintf("deallocuvm: dropped %d bad user ptes pgdir=%p oldsz=%u newsz=%u\n",
+            bad, pgdir, oldsz, newsz);
   return newsz;
 }
 
@@ -311,14 +368,24 @@ void
 freevm(pde_t *pgdir)
 {
   uint i;
+  uint raw;
+  uint pa;
 
   if(pgdir == 0)
     panic("freevm: no pgdir");
   deallocuvm(pgdir, KERNBASE, 0);
   for(i = 0; i < NPDENTRIES; i++){
     if(pgdir[i] & PTE_P){
-      char * v = P2V(PTE_ADDR(pgdir[i]));
-      kfree(v);
+      raw = pgdir[i];
+      pa = PTE_ADDR(raw);
+      if(pa == 0 || pa >= PHYSTOP || pa >= KERNBASE){
+        cprintf("freevm: skip bad pde pgdir=%p idx=%u raw=%x pa=%x\n",
+                pgdir, i, raw, pa);
+        pgdir[i] = 0;
+        continue;
+      }
+      kfree(P2V(pa));
+      pgdir[i] = 0;
     }
   }
   kfree((char*)pgdir);
@@ -468,10 +535,14 @@ uvm_release_pte(uint *pte)
   pa = PTE_ADDR(*pte);
   if(pa == 0)
     return -1;
-  if(pa >= PHYSTOP || pa >= KERNBASE){
-    cprintf("uvm_release_pte: bad pa pte=%p raw=%x pa=%x flags=%x\n",
-            pte, raw, pa, PTE_FLAGS(raw));
-    panic("uvm_release_pte pa");
+  if(pa >= PHYSTOP || pa >= KERNBASE || !kpage_is_managed(pa)){
+    vm_bad_pte_drops++;
+    if((vm_bad_pte_drops & 0x3f) == 1){
+      cprintf("uvm_release_pte: drop bad pte=%p raw=%x pa=%x flags=%x drops=%u\n",
+              pte, raw, pa, PTE_FLAGS(raw), vm_bad_pte_drops);
+    }
+    *pte = 0;
+    return -2;
   }
 
   // Phase 3 scaffolding: release through allocator refcount path so

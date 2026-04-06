@@ -664,6 +664,9 @@ readi(struct inode *ip, char *dst, uint64_t off, uint n)
   uint tot, m;
   struct buf *bp;
   struct proc *p;
+  char *kbuf;
+  int r;
+  int want;
 
   if(ip->dev == PROCFSDEV)
     return procfs_readi(ip, dst, off, n);
@@ -671,7 +674,41 @@ readi(struct inode *ip, char *dst, uint64_t off, uint n)
   if(ip->type == T_DEV){
     if(ip->major < 0 || ip->major >= NDEV || !devsw[ip->major].read)
       return -1;
-    return devsw[ip->major].read(ip, dst, off, n);
+    if((uint)dst >= KERNBASE)
+      return devsw[ip->major].read(ip, dst, off, n);
+
+    p = myproc();
+    if(p == 0 || p->pgdir == 0)
+      return -1;
+
+    if(n == 0)
+      return 0;
+
+    kbuf = (char*)kmalloc(PGSIZE);
+    if(kbuf == 0)
+      return -1;
+
+    tot = 0;
+    while(tot < n){
+      want = (int)(n - tot);
+      if(want > PGSIZE)
+        want = PGSIZE;
+      r = devsw[ip->major].read(ip, kbuf, off + tot, want);
+      if(r <= 0)
+        break;
+      if(copyout(p->pgdir, (uint)(dst + tot), kbuf, (uint)r) < 0){
+        kmalloc_free(kbuf);
+        return (tot > 0) ? (int)tot : -1;
+      }
+      tot += (uint)r;
+      if(r < want)
+        break;
+    }
+
+    kmalloc_free(kbuf);
+    if(tot > 0)
+      return (int)tot;
+    return r;
   }
 
   if(off > ip->size || off + n < off)
@@ -706,6 +743,9 @@ writei(struct inode *ip, char *src, uint64_t off, uint n)
   uint tot, m;
   struct buf *bp;
   struct proc *p;
+  char *kbuf;
+  int r;
+  int want;
 
   if(ip->dev == PROCFSDEV)
     return -1;
@@ -713,7 +753,41 @@ writei(struct inode *ip, char *src, uint64_t off, uint n)
   if(ip->type == T_DEV){
     if(ip->major < 0 || ip->major >= NDEV || !devsw[ip->major].write)
       return -1;
-    return devsw[ip->major].write(ip, src, off, n);
+    if((uint)src >= KERNBASE)
+      return devsw[ip->major].write(ip, src, off, n);
+
+    p = myproc();
+    if(p == 0 || p->pgdir == 0)
+      return -1;
+
+    if(n == 0)
+      return 0;
+
+    kbuf = (char*)kmalloc(PGSIZE);
+    if(kbuf == 0)
+      return -1;
+
+    tot = 0;
+    while(tot < n){
+      want = (int)(n - tot);
+      if(want > PGSIZE)
+        want = PGSIZE;
+      if(copyin(p->pgdir, kbuf, (uint)(src + tot), (uint)want) < 0){
+        kmalloc_free(kbuf);
+        return (tot > 0) ? (int)tot : -1;
+      }
+      r = devsw[ip->major].write(ip, kbuf, off + tot, want);
+      if(r <= 0)
+        break;
+      tot += (uint)r;
+      if(r < want)
+        break;
+    }
+
+    kmalloc_free(kbuf);
+    if(tot > 0)
+      return (int)tot;
+    return r;
   }
 
   if(off > ip->size || off + n < off)

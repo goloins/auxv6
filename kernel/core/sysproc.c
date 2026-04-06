@@ -191,25 +191,11 @@ sys_sigaction(void)
   int signo;
   int actaddr;
   int oldactaddr;
-  uint *act;
-  uint *oldact;
 
   if(argint(0, &signo) < 0 || argint(1, &actaddr) < 0 || argint(2, &oldactaddr) < 0)
     return -1;
 
-  act = 0;
-  if(actaddr != 0) {
-    if(argptr(1, (char**)&act, sizeof(uint) * 3) < 0)
-      return -1;
-  }
-
-  oldact = 0;
-  if(oldactaddr != 0) {
-    if(argptr(2, (char**)&oldact, sizeof(uint) * 3) < 0)
-      return -1;
-  }
-
-  return proc_sigaction(signo, (uint)act, (uint)oldact);
+  return proc_sigaction(signo, (uint)actaddr, (uint)oldactaddr);
 }
 
 int
@@ -218,25 +204,11 @@ sys_sigprocmask(void)
   int how;
   int setaddr;
   int oldsetaddr;
-  sigset_t *set;
-  sigset_t *oldset;
 
   if(argint(0, &how) < 0 || argint(1, &setaddr) < 0 || argint(2, &oldsetaddr) < 0)
     return -1;
 
-  set = 0;
-  if(setaddr != 0) {
-    if(argptr(1, (char**)&set, sizeof(sigset_t)) < 0)
-      return -1;
-  }
-
-  oldset = 0;
-  if(oldsetaddr != 0) {
-    if(argptr(2, (char**)&oldset, sizeof(sigset_t)) < 0)
-      return -1;
-  }
-
-  return proc_sigprocmask(how, (uint)set, (uint)oldset);
+  return proc_sigprocmask(how, (uint)setaddr, (uint)oldsetaddr);
 }
 
 // Restore context from signal frame on user stack.
@@ -495,18 +467,11 @@ sys_tcgetattr(void)
 {
   int fd;
   int termios_addr;
-  struct termios *tp;
 
   if(argint(0, &fd) < 0 || argint(1, &termios_addr) < 0)
     return -1;
 
-  tp = 0;
-  if(termios_addr != 0) {
-    if(argptr(1, (char**)&tp, sizeof(struct termios)) < 0)
-      return -1;
-  }
-
-  return proc_tcgetattr(fd, (uint)tp);
+  return proc_tcgetattr(fd, (uint)termios_addr);
 }
 
 int
@@ -515,19 +480,24 @@ sys_tcsetattr(void)
   int fd;
   int optional_actions;
   int termios_addr;
-  struct termios *tp;
 
   if(argint(0, &fd) < 0 || argint(1, &optional_actions) < 0 ||
      argint(2, &termios_addr) < 0)
     return -1;
 
-  tp = 0;
-  if(termios_addr != 0) {
-    if(argptr(2, (char**)&tp, sizeof(struct termios)) < 0)
-      return -1;
-  }
+  return proc_tcsetattr(fd, optional_actions, (uint)termios_addr);
+}
 
-  return proc_tcsetattr(fd, optional_actions, (uint)tp);
+static int
+tty_ioctl_dispatch(struct file *f, int fd, int tty_major, int request, uint arg)
+{
+  if(tty_major == CONSOLE)
+    return console_ioctl(fd, request, arg);
+  if(tty_major == PTYDEV)
+    return pty_ioctl_file(f, request, arg);
+  if(tty_major == SERIALDEV)
+    return serial_ioctl_file(f, request, arg);
+  return -1;
 }
 
 int
@@ -767,10 +737,13 @@ sys_setrlimit(void)
     int fd;
     int request;
     int arg_size;
-    char *arg_ptr;
+    int arg_raw;
+    uint arg_u;
+    char *karg;
     int arg_int;
     int tty_major;
     struct file *f;
+    struct proc *p;
 
     if(argint(0, &fd) < 0 || argint(1, &request) < 0)
       return -1;
@@ -787,9 +760,24 @@ sys_setrlimit(void)
       arg_size = audio_ioctl_arg_size(request);
       if(arg_size <= 0)
         return -1;
-      if(argptr(2, &arg_ptr, arg_size) < 0)
+      if(argint(2, &arg_raw) < 0)
         return -1;
-      return audio_ioctl_file(f, request, (uint)arg_ptr);
+      arg_u = (uint)arg_raw;
+      p = myproc();
+      if(p == 0 || p->pgdir == 0)
+        return -1;
+      karg = (char*)kmalloc((uint)arg_size);
+      if(karg == 0)
+        return -1;
+      if(copyin(p->pgdir, karg, arg_u, (uint)arg_size) < 0){
+        kmalloc_free(karg);
+        return -1;
+      }
+      arg_int = audio_ioctl_file(f, request, (uint)karg);
+      if(arg_int >= 0 && copyout(p->pgdir, arg_u, karg, (uint)arg_size) < 0)
+        arg_int = -1;
+      kmalloc_free(karg);
+      return arg_int;
     }
 
     if(tuntap_is_ioctl(request)){
@@ -804,9 +792,24 @@ sys_setrlimit(void)
           return -1;
         return tuntap_ioctl_file(f, request, (uint)arg_int);
       }
-      if(argptr(2, &arg_ptr, arg_size) < 0)
+      if(argint(2, &arg_raw) < 0)
         return -1;
-      return tuntap_ioctl_file(f, request, (uint)arg_ptr);
+      arg_u = (uint)arg_raw;
+      p = myproc();
+      if(p == 0 || p->pgdir == 0)
+        return -1;
+      karg = (char*)kmalloc((uint)arg_size);
+      if(karg == 0)
+        return -1;
+      if(copyin(p->pgdir, karg, arg_u, (uint)arg_size) < 0){
+        kmalloc_free(karg);
+        return -1;
+      }
+      arg_int = tuntap_ioctl_file(f, request, (uint)karg);
+      if(arg_int >= 0 && copyout(p->pgdir, arg_u, karg, (uint)arg_size) < 0)
+        arg_int = -1;
+      kmalloc_free(karg);
+      return arg_int;
     }
 
     if(!proc_is_tty_fd(fd))
@@ -821,59 +824,104 @@ sys_setrlimit(void)
     case 0x5402:  /* TCSETS */
     case 0x5403:  /* TCSETSW */
     case 0x5404:  /* TCSETSF */
-      if(argptr(2, &arg_ptr, sizeof(struct termios)) < 0)
+      if(argint(2, &arg_raw) < 0)
         return -1;
-      if(tty_major == CONSOLE)
-        return console_ioctl(fd, request, (uint)arg_ptr);
-      if(tty_major == PTYDEV)
-        return pty_ioctl_file(f, request, (uint)arg_ptr);
-      if(tty_major == SERIALDEV)
-        return serial_ioctl_file(f, request, (uint)arg_ptr);
-      return -1;
+      arg_u = (uint)arg_raw;
+      p = myproc();
+      if(p == 0 || p->pgdir == 0)
+        return -1;
+      karg = (char*)kmalloc(sizeof(struct termios));
+      if(karg == 0)
+        return -1;
+      if(copyin(p->pgdir, karg, arg_u, sizeof(struct termios)) < 0){
+        kmalloc_free(karg);
+        return -1;
+      }
+      arg_int = tty_ioctl_dispatch(f, fd, tty_major, request, (uint)karg);
+      if(arg_int >= 0 && copyout(p->pgdir, arg_u, karg, sizeof(struct termios)) < 0)
+        arg_int = -1;
+      kmalloc_free(karg);
+      return arg_int;
 
     case 0x5413:  /* TIOCGWINSZ */
-      if(argptr(2, &arg_ptr, sizeof(struct winsize)) < 0)
+      if(argint(2, &arg_raw) < 0)
         return -1;
-      if(tty_major == CONSOLE)
-        return console_ioctl(fd, request, (uint)arg_ptr);
-      if(tty_major == PTYDEV)
-        return pty_ioctl_file(f, request, (uint)arg_ptr);
-      if(tty_major == SERIALDEV)
-        return serial_ioctl_file(f, request, (uint)arg_ptr);
-      return -1;
+      arg_u = (uint)arg_raw;
+      p = myproc();
+      if(p == 0 || p->pgdir == 0)
+        return -1;
+      karg = (char*)kmalloc(sizeof(struct winsize));
+      if(karg == 0)
+        return -1;
+      if(copyin(p->pgdir, karg, arg_u, sizeof(struct winsize)) < 0){
+        kmalloc_free(karg);
+        return -1;
+      }
+      arg_int = tty_ioctl_dispatch(f, fd, tty_major, request, (uint)karg);
+      if(arg_int >= 0 && copyout(p->pgdir, arg_u, karg, sizeof(struct winsize)) < 0)
+        arg_int = -1;
+      kmalloc_free(karg);
+      return arg_int;
 
     case 0x5414:  /* TIOCSWINSZ */
-      if(argptr(2, &arg_ptr, sizeof(struct winsize)) < 0)
+      if(argint(2, &arg_raw) < 0)
         return -1;
-      if(tty_major == CONSOLE)
-        return console_ioctl(fd, request, (uint)arg_ptr);
-      if(tty_major == PTYDEV)
-        return pty_ioctl_file(f, request, (uint)arg_ptr);
-      if(tty_major == SERIALDEV)
-        return serial_ioctl_file(f, request, (uint)arg_ptr);
-      return -1;
+      arg_u = (uint)arg_raw;
+      p = myproc();
+      if(p == 0 || p->pgdir == 0)
+        return -1;
+      karg = (char*)kmalloc(sizeof(struct winsize));
+      if(karg == 0)
+        return -1;
+      if(copyin(p->pgdir, karg, arg_u, sizeof(struct winsize)) < 0){
+        kmalloc_free(karg);
+        return -1;
+      }
+      arg_int = tty_ioctl_dispatch(f, fd, tty_major, request, (uint)karg);
+      if(arg_int >= 0 && copyout(p->pgdir, arg_u, karg, sizeof(struct winsize)) < 0)
+        arg_int = -1;
+      kmalloc_free(karg);
+      return arg_int;
 
     case 0x540F:  /* TIOCGPGRP */
-      if(argptr(2, &arg_ptr, sizeof(int)) < 0)
+      if(argint(2, &arg_raw) < 0)
         return -1;
-      if(tty_major == CONSOLE)
-        return console_ioctl(fd, request, (uint)arg_ptr);
-      if(tty_major == PTYDEV)
-        return pty_ioctl_file(f, request, (uint)arg_ptr);
-      if(tty_major == SERIALDEV)
-        return serial_ioctl_file(f, request, (uint)arg_ptr);
-      return -1;
+      arg_u = (uint)arg_raw;
+      p = myproc();
+      if(p == 0 || p->pgdir == 0)
+        return -1;
+      karg = (char*)kmalloc(sizeof(int));
+      if(karg == 0)
+        return -1;
+      if(copyin(p->pgdir, karg, arg_u, sizeof(int)) < 0){
+        kmalloc_free(karg);
+        return -1;
+      }
+      arg_int = tty_ioctl_dispatch(f, fd, tty_major, request, (uint)karg);
+      if(arg_int >= 0 && copyout(p->pgdir, arg_u, karg, sizeof(int)) < 0)
+        arg_int = -1;
+      kmalloc_free(karg);
+      return arg_int;
 
     case 0x5410:  /* TIOCSPGRP */
-      if(argptr(2, &arg_ptr, sizeof(int)) < 0)
+      if(argint(2, &arg_raw) < 0)
         return -1;
-      if(tty_major == CONSOLE)
-        return console_ioctl(fd, request, (uint)arg_ptr);
-      if(tty_major == PTYDEV)
-        return pty_ioctl_file(f, request, (uint)arg_ptr);
-      if(tty_major == SERIALDEV)
-        return serial_ioctl_file(f, request, (uint)arg_ptr);
-      return -1;
+      arg_u = (uint)arg_raw;
+      p = myproc();
+      if(p == 0 || p->pgdir == 0)
+        return -1;
+      karg = (char*)kmalloc(sizeof(int));
+      if(karg == 0)
+        return -1;
+      if(copyin(p->pgdir, karg, arg_u, sizeof(int)) < 0){
+        kmalloc_free(karg);
+        return -1;
+      }
+      arg_int = tty_ioctl_dispatch(f, fd, tty_major, request, (uint)karg);
+      if(arg_int >= 0 && copyout(p->pgdir, arg_u, karg, sizeof(int)) < 0)
+        arg_int = -1;
+      kmalloc_free(karg);
+      return arg_int;
 
     case 0x540E:  /* TIOCSCTTY */
       if(argint(2, &arg_int) < 0)
@@ -904,15 +952,24 @@ sys_setrlimit(void)
     case 0x5417:  /* TIOCMBIC */
     case 0x5418:  /* TIOCMSET */
     case 0x80045430: /* TIOCGPTN */
-      if(argptr(2, &arg_ptr, sizeof(int)) < 0)
+      if(argint(2, &arg_raw) < 0)
         return -1;
-      if(tty_major == CONSOLE)
-        return console_ioctl(fd, request, (uint)arg_ptr);
-      if(tty_major == PTYDEV)
-        return pty_ioctl_file(f, request, (uint)arg_ptr);
-      if(tty_major == SERIALDEV)
-        return serial_ioctl_file(f, request, (uint)arg_ptr);
-      return -1;
+      arg_u = (uint)arg_raw;
+      p = myproc();
+      if(p == 0 || p->pgdir == 0)
+        return -1;
+      karg = (char*)kmalloc(sizeof(int));
+      if(karg == 0)
+        return -1;
+      if(copyin(p->pgdir, karg, arg_u, sizeof(int)) < 0){
+        kmalloc_free(karg);
+        return -1;
+      }
+      arg_int = tty_ioctl_dispatch(f, fd, tty_major, request, (uint)karg);
+      if(arg_int >= 0 && copyout(p->pgdir, arg_u, karg, sizeof(int)) < 0)
+        arg_int = -1;
+      kmalloc_free(karg);
+      return arg_int;
 
     case 0x54A3:  /* TIOCISATTY */
       if(tty_major == CONSOLE)
@@ -924,15 +981,24 @@ sys_setrlimit(void)
       return -1;
 
     case 0x54A0:  /* TIOCGACTTTY */
-      if(argptr(2, &arg_ptr, sizeof(int)) < 0)
+      if(argint(2, &arg_raw) < 0)
         return -1;
-      if(tty_major == CONSOLE)
-        return console_ioctl(fd, request, (uint)arg_ptr);
-      if(tty_major == PTYDEV)
-        return pty_ioctl_file(f, request, (uint)arg_ptr);
-      if(tty_major == SERIALDEV)
-        return serial_ioctl_file(f, request, (uint)arg_ptr);
-      return -1;
+      arg_u = (uint)arg_raw;
+      p = myproc();
+      if(p == 0 || p->pgdir == 0)
+        return -1;
+      karg = (char*)kmalloc(sizeof(int));
+      if(karg == 0)
+        return -1;
+      if(copyin(p->pgdir, karg, arg_u, sizeof(int)) < 0){
+        kmalloc_free(karg);
+        return -1;
+      }
+      arg_int = tty_ioctl_dispatch(f, fd, tty_major, request, (uint)karg);
+      if(arg_int >= 0 && copyout(p->pgdir, arg_u, karg, sizeof(int)) < 0)
+        arg_int = -1;
+      kmalloc_free(karg);
+      return arg_int;
 
     case 0x54A1:  /* TIOCSACTTTY */
       if(argint(2, &arg_int) < 0)
@@ -946,15 +1012,24 @@ sys_setrlimit(void)
       return -1;
 
     case 0x54A2:  /* TIOCGNTTY */
-      if(argptr(2, &arg_ptr, sizeof(int)) < 0)
+      if(argint(2, &arg_raw) < 0)
         return -1;
-      if(tty_major == CONSOLE)
-        return console_ioctl(fd, request, (uint)arg_ptr);
-      if(tty_major == PTYDEV)
-        return pty_ioctl_file(f, request, (uint)arg_ptr);
-      if(tty_major == SERIALDEV)
-        return serial_ioctl_file(f, request, (uint)arg_ptr);
-      return -1;
+      arg_u = (uint)arg_raw;
+      p = myproc();
+      if(p == 0 || p->pgdir == 0)
+        return -1;
+      karg = (char*)kmalloc(sizeof(int));
+      if(karg == 0)
+        return -1;
+      if(copyin(p->pgdir, karg, arg_u, sizeof(int)) < 0){
+        kmalloc_free(karg);
+        return -1;
+      }
+      arg_int = tty_ioctl_dispatch(f, fd, tty_major, request, (uint)karg);
+      if(arg_int >= 0 && copyout(p->pgdir, arg_u, karg, sizeof(int)) < 0)
+        arg_int = -1;
+      kmalloc_free(karg);
+      return arg_int;
 
     default:
       return -1;

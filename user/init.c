@@ -73,12 +73,17 @@ static void
 run_runlevel_script(char target)
 {
   int pid;
+  int i;
   char script_path[] = "/etc/rc.d/rc.X";
   char *script_argv[] = { "dash", script_path, 0 };
 
   script_path[13] = target;
   pid = fork();
   if(pid == 0){
+    dprintf(1, "init: runlevel argv1 ptr=%p bytes:", script_path);
+    for(i = 0; i < (int)sizeof(script_path); i++)
+      dprintf(1, " %02x", (uchar)script_path[i]);
+    dprintf(1, "\n");
     dprintf(1, "init: child executing runlevel script %s\n", script_path);
     exec("/bin/dash", script_argv);
     dprintf(1, "init: runlevel script %s missing or failed\n", script_path);

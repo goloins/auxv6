@@ -2,6 +2,7 @@
 #include "param.h"
 #include "defs.h"
 #include "stat.h"
+#include "memlayout.h"
 #include "fs.h"
 #include "spinlock.h"
 #include "sleeplock.h"
@@ -593,6 +594,9 @@ int
 audio_filewrite(struct file *f, char *src, int n)
 {
   struct audio_stream *s;
+  struct proc *p;
+  int user_src;
+  char kchunk[256];
   uint32_t frame_bytes;
   int copied;
   int chunk;
@@ -605,6 +609,11 @@ audio_filewrite(struct file *f, char *src, int n)
   if(!audio_is_stream_minor(f->ip->minor))
     return -1;
   if(n < 0)
+    return -1;
+
+  user_src = ((uint)src < KERNBASE);
+  p = user_src ? myproc() : 0;
+  if(user_src && (p == 0 || p->pgdir == 0))
     return -1;
 
   /* Service pending AC97 completions even when IRQ delivery is absent. */
@@ -665,7 +674,17 @@ audio_filewrite(struct file *f, char *src, int n)
     if(chunk > (int)(s->ring_size - s->ring_tail))
       chunk = (int)(s->ring_size - s->ring_tail);
 
-    memmove(&s->ring[s->ring_tail], &src[copied], (uint)chunk);
+    if(user_src){
+      if(chunk > (int)sizeof(kchunk))
+        chunk = sizeof(kchunk);
+      if(copyin(p->pgdir, kchunk, (uint)(src + copied), (uint)chunk) < 0){
+        release(&audio_core.lock);
+        return (copied > 0) ? copied : -1;
+      }
+      memmove(&s->ring[s->ring_tail], kchunk, (uint)chunk);
+    } else {
+      memmove(&s->ring[s->ring_tail], &src[copied], (uint)chunk);
+    }
     s->ring_tail = (s->ring_tail + (uint32_t)chunk) % s->ring_size;
     s->sw_ptr_bytes += (uint64_t)chunk;
     audio_stream_update_queue_frames(s);

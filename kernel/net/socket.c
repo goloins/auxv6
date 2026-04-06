@@ -802,10 +802,11 @@ sys_socket(void)
 int
 sys_bind(void)
 {
-  int sockfd, addrlen;
+  int sockfd, addrlen, addr_raw;
   int i;
   struct socket *s;
-  struct sockaddr_in *addr;
+  struct sockaddr_in addr;
+  struct proc *p;
   
   if(argint(0, &sockfd) < 0 || argint(2, &addrlen) < 0)
     return -1;
@@ -815,7 +816,13 @@ sys_bind(void)
     return -1;
   }
   
-  if(argptr(1, (char**)&addr, addrlen) < 0)
+  if(argint(1, &addr_raw) < 0)
+    return -1;
+
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+  if(copyin(p->pgdir, &addr, (uint)addr_raw, sizeof(addr)) < 0)
     return -1;
   
   // Get socket from fd
@@ -825,26 +832,26 @@ sys_bind(void)
     return -1;
   }
 
-  if(addr->sin_port == 0)
+  if(addr.sin_port == 0)
     return -1;
   
   acquire(&socket_lock);
 
   // Check for port conflict; allow if both sockets have SO_REUSEADDR.
-  if(addr->sin_port != 0) {
+  if(addr.sin_port != 0) {
     for(i = 0; i < NSOCKET; i++) {
       if(&sockets[i] == s)
         continue;
       if(sockets[i].ref == 0)
         continue;
-      if(sockets[i].family != addr->sin_family)
+      if(sockets[i].family != addr.sin_family)
         continue;
-      if(sockets[i].local_addr.sin_port != addr->sin_port)
+      if(sockets[i].local_addr.sin_port != addr.sin_port)
         continue;
       // Check address overlap: INADDR_ANY overlaps with everything.
-      if(addr->sin_addr != INADDR_ANY &&
+      if(addr.sin_addr != INADDR_ANY &&
          sockets[i].local_addr.sin_addr != INADDR_ANY &&
-         sockets[i].local_addr.sin_addr != addr->sin_addr)
+         sockets[i].local_addr.sin_addr != addr.sin_addr)
         continue;
       // Port is in use.  Allow only if both sides have SO_REUSEADDR.
       if(!s->reuseaddr || !sockets[i].reuseaddr) {
@@ -854,7 +861,7 @@ sys_bind(void)
     }
   }
 
-  memmove(&s->local_addr, addr, sizeof(struct sockaddr_in));
+  memmove(&s->local_addr, &addr, sizeof(struct sockaddr_in));
   s->state = SOCK_BOUND;
   release(&socket_lock);
   
@@ -867,27 +874,34 @@ sys_bind(void)
 int
 sys_connect(void)
 {
-  int sockfd, addrlen;
+  int sockfd, addrlen, addr_raw;
   struct socket *s;
-  struct sockaddr_in *addr;
+  struct sockaddr_in addr;
   struct ifnet *ifp;
   uint route_src;
+  struct proc *p;
 
   if(argint(0, &sockfd) < 0 || argint(2, &addrlen) < 0)
     return -1;
   if(addrlen != sizeof(struct sockaddr_in))
     return -1;
-  if(argptr(1, (char**)&addr, addrlen) < 0)
+  if(argint(1, &addr_raw) < 0)
+    return -1;
+
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+  if(copyin(p->pgdir, &addr, (uint)addr_raw, sizeof(addr)) < 0)
     return -1;
 
   s = getfd_socket(sockfd);
   if(!s)
     return -1;
-  if(addr->sin_family != AF_INET)
+  if(addr.sin_family != AF_INET)
     return -1;
 
   route_src = 0;
-  ifp = route_lookup(addr->sin_addr, &route_src, 0);
+  ifp = route_lookup(addr.sin_addr, &route_src, 0);
   if(ifp == 0)
     return -1;
 
@@ -897,10 +911,10 @@ sys_connect(void)
   release(&socket_lock);
 
   if(s->type == SOCK_STREAM)
-    return tcp_connect(ifp, s, addr);
+    return tcp_connect(ifp, s, &addr);
 
   acquire(&socket_lock);
-  memmove(&s->remote_addr, addr, sizeof(struct sockaddr_in));
+  memmove(&s->remote_addr, &addr, sizeof(struct sockaddr_in));
   s->state = SOCK_CONNECT;
   release(&socket_lock);
 
@@ -996,8 +1010,9 @@ sys_accept(void)
 int
 sys_send(void)
 {
-  int sockfd, len;
-  char *buf;
+  int sockfd, len, buf_raw;
+  uint buf_u;
+  char *kbuf;
   struct socket *s;
   struct sockaddr_in src;
   struct sockaddr_in dst;
@@ -1006,15 +1021,37 @@ sys_send(void)
   uint tcp_state;
   struct ifnet *ifp;
   uint route_src;
+  struct proc *p;
 
   if(argint(0, &sockfd) < 0 || argint(2, &len) < 0)
     return -1;
   if(len < 0)
     return -1;
+  if(argint(1, &buf_raw) < 0)
+    return -1;
+
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+  buf_u = (uint)buf_raw;
+
+  if(len == 0)
+    return 0;
+
+  kbuf = (char*)kmalloc((uint)len);
+  if(kbuf == 0)
+    return -1;
+  if(copyin(p->pgdir, kbuf, buf_u, (uint)len) < 0){
+    kmalloc_free(kbuf);
+    return -1;
+  }
 
   s = getfd_socket(sockfd);
   if(!s)
+  {
+    kmalloc_free(kbuf);
     return -1;
+  }
 
   acquire(&socket_lock);
   if(s->shut_wr) {
@@ -1028,65 +1065,67 @@ sys_send(void)
   tcp_state = s->tcp.state;
   release(&socket_lock);
 
-  // Validate buf pointer — type-specific size check below.
-  if(argptr(1, &buf, len) < 0)
-    return -1;
-
   route_src = 0;
   ifp = route_lookup(dst.sin_addr, &route_src, 0);
   if(ifp == 0)
-    return -1;
+    goto send_fail;
   if(src.sin_addr == 0)
     src.sin_addr = route_src;
 
   if(type == SOCK_DGRAM) {
     if((uint)len > MBUF_SIZE - sizeof(struct udp_hdr))
-      return -1;
+      goto send_fail;
     if(src.sin_port == 0 || dst.sin_port == 0)
-      return -1;
-    if(udp_output(ifp, &src, &dst, buf, (uint)len) < 0)
-      return -1;
+      goto send_fail;
+    if(udp_output(ifp, &src, &dst, kbuf, (uint)len) < 0)
+      goto send_fail;
   } else if(type == SOCK_STREAM) {
     // TCP: send in segments; tcp_output() clamps each call to MSS.
-    const char *p = buf;
+    const char *sp = kbuf;
     int remaining = len;
     int total_sent = 0;
     int r;
 
     if(src.sin_port == 0 || dst.sin_port == 0)
-      return -1;
+      goto send_fail;
     if(tcp_state != TCPS_ESTABLISHED)
-      return -1;
+      goto send_fail;
 
     while(remaining > 0) {
-      r = tcp_output(ifp, &src, &dst, (char*)p, (uint)remaining);
+      r = tcp_output(ifp, &src, &dst, (char*)sp, (uint)remaining);
       if(r <= 0)
         break;
       total_sent += r;
-      p += r;
+      sp += r;
       remaining -= r;
     }
     if(total_sent == 0)
-      return -1;
+      goto send_fail;
+    kmalloc_free(kbuf);
     return total_sent;
   } else if(type == SOCK_RAW) {
     uchar snd_ttl;
     if((uint)len > MBUF_SIZE - sizeof(struct ip_hdr))
-      return -1;
+      goto send_fail;
     if(dst.sin_addr == 0)
-      return -1;
+      goto send_fail;
     if(src.sin_addr == 0)
       src.sin_addr = route_src;
     acquire(&socket_lock);
     snd_ttl = s->ttl ? s->ttl : 64;
     release(&socket_lock);
-    if(ip_output_ttl(ifp, (uchar)proto, src.sin_addr, dst.sin_addr, buf, (uint)len, snd_ttl) < 0)
-      return -1;
+    if(ip_output_ttl(ifp, (uchar)proto, src.sin_addr, dst.sin_addr, kbuf, (uint)len, snd_ttl) < 0)
+      goto send_fail;
   } else {
-    return -1;
+    goto send_fail;
   }
 
+  kmalloc_free(kbuf);
   return len;
+
+send_fail:
+  kmalloc_free(kbuf);
+  return -1;
 }
 
 // sendto(sockfd, buf, len, flags, dst, dstlen) syscall
@@ -1096,15 +1135,18 @@ sys_send(void)
 int
 sys_sendto(void)
 {
-  int sockfd, len, flags, dstlen, dst_raw;
-  char *buf;
+  int sockfd, len, flags, dstlen, dst_raw, buf_raw;
+  uint buf_u;
+  char *kbuf;
   struct socket *s;
-  struct sockaddr_in *dst;
+  struct sockaddr_in udst;
+  int have_dst;
   struct sockaddr_in src, rdst;
   int type;
   uint proto;
   struct ifnet *ifp;
   uint route_src;
+  struct proc *p;
 
   if(argint(0, &sockfd) < 0 || argint(2, &len) < 0)
     return -1;
@@ -1112,47 +1154,64 @@ sys_sendto(void)
     return -1;
   if(len < 0 || (uint)len > MBUF_SIZE - sizeof(struct udp_hdr))
     return -1;
-  if(argptr(1, &buf, len) < 0)
+  if(argint(1, &buf_raw) < 0)
     return -1;
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+  buf_u = (uint)buf_raw;
+
+  if(len > 0){
+    kbuf = (char*)kmalloc((uint)len);
+    if(kbuf == 0)
+      return -1;
+    if(copyin(p->pgdir, kbuf, buf_u, (uint)len) < 0){
+      kmalloc_free(kbuf);
+      return -1;
+    }
+  } else {
+    kbuf = 0;
+  }
 
   // arg4 is the destination pointer – may be 0 (NULL)
   if(argint(4, &dst_raw) < 0)
-    return -1;
-  dst = 0;
+    goto sendto_fail;
+  have_dst = 0;
   if(dst_raw != 0) {
     if(argint(5, &dstlen) < 0 || dstlen < (int)sizeof(struct sockaddr_in))
-      return -1;
-    if(argptr(4, (char**)&dst, sizeof(struct sockaddr_in)) < 0)
-      return -1;
-    if(dst->sin_family != AF_INET)
-      return -1;
+      goto sendto_fail;
+    if(copyin(p->pgdir, &udst, (uint)dst_raw, sizeof(udst)) < 0)
+      goto sendto_fail;
+    if(udst.sin_family != AF_INET)
+      goto sendto_fail;
+    have_dst = 1;
   }
 
   s = getfd_socket(sockfd);
   if(!s)
-    return -1;
+    goto sendto_fail;
 
   acquire(&socket_lock);
   type = s->type;
   proto = s->protocol;
   memmove(&src, &s->local_addr, sizeof(src));
-  if(dst)
-    memmove(&rdst, dst, sizeof(rdst));
+  if(have_dst)
+    memmove(&rdst, &udst, sizeof(rdst));
   else
     memmove(&rdst, &s->remote_addr, sizeof(rdst));
   release(&socket_lock);
 
   // Unsupported on SOCK_STREAM – use send()
   if(type != SOCK_DGRAM && type != SOCK_RAW)
-    return -1;
+    goto sendto_fail;
 
   if(rdst.sin_addr == 0)
-    return -1;
+    goto sendto_fail;
 
   route_src = 0;
   ifp = route_lookup(rdst.sin_addr, &route_src, 0);
   if(!ifp)
-    return -1;
+    goto sendto_fail;
   if(src.sin_addr == 0)
     src.sin_addr = route_src;
 
@@ -1163,7 +1222,7 @@ sys_sendto(void)
       ushort p = alloc_ephemeral_port_locked();
       if(p == 0) {
         release(&socket_lock);
-        return -1;
+        goto sendto_fail;
       }
       s->local_addr.sin_family = AF_INET;
       s->local_addr.sin_port = p;
@@ -1177,40 +1236,65 @@ sys_sendto(void)
 
   if(type == SOCK_DGRAM) {
     if(rdst.sin_port == 0)
-      return -1;
-    if(udp_output(ifp, &src, &rdst, buf, (uint)len) < 0)
-      return -1;
+      goto sendto_fail;
+    if(udp_output(ifp, &src, &rdst, kbuf, (uint)len) < 0)
+      goto sendto_fail;
   } else {
     // SOCK_RAW - use per-socket TTL
     uchar snd_ttl;
     acquire(&socket_lock);
     snd_ttl = s->ttl ? s->ttl : 64;
     release(&socket_lock);
-    if(ip_output_ttl(ifp, (uchar)proto, src.sin_addr, rdst.sin_addr, buf, (uint)len, snd_ttl) < 0)
-      return -1;
+    if(ip_output_ttl(ifp, (uchar)proto, src.sin_addr, rdst.sin_addr, kbuf, (uint)len, snd_ttl) < 0)
+      goto sendto_fail;
   }
 
   NETDBG("sendto: fd=%d len=%d dport=%d\n", sockfd, len, rdst.sin_port);
+  if(kbuf)
+    kmalloc_free(kbuf);
   return len;
+
+sendto_fail:
+  if(kbuf)
+    kmalloc_free(kbuf);
+  return -1;
 }
 
 // recv(sockfd, buf, len) syscall
 int
 sys_recv(void)
 {
-  int sockfd, len;
-  char *buf;
+  int sockfd, len, buf_raw;
+  uint buf_u;
+  char *kbuf;
   int n;
   struct socket *s;
+  struct proc *p;
 
   if(argint(0, &sockfd) < 0 || argint(2, &len) < 0)
     return -1;
-  if(len < 0 || argptr(1, &buf, len) < 0)
+  if(len < 0)
+    return -1;
+  if(argint(1, &buf_raw) < 0)
+    return -1;
+
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+  buf_u = (uint)buf_raw;
+
+  if(len == 0)
+    return 0;
+
+  kbuf = (char*)kmalloc((uint)len);
+  if(kbuf == 0)
     return -1;
 
   s = getfd_socket(sockfd);
-  if(!s)
+  if(!s){
+    kmalloc_free(kbuf);
     return -1;
+  }
 
   acquire(&socket_lock);
   while(s->recv_len == 0) {
@@ -1221,9 +1305,16 @@ sys_recv(void)
     sleep(s, &socket_lock);
   }
 
-  n = socket_recv_copy_locked(s, buf, len, 0);
+  n = socket_recv_copy_locked(s, kbuf, len, 0);
 
   release(&socket_lock);
+
+  if(n > 0 && copyout(p->pgdir, buf_u, kbuf, (uint)n) < 0){
+    kmalloc_free(kbuf);
+    return -1;
+  }
+
+  kmalloc_free(kbuf);
 
   socket_stream_window_update(s, n);
   return n;
@@ -1235,40 +1326,51 @@ sys_recv(void)
 int
 sys_recvfrom(void)
 {
-  int sockfd, len, flags, src_raw;
-  char *buf;
+  int sockfd, len, flags, src_raw, buf_raw;
+  int slen_raw;
+  int srclen_addr;
+  uint buf_u;
+  char *kbuf;
   int n;
   struct socket *s;
-  struct sockaddr_in *src_out;
-  int *srclen_ptr;
   struct sockaddr_in peer;
+  struct proc *p;
 
   if(argint(0, &sockfd) < 0 || argint(2, &len) < 0)
     return -1;
   if(argint(3, &flags) < 0 || flags != 0)
     return -1;
-  if(len < 0 || argptr(1, &buf, len) < 0)
+  if(len < 0)
     return -1;
+  if(argint(1, &buf_raw) < 0)
+    return -1;
+
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+  buf_u = (uint)buf_raw;
+
+  if(len > 0){
+    kbuf = (char*)kmalloc((uint)len);
+    if(kbuf == 0)
+      return -1;
+  } else {
+    kbuf = 0;
+  }
 
   // arg4 is the source address pointer – may be 0 (NULL)
   if(argint(4, &src_raw) < 0)
-    return -1;
-  src_out = 0;
-  srclen_ptr = 0;
+    goto recvfrom_fail;
+  srclen_addr = 0;
   if(src_raw != 0) {
-    if(argptr(4, (char**)&src_out, sizeof(struct sockaddr_in)) < 0)
-      return -1;
     // arg5 is the addrlen pointer – may also be NULL
-    {
-      int slen_raw;
-      if(argint(5, &slen_raw) >= 0 && slen_raw != 0)
-        argptr(5, (char**)&srclen_ptr, sizeof(int));
-    }
+    if(argint(5, &slen_raw) >= 0 && slen_raw != 0)
+      srclen_addr = slen_raw;
   }
 
   s = getfd_socket(sockfd);
   if(!s)
-    return -1;
+    goto recvfrom_fail;
 
   acquire(&socket_lock);
   while(s->recv_len == 0) {
@@ -1279,18 +1381,34 @@ sys_recvfrom(void)
     sleep(s, &socket_lock);
   }
 
-  n = socket_recv_copy_locked(s, buf, len, &peer);
+  n = socket_recv_copy_locked(s, kbuf, len, &peer);
   release(&socket_lock);
 
-  if(src_out)
-    memmove(src_out, &peer, sizeof(peer));
-  if(srclen_ptr)
-    *srclen_ptr = (int)sizeof(struct sockaddr_in);
+  if(n > 0 && copyout(p->pgdir, buf_u, kbuf, (uint)n) < 0)
+    goto recvfrom_fail;
+
+  if(src_raw != 0){
+    if(copyout(p->pgdir, (uint)src_raw, &peer, sizeof(peer)) < 0)
+      goto recvfrom_fail;
+    if(srclen_addr != 0){
+      int sl = (int)sizeof(struct sockaddr_in);
+      if(copyout(p->pgdir, (uint)srclen_addr, &sl, sizeof(sl)) < 0)
+        goto recvfrom_fail;
+    }
+  }
 
   socket_stream_window_update(s, n);
 
+  if(kbuf)
+    kmalloc_free(kbuf);
+
   NETDBG("recvfrom: fd=%d n=%d sport=%d\n", sockfd, n, peer.sin_port);
   return n;
+
+recvfrom_fail:
+  if(kbuf)
+    kmalloc_free(kbuf);
+  return -1;
 }
 
 // recvtimeout(sockfd, buf, len, timeout_ticks) syscall
@@ -1298,21 +1416,38 @@ sys_recvfrom(void)
 int
 sys_recvtimeout(void)
 {
-  int sockfd, len, timeout_ticks;
+  int sockfd, len, timeout_ticks, buf_raw;
+  uint buf_u;
+  char *kbuf;
   int n;
   uint start;
   uint now;
-  char *buf;
   struct socket *s;
+  struct proc *p;
 
   if(argint(0, &sockfd) < 0 || argint(2, &len) < 0 || argint(3, &timeout_ticks) < 0)
     return -1;
-  if(len < 0 || timeout_ticks < 0 || argptr(1, &buf, len) < 0)
+  if(len < 0 || timeout_ticks < 0)
     return -1;
+  if(argint(1, &buf_raw) < 0)
+    return -1;
+
+  p = myproc();
+  if(p == 0 || p->pgdir == 0)
+    return -1;
+  buf_u = (uint)buf_raw;
+
+  if(len > 0){
+    kbuf = (char*)kmalloc((uint)len);
+    if(kbuf == 0)
+      return -1;
+  } else {
+    kbuf = 0;
+  }
 
   s = getfd_socket(sockfd);
   if(!s)
-    return -1;
+    goto recvtimeout_fail;
 
   if(timeout_ticks == 0)
     return 0;
@@ -1325,6 +1460,8 @@ sys_recvtimeout(void)
   while(s->recv_len == 0) {
     if(socket_stream_eof_locked(s)) {
       release(&socket_lock);
+      if(kbuf)
+        kmalloc_free(kbuf);
       return 0;
     }
     release(&socket_lock);
@@ -1333,6 +1470,8 @@ sys_recvtimeout(void)
     now = ticks;
     if(now - start >= (uint)timeout_ticks) {
       release(&tickslock);
+      if(kbuf)
+        kmalloc_free(kbuf);
       return RECV_TIMEOUT_EXPIRED;
     }
 
@@ -1342,18 +1481,30 @@ sys_recvtimeout(void)
     acquire(&socket_lock);
   }
 
-  n = socket_recv_copy_locked(s, buf, len, 0);
+  n = socket_recv_copy_locked(s, kbuf, len, 0);
 
   release(&socket_lock);
 
+  if(n > 0 && copyout(p->pgdir, buf_u, kbuf, (uint)n) < 0)
+    goto recvtimeout_fail;
+
+  if(kbuf)
+    kmalloc_free(kbuf);
+
   socket_stream_window_update(s, n);
   return n;
+
+recvtimeout_fail:
+  if(kbuf)
+    kmalloc_free(kbuf);
+  return -1;
 }
 
 int
 sys_netifinfo(void)
 {
-  struct netif_info *out;
+  int out_addr;
+  uint out_u;
   struct netif_info *kout;
   struct proc *p;
   int max;
@@ -1365,8 +1516,9 @@ sys_netifinfo(void)
     return -1;
   if(max > MAXNETIF)
     max = MAXNETIF;
-  if(argptr(0, (char**)&out, max * sizeof(*out)) < 0)
+  if(argint(0, &out_addr) < 0)
     return -1;
+  out_u = (uint)out_addr;
 
   kout = (struct netif_info*)kmalloc(max * sizeof(*kout));
   if(kout == 0)
@@ -1381,7 +1533,7 @@ sys_netifinfo(void)
   if(n > 0){
     p = myproc();
     if(p == 0 || p->pgdir == 0 ||
-       copyout(p->pgdir, (uint)out, kout, n * sizeof(*kout)) < 0){
+       copyout(p->pgdir, out_u, kout, n * sizeof(*kout)) < 0){
       kmalloc_free(kout);
       return -1;
     }
@@ -1394,7 +1546,8 @@ sys_netifinfo(void)
 int
 sys_routeinfo(void)
 {
-  struct route_info *out;
+  int out_addr;
+  uint out_u;
   struct route_info *kout;
   struct proc *p;
   int max;
@@ -1406,8 +1559,9 @@ sys_routeinfo(void)
     return -1;
   if(max > NET_ROUTE_TABLE_MAX)
     max = NET_ROUTE_TABLE_MAX;
-  if(argptr(0, (char**)&out, max * sizeof(*out)) < 0)
+  if(argint(0, &out_addr) < 0)
     return -1;
+  out_u = (uint)out_addr;
 
   kout = (struct route_info*)kmalloc(max * sizeof(*kout));
   if(kout == 0)
@@ -1422,7 +1576,7 @@ sys_routeinfo(void)
   if(n > 0){
     p = myproc();
     if(p == 0 || p->pgdir == 0 ||
-       copyout(p->pgdir, (uint)out, kout, n * sizeof(*kout)) < 0){
+       copyout(p->pgdir, out_u, kout, n * sizeof(*kout)) < 0){
       kmalloc_free(kout);
       return -1;
     }
@@ -1435,7 +1589,8 @@ sys_routeinfo(void)
 int
 sys_arpinfo(void)
 {
-  struct arp_info *out;
+  int out_addr;
+  uint out_u;
   struct arp_info *kout;
   struct proc *p;
   int max;
@@ -1447,8 +1602,9 @@ sys_arpinfo(void)
     return -1;
   if(max > NET_ARP_CACHE_MAX)
     max = NET_ARP_CACHE_MAX;
-  if(argptr(0, (char**)&out, max * sizeof(*out)) < 0)
+  if(argint(0, &out_addr) < 0)
     return -1;
+  out_u = (uint)out_addr;
 
   kout = (struct arp_info*)kmalloc(max * sizeof(*kout));
   if(kout == 0)
@@ -1463,7 +1619,7 @@ sys_arpinfo(void)
   if(n > 0){
     p = myproc();
     if(p == 0 || p->pgdir == 0 ||
-       copyout(p->pgdir, (uint)out, kout, n * sizeof(*kout)) < 0){
+       copyout(p->pgdir, out_u, kout, n * sizeof(*kout)) < 0){
       kmalloc_free(kout);
       return -1;
     }

@@ -445,6 +445,53 @@ More "old xv6 style" user-pointer dereferences were removed in process APIs:
        - `sys_getdents` allocation order corrected so non-directory early returns do not leak
           temporary kernel buffers.
 
+   ## COW Audit Completion (Current Scope)
+
+   Completed additional conversion pass to remove remaining legacy direct user-pointer
+   dereferences in syscall/control planes.
+
+   1. [kernel/core/sysfile.c](kernel/core/sysfile.c)
+       - Converted `sys_fstat`, `sys_stat`, `sys_lstat`, `sys_getcwd`, `sys_readlink`,
+          `sys_pipe`, and `sys_loopstatus` to kernel-local staging + `copyout`.
+
+   2. [kernel/core/sysproc.c](kernel/core/sysproc.c)
+       - Removed residual `argptr`-style pointer handoff in wrappers:
+          `sys_sigaction`, `sys_sigprocmask`, `sys_tcgetattr`, `sys_tcsetattr`.
+       - Reworked `sys_ioctl` pointer-based branches (audio/tuntap/tty ioctls) to:
+          kernel buffer staging + `copyin`, backend call, then `copyout`.
+
+   3. [kernel/net/socket.c](kernel/net/socket.c)
+       - Converted `sys_bind`/`sys_connect` sockaddr ingestion to `copyin`.
+       - Converted `sys_send`, `sys_sendto`, `sys_recv`, `sys_recvfrom`,
+          `sys_recvtimeout` payload and sockaddr/result handling to staged kernel
+          buffers with `copyin`/`copyout`.
+
+   Residual `argptr` usage is now limited to validation-oriented or compatibility
+   surfaces where direct user-memory writes are no longer performed in these paths.
+
+   ## Intermittent rc.3 Filename Corruption Triage
+
+   Observed symptom (non-deterministic at boot):
+
+   ```text
+   dash: 0: cannot open <non-printable bytes>: Unknown error 0
+   ```
+
+   To capture raw bytes at the boundary where corruption appears, targeted diagnostics
+   were added:
+
+   1. [user/init.c](user/init.c)
+       - `run_runlevel_script()` now logs the raw byte sequence of `script_path`
+          immediately before `exec("/bin/dash", ...)`.
+
+   2. [kernel/core/sysfile.c](kernel/core/sysfile.c)
+       - `sys_exec()` now emits a hexdump of `argv[1]` when launching `/bin/dash`
+          if non-printable bytes are detected.
+
+   This should distinguish:
+   - user-space source corruption before `exec`, vs
+   - corruption on/after syscall argument ingestion.
+
 ## Proposed Acceptance Criteria for Fix
 
 1. No trap/panic across repeated `lsblk` calls during NVMe/Btrfs boots.
@@ -473,3 +520,104 @@ Interpretation:
 
 This is the first clean bounded high-stress run after the COW/user-copy cleanup passes and is
 the current stability baseline.
+
+Additional validation milestone:
+
+```text
+kmemstress -M -v -n 1000: completed with fail_total=0
+```
+
+Interpretation:
+- Longer-duration medium-pressure stress also remains clean for hard failures.
+- Current blocking issue remains intermittent boot/runlevel-script filename corruption,
+  not deterministic kmemstress instability.
+
+## kmemstress -M -n 1500 Regression (2026-04-06, CPU1)
+
+Observed user trace:
+
+```text
+kalloc: dropped invalid cache run=9fcc6000 drops=1
+unexpected trap 14 from cpu 1 eip 8014e100 (cr2=0x807feeb4)
+FATAL trap: kernel-page-fault ... eip=0x8014e100 cs=0x8 cr2=0x807feeb4
+```
+
+Symbol mapping:
+- `0x8014e100` is in `kalloc_cache_pop_valid()` while reading `kpage_meta[]`.
+- Faulting read occurred before the existing `kaddr_writable_current_pgdir(r)` guard.
+
+Related prior chain observed in same tranche:
+- invalid `kfree` pointer from `freevm()` (`caller=0x8015f0c3`).
+- panic-path page fault in `getcallerpcs()` (`eip=0x8015348e`).
+
+Applied fixes:
+1. `kernel/core/proc.c`
+   - `cpuid()` now disables interrupts around `mycpu()`.
+2. `kernel/core/spinlock.c`
+   - `getcallerpcs()` now bounds-checks/align-checks EBP chain.
+3. `kernel/core/vm.c`
+   - `freevm()` now validates PDE physical addresses before `kfree`.
+   - `walkpgdir()` now detects/clears bad present PDEs before `P2V` translation.
+4. `kernel/core/kalloc.c`
+   - metadata mapping check added before dereferencing `kpage_meta` in
+     `kalloc_free_run_valid()`.
+   - same mapping check added in hot paths that consume metadata:
+     `kfree()`, early `kalloc()`, cache-hit `kalloc()`, refill `kalloc()`.
+
+5. `kernel/core/spinlock.c`
+    - `pushcli()`/`popcli()` now fetch `mycpu()` once per call and use a local
+       CPU pointer for all `ncli/intena` updates.
+    - Rationale: repeated `mycpu()` calls in one function can become internally
+       inconsistent if APIC-ID lookup is transiently wrong, which can corrupt
+       per-CPU `ncli` accounting and trigger `panic("popcli")` under load.
+
+6. `kernel/core/proc.c`
+    - `mycpu()` now validates reverse-map hits: `apic_cpu_map[apicid]` must map
+       to a CPU whose recorded `cpus[idx].apicid` matches the queried APIC ID.
+    - Stale/corrupt reverse-map entries are invalidated and rebuilt via scan,
+       preventing silent wrong-CPU returns that can poison per-CPU accounting
+       (notably `ncli`).
+
+7. `kernel/core/spinlock.c`
+    - Added explicit `popcli underflow` diagnostic print with CPU APIC ID,
+       `ncli`, `intena`, and immediate caller address before panic.
+    - Purpose: if underflow persists, next report contains a direct call-site
+       anchor instead of only `panic("popcli")`.
+
+8. `kernel/core/vm.c` (core containment, no rigging)
+    - `uvm_release_pte()` no longer panics the kernel on corrupted user PTE
+       physical addresses (e.g. `pa >= PHYSTOP`, `pa >= KERNBASE`, or unmanaged
+       allocator page). Instead it:
+       - logs a throttled diagnostic,
+       - clears the PTE,
+       - returns a corruption code (`-2`).
+    - `deallocuvm()` treats that corruption code as a per-process page-table
+       defect, counts/drops bad PTEs, and continues teardown instead of panicking
+       the whole kernel.
+    - Goal: keep kernel alive, quarantine bad process mappings, and preserve
+       actionable diagnostics for upstream root-cause analysis.
+
+9. `kernel/core/vm.c` (kernel-half canonicalization)
+    - Added `vm_sync_kernel_pdes(pgdir)` and invoked it from `switchuvm()`
+       before loading CR3.
+    - For every process switch, kernel-half PDE entries (`PDX(KERNBASE)..1023`)
+       are forced to match `kpgdir` canonical mappings.
+    - This prevents a single process with corrupted kernel-half page-directory
+       entries from destabilizing kernel execution or inducing hangs after
+       context switch.
+
+10. `kernel/core/kalloc.c` (global freelist corruption containment)
+      - `kalloc_refill_local()` no longer panics immediately on an invalid
+         global freelist head node.
+      - New behavior:
+         - increments/logs `invalid_global_drops`,
+         - unlinks the bad run if readable (`kmem.freelist = r->next`),
+         - otherwise stops refill by clearing freelist head to avoid deref fault.
+      - Rationale: avoids catastrophic panic loops/triple-fault cycles from a
+         single poisoned freelist node and preserves runtime to gather upstream
+         corruption diagnostics.
+
+Intent of tranche:
+- Prevent allocator crashes when current process page tables have transiently broken
+  kernel mappings, and surface root-cause corruption signals via explicit diagnostics
+  rather than faulting in allocator validation code.

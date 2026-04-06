@@ -19,9 +19,12 @@ fetchint(uint addr, int *ip)
 {
   struct proc *curproc = myproc();
 
+  if(curproc == 0 || curproc->pgdir == 0)
+    return -1;
   if(addr >= curproc->sz || addr+4 > curproc->sz)
     return -1;
-  *ip = *(int*)(addr);
+  if(copyin(curproc->pgdir, ip, addr, sizeof(*ip)) < 0)
+    return -1;
   return 0;
 }
 

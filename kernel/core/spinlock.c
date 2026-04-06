@@ -274,11 +274,17 @@ void
 getcallerpcs(void *v, uint pcs[])
 {
   uint *ebp;
+  uint ebp_u;
   int i;
 
   ebp = (uint*)v - 2;
   for(i = 0; i < 10; i++){
-    if(ebp == 0 || ebp < (uint*)KERNBASE || ebp == (uint*)0xffffffff)
+    ebp_u = (uint)ebp;
+    if(ebp_u == 0 || ebp_u == 0xffffffff)
+      break;
+    if((ebp_u & 3) != 0)
+      break;
+    if(ebp_u < KERNBASE || ebp_u > (KERNBASE + PHYSTOP - 2 * sizeof(uint)))
       break;
     pcs[i] = ebp[1];     // saved %eip
     ebp = (uint*)ebp[0]; // saved %ebp
@@ -307,22 +313,31 @@ void
 pushcli(void)
 {
   int eflags;
+  struct cpu *c;
 
   eflags = readeflags();
   cli();
-  if(mycpu()->ncli == 0)
-    mycpu()->intena = eflags & FL_IF;
-  mycpu()->ncli += 1;
+  c = mycpu();
+  if(c->ncli == 0)
+    c->intena = eflags & FL_IF;
+  c->ncli += 1;
 }
 
 void
 popcli(void)
 {
+  struct cpu *c;
+
   if(readeflags()&FL_IF)
     panic("popcli - interruptible");
-  if(--mycpu()->ncli < 0)
+  c = mycpu();
+  c->ncli -= 1;
+  if(c->ncli < 0){
+    cprintf("popcli underflow: cpu_apic=%d ncli=%d intena=%d caller=%p\n",
+            c->apicid, c->ncli, c->intena, __builtin_return_address(0));
     panic("popcli");
-  if(mycpu()->ncli == 0 && mycpu()->intena)
+  }
+  if(c->ncli == 0 && c->intena)
     sti();
 }
 
