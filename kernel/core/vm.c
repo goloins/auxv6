@@ -13,21 +13,77 @@ extern char data[];  // defined by kernel.ld
 pde_t *kpgdir;  // for use in scheduler()
 static uint vm_bad_pte_drops;
 static uint vm_kernel_pde_repairs;
+static uint vm_kernel_pde_master_repairs;
+static pde_t vm_kernel_pde_ref[NPDENTRIES];
+static int vm_kernel_pde_ref_ready;
+
+// x86 sets Accessed/Dirty in paging entries at runtime.
+#define VM_PDE_VOLATILE_BITS (0x020 | 0x040)
+
+static pde_t
+vm_pde_stable(pde_t pde)
+{
+  return pde & ~VM_PDE_VOLATILE_BITS;
+}
+
+static pde_t
+vm_pde_merge_runtime_bits(pde_t cur, pde_t want)
+{
+  return (want & ~VM_PDE_VOLATILE_BITS) | (cur & VM_PDE_VOLATILE_BITS);
+}
+
+static pde_t
+vm_kernel_pde_canonical(uint idx)
+{
+  if(vm_kernel_pde_ref_ready)
+    return vm_kernel_pde_ref[idx];
+  if(kpgdir)
+    return kpgdir[idx];
+  return 0;
+}
+
+static void
+vm_capture_kernel_pde_ref(void)
+{
+  uint i;
+
+  if(kpgdir == 0)
+    return;
+  for(i = PDX(KERNBASE); i < NPDENTRIES; i++)
+    vm_kernel_pde_ref[i] = kpgdir[i];
+  vm_kernel_pde_ref_ready = 1;
+}
 
 static void
 vm_sync_kernel_pdes(pde_t *pgdir)
 {
   uint i;
   uint repaired;
+  uint master_repaired;
+  pde_t want;
 
   if(pgdir == 0 || kpgdir == 0)
     return;
 
   repaired = 0;
+  master_repaired = 0;
   for(i = PDX(KERNBASE); i < NPDENTRIES; i++){
-    if(pgdir[i] != kpgdir[i]){
-      pgdir[i] = kpgdir[i];
+    want = vm_kernel_pde_canonical(i);
+    if(vm_pde_stable(kpgdir[i]) != vm_pde_stable(want)){
+      kpgdir[i] = vm_pde_merge_runtime_bits(kpgdir[i], want);
+      master_repaired++;
+    }
+    if(vm_pde_stable(pgdir[i]) != vm_pde_stable(want)){
+      pgdir[i] = vm_pde_merge_runtime_bits(pgdir[i], want);
       repaired++;
+    }
+  }
+
+  if(master_repaired > 0){
+    vm_kernel_pde_master_repairs += master_repaired;
+    if((vm_kernel_pde_master_repairs & 0x3f) == master_repaired){
+      cprintf("vm_sync_kernel_pdes: repaired_master=%u total_master=%u\n",
+              master_repaired, vm_kernel_pde_master_repairs);
     }
   }
 
@@ -79,7 +135,7 @@ walkpgdir(pde_t *pgdir, const void *va, int alloc)
       if(!alloc){
         // Kernel-half PDEs are canonical and shared; repair drift in place.
         if((uint)va >= KERNBASE && kpgdir != 0 && PDX(va) >= PDX(KERNBASE)){
-          *pde = kpgdir[PDX(va)];
+          *pde = vm_kernel_pde_canonical(PDX(va));
           if((*pde & PTE_P) != 0){
             pa = PTE_ADDR(*pde);
             if(pa != 0 && pa < PHYSTOP && pa < KERNBASE){
@@ -195,7 +251,7 @@ setupkvm(void)
   // Modern model: all process page tables share canonical kernel-half PDEs.
   if(kpgdir != 0){
     for(i = PDX(KERNBASE); i < NPDENTRIES; i++)
-      pgdir[i] = kpgdir[i];
+      pgdir[i] = vm_kernel_pde_canonical(i);
     return pgdir;
   }
 
@@ -216,6 +272,7 @@ void
 kvmalloc(void)
 {
   kpgdir = setupkvm();
+  vm_capture_kernel_pde_ref();
   switchkvm();
 }
 
@@ -224,6 +281,7 @@ kvmalloc(void)
 void
 switchkvm(void)
 {
+  vm_sync_kernel_pdes(kpgdir);
   lcr3(V2P(kpgdir));   // switch to the kernel page table
 }
 
