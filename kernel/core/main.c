@@ -27,6 +27,7 @@ main(void)
   display_init();  // display device registry
   pci_init();      // PCI bus enumeration
   modem_init();    // modem-class PCI probe stubs
+  firewire_init(); // firewire/IEEE1394 PCI probe stubs
   virtio_gpu_init(); // virtio-gpu subsystem
   intel_gfx_init();  // intel display-class PCI probe stub
   consoleinit();   // console hardware

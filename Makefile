@@ -39,6 +39,7 @@ OBJS = \
 	kernel/driver/ioapic.o\
 	kernel/driver/pci.o\
 	kernel/driver/modem.o\
+	kernel/driver/firewire.o\
 	kernel/driver/conexant_hsf.o\
 	kernel/driver/agere_lt.o\
 	kernel/driver/smartlink.o\

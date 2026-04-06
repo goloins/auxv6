@@ -142,6 +142,10 @@
 /* Network Subclasses */
 #define PCI_SUBCLASS_ETHERNET 0x00
 
+/* Serial Bus Subclasses / Prog IF */
+#define PCI_SUBCLASS_SERIAL_FIREWIRE 0x00
+#define PCI_PROGIF_IEEE1394_OHCI 0x10
+
 /* Known Vendor IDs */
 #define PCI_VENDOR_INTEL    0x8086
 #define PCI_VENDOR_AMD      0x1022

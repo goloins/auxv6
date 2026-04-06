@@ -55,6 +55,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 | exFAT | 35% | Initial read-only backend parser is in-tree (boot-sector validation, entry-set traversal, case-insensitive lookup, regular-file reads), but the mount device-selection path still needs parity wiring in `sys_mount`; write/allocate/truncate/rename metadata paths and robust seeded-image tooling remain out of scope |
 | Btrfs | 35% | Initial read-only VFS backend landed (`btrfs` mount type): single-device volumes, metadata-tree traversal, directory lookup/readdir, regular-file reads, and symlink reads; write paths, compression/RAID/multi-device, and many advanced features remain out of scope |
 | UFS2/FFS | 28% | Initial read-only VFS backend landed (`ufs2`/`ffs` mount type): superblock probe, inode/directory traversal, direct/single-indirect file reads, and symlink reads with conservative format assumptions; write paths and broader on-disk compatibility hardening remain out of scope |
+| FireWire / IEEE 1394 | 34% | OHCI-class PCI scaffold is in-tree with boot-time discovery, basic controller-init/reset attempts, IRQ wiring, controller phase-state tracking (`init/ready/resetting/degraded`), phase-change tick telemetry, and bus-reset/self-id generation observability. A polled event path services non-IRQ controllers, and a minimal async request-context ring scaffold now has generation-guard invalidation, timeout reaping, and queue health counters (`pending/submit/complete/stale/timeout/age`) exposed via `/proc/firewire`; full async transaction plumbing, CSR/Config ROM, and SBP-2 remain unimplemented |
 | Audio subsystem | 45% | Stage-0 ABI/core is in-tree with ioctl + procfs surfaces and PCI-family probe stubs; Stage-1 tranches 1-3 are now landed with per-fd stream objects/ring buffers, blocking + `O_NONBLOCK` PCM write semantics, poll/select readiness wiring, and `/proc/audio_clients` observability via `audiostat`; Stage-2 tranches 1-2 are landed with a minimal `audiod` daemon scaffold plus local runtime control (`audiodctl`) for status/reconfigure; capture/hardware backends and broader policy compatibility remain follow-on |
 | Device hotplug/eventing | None | Planned kernel event path for live node add/remove beyond boot-time `devman -s` |
 
@@ -132,6 +133,7 @@ Primary goal: hold the current kernel/userland gains as the stable baseline whil
 - Rolling implementation log: `docs/CHANGELOG-2026-04.md`
 - Kernel perf/COW architecture and validation: `docs/allocator-vm-refactor-blueprint.md`, `docs/kernel-perf-hardening.md`
 - Storage backends: `docs/nvme-driver.md`, `docs/msdosfs.md`, `docs/exfat-driver.md`, `docs/btrfs-driver.md`, `docs/ufs2-driver.md`
+- FireWire/IEEE 1394 status and tranche plan: `docs/firewire-driver.md`
 - PCI interrupt modernization (MSI/MSI-X): `docs/pci-msi-msix-tranche-plan.md`
 - TUN/TAP design and execution phases: `docs/tuntap-design-and-phase-plan.md`
 - NFS status and scope: `docs/nfs-v3-integration.md`
