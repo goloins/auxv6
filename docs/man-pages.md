@@ -1,6 +1,6 @@
 # auxv6 Man Pages
 
-Generated: 2026-04-04
+Generated: 2026-04-05
 
 ## Scope
 - Enriched all utility man pages using source-derived usage and option extraction from user/*.c.
@@ -89,6 +89,7 @@ Generated: 2026-04-04
 | termcheck | targetfs/usr/share/man/termcheck.md | 2026-04-01 | user/termcheck.c | source-derived usage/options |
 | termdemo | targetfs/usr/share/man/termdemo.md | 2026-04-01 | user/termdemo.c | source-derived usage/options |
 | time | targetfs/usr/share/man/time.md | 2026-04-02 | user/time.c | source-derived usage/options |
+| tuntapctl | targetfs/usr/share/man/tuntapctl.md | 2026-04-05 | user/tuntapctl.c | baseline `/dev/net/tun` control utility for create/get/persist/owner/group |
 | umount | targetfs/usr/share/man/umount.md | 2026-04-01 | user/umount.c | source-derived usage/options |
 | uname | targetfs/usr/share/man/uname.md | 2026-04-01 | user/uname.c | source-derived usage/options |
 | usertests | targetfs/usr/share/man/usertests.md | 2026-04-01 | user/usertests.c | source-derived usage/options |
