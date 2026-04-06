@@ -25,6 +25,22 @@ struct {
   struct sleeplock lock;
 } file_global;
 
+static int
+file_handle_valid(struct file *f)
+{
+  if(f == 0)
+    return 0;
+  if((uint)f < KERNBASE)
+    return 0;
+  if(f->magic != FILE_MAGIC)
+    return 0;
+  if(f->ref < 1)
+    return 0;
+  if(f->type < FD_NONE || f->type > FD_SOCKET)
+    return 0;
+  return 1;
+}
+
 void
 fileinit(void)
 {
@@ -44,6 +60,7 @@ filealloc(void)
 
   acquiresleep(&file_global.lock);
   memset(f, 0, sizeof(*f));
+  f->magic = FILE_MAGIC;
   f->ref = 1;
   f->pty_side = PTY_SIDE_NONE;
   f->pty_index = -1;
@@ -55,6 +72,9 @@ filealloc(void)
 struct file*
 filedup(struct file *f)
 {
+  if(!file_handle_valid(f))
+    return 0;
+
   acquiresleep(&file_global.lock);
   if(f->ref < 1)
     panic("filedup");
@@ -69,6 +89,9 @@ fileclose(struct file *f)
 {
   struct file ff;
 
+  if(!file_handle_valid(f))
+    return;
+
   acquiresleep(&file_global.lock);
   if(f->ref < 1)
     panic("fileclose");
@@ -78,6 +101,7 @@ fileclose(struct file *f)
   }
   ff = *f;
   f->ref = 0;
+  f->magic = 0;
   f->type = FD_NONE;
   releasesleep(&file_global.lock);
 
@@ -90,9 +114,9 @@ fileclose(struct file *f)
     if(ff.ip && ff.ip->type == T_DEV && ff.ip->major == SERIALDEV)
       serial_close(&ff);
     if(ff.ip && ff.ip->type == T_DEV && ff.ip->major == AUDIODEV)
-      audio_close(f);
+      audio_close(&ff);
     if(ff.ip && ff.ip->type == T_DEV && ff.ip->major == TUNTAPDEV)
-      tuntap_close(f);
+      tuntap_close(&ff);
     begin_op();
     iput(ff.ip);
     end_op();
@@ -110,6 +134,9 @@ filestat(struct file *f, struct stat *st)
 {
   const struct vnode_ops *ops;
   int rc;
+
+  if(!file_handle_valid(f))
+    return -1;
 
   if(f->type == FD_INODE){
     ilock(f->ip);
@@ -136,6 +163,9 @@ fileread(struct file *f, char *addr, int n)
   int r;
   const struct vnode_ops *ops;
   struct inode *mountpoint;
+
+  if(!file_handle_valid(f))
+    return -1;
 
   if(f->readable == 0)
     return -1;
@@ -272,6 +302,9 @@ filewrite(struct file *f, char *addr, int n)
 {
   int r;
   const struct vnode_ops *ops;
+
+  if(!file_handle_valid(f))
+    return -1;
 
   if(f->writable == 0)
     return -1;

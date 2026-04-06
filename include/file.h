@@ -1,4 +1,5 @@
 struct file {
+  uint magic;
   enum { FD_NONE, FD_PIPE, FD_INODE, FD_SOCKET } type;
   int ref; // reference count
   char readable;
@@ -12,6 +13,8 @@ struct file {
                  * Widened from uint; all code that reads/writes this field
                  * must use uint64_t or int64_t locals to avoid truncation. */
 };
+
+#define FILE_MAGIC 0x46494c45u
 
 
 // in-memory copy of an inode

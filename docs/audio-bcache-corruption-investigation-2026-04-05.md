@@ -441,3 +441,289 @@ Scope note:
    involved in process I/O. Internal kernel-only memory copies (for example
    framebuffer blits or purely in-kernel struct copies) were intentionally left
    unchanged.
+
+## New Panic After Copy Sweep: kpage_drop_ref Underflow (2026-04-05)
+
+Observed under stress:
+
+```text
+bcachestress: round 10/200 ok
+lapicid 0: panic: kpage_drop_ref: kpage_drop_ref underflow
+```
+
+Interpretation:
+
+- This indicates a duplicate free/unmap path reached `kfree()` with a managed
+   page already at `refcount==0`.
+- After the user-copy hardening sweep, this became the next dominant failure
+   mode under fork/COW churn.
+
+Mitigation applied:
+
+- `kernel/core/kalloc.c::kfree` now explicitly checks for
+   `meta->refcount==0 && (meta->flags & KPAGE_FREE)` and treats it as a
+   duplicate free event.
+- In that case it logs:
+   - `kfree: duplicate free ignored pa=... v=...`
+   and returns early (no panic, no second freelist insertion).
+- If `refcount==0` but `KPAGE_FREE` is not set, kernel still panics with an
+   explicit state message (`kfree refcount state`) because that indicates a
+   deeper metadata inconsistency.
+
+Why this is safe:
+
+- The old behavior panicked in `kpage_drop_ref` underflow.
+- Blindly continuing into normal free path would enqueue the same page twice and
+   corrupt allocator freelists.
+- Early return on known duplicate-free state preserves allocator integrity while
+   allowing stress to continue and expose remaining root causes.
+
+Build status:
+
+- Rebuilt successfully after this mitigation.
+
+## New Crash Signature: kfree Local-Cache Drain Fault (2026-04-06)
+
+Observed under the same stress command:
+
+```text
+bcachestress -w 8 -r 200 -f 16 -k 32
+...
+unexpected trap 14 from cpu 0 eip 80140912 (cr2=0x9fc00000)
+FATAL trap: kernel-page-fault cpu=0x00000000 trap=0x0000000e err=0x00000002 eip=0x80140912
+```
+
+Symbol mapping (`kernel.asm`):
+
+- `0x80140912` is `kfree+0x12e`
+- Faulting instruction: `mov %eax,(%edx)`
+- This is the write to `p->next` while draining a per-CPU `kfree_cache` entry
+   into `kmem.freelist`.
+
+Interpretation:
+
+- The popped cache entry pointer (`p`) was stale/corrupted by the time it was
+   consumed.
+- Earlier checks only validated virtual address shape (alignment/range), not
+   allocator metadata state (`managed`, `free`, `refcount==0`).
+- Under duplicate-free/unmap races, this allowed stale cache entries to survive
+   long enough to fault at dereference time.
+
+Hardening applied:
+
+1. Added strict free-run validation in `kernel/core/kalloc.c`:
+      - `kalloc_free_run_valid()` now requires:
+         - page-aligned/range-valid pointer,
+         - `KPAGE_MANAGED` set,
+         - `KPAGE_FREE` set,
+         - `refcount == 0`.
+2. Added `kalloc_cache_pop_valid()` for per-CPU cache consumption:
+      - invalid/stale cache entries are dropped instead of dereferenced,
+      - drop count is tracked in `kmem.invalid_cache_drops`,
+      - periodic diagnostic log is emitted.
+3. Updated all local-cache pop/drain sites to use strict validation:
+      - `kalloc()` fast-path cache pop,
+      - `kalloc()` refill pop,
+      - `kalloc_drain_local()` push-to-global path,
+      - `kfree()` emergency drain path.
+4. Tightened freelist pop validation in `kalloc_refill_local()` and early
+    `kalloc()` path to use metadata-aware checks.
+
+Build status:
+
+- `sudo make aux.kern _bcachestress` succeeded on macOS host.
+
+Next verification target:
+
+- Re-run `bcachestress -w 8 -r 200 -f 16 -k 32` and check whether:
+   - crash is eliminated,
+   - or allocator now reports invalid cache drops before any fault,
+   which would further localize the producer path for stale entries.
+
+## New Crash Signature: filewrite Entry Dereference (2026-04-06)
+
+Observed under the same stress command:
+
+```text
+bcachestress -w 8 -r 200 -f 16 -k 32
+unexpected trap 14 from cpu 0 eip 8010ffa0 (cr2=0x0780200c)
+FATAL trap: kernel-page-fault cpu=0 trap=0x0e err=0x00000000 eip=0x8010ffa0
+```
+
+Symbol mapping (`kernel.asm`):
+
+- `0x8010ffa0` is in `filewrite()` at the first field access:
+   `cmpb $0x0, 0x9(%ebx)` (`f->writable`).
+
+Interpretation:
+
+- Kernel faulted before any inode/device path work.
+- `cr2=0x0780200c` is below `KERNBASE`, indicating the `struct file *f`
+   argument was invalid/corrupted by the time `filewrite()` dereferenced it.
+- This aligns with lifecycle/handle integrity problems at the API boundary,
+   not allocator throughput itself (consistent with `kallocstress` passing).
+
+Hardening applied:
+
+1. Added a file-object magic tag:
+      - `include/file.h`: new `struct file::magic` and `FILE_MAGIC`.
+2. File lifecycle now stamps/clears magic:
+      - `kernel/fs/file.c::filealloc` sets `magic = FILE_MAGIC`.
+      - `kernel/fs/file.c::fileclose` clears magic before free.
+3. Added `file_handle_valid()` in `kernel/fs/file.c` and guarded entry points:
+      - `filedup`, `fileclose`, `filestat`, `fileread`, `filewrite`.
+      - Invalid handles now fail safely (`-1` or no-op close) instead of
+         blindly dereferencing and faulting.
+4. Hardened syscall fd lookup:
+      - `kernel/core/sysfile.c::argfd` now rejects file pointers below
+         `KERNBASE` and rejects non-live file objects (`magic` mismatch or
+         `ref < 1`).
+
+Build status:
+
+- `sudo make aux.kern _bcachestress` succeeded after this patch set.
+
+Next verification target:
+
+- Re-run `bcachestress -w 8 -r 200 -f 16 -k 32` and capture either:
+   - successful completion progression, or
+   - new explicit failure location (if corruption now surfaces elsewhere).
+## New Crash Signature: kfree Drain Write to Unmapped KVA (2026-04-06)
+
+Observed under the same stress command:
+
+```text
+bcachestress -w 8 -r 200 -f 16 -k 32
+unexpected trap 14 from cpu 0 eip 80140acd (cr2=0x9fc00000)
+FATAL trap: kernel-page-fault cpu=0 trap=0x0e err=0x00000002 eip=0x80140acd
+```
+
+Symbol mapping (`kernel.asm`):
+
+- `0x80140acd` is in `kfree()` while draining per-CPU cache into global
+  freelist (`p->next = kmem.freelist`).
+
+Interpretation:
+
+- This is a write fault to a non-present page at a would-be free-page KVA.
+- Prior checks validated pointer shape and allocator metadata but did not verify
+  that the pointer is writable in the currently active page table.
+- Under page-table corruption or stale metadata, a pointer can still pass shape
+  checks yet fault at first dereference.
+
+Hardening applied:
+
+1. Added VM helper in `kernel/core/vm.c`:
+    - `kaddr_writable_current_pgdir(char *kva)`
+    - checks mapping presence and `PTE_W` in the active pgdir (`myproc()->pgdir`
+      when present, else `kpgdir`).
+2. Exported the helper in `include/defs.h`.
+3. Strengthened `kernel/core/kalloc.c::kalloc_free_run_valid()` to require
+   `kaddr_writable_current_pgdir((char*)r)` before accepting a free-run pointer.
+
+Build status:
+
+- `sudo make aux.kern _bcachestress` succeeded after this patch.
+
+Next verification target:
+
+- Re-run `bcachestress -w 8 -r 200 -f 16 -k 32`.
+- If a new panic appears, capture `eip` and `cr2`; this guard should prevent
+  this exact non-present write fault in `kfree` drain path.
+
+## April 6 Deep Audit Update: kmalloc_free Loop-Bound Corruption (2026-04-06)
+
+Observed repro:
+
+```text
+bcachestress -w 8 -r 200 -f 16 -k 32
+kfree: duplicate free ignoring pa=... caller=80141309
+unexpected trap 14 ... eip 80140af5 (cr2=0x9fc00000)
+```
+
+Address mapping from `kernel.asm`:
+
+- `0x80141309` -> `kmalloc_free` loop increment (`inc %edi`) in the page-free loop.
+- `0x80140af5` -> `kfree` drain path write (`p->next = kmem.freelist`).
+
+What this proves:
+
+1. Duplicate-free reports are coming from the `kmalloc_free` loop path.
+2. Crash occurs when a popped cached run pointer is first dereferenced in `kfree` drain.
+
+Deterministic logic bug identified in `kmalloc_free`:
+
+- The loop bound used `h->npages` directly on each iteration.
+- The first `kfree(base)` can make the header page reusable.
+- If that page is recycled before loop completion, `h->npages` can change mid-loop.
+- Result: over-freeing arbitrary pages, duplicate-free storms, and allocator state poisoning.
+
+Fix applied in `kernel/core/kmalloc.c`:
+
+1. Snapshot header fields before any free:
+   - `npages = h->npages`
+   - `req_size = h->req_size`
+2. Validate and log using the snapshotted locals.
+3. Free with stable bound:
+   - `for(i = 0; i < npages; i++) kfree(base + i * PGSIZE);`
+
+Build verification:
+
+- `sudo make aux.kern` succeeded after this fix.
+
+Why this is not a guess:
+
+- The caller address in logs (`0x80141309`) lands exactly on the kmalloc_free loop site.
+- The fix removes a concrete use-after-free-of-header pattern in loop control logic.
+- This is sufficient to generate exactly the observed duplicate-free cascades.
+
+## Validation: bcachestress PASS After kmalloc_free Fix (2026-04-06)
+
+User-verified repro result after the `kmalloc_free` loop-bound snapshot fix:
+
+```text
+bcachestress -w 8 -r 200 -f 16 -k 32
+bcachestress: round 10/200 ok (worker_errs_so_far=0)
+...
+bcachestress: round 200/200 ok (worker_errs_so_far=0)
+bcachestress: PASS 200 rounds, 8 workers, 16 files each
+```
+
+No panic signatures observed in this run:
+
+- no `kfree: duplicate free ... caller=80141309`
+- no trap-14 at `0x80140af5`
+- no allocator drain write fault with `cr2=0x9fc00000`
+
+Round-200 allocator/memory telemetry captured from the successful run:
+
+```text
+pages_total 129556
+pages_free 128474
+pages_allocated 1082
+pages_shared 0
+alloc_calls 852278
+free_calls 1029123
+cache_alloc_hits 852125
+cache_alloc_misses 0
+cache_free_inserts 851190
+global_refill_batches 37973
+global_refill_pages 607568
+global_drain_batches 37913
+global_drain_pages 606608
+ref_increments 48371
+deferred_frees 48371
+
+MemTotal: 518224 kB
+MemFree: 513892 kB
+PagesTotal: 129556
+PagesFree: 128473
+PagesAlloc: 1083
+```
+
+Conclusion:
+
+- The `kmalloc_free` header reuse bug was a real root-cause contributor.
+- Snapshotting `npages/req_size` before the first free removed the loop-control
+   use-after-free condition and stabilized the stress path.
+- Current status for this failure mode: **resolved by validated repro**.

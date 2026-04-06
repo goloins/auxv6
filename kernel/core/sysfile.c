@@ -10,6 +10,7 @@
 #include "param.h"
 #include "stat.h"
 #include "mmu.h"
+#include "memlayout.h"
 #include "proc.h"
 #include "fs.h"
 #include "spinlock.h"
@@ -173,7 +174,7 @@ fdtable_dup(struct fdtable *parent_ft, struct fdtable *child_ft)
   }
 
   memset(child_ft->entries, 0, child_ft->capacity * sizeof(struct file *));
-  memset(child_ft->entries, 0, parent_ft->capacity * sizeof(struct file *));
+  memset(child_ft->fdflags, 0, child_ft->capacity);
   child_ft->capacity = parent_ft->capacity;
   child_ft->nfds = parent_ft->nfds;
 
@@ -532,6 +533,12 @@ argfd(int n, int *pfd, struct file **pf)
   
   // Bounds check: fd must be valid and exist in fdtable
   if(fd < 0 || fd >= curproc->fdtable->nfds || (f = curproc->fdtable->entries[fd]) == 0)
+    return -1;
+
+  // Defensive hardening: reject obviously corrupt file pointers early.
+  if((uint)f < KERNBASE)
+    return -1;
+  if(f->magic != FILE_MAGIC || f->ref < 1)
     return -1;
   
   if(pfd)

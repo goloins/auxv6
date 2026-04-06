@@ -950,7 +950,7 @@ tmpfs_remove(struct inode *dp, char *name)
     return -1;
 
   node->nlink--;
-  ip = iget(dp->dev, node->inum);
+  ip = tmpfs_make_inode(md, node);
   if(ip){
     ip->nlink = node->nlink;
     if(node->nlink == 0)
@@ -964,6 +964,7 @@ static int
 tmpfs_rename(struct inode *olddp, char *oldname,
              struct inode *newdp, char *newname)
 {
+  struct tmpfs_mount_data *md;
   struct tmpfs_node *srcdir;
   struct tmpfs_node *dstdir;
   struct tmpfs_node *node;
@@ -978,6 +979,10 @@ tmpfs_rename(struct inode *olddp, char *oldname,
   srcdir = tmpfs_inode_node(olddp);
   dstdir = tmpfs_inode_node(newdp);
   if(srcdir == 0 || dstdir == 0)
+    return -1;
+
+  md = tmpfs_data_for_dev(newdp->dev);
+  if(md == 0)
     return -1;
 
   if(tmpfs_dirent_remove(srcdir, oldname, &node) < 0)
@@ -995,7 +1000,7 @@ tmpfs_rename(struct inode *olddp, char *oldname,
       struct inode *rip;
 
       replace->nlink--;
-      rip = iget(newdp->dev, replace->inum);
+      rip = tmpfs_make_inode(md, replace);
       if(rip){
         rip->nlink = replace->nlink;
         if(replace->nlink == 0)

@@ -356,6 +356,35 @@ user_page_state(pde_t *pgdir, char *uva)
 }
 
 int
+kaddr_writable_current_pgdir(char *kva)
+{
+  pde_t *pgdir;
+  pte_t *pte;
+  struct proc *p;
+
+  if((uint)kva < KERNBASE)
+    return 0;
+
+  p = myproc();
+  if(p && p->pgdir)
+    pgdir = p->pgdir;
+  else
+    pgdir = kpgdir;
+
+  if(pgdir == 0)
+    return 0;
+
+  pte = walkpgdir(pgdir, kva, 0);
+  if(pte == 0 || ((*pte & PTE_P) == 0))
+    return 0;
+  pte_assert_sane(*pte);
+  if((*pte & PTE_W) == 0)
+    return 0;
+
+  return 1;
+}
+
+int
 pte_is_cow(uint pte)
 {
   return (pte & PTE_COW) != 0;
