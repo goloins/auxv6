@@ -667,3 +667,205 @@ Intent of tranche:
 - Prevent allocator crashes when current process page tables have transiently broken
   kernel mappings, and surface root-cause corruption signals via explicit diagnostics
   rather than faulting in allocator validation code.
+
+## Full Implementation Log Before Further Triage (2026-04-06)
+
+This section is a strict chronological record of concrete changes applied in this
+session family before doing additional root-cause exploration.
+
+### A. Syscall/user-copy and COW-safety cleanup
+
+1. `kernel/core/sysfile.c`
+   - Converted direct user-memory reads/writes to kernel staging + `copyin/copyout`
+     across major interfaces (`sys_read`, `sys_write`, `sys_mount`, `sys_poll`,
+     `sys_getdents`, and related structured outputs).
+   - Added safer user-string copy helper (`copyinstr_user`) for explicit user-copy
+     discipline.
+
+2. `kernel/net/socket.c`
+   - Removed direct user-pointer dereferences in structured output/input paths
+     (`sys_netifinfo`, `sys_routeinfo`, `sys_arpinfo`, and additional socket
+     argument/result staging updates).
+
+3. `kernel/core/syscall.c`
+   - `fetchint()` converted to copyin-backed behavior so syscall arg fetch does
+     not dereference user pointers directly.
+
+### B. VM ownership and teardown correctness
+
+1. `kernel/core/vm.c` read-only walk safety
+   - `walkpgdir(alloc=0)` made non-destructive for bad PDEs (no writeback while
+     performing read-only lookup).
+
+2. `kernel/core/vm.c` root ownership fix
+   - Removed kernel-half PDE syncing in `switchuvm()` (`vm_sync_kernel_pdes` path).
+   - Reason: it aliased kernel-owned page-table pages into process pgdirs, then
+     `freevm()` could free shared kernel page tables.
+
+3. `kernel/core/vm.c` anti-regression guard
+   - `freevm()` now detects and skips freeing PDE page-table pages whose PA equals
+     the corresponding `kpgdir` kernel-half PDE PA.
+   - This blocks a class of aliasing regressions from becoming destructive frees.
+
+4. `kernel/core/vm.c` switch path cleanup
+   - `switchuvm()` now snapshots `mycpu()` once and uses that local CPU pointer
+     for all TSS/GDT updates in the critical section.
+
+### C. Spinlock/interrupt nesting and SMP identity
+
+1. `kernel/core/trap.c`
+   - Timer interrupt path narrowed: `wakeup(&ticks)` moved outside `tickslock`
+     critical section to avoid lock-order inversion in IRQ context.
+
+2. `kernel/core/proc.c`
+   - `mycpu()` switched to strict reverse APIC-ID map lookup (fail-fast on
+     inconsistency, no runtime remapping/mutation in hot path).
+
+3. `kernel/core/spinlock.c`
+   - Added `mycpu_nocli()` best-effort CPU resolver for ownership checks that
+     must not mutate interrupt nesting.
+   - `holding()` now uses `mycpu_nocli()` and no longer pushes/pops CLI depth.
+
+4. `kernel/driver/console.c`
+   - `cprintf()` and console lock checks updated to rely on corrected `holding()`
+     semantics instead of ad-hoc interrupt-state workarounds.
+
+### D. Allocator corruption containment/hardening
+
+1. `kernel/core/kalloc.c`
+   - `kalloc_refill_local()` already had bad-run drop containment; latest pass
+     extended this pattern into contiguous allocator traversal.
+
+2. `kernel/core/kalloc.c` contiguous path
+   - `kalloc_contiguous()` freelist walk now validates current and next nodes
+     before dereference.
+   - On poison detection, logs and severs chain locally instead of dereferencing
+     invalid pointers (`kalloc_contiguous: drop bad run/next ...`).
+
+### E. Regressions introduced and corrected in-session
+
+1. Earlier temporary change made `holding()` return false when interrupts were
+   enabled to avoid nesting side-effects.
+2. That weakened nested-lock detection and was corrected.
+3. Current state uses `mycpu_nocli()` so `holding()` remains accurate without
+   perturbing `ncli/intena`.
+
+### F. Build/verification status for code edits
+
+- Each tranche above was followed by successful `make aux.kern` rebuild(s).
+- No compilation failures remain in modified files at this checkpoint.
+
+## New User Results Captured (Boots 1-10, latest report)
+
+### High-level outcome
+
+- Behavior remains intermittent: some boots reach shell and complete stress runs,
+  others fail with popcli underflow, triple fault, or silent reset.
+- Throughput degradation is now a prominent symptom even on non-crashing runs.
+
+### Boot/stress observations (as reported)
+
+1. Boot 1/2/3 pattern
+   - Repeated `popcli underflow` with caller set anchored at:
+     - `caller=80151ec9`
+     - `caller=80107bf2` (repeated)
+   - Panic string remains `panic: popcli` (`8017dec4` marker in panic frame).
+
+2. Boot 4
+   - Reached shell, `kmemstress -M -v -n 40` emitted
+     `kalloc_refill_local: drop bad global run=9fc7a000 drops=1`.
+   - Later silent crash/reset while typing.
+
+3. Boot 3/5
+   - `freevm: skip bad pde ...` repeats with stable suspicious raw values:
+     - `raw=8016c713` (`pa=8016c000`)
+     - `raw=80153b35` (`pa=80153000`)
+     - `raw=80118cf3` (`pa=80118000`)
+     - `raw=80118c49` (`pa=80118000`)
+
+4. Boot 4/6/9 performance regression
+   - `kallocstress` and `kmemstress` complete with pass=0 failures, but severe
+     slowdown increases with runtime.
+   - `/proc/vmstat` counters show very high allocator churn (large alloc/free,
+     refill/drain counts) while free memory remains high.
+
+5. Boot 6 specific
+   - Stressing `top` refresh (`r` spam) drives system into crawl.
+   - Diagnostic emitted: `kalloc_contiguous: drop bad run=9e246000 drops=1`.
+
+6. Boot 7/8
+   - Triple fault / automatic reboot without stable capture.
+
+7. Boot 10
+   - Popcli underflow resumed with new caller pair:
+     - `caller=80152009`
+     - `caller=80107d37` repeated
+   - Ends with `panic: popcli` (`8017e0c4` marker in panic frame).
+
+## Current Interpretation Snapshot (pre-next-investigation)
+
+1. There is still a first-corruptor writing code-like values into structures
+   consumed as PDE or freelist links.
+2. Popcli underflow remains a symptom of state inconsistency under stress,
+   but not yet conclusively the originating writer.
+3. Performance collapse suggests heavy retry/churn path activation (allocator,
+   scheduler, or interrupt-path contention), even when hard-failure counters
+   stay at zero in stress summaries.
+
+This document section intentionally freezes the full work history and latest
+results before any additional code changes.
+
+## New Boot Batch (User Report, after first-fault latch)
+
+### Observed boots (1-8)
+
+1. Boot 1
+   - First-fault capture is now stable and immediate:
+
+   ```text
+   FATAL trap: kernel-page-fault apic=0x00000001 trap=0x0000000e err=0x00000002 eip=0x8014f329 cs=0x00000008 cr2=0xfee00
+   ```
+
+2. Boot 2
+   - Survives to rc.3 path with repeated `freevm: skip bad pde ...` lines.
+   - Stable suspicious raws now include `raw=80153b85` plus prior `80118cf3/80118c49`.
+
+3. Boot 3/4/5/6/8
+   - Same latched first-fault signature as Boot 1 at `eip=0x8014f329`.
+
+4. Boot 7
+   - Similar to Boot 2 (`freevm` bad PDE skips and rc.3 progress).
+
+### Symbolication of the stable first fault
+
+- `eip=0x8014f329` resolves to [kernel.asm](kernel.asm#L96760), inside `lapiceoi`:
+
+```asm
+8014f320 <lapiceoi>:
+8014f320: mov    lapic,%eax
+8014f325: test   %eax,%eax
+8014f327: je     8014f336
+8014f329: movl   $0x0,0xb0(%eax)   ; EOI MMIO write
+```
+
+Interpretation:
+- Trap error `err=0x2` is a kernel write fault (non-present page on write).
+- Fault VA `cr2=0x000fee00` aligns with local APIC MMIO region expectations,
+  indicating the EOI write is targeting an unmapped/invalid LAPIC mapping at
+  trap time.
+- This is a major narrowing: repeated crash loop is no longer an opaque cascade;
+  it is a deterministic failure at LAPIC EOI write path on CPU 1.
+
+### Concurrent persistent signal
+
+- Boots that survive still emit repeated `freevm: skip bad pde` with code-like
+  values in PDE fields (`80153b85`, `80118cf3`, `80118c49`), reinforcing that
+  page-directory corruption producer is still active.
+
+### Current diagnostic conclusion from this batch
+
+1. Primary deterministic crash signature: LAPIC EOI MMIO write fault on CPU 1.
+2. Secondary persistent integrity signal: process pgdir kernel-half entries are
+   still receiving code-like corrupt writes.
+3. The new one-shot fatal latch succeeded in exposing the true first fault site
+   before triple-fault noise.

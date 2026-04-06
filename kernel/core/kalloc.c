@@ -506,6 +506,7 @@ char*
 kalloc_contiguous(uint npages)
 {
   struct run *r;
+  struct run *scan_next;
   struct run *prev;
   struct run *run_head;
   struct run *run_prev;
@@ -518,6 +519,7 @@ kalloc_contiguous(uint npages)
   struct kpage_meta *meta;
   char *base;
   uint marked;
+  static uint contiguous_invalid_drops;
 
   if(npages == 0)
     return 0;
@@ -539,7 +541,25 @@ kalloc_contiguous(uint npages)
   run_len = 0;
   last_pa = 0;
 
-  for(r = kmem.freelist; r; prev = r, r = r->next){
+  for(r = kmem.freelist; r; prev = r, r = scan_next){
+    if(!kalloc_free_run_valid(r)){
+      contiguous_invalid_drops++;
+      cprintf("kalloc_contiguous: drop bad run=%p drops=%u\n",
+              r, contiguous_invalid_drops);
+      if(prev)
+        prev->next = 0;
+      else
+        kmem.freelist = 0;
+      break;
+    }
+    scan_next = r->next;
+    if(scan_next && !kalloc_runptr_valid(scan_next)){
+      contiguous_invalid_drops++;
+      cprintf("kalloc_contiguous: drop bad next=%p cur=%p drops=%u\n",
+              scan_next, r, contiguous_invalid_drops);
+      r->next = 0;
+      scan_next = 0;
+    }
     pa = V2P((char *)r);
     meta = kpage_meta_pa(pa);
     if(meta && (meta->flags & KPAGE_MANAGED) && (meta->flags & KPAGE_FREE)) {

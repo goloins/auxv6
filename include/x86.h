@@ -160,6 +160,14 @@ rcr2(void)
   return val;
 }
 
+static inline uint
+rcr3(void)
+{
+  uint val;
+  asm volatile("movl %%cr3,%0" : "=r" (val));
+  return val;
+}
+
 static inline void
 lcr3(uint val)
 {
@@ -174,6 +182,20 @@ rdtsc(void)
 
   asm volatile("rdtsc" : "=a" (lo), "=d" (hi));
   return ((unsigned long long)hi << 32) | (unsigned long long)lo;
+}
+
+static inline uchar
+cpu_apicid_cpuid(void)
+{
+  uint eax;
+  uint ebx;
+  uint ecx;
+  uint edx;
+
+  eax = 1;
+  asm volatile("cpuid"
+               : "+a" (eax), "=b" (ebx), "=c" (ecx), "=d" (edx));
+  return (uchar)(ebx >> 24);
 }
 
 //PAGEBREAK: 36

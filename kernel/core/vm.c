@@ -183,6 +183,8 @@ switchkvm(void)
 void
 switchuvm(struct proc *p)
 {
+  struct cpu *c;
+
   if(p == 0)
     panic("switchuvm: no process");
   if(p->kstack == 0)
@@ -191,14 +193,15 @@ switchuvm(struct proc *p)
     panic("switchuvm: no pgdir");
 
   pushcli();
-  mycpu()->gdt[SEG_TSS] = SEG16(STS_T32A, &mycpu()->ts,
-                                sizeof(mycpu()->ts)-1, 0);
-  mycpu()->gdt[SEG_TSS].s = 0;
-  mycpu()->ts.ss0 = SEG_KDATA << 3;
-  mycpu()->ts.esp0 = (uint)p->kstack + KSTACKSIZE;
+  c = mycpu();
+  c->gdt[SEG_TSS] = SEG16(STS_T32A, &c->ts,
+                          sizeof(c->ts)-1, 0);
+  c->gdt[SEG_TSS].s = 0;
+  c->ts.ss0 = SEG_KDATA << 3;
+  c->ts.esp0 = (uint)p->kstack + KSTACKSIZE;
   // setting IOPL=0 in eflags *and* iomb beyond the tss segment limit
   // forbids I/O instructions (e.g., inb and outb) from user space
-  mycpu()->ts.iomb = (ushort) 0xFFFF;
+  c->ts.iomb = (ushort)0xFFFF;
   ltr(SEG_TSS << 3);
   lcr3(V2P(p->pgdir));  // switch to process's address space
   popcli();

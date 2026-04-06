@@ -1765,7 +1765,7 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
     return;
   if(!console_gfx_boot_ready)
     return;
-  if(!(readeflags() & FL_IF) && holding(&tickslock)) {
+  if(holding(&tickslock)) {
     console_gfx_stat_flush_blocked_tickslock++;
     return;
   }
@@ -2007,7 +2007,7 @@ cprintf(char *fmt, ...)
   int width, prec, have_prec, left, zero;
 
   locking = cons.locking;
-  if(locking && !(readeflags() & FL_IF) && holding(&cons.tty_lock))
+  if(locking && holding(&cons.tty_lock))
     locking = 0;
 #if KDEBUG_LOCKDEP
   if(locking) {

@@ -642,14 +642,20 @@ proc_handle_signals_on_return(struct proc *p)
 // Must be called with interrupts disabled
 int
 cpuid() {
-  struct cpu *c;
-  int id;
+  uchar apicid;
+  uchar idx;
 
-  pushcli();
-  c = mycpu();
-  id = c - cpus;
-  popcli();
-  return id;
+  if(ncpu <= 1)
+    return 0;
+
+  apicid = cpu_apicid_cpuid();
+  idx = apic_cpu_map[apicid];
+  if(idx != 0xff && (int)idx < ncpu && (uchar)cpus[idx].apicid == apicid)
+    return idx;
+
+  cprintf("cpuid: apic lookup failed apicid=%d ncpu=%d\n", apicid, ncpu);
+  panic("unknown apicid\n");
+  return 0;
 }
 
 // Must be called with interrupts disabled to avoid the caller being
@@ -658,7 +664,7 @@ struct cpu*
 mycpu(void)
 {
   uchar apicid;
-  int i;
+  uchar idx;
 
   if(readeflags()&FL_IF)
     panic("mycpu called with interrupts enabled\n");
@@ -667,14 +673,12 @@ mycpu(void)
   if(ncpu <= 1)
     return &cpus[0];
 
-  // Keep this lookup read-only and deterministic in runtime paths.
-  // Runtime mutation of APIC-ID maps can turn transient anomalies into
-  // cross-CPU accounting corruption (pushcli/popcli underflow cascades).
-  apicid = (uchar)lapicid();
-  for(i = 0; i < ncpu; i++){
-    if((uchar)cpus[i].apicid == apicid)
-      return &cpus[i];
-  }
+  // Strict reverse-map lookup built at mpinit().
+  // Fail fast on any inconsistency rather than returning a potentially wrong CPU.
+  apicid = cpu_apicid_cpuid();
+  idx = apic_cpu_map[apicid];
+  if(idx != 0xff && (int)idx < ncpu && (uchar)cpus[idx].apicid == apicid)
+    return &cpus[idx];
 
   cprintf("mycpu: apic lookup failed apicid=%d ncpu=%d\n", apicid, ncpu);
   panic("unknown apicid\n");

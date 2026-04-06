@@ -9,6 +9,28 @@
 #include "proc.h"
 #include "spinlock.h"
 
+extern uchar apic_cpu_map[256];
+
+// Best-effort current CPU lookup that is safe to call with interrupts enabled.
+// This is used by lock ownership checks that must not perturb ncli/intena.
+static struct cpu*
+mycpu_nocli(void)
+{
+  uchar apicid;
+  uchar idx;
+
+  if(ncpu <= 1)
+    return &cpus[0];
+
+  apicid = cpu_apicid_cpuid();
+  idx = apic_cpu_map[apicid];
+  if(idx == 0xff || (int)idx >= ncpu)
+    return 0;
+  if((uchar)cpus[idx].apicid != apicid)
+    return 0;
+  return &cpus[idx];
+}
+
 #if KDEBUG_LOCKDEP
 static int lockdep_runtime_enabled;
 
@@ -297,11 +319,12 @@ getcallerpcs(void *v, uint pcs[])
 int
 holding(struct spinlock *lock)
 {
-  // Modern contract: this helper must not perturb interrupt nesting.
-  // If interrupts are enabled, conservatively report "not held".
-  if(readeflags() & FL_IF)
+  struct cpu *c;
+
+  c = mycpu_nocli();
+  if(c == 0)
     return 0;
-  return lock->locked && lock->cpu == mycpu();
+  return lock->locked && lock->cpu == c;
 }
 
 

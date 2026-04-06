@@ -42,19 +42,59 @@
 #define TDCR    (0x03E0/4)   // Timer Divide Configuration
 
 volatile uint *lapic;  // Initialized in mp.c
+static uint lapic_boot_addr;
+static uint lapic_pointer_repairs;
+static uint lapic_eoi_kpgdir_fallbacks;
+extern pde_t *kpgdir;
+
+static volatile uint*
+lapic_ptr(void)
+{
+  volatile uint *p;
+  uint a;
+
+  p = lapic;
+  if(p == 0)
+    return 0;
+
+  a = (uint)p;
+  if(a >= DEVSPACE && (a & 0xFFF) == 0){
+    if(lapic_boot_addr == 0)
+      lapic_boot_addr = a;
+    return p;
+  }
+
+  // Recover from pointer clobbering by restoring canonical LAPIC base.
+  if(lapic_boot_addr >= DEVSPACE && (lapic_boot_addr & 0xFFF) == 0)
+    a = lapic_boot_addr;
+  else
+    a = 0xFEE00000U;
+
+  lapic = (volatile uint*)a;
+  lapic_pointer_repairs++;
+  if((lapic_pointer_repairs & 0x3f) == 1)
+    cprintf("lapic: repaired pointer old=%x new=%x repairs=%u\n",
+            (uint)p, a, lapic_pointer_repairs);
+  return lapic;
+}
 
 //PAGEBREAK!
 static void
 lapicw(int index, int value)
 {
-  lapic[index] = value;
-  lapic[ID];  // wait for write to finish, by reading
+  volatile uint *p;
+
+  p = lapic_ptr();
+  if(p == 0)
+    return;
+  p[index] = value;
+  p[ID];  // wait for write to finish, by reading
 }
 
 void
 lapicinit(void)
 {
-  if(!lapic)
+  if(!lapic_ptr())
     return;
 
   // Enable local APIC; set spurious interrupt vector.
@@ -74,7 +114,7 @@ lapicinit(void)
 
   // Disable performance counter overflow interrupts
   // on machines that provide that interrupt entry.
-  if(((lapic[VER]>>16) & 0xFF) >= 4)
+  if(((lapic_ptr()[VER]>>16) & 0xFF) >= 4)
     lapicw(PCINT, MASKED);
 
   // Map error interrupt to IRQ_ERROR.
@@ -90,7 +130,7 @@ lapicinit(void)
   // Send an Init Level De-Assert to synchronise arbitration ID's.
   lapicw(ICRHI, 0);
   lapicw(ICRLO, BCAST | INIT | LEVEL);
-  while(lapic[ICRLO] & DELIVS)
+  while(lapic_ptr()[ICRLO] & DELIVS)
     ;
 
   // Enable interrupts on the APIC (but not on the processor).
@@ -100,17 +140,46 @@ lapicinit(void)
 int
 lapicid(void)
 {
-  if (!lapic)
+  volatile uint *p;
+
+  p = lapic_ptr();
+  if (!p)
     return 0;
-  return lapic[ID] >> 24;
+  return p[ID] >> 24;
 }
 
 // Acknowledge interrupt.
 void
 lapiceoi(void)
 {
-  if(lapic)
-    lapicw(EOI, 0);
+  volatile uint *p;
+  uint oldcr3;
+  uint kcr3;
+
+  p = lapic_ptr();
+  if(!p)
+    return;
+
+  // If the current CR3 cannot access LAPIC MMIO, ack via kpgdir and restore.
+  if(!kaddr_writable_current_pgdir((char*)&p[EOI])){
+    if(kpgdir == 0)
+      return;
+    oldcr3 = rcr3();
+    kcr3 = V2P(kpgdir);
+    if(oldcr3 != kcr3)
+      lcr3(kcr3);
+    p = lapic_ptr();
+    if(p){
+      p[EOI] = 0;
+      p[ID];
+    }
+    if(oldcr3 != kcr3)
+      lcr3(oldcr3);
+    lapic_eoi_kpgdir_fallbacks++;
+    return;
+  }
+
+  lapicw(EOI, 0);
 }
 
 // Spin for a given number of microseconds.
