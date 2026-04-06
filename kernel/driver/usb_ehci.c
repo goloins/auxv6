@@ -177,3 +177,39 @@ usb_ehci_start(struct usb_hc_probe *sc, struct pci_dev *dev)
 
   return 0;
 }
+
+/* PORTSC registers: opbase + 0x44 + n*4 (EHCI spec §2.3.9). */
+#define EHCI_OP_PORTSC_BASE  0x44
+#define EHCI_PORTSC_CCS      (1U << 0)   /* Current Connect Status */
+#define EHCI_PORTSC_CSC      (1U << 1)   /* Connect Status Change (RWC) */
+
+int
+usb_ehci_scan_ports(struct usb_hc_probe *sc, struct pci_dev *dev)
+{
+  volatile uint *regs;
+  uint opbase;
+  uint n;
+
+  if(!sc || !sc->reg_probe_ok || sc->rh_ports == 0)
+    return 0;
+
+  regs = ehci_regs(dev);
+  if(!regs)
+    return -1;
+
+  opbase = (uint)sc->cap_length;
+  if(opbase < 0x10 || opbase > 0x40)
+    return -1;
+
+  sc->rh_connect_bits = 0;
+  sc->rh_change_bits = 0;
+
+  for(n = 0; n < sc->rh_ports && n < 32; n++){
+    uint portsc = ehci_read(regs, opbase + EHCI_OP_PORTSC_BASE + n * 4);
+    if(portsc & EHCI_PORTSC_CCS)
+      sc->rh_connect_bits |= (1U << n);
+    if(portsc & EHCI_PORTSC_CSC)
+      sc->rh_change_bits |= (1U << n);
+  }
+  return 0;
+}

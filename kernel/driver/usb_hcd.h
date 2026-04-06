@@ -47,6 +47,7 @@ struct usb_hc_probe {
   uchar rh_present;
   uchar rh_ports;
   uint rh_change_bits;
+  uint rh_connect_bits;
   uint probe_attempts;
   uint probe_successes;
   uint probe_failures;
@@ -59,6 +60,9 @@ struct usb_hc_probe {
   uint start_attempts;
   uint start_successes;
   uint start_failures;
+  uint scan_attempts;
+  uint scan_successes;
+  uint scan_failures;
   uint last_error;
   uint init_failures;
 };
@@ -69,6 +73,7 @@ struct usb_hc_ops {
   int (*reset)(struct usb_hc_probe *sc, struct pci_dev *dev);
   int (*halt)(struct usb_hc_probe *sc, struct pci_dev *dev);
   int (*start)(struct usb_hc_probe *sc, struct pci_dev *dev);
+  int (*scan_ports)(struct usb_hc_probe *sc, struct pci_dev *dev);
 };
 
 int usb_probe_uhci_regs(struct usb_hc_probe *sc, struct pci_dev *dev);
@@ -87,5 +92,9 @@ int usb_ehci_start(struct usb_hc_probe *sc, struct pci_dev *dev);
 int usb_xhci_reset(struct usb_hc_probe *sc, struct pci_dev *dev);
 int usb_xhci_halt(struct usb_hc_probe *sc, struct pci_dev *dev);
 int usb_xhci_start(struct usb_hc_probe *sc, struct pci_dev *dev);
+int usb_uhci_scan_ports(struct usb_hc_probe *sc, struct pci_dev *dev);
+int usb_ohci_scan_ports(struct usb_hc_probe *sc, struct pci_dev *dev);
+int usb_ehci_scan_ports(struct usb_hc_probe *sc, struct pci_dev *dev);
+int usb_xhci_scan_ports(struct usb_hc_probe *sc, struct pci_dev *dev);
 
 #endif

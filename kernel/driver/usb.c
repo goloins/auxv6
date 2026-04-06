@@ -33,6 +33,7 @@ static const struct usb_hc_ops usb_hc_ops_uhci = {
   .reset = usb_uhci_reset,
   .halt = usb_uhci_halt,
   .start = usb_uhci_start,
+  .scan_ports = usb_uhci_scan_ports,
 };
 
 static const struct usb_hc_ops usb_hc_ops_ohci = {
@@ -41,6 +42,7 @@ static const struct usb_hc_ops usb_hc_ops_ohci = {
   .reset = usb_ohci_reset,
   .halt = usb_ohci_halt,
   .start = usb_ohci_start,
+  .scan_ports = usb_ohci_scan_ports,
 };
 
 static const struct usb_hc_ops usb_hc_ops_ehci = {
@@ -49,6 +51,7 @@ static const struct usb_hc_ops usb_hc_ops_ehci = {
   .reset = usb_ehci_reset,
   .halt = usb_ehci_halt,
   .start = usb_ehci_start,
+  .scan_ports = usb_ehci_scan_ports,
 };
 
 static const struct usb_hc_ops usb_hc_ops_xhci = {
@@ -57,6 +60,7 @@ static const struct usb_hc_ops usb_hc_ops_xhci = {
   .reset = usb_xhci_reset,
   .halt = usb_xhci_halt,
   .start = usb_xhci_start,
+  .scan_ports = usb_xhci_scan_ports,
 };
 
 static int
@@ -341,6 +345,13 @@ usb_init(void)
               sc->init_failures++;
             } else {
               sc->start_successes++;
+              if(ops->scan_ports){
+                sc->scan_attempts++;
+                if(ops->scan_ports(sc, dev) < 0)
+                  sc->scan_failures++;
+                else
+                  sc->scan_successes++;
+              }
             }
           }
         }
@@ -518,6 +529,14 @@ usb_procfs_dump(char *buf, uint max)
     if(usb_buf_putu(buf, max, &len, sc->start_successes) < 0) goto out;
     if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
     if(usb_buf_putu(buf, max, &len, sc->start_failures) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " sc=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, sc->scan_attempts) < 0) goto out;
+    if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, sc->scan_successes) < 0) goto out;
+    if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, sc->scan_failures) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " rh_connect=0x") < 0) goto out;
+    if(usb_buf_puthex32(buf, max, &len, sc->rh_connect_bits) < 0) goto out;
     if(usb_buf_puts(buf, max, &len, " failures=") < 0) goto out;
     if(usb_buf_putu(buf, max, &len, sc->init_failures) < 0) goto out;
 
