@@ -56,8 +56,9 @@ This document holds the detailed 2026-04 change history that was moved out of `d
 
 ## Known Regressions and Constraints (Tracked)
 
-- `NFILE=1024` remains a known trap-14 boundary failure; `NFILE=1023` remains the safe lock value while root cause work is pending.
+- `NFILE` global table was fully antiquated by the P1-A tranche (replaced by per-process dynamic `fdtable`, `NOFILE_DEFAULT`/`NOFILE_HARD` policy). The former `NFILE=1024` trap-14 boundary is a moot historical note; the crash path no longer exists.
 - TUN/TAP is partially landed (Phase 0 + early Phase 1 foundations); TAP/L2 parity and full soak signoff remain pending.
+- Guest validation (2026-04-05): `/dev/net/tun` is present under `/dev/net`, `devman -s` is idempotent for device creation, and `tuntapctl create tun tun0` succeeds in-guest (`tun0 mode=tun flags=0x1001`).
 - exFAT device-selection parity in `sys_mount` remains an open integration item.
 
 ## Cross-References
