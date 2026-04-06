@@ -83,6 +83,8 @@ user/route
 user/arp
 user/rarp
 user/ip
+user/tuntapctl
+user/tuntest
 user/dhcp
 user/v6dhcpd
 user/ntpd

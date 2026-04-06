@@ -209,6 +209,23 @@ maybe_release_unit_locked(int unit)
   memset(&tuntap_state.units[unit], 0, sizeof(tuntap_state.units[unit]));
 }
 
+static void
+unregister_if_locked(int unit)
+{
+  struct tuntap_unit *u;
+
+  if(unit < 0 || unit >= TUNTAP_MAX_UNITS)
+    return;
+  u = &tuntap_state.units[unit];
+  if(!u->allocated || !u->if_registered)
+    return;
+
+  if_unregister(&u->ifp);
+  u->if_registered = 0;
+  memset(&u->ifp, 0, sizeof(u->ifp));
+  memset(&u->if_ops, 0, sizeof(u->if_ops));
+}
+
 static int
 rxq_empty(struct tuntap_unit *u)
 {
@@ -298,6 +315,8 @@ register_if_locked(int idx)
   safestrcpy(u->ifp.if_xname, u->name, sizeof(u->ifp.if_xname));
   u->ifp.if_mtu = MBUF_SIZE;
   u->ifp.if_flags = IFF_UP | IFF_RUNNING;
+  if(u->mode == IFF_TUN)
+    u->ifp.if_flags |= IFF_POINTOPOINT;
   u->ifp.if_softc = u;
   u->ifp.if_input = (u->mode == IFF_TAP) ? ether_input : ip_input;
   u->if_ops.if_output = if_output_tuntap;
@@ -637,6 +656,8 @@ tuntap_close(struct file *f)
   if(ui >= 0 && ui < TUNTAP_MAX_UNITS && tuntap_state.units[ui].allocated){
     if(tuntap_state.units[ui].refs > 0)
       tuntap_state.units[ui].refs--;
+    if(tuntap_state.units[ui].refs == 0 && !tuntap_state.units[ui].persist)
+      unregister_if_locked(ui);
     maybe_release_unit_locked(ui);
   }
 

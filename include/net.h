@@ -20,6 +20,7 @@
 // Interface flags (subset, BSD-style naming)
 #define IFF_UP        0x1
 #define IFF_BROADCAST 0x2
+#define IFF_POINTOPOINT 0x10
 #define IFF_LOOPBACK  0x8
 #define IFF_RUNNING   0x40
 
@@ -190,6 +191,7 @@ struct arp_info {
 void netdev_init(void);
 void netdev_poll(void);
 int if_register(struct ifnet *ifp);
+int if_unregister(struct ifnet *ifp);
 struct ifnet* if_get(char *name);
 struct ifnet* if_byindex(uint ifindex);
 struct ifnet* if_first(void);

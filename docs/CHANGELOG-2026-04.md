@@ -36,6 +36,7 @@ This document holds the detailed 2026-04 change history that was moved out of `d
 - FAT32 NVMe workflow validated end-to-end; `fatregress -d /mnt/fat32` reported all checks passed.
 - exFAT, btrfs, and ufs2 read-only first tranches are in-tree with documented scope boundaries.
 - User stack growth (Area 5) is complete and guest validated (`stackgrowtest` 3/3 pass).
+- TUN/TAP Phase 1 follow-on landed: nonpersistent tun close now unregisters interface state cleanly, `tuntest` is in-tree for nonblock/poll/ICMP self validation, and guest-visible `tun0` creation now lines up with `ifconfig`/`/proc/net_dev` semantics.
 
 ## Past Changes (2026-03-30 to 2026-04-03)
 

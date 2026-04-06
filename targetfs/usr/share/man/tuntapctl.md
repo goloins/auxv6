@@ -6,11 +6,11 @@ tuntapctl - Create and manage `/dev/net/tun` virtual interface bindings.
 ## Synopsis
 ```
 tuntapctl create <tun|tap> [name]
-tuntapctl destroy <tun|tap> <name>
-tuntapctl get <tun|tap> <name>
-tuntapctl persist <tun|tap> <name> <0|1>
-tuntapctl owner <tun|tap> <name> <uid>
-tuntapctl group <tun|tap> <name> <gid>
+tuntapctl destroy [<tun|tap>] <name>
+tuntapctl get [<tun|tap>] <name>
+tuntapctl persist [<tun|tap>] <name> <0|1>
+tuntapctl owner [<tun|tap>] <name> <uid>
+tuntapctl group [<tun|tap>] <name> <gid>
 ```
 
 ## Duty
@@ -23,19 +23,20 @@ policy.
   omitted, kernel-side auto-allocation is used. Automatically sets
   `TUNSETPERSIST=1` so the kernel network interface survives after this fd closes.
   The created interface is immediately visible via `ifconfig`.
-- `destroy <tun|tap> <name>` — Bind the named unit and set `TUNSETPERSIST=0`,
+- `destroy [<tun|tap>] <name>` — Bind the named unit and set `TUNSETPERSIST=0`,
   allowing the kernel to release the unit once all fds are closed.
-- `get <tun|tap> <name>` — Bind the named unit and print current mode flags
+- `get [<tun|tap>] <name>` — Bind the named unit and print current mode flags
   via `TUNGETIFF`.
-- `persist <tun|tap> <name> <0|1>` — Set `TUNSETPERSIST` for the bound unit.
-- `owner <tun|tap> <name> <uid>` — Set `TUNSETOWNER` for the bound unit.
-- `group <tun|tap> <name> <gid>` — Set `TUNSETGROUP` for the bound unit.
+- `persist [<tun|tap>] <name> <0|1>` — Set `TUNSETPERSIST` for the bound unit.
+- `owner [<tun|tap>] <name> <uid>` — Set `TUNSETOWNER` for the bound unit.
+- `group [<tun|tap>] <name> <gid>` — Set `TUNSETGROUP` for the bound unit.
 
 ## Notes
 - `tuntapctl` always opens `/dev/net/tun` and requires that node to exist
   (typically created by `devman -s`).
 - The utility requests `IFF_NO_PI` when binding/creating units.
-- Mode must be either `tun` or `tap`.
+- For non-create commands, mode may be omitted when `name` starts with `tun`
+  or `tap` (for example, `tun0`, `tap3`).
 - `tun0` is a kernel virtual network interface and is NOT visible as a file
   under `/dev/net/`. After `create`, use `ifconfig` to see it and assign an
   address.
@@ -52,6 +53,11 @@ devman -s
 tuntapctl create tun
 tuntapctl create tun tun0
 ifconfig tun0 10.0.0.1 netmask 255.255.255.0
+tuntapctl get tun0
+tuntapctl persist tun0 1
+tuntapctl owner tun0 1000
+tuntapctl group tun0 1000
+tuntapctl destroy tun0
 tuntapctl get tun tun0
 tuntapctl persist tun tun0 1
 tuntapctl owner tun tun0 1000

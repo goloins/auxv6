@@ -104,6 +104,40 @@ if_register(struct ifnet *ifp)
 	return 0;
 }
 
+int
+if_unregister(struct ifnet *ifp)
+{
+	struct ifnet **link;
+	uint old_addr;
+	uint old_mask;
+
+	if(ifp == 0)
+		return -1;
+
+	acquire(&if_lock);
+	link = &if_list;
+	while(*link && *link != ifp)
+		link = &(*link)->if_next;
+	if(*link == 0){
+		release(&if_lock);
+		return -1;
+	}
+	*link = ifp->if_next;
+	ifp->if_next = 0;
+	old_addr = ifp->if_addr;
+	old_mask = ifp->if_netmask;
+	ifp->if_addr = 0;
+	ifp->if_netmask = 0;
+	ifp->if_flags &= ~(IFF_UP | IFF_RUNNING);
+	ifp->if_link_state = LINK_STATE_DOWN;
+	release(&if_lock);
+
+	if(old_addr != 0 && old_mask != 0)
+		(void)route_delete(old_addr & old_mask, old_mask, ifp);
+
+	return 0;
+}
+
 struct ifnet*
 if_get(char *name)
 {

@@ -102,7 +102,7 @@ Primary goal: hold the current kernel/userland gains as the stable baseline whil
 ### In-progress priorities
 1. Kernel-core COW/perf follow-through: keep the current Phase-4-slice-2 baseline stable (`kallocstress` 92/100, `schedperf` 87/100, `fsperf` 87/100), then harden correctness before wider COW expansion. Details: `docs/allocator-vm-refactor-blueprint.md` and `docs/kernel-perf-hardening.md`.
 2. Storage reliability follow-through: keep AHCI/NVMe/virtio behavior stable under repeat attach/mount/unmount cycles; finish NVMe interrupt-driven completion. Details: `docs/nvme-driver.md`.
-3. TUN/TAP completion path: Phase 0 is landed and early Phase 1 tun datapath is in-tree; complete TAP/L2 parity plus soak/regression signoff. Details: `docs/tuntap-design-and-phase-plan.md`.
+3. TUN/TAP completion path: Phase 0 is landed and Phase 1 now includes tun datapath, nonpersistent lifecycle teardown, and first-pass regression coverage via `tuntest`; complete TAP/L2 parity plus soak/regression signoff. Details: `docs/tuntap-design-and-phase-plan.md`.
 4. Libc/POSIX thread-enablement and remaining truthfulness edges: threads remain the major unlanded runtime feature; portability surface should only expand where kernel backing is real. Details: `docs/libc-posix-unified-tranche-inventory.md`.
 5. Server7/graphics boundary follow-through: continue ownership/bootflow integration while keeping canonical console paths stable. Details: `docs/graphics-subsystem-design.md` and `docs/framebuffer-implementation-vt-summary.md`.
 
@@ -110,7 +110,7 @@ Primary goal: hold the current kernel/userland gains as the stable baseline whil
 - Descriptor policy now uses per-process dynamic `fdtable` plus `NOFILE_DEFAULT`/`NOFILE_HARD`; the historical global `NFILE` boundary issue is obsolete. Details: `docs/death-of-xv6.md` and `docs/CHANGELOG-2026-04.md`.
 - Missing syscall families remain, notably `mmap`, plus broader non-tty `ioctl` coverage.
 - Modem stack remains early (probe visibility and baseline tty wiring exist; deeper UART, pgrp/session, and AT/PPP behavior remains).
-- TUN/TAP is partial (tun control plane plus early datapath are landed; TAP and full compatibility/soak remain).
+- TUN/TAP is partial (tun control plane, core Phase 1 datapath, teardown semantics, and first-pass regression coverage are landed; TAP and full compatibility/soak remain).
 
 ## Recommended Next Steps
 

@@ -74,6 +74,14 @@ ip_output_ttl(struct ifnet *ifp, uchar proto, uint src, uint dst,
 		return len;
 	}
 
+	if(ifp->if_flags & IFF_POINTOPOINT){
+		if(if_output(ifp, m) < 0){
+			mbuf_free(m);
+			return -1;
+		}
+		return len;
+	}
+
 	gateway = 0;
 	route_lookup(dst, 0, &gateway);
 	if(ether_output_ip(ifp, m, gateway ? gateway : dst) < 0){

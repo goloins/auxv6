@@ -703,6 +703,7 @@ int             socket_get_table(struct socket_info_k *out, int max);
 void            netdev_init(void);
 void            netdev_poll(void);
 int             if_register(struct ifnet*);
+int             if_unregister(struct ifnet*);
 struct ifnet*   if_get(char*);
 struct ifnet*   if_byindex(uint);
 struct ifnet*   if_first(void);

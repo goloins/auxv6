@@ -227,12 +227,14 @@ Started now:
 - Kernel egress path enqueues frames into per-unit queues through ifnet `if_output`.
 - Tun file descriptors now have a queue-backed read path (`fileread`) and tun-mode write ingress (`filewrite`) into the IP input path.
 - `O_NONBLOCK` is now tracked for tun file descriptors via `fcntl(F_SETFL/F_GETFL)` and respected by queue reads.
+- Nonpersistent close semantics now unregister tun interfaces from the ifnet list and release their unit state, so destroy/teardown behavior is testable instead of purely cosmetic.
+- An in-tree regression utility now exists (`tuntest`) covering empty nonblocking reads, empty-queue poll readiness, and an end-to-end tun ICMP self-test that injects an echo request and validates the queued reply.
 
 Current Phase 1 limitations (expected at tranche start):
 
 - No TAP ingress handling yet (writes are tun-only for now).
 - Queue model is intentionally simple (single queue, fixed depth, no multiqueue).
-- No dedicated regression binary yet for queue semantics (`tuntest` remains follow-on).
+- Regression coverage is still first-pass only: no soak loops, mixed-interface stress, or TAP/L2 validation yet.
 
 This is the intended first landing for Phase 1: real tun data path foundations without broadening scope prematurely.
 

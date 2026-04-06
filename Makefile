@@ -533,6 +533,9 @@ _ip: user/ip
 _tuntapctl: user/tuntapctl
 	cp user/tuntapctl _tuntapctl
 
+_tuntest: user/tuntest
+	cp user/tuntest _tuntest
+
 _v6dhcpd: user/v6dhcpd
 	cp user/v6dhcpd _v6dhcpd
 
@@ -731,6 +734,7 @@ UPROGS=\
 	_rarp\
 	_ip\
 	_tuntapctl\
+	_tuntest\
 	_v6dhcpd\
 	_ntpd\
 	_passwd\
@@ -878,6 +882,7 @@ clean:
 	user/uname \
 	_dhcp \
 	user/ifconfig user/netstat user/route user/arp user/rarp user/ip \
+	user/tuntapctl user/tuntest \
 	user/dhcp user/v6dhcpd user/ntpd user/nslookup \
 	user/6get \
 	user/abrowse \

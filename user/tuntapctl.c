@@ -8,11 +8,11 @@ static void
 usage(void)
 {
   dprintf(2, "usage: tuntapctl create <tun|tap> [name]\n");
-  dprintf(2, "       tuntapctl destroy <tun|tap> <name>\n");
-  dprintf(2, "       tuntapctl get <tun|tap> <name>\n");
-  dprintf(2, "       tuntapctl persist <tun|tap> <name> <0|1>\n");
-  dprintf(2, "       tuntapctl owner <tun|tap> <name> <uid>\n");
-  dprintf(2, "       tuntapctl group <tun|tap> <name> <gid>\n");
+  dprintf(2, "       tuntapctl destroy [<tun|tap>] <name>\n");
+  dprintf(2, "       tuntapctl get [<tun|tap>] <name>\n");
+  dprintf(2, "       tuntapctl persist [<tun|tap>] <name> <0|1>\n");
+  dprintf(2, "       tuntapctl owner [<tun|tap>] <name> <uid>\n");
+  dprintf(2, "       tuntapctl group [<tun|tap>] <name> <gid>\n");
   exit(1);
 }
 
@@ -22,6 +22,18 @@ parse_mode(const char *s)
   if(strcmp(s, "tun") == 0)
     return IFF_TUN;
   if(strcmp(s, "tap") == 0)
+    return IFF_TAP;
+  return -1;
+}
+
+static int
+mode_from_ifname(const char *name)
+{
+  if(name == 0)
+    return -1;
+  if(strncmp(name, "tun", 3) == 0)
+    return IFF_TUN;
+  if(strncmp(name, "tap", 3) == 0)
     return IFF_TAP;
   return -1;
 }
@@ -47,6 +59,8 @@ main(int argc, char **argv)
   int mode;
   int val;
   int req;
+  const char *ifname;
+  const char *valarg;
   struct ifreq ifr;
 
   if(argc < 3)
@@ -82,14 +96,43 @@ main(int argc, char **argv)
     exit(0);
   }
 
-  if(argc < 4)
-    usage();
-  mode = parse_mode(argv[2]);
-  if(mode < 0)
-    usage();
+  ifname = 0;
+  valarg = 0;
 
-  if(bind_name(fd, mode, argv[3], &ifr) < 0){
-    dprintf(2, "tuntapctl: bind failed for %s\n", argv[3]);
+  if(strcmp(argv[1], "destroy") == 0 || strcmp(argv[1], "get") == 0){
+    if(argc == 4){
+      mode = parse_mode(argv[2]);
+      ifname = argv[3];
+    } else if(argc == 3){
+      ifname = argv[2];
+      mode = mode_from_ifname(ifname);
+    } else {
+      usage();
+    }
+    if(mode < 0)
+      usage();
+  } else if(strcmp(argv[1], "persist") == 0 ||
+            strcmp(argv[1], "owner") == 0 ||
+            strcmp(argv[1], "group") == 0){
+    if(argc == 5){
+      mode = parse_mode(argv[2]);
+      ifname = argv[3];
+      valarg = argv[4];
+    } else if(argc == 4){
+      ifname = argv[2];
+      mode = mode_from_ifname(ifname);
+      valarg = argv[3];
+    } else {
+      usage();
+    }
+    if(mode < 0)
+      usage();
+  } else {
+    usage();
+  }
+
+  if(bind_name(fd, mode, ifname, &ifr) < 0){
+    dprintf(2, "tuntapctl: bind failed for %s\n", ifname);
     close(fd);
     exit(1);
   }
@@ -114,15 +157,12 @@ main(int argc, char **argv)
       close(fd);
       exit(1);
     }
-    dprintf(1, "%s destroyed\n", argv[3]);
+    dprintf(1, "%s destroyed\n", ifname);
     close(fd);
     exit(0);
   }
 
-  if(argc != 5)
-    usage();
-
-  val = atoi(argv[4]);
+  val = atoi(valarg);
   req = -1;
   if(strcmp(argv[1], "persist") == 0)
     req = TUNSETPERSIST;
@@ -139,7 +179,7 @@ main(int argc, char **argv)
     exit(1);
   }
 
-  dprintf(1, "%s ok: %s=%d\n", argv[3], argv[1], val);
+  dprintf(1, "%s ok: %s=%d\n", ifname, argv[1], val);
   close(fd);
   exit(0);
 }
