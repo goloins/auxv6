@@ -107,8 +107,20 @@ Btrfs image generation is now wired into the build on Linux hosts via `tools/sta
 
 Useful targets:
 - `make nvme-btrfs.img` builds a deterministic read-only test image with sample files and a symlink.
+- `make btrfs-host-verify` checks key superblock fields from the generated image using `btrfs inspect-internal dump-super`.
+- `make test-btrfs-smoke` prepares kernel + ext2 + btrfs artifacts and prints the manual guest commands for smoke validation.
+- `make test-btrfs-regression` runs both the host verify step and smoke-prep flow.
 - `make qemu-nvme-btrfs` boots auxv6 with the Btrfs image attached to NVMe.
 - `make qemu-nox-nvme-btrfs` does the same in serial-only mode.
 - `make btrfs-reset` rebuilds the image from scratch.
+
+Root requirement:
+- Building `nvme-btrfs.img` is root-gated in Makefile. Run it with `sudo` so the staged image is created through the supported root flow.
+- Typical sequence:
+	1. `sudo make test-btrfs-smoke`
+	2. `make qemu-nvme-btrfs`
+	3. In guest: `mkdir -p /mnt/nvme && mount -t btrfs n0 /mnt/nvme`
+	4. Run `ls -la /mnt/nvme`, `cat /mnt/nvme/README.TXT`, `cat /mnt/nvme/README.LNK`, `cat /mnt/nvme/SUBDIR/NOTE.TXT`
+	5. Confirm read-only behavior: `echo x > /mnt/nvme/NEWFILE.TXT` should fail
 
 On macOS, these targets fail with a clear error because `mkfs.btrfs` is Linux-only for this workflow.

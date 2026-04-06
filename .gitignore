@@ -158,3 +158,4 @@ user/netcat
 aux.bootkern
 .extra_cflags.stamp
 user/fdtest
+.btrfsroot/

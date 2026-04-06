@@ -1213,6 +1213,11 @@ nvme-fat.img:
 # Inside the guest:
 #   mkdir /mnt/nvme && mount -t btrfs n0 /mnt/nvme
 nvme-btrfs.img: tools/stage-btrfs-root.sh
+	@if [ "$$(id -u)" -ne 0 ]; then \
+		echo "error: building $(BTRFSIMG) requires root (mkfs.btrfs test image flow)" >&2; \
+		echo "hint: run 'sudo make $(BTRFSIMG)' or 'sudo make test-btrfs-smoke'" >&2; \
+		exit 1; \
+	fi
 	sh tools/stage-btrfs-root.sh $(BTRFSROOT_STAGE) $(BTRFSIMG)
 
 # NVMe UFS2 test image scaffold.
@@ -1415,6 +1420,34 @@ qemu-nox-nvme-btrfs: aux.bootkern $(EXT2IMG) nvme-btrfs.img
 		-device nvme,drive=nvme0,serial=auxv6nvme0 \
 		$(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
+# Btrfs host-side sanity check without launching the guest.
+# Prints key superblock fields from the staged image.
+btrfs-host-verify: $(BTRFSIMG)
+	@BTRFS_INSPECT=$$(command -v btrfs 2>/dev/null || true); \
+	if [ -z "$$BTRFS_INSPECT" ]; then \
+		echo "error: btrfs command not found; install btrfs-progs" >&2; \
+		exit 1; \
+	fi; \
+	"$$BTRFS_INSPECT" inspect-internal dump-super -f $(BTRFSIMG) | \
+		grep -E 'label|num_devices|sectorsize|nodesize|sys_chunk_array_size' | head -n 8
+
+# Build-only smoke target for manual guest-side validation flow.
+# We intentionally keep execution manual in the guest console.
+test-btrfs-smoke: aux.bootkern $(EXT2IMG) $(BTRFSIMG)
+	@echo "Btrfs smoke artifacts are ready."
+	@echo "1) Boot: make qemu-nvme-btrfs"
+	@echo "2) In guest console, run:"
+	@echo "   mkdir -p /mnt/nvme"
+	@echo "   mount -t btrfs n0 /mnt/nvme"
+	@echo "   ls -la /mnt/nvme"
+	@echo "   cat /mnt/nvme/README.TXT"
+	@echo "   cat /mnt/nvme/README.LNK"
+	@echo "   cat /mnt/nvme/SUBDIR/NOTE.TXT"
+	@echo "   echo x > /mnt/nvme/NEWFILE.TXT"
+
+test-btrfs-regression: test-btrfs-smoke btrfs-host-verify
+	@echo "Btrfs regression prep complete (host verify + guest smoke commands printed)."
+
 # NVMe UFS2 test: same config with a UFS2 test volume.
 # Inside the guest:
 #   mkdir /mnt/nvme && mount -t ufs2 n0 /mnt/nvme
@@ -1598,4 +1631,4 @@ tar:
 	cp dist/* config/.gdbinit.tmpl /tmp/xv6
 	(cd /tmp; tar cf - xv6) | gzip >xv6-rev10.tar.gz  # the next one will be 10 (9/17)
 
-.PHONY: dist-test dist ext2-reset fat-reset fat32-reset exfat-reset btrfs-reset ufs2-reset ext2root qemu-ext2root qemu-nox-ext2root qemu-gdb-ext2root qemu-nox-gdb-ext2root qemu-fat qemu-nox-fat qemu-oldinit e1000 qemu-nvme-btrfs qemu-nox-nvme-btrfs qemu-nvme-ufs2 qemu-nox-nvme-ufs2 qemu-nvme-fat32 qemu-nox-nvme-fat32 qemu-nvme-exfat qemu-nox-nvme-exfat
+.PHONY: dist-test dist ext2-reset fat-reset fat32-reset exfat-reset btrfs-reset ufs2-reset ext2root qemu-ext2root qemu-nox-ext2root qemu-gdb-ext2root qemu-nox-gdb-ext2root qemu-fat qemu-nox-fat qemu-oldinit e1000 qemu-nvme-btrfs qemu-nox-nvme-btrfs qemu-nvme-ufs2 qemu-nox-nvme-ufs2 qemu-nvme-fat32 qemu-nox-nvme-fat32 qemu-nvme-exfat qemu-nox-nvme-exfat btrfs-host-verify test-btrfs-smoke test-btrfs-regression

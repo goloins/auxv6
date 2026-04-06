@@ -14,6 +14,12 @@ if [ "$(uname -s)" != "Linux" ]; then
   exit 1
 fi
 
+if [ "$(id -u)" -ne 0 ]; then
+  echo "error: this Btrfs staging flow requires root privileges" >&2
+  echo "hint: run with sudo (for example: sudo make nvme-btrfs.img)" >&2
+  exit 1
+fi
+
 MKFS_BTRFS=""
 for p in "$(command -v mkfs.btrfs 2>/dev/null || true)" /sbin/mkfs.btrfs /usr/sbin/mkfs.btrfs /usr/bin/mkfs.btrfs; do
   if [ -n "$p" ] && [ -x "$p" ]; then
