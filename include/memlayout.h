@@ -6,7 +6,7 @@
 
 // Early-boot identity/high mapping window used by entrypgdir before kvmalloc.
 // Must be a multiple of 4MB because entrypgdir uses 4MB PDEs (PTE_PS).
-#define BOOT_EARLY_PHYSTOP 0x00800000  // 8 MB
+#define BOOT_EARLY_PHYSTOP 0x01000000  // 16 MB
 
 // Key addresses for address space layout (see kmap in vm.c for layout)
 #define KERNBASE 0x80000000         // First kernel virtual address

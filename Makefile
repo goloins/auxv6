@@ -339,6 +339,7 @@ LIBAUXV6_OBJS = user/crt0.o user/usys.o user/printf.o user/resolve.o
 ULIB = $(LIBC_OBJS) $(LIBAUXV6_OBJS)
 
 USER_STAGE_DIR = user/.stage
+USER_PROG_JOBS ?= $(shell nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 
 # sh is close to xv6 MAXFILE; compile with -Os to keep the binary under limit.
 user/sh.o: user/sh.c
@@ -682,6 +683,13 @@ _ftwtest: user/ftwtest
 _ftstest: user/ftstest
 	cp user/ftstest _ftstest
 
+.PHONY: userprogs userprogs-oldinit
+userprogs:
+	+$(MAKE) -j$(USER_PROG_JOBS) $(UPROGS)
+
+userprogs-oldinit:
+	+$(MAKE) -j$(USER_PROG_JOBS) $(UPROGS_OLDINIT)
+
 ifeq ($(LEGACY_XV6FS),1)
 mkfs: tools/mkfs.c include/fs.h
 	gcc -Werror -Wall -o mkfs tools/mkfs.c
@@ -836,9 +844,9 @@ qemu-nox-gdb-ext2root: .gdbinit
 # Single-image GRUB boot targets.
 # Build this target with ROOTFS_DEV set to /dev/hda1 (HD_PART_DEV(0,1)).
 auxv6.img: ROOTFS_DEV_VALUE=4
-auxv6.img: tools/build-auxv6-img.sh tools/stage-ext2-root.sh aux.kern \
+auxv6.img: tools/build-auxv6-img.sh tools/stage-ext2-root.sh aux.kern userprogs \
 		$(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) \
-		$(ROOTFS_TARGETFS_FILES) $(UPROGS)
+		$(ROOTFS_TARGETFS_FILES)
 	sh tools/stage-ext2-root.sh .auxv6root .auxv6-part.img \
 		$(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) \
 		$(ROOTFS_TARGETFS_FILES) $(UPROGS)
@@ -995,13 +1003,13 @@ $(TARGETFS_DIR)/tmp/test.iso:
 	fi
 	rm -rf .isoroot
 #nice
-test_ext2.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) $(UPROGS)
+test_ext2.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) userprogs
 	sh tools/stage-ext2-root.sh .ext2root $(EXT2IMG) $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) $(UPROGS)
 
-test_ext2_server7.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES_SERVER7) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) $(UPROGS)
+test_ext2_server7.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES_SERVER7) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) userprogs
 	sh tools/stage-ext2-root.sh .ext2root-server7 test_ext2_server7.img $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES_SERVER7) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) $(UPROGS)
 
-test_ext2_oldinit.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(UPROGS_OLDINIT)
+test_ext2_oldinit.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) userprogs-oldinit
 	sh tools/stage-ext2-root.sh .ext2root-oldinit test_ext2_oldinit.img $(ROOTFS_COMMON_FILES) $(UPROGS_OLDINIT)
 
 test_fat.img: tools/stage-fat-root.sh

@@ -21,19 +21,6 @@ SECTIONS
 		*(.rodata .rodata.* .gnu.linkonce.r.*)
 	}
 
-	/* Include debugging information in kernel memory */
-	.stab : {
-		PROVIDE(__STAB_BEGIN__ = .);
-		*(.stab);
-		PROVIDE(__STAB_END__ = .);
-	}
-
-	.stabstr : {
-		PROVIDE(__STABSTR_BEGIN__ = .);
-		*(.stabstr);
-		PROVIDE(__STABSTR_END__ = .);
-	}
-
 	/* Adjust the address for the data segment to the next page */
 	. = ALIGN(0x1000);
 
@@ -62,12 +49,14 @@ SECTIONS
 	 * Early boot executes with entrypgdir before kvmalloc(), so the linked
 	 * kernel image must fit in that pre-mapped window.
 	 *
-	 * entrypgdir currently maps 8MB at KERNBASE.
+	 * entrypgdir currently maps 16MB at KERNBASE.
 	 */
-	ASSERT((end - 0x80000000) <= 0x00800000,
-	       "kernel image exceeds early-boot 8MB mapping window; increase entrypgdir map or reduce static footprint")
+	ASSERT((end - 0x80000000) <= 0x01000000,
+	       "kernel image exceeds early-boot 16MB mapping window; increase entrypgdir map or reduce static footprint")
 
 	/DISCARD/ : {
-		*(.eh_frame .note.GNU-stack)
+		/* Keep debug/toolchain metadata out of the runtime-mapped image. */
+		*(.eh_frame .note.GNU-stack .comment .note* .gnu_debuglink)
+		*(.stab .stabstr .debug* .zdebug*)
 	}
 }

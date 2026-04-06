@@ -123,18 +123,22 @@ startothers(void)
 // PTE_PS in a page directory entry enables 4Mbyte pages.
 // Keep this in sync with BOOT_EARLY_PHYSTOP in memlayout.h.
 
-#if (BOOT_EARLY_PHYSTOP != (8*1024*1024))
-#error "entrypgdir initializer assumes BOOT_EARLY_PHYSTOP == 8MB"
+#if (BOOT_EARLY_PHYSTOP != (16*1024*1024))
+#error "entrypgdir initializer assumes BOOT_EARLY_PHYSTOP == 16MB"
 #endif
 
 __attribute__((__aligned__(PGSIZE)))
 pde_t entrypgdir[NPDENTRIES] = {
-  // Map VA's [0, 8MB) to PA's [0, 8MB)
+  // Map VA's [0, 16MB) to PA's [0, 16MB)
   [0] = (0) | PTE_P | PTE_W | PTE_PS,
   [1] = (0x00400000) | PTE_P | PTE_W | PTE_PS,
-  // Map VA's [KERNBASE, KERNBASE+8MB) to PA's [0, 8MB)
+  [2] = (0x00800000) | PTE_P | PTE_W | PTE_PS,
+  [3] = (0x00C00000) | PTE_P | PTE_W | PTE_PS,
+  // Map VA's [KERNBASE, KERNBASE+16MB) to PA's [0, 16MB)
   [KERNBASE>>PDXSHIFT] = (0) | PTE_P | PTE_W | PTE_PS,
   [(KERNBASE>>PDXSHIFT) + 1] = (0x00400000) | PTE_P | PTE_W | PTE_PS,
+  [(KERNBASE>>PDXSHIFT) + 2] = (0x00800000) | PTE_P | PTE_W | PTE_PS,
+  [(KERNBASE>>PDXSHIFT) + 3] = (0x00C00000) | PTE_P | PTE_W | PTE_PS,
 };
 
 //PAGEBREAK!
