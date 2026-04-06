@@ -8,6 +8,7 @@ static void
 usage(void)
 {
   dprintf(2, "usage: tuntapctl create <tun|tap> [name]\n");
+  dprintf(2, "       tuntapctl destroy <tun|tap> <name>\n");
   dprintf(2, "       tuntapctl get <tun|tap> <name>\n");
   dprintf(2, "       tuntapctl persist <tun|tap> <name> <0|1>\n");
   dprintf(2, "       tuntapctl owner <tun|tap> <name> <uid>\n");
@@ -68,6 +69,13 @@ main(int argc, char **argv)
       close(fd);
       exit(1);
     }
+    /* Persist so the interface survives after this fd is closed. */
+    val = 1;
+    if(ioctl(fd, TUNSETPERSIST, val) < 0){
+      dprintf(2, "tuntapctl: TUNSETPERSIST failed\n");
+      close(fd);
+      exit(1);
+    }
     dprintf(1, "%s mode=%s flags=0x%x\n", ifr.ifr_name,
             (mode == IFF_TAP) ? "tap" : "tun", ifr.ifr_flags);
     close(fd);
@@ -94,6 +102,19 @@ main(int argc, char **argv)
       exit(1);
     }
     dprintf(1, "%s flags=0x%x\n", ifr.ifr_name, ifr.ifr_flags);
+    close(fd);
+    exit(0);
+  }
+
+  if(strcmp(argv[1], "destroy") == 0){
+    /* Clear persist so the unit can be released when the fd closes. */
+    val = 0;
+    if(ioctl(fd, TUNSETPERSIST, val) < 0){
+      dprintf(2, "tuntapctl: TUNSETPERSIST(0) failed\n");
+      close(fd);
+      exit(1);
+    }
+    dprintf(1, "%s destroyed\n", argv[3]);
     close(fd);
     exit(0);
   }
