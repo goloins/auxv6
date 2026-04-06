@@ -37,6 +37,7 @@ This document holds the detailed 2026-04 change history that was moved out of `d
 - Early-boot growth guardrails landed (entry window fit assertions, kernel image size checks, per-build footprint reporting).
 - Pipe and exec argument policy modernizations landed with compile-time fit/invariant guards.
 - NVMe/loop dev-number collision was fixed (loop moved to dev 44-51), restoring stable `/dev/nda` behavior.
+- AHCI controller-profile wiring now includes NVIDIA MCP79 SATA (10de:0ab5) as an explicit PCI-ID path in the shared AHCI driver, with MCP79-style capability masking for port multipliers (Linux `board_ahci_mcp79`-inspired).
 - Storage diagnostics improved with `/proc/bdev_table` and `lsblk -v`.
 - FAT32 NVMe workflow validated end-to-end; `fatregress -d /mnt/fat32` reported all checks passed.
 - exFAT, btrfs, and ufs2 read-only first tranches are in-tree with documented scope boundaries.

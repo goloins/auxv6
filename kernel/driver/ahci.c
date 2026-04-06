@@ -340,6 +340,35 @@ static int ahci_test_fail_mode = 0;
 static int ahci_test_fail_remaining = 0;
 static int ahci_last_fail_class = 0;
 
+/*
+ * Controller profile flags.
+ *
+ * Inspired by Linux ahci board profiles (for example board_ahci_mcp79),
+ * but adapted to auxv6's single shared AHCI probe path.
+ */
+#define AHCI_CTLR_F_NO_PMP_CAP 0x00000001
+
+struct ahci_ctrl_profile {
+    uint16_t vendor_id;
+    uint16_t device_id;
+    const char *name;
+    uint32_t flags;
+};
+
+static const struct ahci_ctrl_profile ahci_profile_generic = {
+    0,
+    0,
+    "generic-ahci",
+    0
+};
+
+static const struct ahci_ctrl_profile ahci_profile_nvidia_mcp79 = {
+    PCI_VENDOR_NVIDIA,
+    PCI_DEVICE_NVIDIA_MCP79_AHCI,
+    "nvidia-mcp79-ahci",
+    AHCI_CTLR_F_NO_PMP_CAP
+};
+
 #define AHCI_TEST_FAIL_NONE    0
 #define AHCI_TEST_FAIL_TIMEOUT 1
 #define AHCI_TEST_FAIL_TFES    2
@@ -374,6 +403,7 @@ static int ahci_alloc_slot(struct ahci_port *p);
 static void ahci_free_slot(struct ahci_port *p, int slot);
 static void ahci_snapshot_error(struct ahci_port *p, uint32_t is);
 static void ahci_irq_handler(int irq, void *arg);
+static const struct ahci_ctrl_profile *ahci_match_profile(struct pci_dev *dev);
 
 extern uint ticks;
 extern struct spinlock tickslock;
@@ -1093,6 +1123,24 @@ ahci_append_uint(char *buf, int max, int pos, uint v)
     if (pos < max)
         buf[pos] = 0;
     return pos;
+}
+
+static const struct ahci_ctrl_profile *
+ahci_match_profile(struct pci_dev *dev)
+{
+    if (!dev)
+        return 0;
+
+    if (dev->vendor_id == ahci_profile_nvidia_mcp79.vendor_id &&
+        dev->device_id == ahci_profile_nvidia_mcp79.device_id)
+        return &ahci_profile_nvidia_mcp79;
+
+    if (dev->class_code == PCI_CLASS_STORAGE &&
+        dev->subclass == PCI_SUBCLASS_SATA &&
+        dev->prog_if == 0x01)  /* AHCI 1.0 */
+        return &ahci_profile_generic;
+
+    return 0;
 }
 
 static int
@@ -1892,16 +1940,27 @@ ahci_port_init(struct ahci_softc *sc, int port)
  * PCI probe function
  */
 int
-ahci_probe(struct pci_dev *pci)
+ahci_probe(struct pci_dev *pci, const struct ahci_ctrl_profile *profile)
 {
     if (ahci_count >= MAX_AHCI)
         return -1;
+
+    if (!profile)
+        profile = &ahci_profile_generic;
     
     struct ahci_softc *sc = &ahci_devices[ahci_count];
     memset(sc, 0, sizeof(*sc));
     initlock(&sc->lock, "ahci");
     lockdep_set_rank(&sc->lock, LOCK_RANK_DEFAULT, "ahci");
     sc->pci = pci;
+
+    cprintf("ahci: attach profile=%s vendor=%x device=%x class=%x:%x if=%x\n",
+            profile->name,
+            pci->vendor_id,
+            pci->device_id,
+            pci->class_code,
+            pci->subclass,
+            pci->prog_if);
     
     /* Map BAR5 (ABAR) */
     sc->regs = pci_map_bar(pci, 5);
@@ -1925,6 +1984,13 @@ ahci_probe(struct pci_dev *pci)
     
     /* Read capabilities */
     sc->cap = ahci_read(sc, AHCI_CAP);
+    if (profile->flags & AHCI_CTLR_F_NO_PMP_CAP) {
+        /*
+         * NVIDIA MCP79 class controllers are treated like Linux
+         * board_ahci_mcp79 profile: no PMP support exposure.
+         */
+        sc->cap &= ~AHCI_CAP_SPM;
+    }
     sc->num_ports = (sc->cap & AHCI_CAP_NP) + 1;
     sc->num_cmd_slots = ((sc->cap & AHCI_CAP_NCS) >> 8) + 1;
     if (sc->num_cmd_slots > 32)
@@ -1973,13 +2039,14 @@ ahci_init(void)
     /* Search for AHCI PCI devices */
     for (int i = 0; i < pci_device_count(); i++) {
         struct pci_dev *dev = pci_get_device(i);
+        const struct ahci_ctrl_profile *profile;
         if (!dev)
             continue;
-        
-        if (dev->class_code == PCI_CLASS_STORAGE &&
-            dev->subclass == PCI_SUBCLASS_SATA &&
-            dev->prog_if == 0x01) {  /* AHCI 1.0 */
-            ahci_probe(dev);
-        }
+
+        profile = ahci_match_profile(dev);
+        if (!profile)
+            continue;
+
+        ahci_probe(dev, profile);
     }
 }

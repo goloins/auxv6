@@ -180,6 +180,7 @@
 #define PCI_DEVICE_E1000E   0x10D3  /* Intel 82574L Gigabit Ethernet */
 #define PCI_DEVICE_PCNET    0x2000  /* AMD PCNET-FAST III 79C973 */
 #define PCI_DEVICE_AHCI     0x2922  /* Intel ICH9 AHCI */
+#define PCI_DEVICE_NVIDIA_MCP79_AHCI 0x0AB5 /* NVIDIA MCP79 AHCI */
 #define PCI_DEVICE_VIRTIO_NET  0x1000  /* Virtio Network Device */
 #define PCI_DEVICE_VIRTIO_BLK  0x1001  /* Virtio Block Device */
 #define PCI_DEVICE_VIRTIO_CON  0x1003  /* Virtio Console Device */
