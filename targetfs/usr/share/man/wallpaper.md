@@ -4,7 +4,9 @@
 wallpaper - set framebuffer background color or image
 
 ## SYNOPSIS
-`wallpaper <#RRGGBB|image-path>`
+`wallpaper [-c #RRGGBB] [image-path]`
+
+`wallpaper [#RRGGBB]`
 
 ## DESCRIPTION
 `wallpaper` writes directly to `/dev/fb0` and sets the current framebuffer background.
@@ -12,6 +14,8 @@ wallpaper - set framebuffer background color or image
 Inputs:
 - Hex color string: `#RRGGBB` (or `RRGGBB`)
 - Image path: currently PNG is decoded; JPEG decode module is present but not enabled yet.
+
+When run with no arguments, `wallpaper` defaults to black (`#000000`).
 
 Image mode scales the input image to the current framebuffer geometry using nearest-neighbor sampling.
 

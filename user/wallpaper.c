@@ -176,7 +176,8 @@ set_image(struct fb_ctx *fb, const struct aux_img *img)
 static void
 usage(void)
 {
-  dprintf(2, "usage: wallpaper <#RRGGBB|image-path>\n");
+  dprintf(2, "usage: wallpaper [-c #RRGGBB] [image-path]\n");
+  dprintf(2, "       wallpaper [#RRGGBB]\n");
   exit(1);
 }
 
@@ -186,9 +187,28 @@ main(int argc, char **argv)
   struct fb_ctx fb;
   uint color;
   struct aux_img img;
+  const char *img_path;
+  const char *color_arg;
 
-  if(argc != 2)
+  img_path = 0;
+  color_arg = 0;
+
+  if(argc == 1) {
+    color_arg = "000000";
+  } else if(argc == 2) {
+    if(strcmp(argv[1], "-c") == 0 || strcmp(argv[1], "--color") == 0)
+      usage();
+    if(parse_color(argv[1], &color) == 0)
+      color_arg = argv[1];
+    else
+      img_path = argv[1];
+  } else if(argc == 3) {
+    if(strcmp(argv[1], "-c") != 0 && strcmp(argv[1], "--color") != 0)
+      usage();
+    color_arg = argv[2];
+  } else {
     usage();
+  }
 
   fb.fd = -1;
   if(fb_open(&fb) < 0) {
@@ -196,7 +216,12 @@ main(int argc, char **argv)
     return 1;
   }
 
-  if(parse_color(argv[1], &color) == 0) {
+  if(color_arg) {
+    if(parse_color(color_arg, &color) < 0) {
+      dprintf(2, "wallpaper: invalid color '%s'\n", color_arg);
+      fb_close(&fb);
+      return 1;
+    }
     if(set_color(&fb, color) < 0) {
       dprintf(2, "wallpaper: failed to set color\n");
       fb_close(&fb);
@@ -207,7 +232,7 @@ main(int argc, char **argv)
   }
 
   aux_img_init(&img);
-  if(aux_img_decode_file(argv[1], &img) < 0) {
+  if(aux_img_decode_file(img_path, &img) < 0) {
     dprintf(2, "wallpaper: unsupported or invalid image\n");
     fb_close(&fb);
     return 1;
