@@ -70,10 +70,10 @@ aux_img_decode_file(const char *path, struct aux_img *out)
 
   if(stat(path, &st) < 0)
     return -1;
-  if(st.size <= 0)
+  if(st.st_size <= 0)
     return -1;
 
-  buf = (uchar*)malloc((size_t)st.size);
+  buf = (uchar*)malloc((size_t)st.st_size);
   if(!buf)
     return -1;
 
@@ -83,9 +83,9 @@ aux_img_decode_file(const char *path, struct aux_img *out)
     return -1;
   }
 
-  n = read(fd, buf, st.size);
+  n = read(fd, buf, st.st_size);
   close(fd);
-  if(n != st.size) {
+  if(n != st.st_size) {
     free(buf);
     return -1;
   }

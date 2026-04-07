@@ -6,8 +6,8 @@
 #include "auxv6/img.h"
 #include "string.h"
 
-#define FBIOGET_VSCREENINFO 0x4600
-#define FBIOGET_FSCREENINFO 0x4602
+#define WALLPAPER_FBIOGET_VSCREENINFO 0x4600
+#define WALLPAPER_FBIOGET_FSCREENINFO 0x4602
 
 struct fb_ctx {
   int fd;
@@ -68,9 +68,9 @@ fb_open(struct fb_ctx *fb)
   if(fb->fd < 0)
     return -1;
 
-  if(ioctl(fb->fd, FBIOGET_VSCREENINFO, &vinfo) < 0)
+  if(ioctl(fb->fd, WALLPAPER_FBIOGET_VSCREENINFO, &vinfo) < 0)
     return -1;
-  if(ioctl(fb->fd, FBIOGET_FSCREENINFO, &finfo) < 0)
+  if(ioctl(fb->fd, WALLPAPER_FBIOGET_FSCREENINFO, &finfo) < 0)
     return -1;
 
   if(vinfo.bits_per_pixel != 32)
