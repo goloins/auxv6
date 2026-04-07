@@ -10,7 +10,7 @@ auxv6 is an xv6-derived Unix-like operating system with significant enhancements
 - Multi-filesystem support with mount table
 
 **Architecture:** x86 32-bit, single address space per process  
-**Current State:** ext2-root is the default boot path, the kernel has received a substantial 2026-04 performance-hardening pass, the first NFS read-only path is partially wired, server7 has an initial session-aware bootstrap, and the userland now includes a broader admin/TUI layer (`top`, `abrowse`, `man`, `which`, `lsof`, `file`) plus an expanded core utility tranche (`uniq`, `sort`, `sum`, `sleep`, `yes`, `true`, `false`, `sync`, `touch`, `md5sum`, `sha*sum`, `base32`, `base64`, and minimal `asroot`/`sudo` compatibility) and a materially stronger libc/POSIX portability baseline (`getrlimit`/`setrlimit`, `netdb`, `fnmatch`, `glob`, `scandir`, `nftw`, `fts`, C-locale scaffolding, and corrected `unlink`/`rmdir` semantics).
+**Current State:** ext2-root is the default boot path, the kernel has received a substantial 2026-04 performance-hardening pass, the first NFS read-only path is partially wired, server7 has an initial session-aware bootstrap, and the userland now includes a broader admin/TUI layer (`top`, `abrowse`, `man`, `which`, `lsof`, `file`, `more`/`less`) plus an expanded core utility tranche (`dd`, `find`, `sed`, `awk`, `uniq`, `sort`, `sum`, `sleep`, `yes`, `true`, `false`, `sync`, `touch`, `md5sum`, `sha*sum`, `base32`, `base64`, and minimal `asroot`/`sudo` compatibility) and a materially stronger libc/POSIX portability baseline (`getrlimit`/`setrlimit`, `netdb`, `fnmatch`, `glob`, `scandir`, `nftw`, `fts`, C-locale scaffolding, and corrected `unlink`/`rmdir` semantics).
 
 ---
 

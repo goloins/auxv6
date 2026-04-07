@@ -363,6 +363,21 @@ $(USER_STAGE_DIR)/%: user/%.o $(ULIB) | $(USER_STAGE_DIR) toolchain-check
 _cat: user/cat
 	cp user/cat _cat
 
+_more: user/more
+	cp user/more _more
+
+_less: _more
+	ln -sf _more _less
+
+_awk: user/awk
+	cp user/awk _awk
+
+_sed: user/sed
+	cp user/sed _sed
+
+_find: user/find
+	cp user/find _find
+
 _devman: user/devman
 	cp user/devman _devman
 
@@ -410,6 +425,9 @@ _ln: user/ln
 
 _cp: user/cp
 	cp user/cp _cp
+
+_dd: user/dd
+	cp user/dd _dd
 
 _ls: user/ls
 	cp user/ls _ls
@@ -770,6 +788,11 @@ endif
 
 UPROGS=\
 	_cat\
+	_more\
+	_less\
+	_awk\
+	_sed\
+	_find\
 	_man\
 	_devman\
 	_echo\
@@ -785,6 +808,7 @@ UPROGS=\
 	_getty\
 	_ln\
 	_cp\
+	_dd\
 	_ls\
 	_lsblk\
 	_free\

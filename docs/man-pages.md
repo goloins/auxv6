@@ -21,6 +21,7 @@ Generated: 2026-04-06
 | audiotone | targetfs/usr/share/man/audiotone.md | 2026-04-05 | user/audiotone.c | deterministic S16_LE square-wave generator for audiod track tests |
 | bcachestress | targetfs/usr/share/man/bcachestress.md | 2026-04-05 | user/bcachestress.c | concurrent fs I/O stress utility with /proc/bcache_health fail-fast checks and vmstat/meminfo context dump |
 | arp | targetfs/usr/share/man/arp.md | 2026-04-01 | user/arp.c | source-derived usage/options |
+| awk | targetfs/usr/share/man/awk.md | 2026-04-06 | user/awk.c | baseline pattern/action processor (`/regex/ { print ... }`) with `$0`/`$N`/`NR` and `-F` field separator |
 | cat | targetfs/usr/share/man/cat.md | 2026-04-01 | user/cat.c | source-derived usage/options |
 | chgrp | targetfs/usr/share/man/chgrp.md | 2026-04-01 | user/chgrp.c | source-derived usage/options |
 | chmod | targetfs/usr/share/man/chmod.md | 2026-04-01 | user/chmod.c | source-derived usage/options |
@@ -29,11 +30,13 @@ Generated: 2026-04-06
 | cp | targetfs/usr/share/man/cp.md | 2026-04-02 | user/cp.c | source-derived usage/options |
 | clear | targetfs/usr/share/man/clear.md | 2026-04-01 | user/clear.c | source-derived usage/options |
 | dash | targetfs/usr/share/man/dash.md | 2026-04-01 | ports/ignored | manual baseline page |
+| dd | targetfs/usr/share/man/dd.md | 2026-04-06 | user/dd.c | block-oriented copy utility with standard `key=value` args and core conversion flags |
 | date | targetfs/usr/share/man/date.md | 2026-04-01 | user/date.c | source-derived usage/options |
 | devman | targetfs/usr/share/man/devman.md | 2026-04-02 | user/devman.c | source-derived usage/options |
 | df | targetfs/usr/share/man/df.md | 2026-04-01 | user/df.c | source-derived usage/options |
 | dmesg | targetfs/usr/share/man/dmesg.md | 2026-04-01 | user/dmesg.c | source-derived usage/options |
 | echo | targetfs/usr/share/man/echo.md | 2026-04-01 | user/echo.c | source-derived usage/options |
+| find | targetfs/usr/share/man/find.md | 2026-04-06 | user/find.c | recursive file-tree walker with `-name/-path/-type/-mindepth/-maxdepth/-print` |
 | fatregress | targetfs/usr/share/man/fatregress.md | 2026-04-01 | user/fatregress.c | source-derived usage/options |
 | forktest | targetfs/usr/share/man/forktest.md | 2026-04-01 | user/forktest.c | source-derived usage/options |
 | free | targetfs/usr/share/man/free.md | 2026-04-01 | user/free.c | source-derived usage/options |
@@ -54,6 +57,7 @@ Generated: 2026-04-06
 | login | targetfs/usr/share/man/login.md | 2026-04-01 | user/login.c | source-derived usage/options |
 | lockprobe | targetfs/usr/share/man/lockprobe.md | 2026-04-05 | user/lockprobe.c | lock modernization validation utility for console/ftable paths plus lockdep handoff selftest mode (`-L`) |
 | losetup | targetfs/usr/share/man/losetup.md | 2026-04-01 | user/losetup.c | source-derived usage/options |
+| less | targetfs/usr/share/man/less.md | 2026-04-06 | user/more.c | pager alias built from the same binary image as `more` |
 | lsblk | targetfs/usr/share/man/lsblk.md | 2026-04-01 | user/lsblk.c | source-derived usage/options |
 | lspci | targetfs/usr/share/man/lspci.md | 2026-04-01 | user/lspci.c | source-derived usage/options |
 | ls | targetfs/usr/share/man/ls.md | 2026-04-02 | user/ls.c | source-derived usage/options |
@@ -61,6 +65,7 @@ Generated: 2026-04-06
 | mkdir | targetfs/usr/share/man/mkdir.md | 2026-04-01 | user/mkdir.c | source-derived usage/options |
 | mount | targetfs/usr/share/man/mount.md | 2026-04-02 | user/mount.c | source-derived usage/options |
 | mktmpfs | targetfs/usr/share/man/mktmpfs.md | 2026-04-02 | user/mktmpfs.c | source-derived usage/options |
+| more | targetfs/usr/share/man/more.md | 2026-04-06 | user/more.c | interactive pager with tty prompt and page sizing (`-n`) |
 | mounts | targetfs/usr/share/man/mounts.md | 2026-04-01 | user/mounts.c | source-derived usage/options |
 | mounttest | targetfs/usr/share/man/mounttest.md | 2026-04-01 | user/mounttest.c | source-derived usage/options |
 | mv | targetfs/usr/share/man/mv.md | 2026-04-01 | user/mv.c | source-derived usage/options |
@@ -78,6 +83,7 @@ Generated: 2026-04-06
 | rm | targetfs/usr/share/man/rm.md | 2026-04-01 | user/rm.c | source-derived usage/options |
 | route | targetfs/usr/share/man/route.md | 2026-04-01 | user/route.c | source-derived usage/options |
 | runlevel | targetfs/usr/share/man/runlevel.md | 2026-04-01 | user/runlevel.c | source-derived usage/options |
+| sed | targetfs/usr/share/man/sed.md | 2026-04-06 | user/sed.c | baseline stream editor with `/addr/`, `s///[g]`, `p`, `d`, and `-n` |
 | schedperf | targetfs/usr/share/man/schedperf.md | 2026-04-03 | user/schedperf.c | kernel scheduler/process perf score utility |
 | server7 | targetfs/usr/share/man/server7.md | 2026-04-03 | user/server7.c | bootstrap display-server daemon entrypoint |
 | sh | targetfs/usr/share/man/sh.md | 2026-04-01 | user/sh.c | source-derived usage/options |

@@ -21,6 +21,10 @@ future_ideas.txt
 *.swp
 user/whoami
 user/cat
+user/more
+user/awk
+user/sed
+user/find
 user/devman
 user/echo
 user/forktest
@@ -43,6 +47,7 @@ user/getty
 user/chvt
 user/ln
 user/cp
+user/dd
 user/ls
 user/man
 user/lsblk
