@@ -689,6 +689,18 @@ fd_ready_events(struct file *f)
         events |= POLLERR | POLLHUP;
       break;
     }
+    if(f->ip && f->ip->type == T_DEV && f->ip->major == CONSOLE &&
+       f->ip->minor == CONSOLE_MINOR_MOUSE0){
+      rd = 0;
+      wr = 0;
+      err = 0;
+      console_mouse_poll_events(&rd, &wr, &err);
+      if(f->readable && rd)
+        events |= POLLIN;
+      if(err)
+        events |= POLLERR | POLLHUP;
+      break;
+    }
     if(f->readable)
       events |= POLLIN;
     if(f->writable)

@@ -4,6 +4,7 @@
 #include "stat.h"
 #include "sys/ioctl.h"
 #include "graphics/drm_ioctls.h"
+#include "graphics/input_events.h"
 #include "signal.h"
 #include "socket.h"
 #include "stdio.h"
@@ -30,6 +31,7 @@
 #define X6_FBIOGET_FSCREENINFO 0x4602
 #define X6_CONSOLE_MAJOR 1
 #define X6_CONSOLE_MINOR_FB0 100
+#define X6_CONSOLE_MINOR_MOUSE0 101
 
 #define X6_MAX_WINDOWS 128
 #define X6_MAX_EVENTS_PER_CLIENT 64
@@ -116,6 +118,7 @@ static int x6_backend = X6_BACKEND_ANSI;
 static int x6_backend_claimed = 0;
 static int x6_console_nonblock_ready = 0;
 static int x6_console_input_enabled = 0;
+static int x6_mouse_fd = -1;
 static int pointer_x;
 static int pointer_y;
 static uint pointer_state;
@@ -482,6 +485,64 @@ x6_console_input_setup(void)
     x6_console_input_enabled = 1;
 
   x6_console_nonblock_ready = 1;
+}
+
+static int
+x6_console_input_pending(void)
+{
+  int n;
+
+  if(!x6_console_input_enabled)
+    return 0;
+  n = 0;
+  if(ioctl(0, 0x541B, &n) < 0)
+    return 0;
+  return n > 0 ? n : 0;
+}
+
+static void
+x6_mouse_setup(void)
+{
+  if(x6_mouse_fd >= 0)
+    return;
+  x6_mouse_fd = open("/dev/mouse0", O_RDONLY);
+  if(x6_mouse_fd < 0) {
+    mknod("/dev/mouse0", M_IFCHR | 0600, X6_CONSOLE_MAJOR, X6_CONSOLE_MINOR_MOUSE0);
+    x6_mouse_fd = open("/dev/mouse0", O_RDONLY);
+  }
+}
+
+static void
+x6_pump_mouse(void)
+{
+  struct aux_mouse_event evt;
+  int n;
+  int bit;
+
+  if(x6_mouse_fd < 0)
+    return;
+
+  n = read(x6_mouse_fd, &evt, sizeof(evt));
+  if(n != (int)sizeof(evt))
+    return;
+
+  if(evt.dx != 0 || evt.dy != 0)
+    x6_move_pointer((int)evt.dx, -(int)evt.dy);
+
+  for(bit = 0; bit < 3; bit++) {
+    uint mask;
+
+    mask = (uint)(1U << bit);
+    if((evt.changed & (uchar)mask) == 0)
+      continue;
+    if(evt.buttons & mask) {
+      pointer_state |= mask;
+      x6_enqueue_pointer_event(X6_EVENT_BUTTON_PRESS, bit + 1);
+    } else {
+      pointer_state &= ~mask;
+      x6_enqueue_pointer_event(X6_EVENT_BUTTON_RELEASE, bit + 1);
+    }
+  }
 }
 
 static void
@@ -1334,9 +1395,10 @@ handle_client(int cfd)
   x6_send_line(cfd, "X6/1 READY\n");
   
   while(keep_running) {
-    struct pollfd pfds[2];
+    struct pollfd pfds[3];
     int nfds;
     int pr;
+    int mouse_poll_index;
 
     // Drain any queued events and send them to client
     while(!x6_event_queue_empty(&q)) {
@@ -1377,8 +1439,10 @@ handle_client(int cfd)
     pfds[nfds].events = POLLIN;
     pfds[nfds].revents = 0;
     nfds++;
-    if(x6_console_input_enabled) {
-      pfds[nfds].fd = 0;
+    mouse_poll_index = -1;
+    if(x6_mouse_fd >= 0) {
+      mouse_poll_index = nfds;
+      pfds[nfds].fd = x6_mouse_fd;
       pfds[nfds].events = POLLIN;
       pfds[nfds].revents = 0;
       nfds++;
@@ -1390,8 +1454,10 @@ handle_client(int cfd)
     if(pr == 0)
       continue;
 
-    if(x6_console_input_enabled && nfds > 1 && (pfds[1].revents & POLLIN))
+    if(x6_console_input_pending() > 0)
       x6_pump_console_input();
+    if(mouse_poll_index >= 0 && (pfds[mouse_poll_index].revents & POLLIN))
+      x6_pump_mouse();
 
     if((pfds[0].revents & POLLIN) == 0)
       continue;
@@ -1483,6 +1549,7 @@ main(int argc, char **argv)
   }
 
   x6_console_input_setup();
+  x6_mouse_setup();
   pointer_x = x6_fb.width > 0 ? (x6_fb.width / 2) : 0;
   pointer_y = x6_fb.height > 0 ? (x6_fb.height / 2) : 0;
   pointer_state = 0;

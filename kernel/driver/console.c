@@ -16,6 +16,7 @@
 #include "termios.h"
 #include "signal.h"
 #include "x86.h"
+#include "graphics/input_events.h"
 #include "graphics/display.h"
 #include "graphics/framebuffer.h"
 #include "graphics/font.h"
@@ -104,6 +105,13 @@ console_kmsg_read(char *dst, int max)
 
 struct console_input_state {
   char buf[128];
+  uint r;
+  uint w;
+  uint e;
+};
+
+struct console_mouse_state {
+  struct aux_mouse_event buf[128];
   uint r;
   uint w;
   uint e;
@@ -274,6 +282,8 @@ static uint console_gfx_stat_flush_pixels;
 static uint console_gfx_stat_flush_blocked_tickslock;
 static int console_gfx_owner_pid = -1;
 static uint console_input_event_count;
+static struct console_mouse_state console_mouse;
+static uchar console_mouse_buttons;
 
 #define CONSOLE_GFX_FALLBACK_WIDTH 640
 #define CONSOLE_GFX_FALLBACK_HEIGHT 400
@@ -3792,6 +3802,44 @@ consoleintr(int (*getc)(void))
     procdump();
 }
 
+void
+console_mouse_packet(int dx, int dy, uchar buttons)
+{
+  struct aux_mouse_event evt;
+  uint cap;
+
+  if(dx == 0 && dy == 0 && buttons == console_mouse_buttons)
+    return;
+
+  evt.dx = (short)dx;
+  evt.dy = (short)dy;
+  evt.buttons = buttons;
+  evt.changed = (uchar)(buttons ^ console_mouse_buttons);
+  console_mouse_buttons = buttons;
+
+  acquire(&cons.input_lock);
+  cap = (uint)(sizeof(console_mouse.buf) / sizeof(console_mouse.buf[0]));
+  if(console_mouse.e - console_mouse.r < cap) {
+    console_mouse.buf[console_mouse.e++ % cap] = evt;
+    console_input_event_count++;
+    wakeup(&console_mouse.r);
+  }
+  release(&cons.input_lock);
+}
+
+void
+console_mouse_poll_events(int *rd, int *wr, int *err)
+{
+  acquire(&cons.input_lock);
+  if(rd)
+    *rd = (console_mouse.r != console_mouse.w) ? 1 : 0;
+  if(wr)
+    *wr = 0;
+  if(err)
+    *err = 0;
+  release(&cons.input_lock);
+}
+
 /* --------------------------------------------------------------------------
  * consoleread / consolewrite
  * -------------------------------------------------------------------------- */
@@ -3814,6 +3862,42 @@ consoleread(struct inode *ip, char *dst, uint64_t off, int n)
   uchar veof;
 
   (void)off;
+
+  if(ip && ip->minor == CONSOLE_MINOR_MOUSE0) {
+    int got_bytes;
+    uint cap;
+
+    iunlock(ip);
+    if(n < (int)sizeof(struct aux_mouse_event)) {
+      ilock(ip);
+      return -1;
+    }
+
+    cap = (uint)(sizeof(console_mouse.buf) / sizeof(console_mouse.buf[0]));
+    acquire(&cons.input_lock);
+    while(console_mouse.r == console_mouse.w) {
+      if(myproc() && myproc()->killed) {
+        release(&cons.input_lock);
+        ilock(ip);
+        return -1;
+      }
+      sleep(&console_mouse.r, &cons.input_lock);
+    }
+
+    got_bytes = 0;
+    while(n - got_bytes >= (int)sizeof(struct aux_mouse_event) &&
+          console_mouse.r != console_mouse.w) {
+      struct aux_mouse_event *evt;
+
+      evt = &console_mouse.buf[console_mouse.r++ % cap];
+      memmove(dst + got_bytes, evt, sizeof(*evt));
+      got_bytes += (int)sizeof(*evt);
+    }
+    release(&cons.input_lock);
+    ilock(ip);
+    return got_bytes;
+  }
+
   iunlock(ip);
   target = n;
   acquire(&cons.tty_lock);
@@ -3939,6 +4023,11 @@ consolewrite(struct inode *ip, char *buf, uint64_t off, int n)
   int i, c;
 
   iunlock(ip);
+
+  if(ip && ip->minor == CONSOLE_MINOR_MOUSE0) {
+    ilock(ip);
+    return -1;
+  }
 
   if(ip && ip->minor == CONSOLE_MINOR_FB0) {
     int copy_n;
@@ -4095,5 +4184,6 @@ consoleinit(void)
   devsw[CONSOLE].read  = consoleread;
   cons.locking = 1;
   ioapicenable(IRQ_KBD, 0);
+  mouseinit();
 }
 
