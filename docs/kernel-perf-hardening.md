@@ -338,9 +338,11 @@ buffer-cache sequential throughput, concurrent open throughput, parallel write
 throughput, inode-capacity headroom, and hash verification throughput.
 
 `kernperf` is the general-purpose, system-agnostic before/after ruler.  It
-measures syscall rate, fork/wait churn, pipe ping-pong IPC throughput,
+measures syscall rate, fork/wait churn, payload-based pipe IPC throughput,
 VM page-touch throughput, and filesystem read/write throughput without relying
-on subsystem-specific `/proc` counters.
+on subsystem-specific `/proc` counters.  The current `r2` profile also emits
+explicit per-test and per-domain (`core/ipc/vm/fs`) gates so poor subsystem
+health remains visible even when aggregate score movement is modest.
 
 ### Iteration Discipline (Required)
 

@@ -12,7 +12,7 @@ kernperf [-n runs]
 Run system-agnostic kernel microbenchmarks that cover core execution paths:
 - syscall round-trip overhead
 - process create/wait churn
-- pipe IPC wakeup throughput
+- pipe IPC throughput (payload-based ping-pong)
 - VM page-touch throughput
 - filesystem read/write throughput
 
@@ -27,6 +27,7 @@ performance ranking.
 - Prints `[PERF]` lines for each test in each run.
 - Prints `[RUN]` score lines and a final `[SUMMARY]` section.
 - Reports a normalized score in the range `0..100` per run.
+- Prints `[GATE]` lines for per-test and per-domain health checks.
 - Returns non-zero only on functional test failures.
 
 ## Output Contract
@@ -35,6 +36,8 @@ performance ranking.
 - `[RUN] N score=S/100`
 - `[SUMMARY] avg-score=.../100`
 - `[SUMMARY] test=... avg=... target=...`
+- `[GATE] test=... status=PASS|FAIL ...`
+- `[GATE] domain=core|ipc|vm|fs status=PASS|FAIL ...`
 
 ## Notes
 - Throughput uses `uptime()` ticks (100 ticks/sec).
@@ -42,6 +45,8 @@ performance ranking.
 - For trend tracking, run with `-n 3` or higher.
 - `kernperf` intentionally avoids subsystem-specific procfs counters so it remains
   broadly useful across kernel configuration changes.
+- v2 uses calibrated default targets and explicit gates so weak subsystems are
+  visible even when the composite score is acceptable.
 
 ## Examples
 ```sh

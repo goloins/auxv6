@@ -12,6 +12,7 @@
 // Output:
 // - [PERF] lines per run and test
 // - Final averaged score (0..100)
+// - [GATE] lines for per-test and per-domain health checks
 // - Non-zero exit only on functional test failures
 
 #include "types.h"
@@ -19,20 +20,32 @@
 #include "fcntl.h"
 #include "auxv6/user.h"
 
-#define KERNPERF_PROFILE "2026-04-06-r1"
+#define KERNPERF_PROFILE "2026-04-06-r2"
 
 #define MAX_RUNS 20
 #define DEFAULT_RUNS 3
 
 #define KB 1024
-#define MB (1024 * 1024)
+#define PIPE_PAYLOAD 128
+#define PIPE_ROUNDS 2000
+
+#define FILE_BLOCK_SIZE 4096
+#define FILE_BLOCKS 256
 
 struct bench_case {
+  const char *domain;
   const char *name;
   const char *unit;
   int target;
   int weight;
+  int gate_pct;
   int (*run)(int *value);
+};
+
+struct domain_gate {
+  const char *name;
+  int ratio_sum;
+  int count;
 };
 
 static int
@@ -67,6 +80,52 @@ score_points(int value, int target, int weight)
 
   scaled = (long long)value * (long long)weight;
   return (int)((scaled + (target / 2)) / target);
+}
+
+static int
+read_full(int fd, char *buf, int n)
+{
+  int got;
+  int r;
+
+  got = 0;
+  while(got < n){
+    r = read(fd, buf + got, n - got);
+    if(r <= 0)
+      return -1;
+    got += r;
+  }
+  return 0;
+}
+
+static int
+write_full(int fd, const char *buf, int n)
+{
+  int off;
+  int w;
+
+  off = 0;
+  while(off < n){
+    w = write(fd, (void*)(buf + off), n - off);
+    if(w <= 0)
+      return -1;
+    off += w;
+  }
+  return 0;
+}
+
+static int
+domain_index(const char *domain)
+{
+  if(strcmp(domain, "core") == 0)
+    return 0;
+  if(strcmp(domain, "ipc") == 0)
+    return 1;
+  if(strcmp(domain, "vm") == 0)
+    return 2;
+  if(strcmp(domain, "fs") == 0)
+    return 3;
+  return -1;
 }
 
 static int
@@ -121,18 +180,16 @@ bench_fork_wait(int *value)
 }
 
 static int
-bench_pipe_pingpong(int *value)
+bench_pipe_throughput(int *value)
 {
   int p2c[2];
   int c2p[2];
   int i;
-  int rounds;
   int pid;
-  char b;
+  char tx[PIPE_PAYLOAD];
+  char rx[PIPE_PAYLOAD];
   uint t0;
   uint t1;
-
-  rounds = 1500;
 
   if(pipe(p2c) < 0)
     return -1;
@@ -146,13 +203,16 @@ bench_pipe_pingpong(int *value)
   if(pid < 0)
     return -1;
 
+  for(i = 0; i < PIPE_PAYLOAD; i++)
+    tx[i] = (char)(i ^ 0x5a);
+
   if(pid == 0){
     close(p2c[1]);
     close(c2p[0]);
-    for(i = 0; i < rounds; i++){
-      if(read(p2c[0], &b, 1) != 1)
+    for(i = 0; i < PIPE_ROUNDS; i++){
+      if(read_full(p2c[0], rx, PIPE_PAYLOAD) < 0)
         exit(1);
-      if(write(c2p[1], &b, 1) != 1)
+      if(write_full(c2p[1], rx, PIPE_PAYLOAD) < 0)
         exit(1);
     }
     close(p2c[0]);
@@ -163,12 +223,11 @@ bench_pipe_pingpong(int *value)
   close(p2c[0]);
   close(c2p[1]);
 
-  b = 0x5a;
   t0 = uptime();
-  for(i = 0; i < rounds; i++){
-    if(write(p2c[1], &b, 1) != 1)
+  for(i = 0; i < PIPE_ROUNDS; i++){
+    if(write_full(p2c[1], tx, PIPE_PAYLOAD) < 0)
       return -1;
-    if(read(c2p[0], &b, 1) != 1)
+    if(read_full(c2p[0], rx, PIPE_PAYLOAD) < 0)
       return -1;
   }
   t1 = uptime();
@@ -178,7 +237,7 @@ bench_pipe_pingpong(int *value)
   if(wait() < 0)
     return -1;
 
-  *value = ops_per_sec(rounds, t0, t1);
+  *value = kb_per_sec(PIPE_ROUNDS * PIPE_PAYLOAD * 2, t0, t1);
   return 0;
 }
 
@@ -225,17 +284,15 @@ bench_vm_page_touch(int *value)
 static int
 bench_file_io(int *value)
 {
-  char buf[512];
+  char buf[FILE_BLOCK_SIZE];
   const char *path;
   int fd;
   int i;
-  int blocks;
   int total;
   uint t0;
   uint t1;
 
-  blocks = 256;
-  total = blocks * sizeof(buf);
+  total = FILE_BLOCKS * FILE_BLOCK_SIZE;
   path = "/tmp/kernperf_io.tmp";
 
   for(i = 0; i < (int)sizeof(buf); i++)
@@ -246,22 +303,23 @@ bench_file_io(int *value)
     return -1;
 
   t0 = uptime();
-  for(i = 0; i < blocks; i++){
-    if(write(fd, buf, sizeof(buf)) != (int)sizeof(buf)){
+  for(i = 0; i < FILE_BLOCKS; i++){
+    if(write_full(fd, buf, sizeof(buf)) < 0){
       close(fd);
       unlink(path);
       return -1;
     }
   }
   close(fd);
+  sync();
 
   fd = open(path, O_RDONLY);
   if(fd < 0){
     unlink(path);
     return -1;
   }
-  for(i = 0; i < blocks; i++){
-    if(read(fd, buf, sizeof(buf)) != (int)sizeof(buf)){
+  for(i = 0; i < FILE_BLOCKS; i++){
+    if(read_full(fd, buf, sizeof(buf)) < 0){
       close(fd);
       unlink(path);
       return -1;
@@ -277,11 +335,11 @@ bench_file_io(int *value)
 }
 
 static struct bench_case benches[] = {
-  { "syscall-getpid", "ops/s", 180000, 18, bench_syscall_getpid },
-  { "fork-wait",      "ops/s",    220, 20, bench_fork_wait },
-  { "pipe-pingpong",  "ops/s",   2200, 22, bench_pipe_pingpong },
-  { "vm-page-touch",  "KB/s",   38000, 20, bench_vm_page_touch },
-  { "file-io",        "KB/s",   18000, 20, bench_file_io },
+  { "core", "syscall-getpid",   "ops/s", 200000, 18, 70, bench_syscall_getpid },
+  { "core", "fork-wait",        "ops/s",    500, 20, 70, bench_fork_wait },
+  { "ipc",  "pipe-throughput",  "KB/s",     120, 22, 50, bench_pipe_throughput },
+  { "vm",   "vm-page-touch",    "KB/s",   50000, 20, 70, bench_vm_page_touch },
+  { "fs",   "file-io",          "KB/s",     300, 20, 50, bench_file_io },
 };
 
 static void
@@ -293,6 +351,12 @@ usage(void)
 int
 main(int argc, char *argv[])
 {
+  static struct domain_gate domains[] = {
+    { "core", 0, 0 },
+    { "ipc",  0, 0 },
+    { "vm",   0, 0 },
+    { "fs",   0, 0 },
+  };
   int i;
   int r;
   int runs;
@@ -302,6 +366,7 @@ main(int argc, char *argv[])
   int total_score;
   int total_max;
   int failures;
+  int gate_failures;
   int avg[16];
 
   runs = DEFAULT_RUNS;
@@ -333,6 +398,7 @@ main(int argc, char *argv[])
   total_score = 0;
   total_max = 0;
   failures = 0;
+  gate_failures = 0;
 
   dprintf(1, "kernperf: profile=%s runs=%d\n", KERNPERF_PROFILE, runs);
 
@@ -369,10 +435,53 @@ main(int argc, char *argv[])
 
   dprintf(1, "[SUMMARY] avg-score=%d/100\n", total_score / runs);
   for(i = 0; i < nbench; i++){
+    int floor;
+    int pass;
+    int ratio;
+    int didx;
     int mean = avg[i] / runs;
+
+    floor = (benches[i].target * benches[i].gate_pct) / 100;
+    pass = mean >= floor;
+
+    ratio = benches[i].target > 0 ? (mean * 100) / benches[i].target : 0;
+    didx = domain_index(benches[i].domain);
+    if(didx >= 0 && didx < (int)(sizeof(domains) / sizeof(domains[0]))){
+      domains[didx].ratio_sum += ratio;
+      domains[didx].count++;
+    }
+
     dprintf(1, "[SUMMARY] test=%s avg=%d %s target=%d\n",
             benches[i].name, mean, benches[i].unit, benches[i].target);
+    dprintf(1, "[GATE] test=%s status=%s floor=%d%% avg=%d %s\n",
+            benches[i].name,
+            pass ? "PASS" : "FAIL",
+            benches[i].gate_pct,
+            mean,
+            benches[i].unit);
+    if(!pass)
+      gate_failures++;
   }
+
+  for(i = 0; i < (int)(sizeof(domains) / sizeof(domains[0])); i++){
+    int dscore;
+    int dpass;
+
+    if(domains[i].count == 0)
+      continue;
+    dscore = domains[i].ratio_sum / domains[i].count;
+    dpass = dscore >= 60;
+    dprintf(1, "[GATE] domain=%s status=%s score=%d%% floor=60%%\n",
+            domains[i].name,
+            dpass ? "PASS" : "FAIL",
+            dscore);
+    if(!dpass)
+      gate_failures++;
+  }
+
+  if(gate_failures)
+    dprintf(1, "kernperf: gate_failures=%d (functional failures=%d)\n",
+            gate_failures, failures);
 
   if(failures){
     dprintf(1, "kernperf: failures=%d\n", failures);
