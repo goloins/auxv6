@@ -600,6 +600,9 @@ _kallocstress: user/kallocstress
 _kernperf: user/kernperf
 	cp user/kernperf _kernperf
 
+_vmprobe: user/vmprobe
+	cp user/vmprobe _vmprobe
+
 _kmemstress: user/kmemstress
 	cp user/kmemstress _kmemstress
 
@@ -867,6 +870,7 @@ UPROGS=\
 	_gfxperf\
 	_kallocstress\
 	_kernperf\
+	_vmprobe\
 	_kmemstress\
 	_bcachestress\
 	_sigtest\

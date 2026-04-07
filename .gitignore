@@ -106,6 +106,7 @@ user/fsperf
 user/gfxperf
 user/kallocstress
 user/kernperf
+user/vmprobe
 user/kmemstress
 user/wc
 user/zombie

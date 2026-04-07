@@ -108,6 +108,7 @@ Generated: 2026-04-06
 | uname | targetfs/usr/share/man/uname.md | 2026-04-01 | user/uname.c | source-derived usage/options |
 | usertests | targetfs/usr/share/man/usertests.md | 2026-04-01 | user/usertests.c | source-derived usage/options |
 | v6dhcpd | targetfs/usr/share/man/v6dhcpd.md | 2026-04-01 | user/v6dhcpd.c | source-derived usage/options |
+| vmprobe | targetfs/usr/share/man/vmprobe.md | 2026-04-06 | user/vmprobe.c | targeted VM/scheduler slowdown hypothesis probe correlating fork/tick phases with vmstat/schedstat deltas |
 | wc | targetfs/usr/share/man/wc.md | 2026-04-01 | user/wc.c | source-derived usage/options |
 | whoami | targetfs/usr/share/man/whoami.md | 2026-04-01 | user/whoami.c | source-derived usage/options |
 | zombie | targetfs/usr/share/man/zombie.md | 2026-04-01 | user/zombie.c | source-derived usage/options |
