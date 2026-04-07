@@ -170,3 +170,9 @@ aux.bootkern
 .extra_cflags.stamp
 user/fdtest
 .btrfsroot/
+
+# Keep dwm port workspace noise out of git for now.
+ports/dwm-6.8/*
+!ports/dwm-6.8/Makefile.auxv6
+ports/dwm-6.8/_dwm
+ports/dwm-6.8/dwm

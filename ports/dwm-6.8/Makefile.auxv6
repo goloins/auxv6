@@ -1,0 +1,124 @@
+# Makefile.auxv6 - dwm 6.8 build for auxv6/x6
+#
+# This file is intentionally separate from upstream Makefile so we can
+# iterate on auxv6/x6 integration without changing default host builds.
+
+ROOT ?= $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST))))../..)
+DWM_DIR := $(ROOT)/ports/dwm-6.8
+OUT := $(DWM_DIR)/_dwm
+
+VERSION = 6.8
+
+# Toolchain detection mirrors the repo root Makefile style.
+CROSS_ROOT ?= /opt/cross
+CROSS_BINDIR ?= $(CROSS_ROOT)/bin
+
+ifndef TOOLPREFIX
+TOOLPREFIX := $(shell \
+  if i386-jos-elf-objdump -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
+  then echo 'i386-jos-elf-'; \
+  elif test -x '$(CROSS_BINDIR)/i386-jos-elf-objdump' && \
+       '$(CROSS_BINDIR)/i386-jos-elf-objdump' -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
+  then echo '$(CROSS_BINDIR)/i386-jos-elf-'; \
+  elif test -x '$(CROSS_BINDIR)/i386-elf-objdump' && \
+       '$(CROSS_BINDIR)/i386-elf-objdump' -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
+  then echo '$(CROSS_BINDIR)/i386-elf-'; \
+  elif test -x '$(CROSS_BINDIR)/i686-elf-objdump' && \
+       '$(CROSS_BINDIR)/i686-elf-objdump' -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
+  then echo '$(CROSS_BINDIR)/i686-elf-'; \
+  elif objdump -i 2>&1 | grep 'elf32-i386' >/dev/null 2>&1; \
+  then echo ''; \
+  else echo "ERROR: no i386 cross-toolchain found" >&2; exit 1; fi)
+endif
+
+CC := $(TOOLPREFIX)gcc
+LD := $(TOOLPREFIX)ld
+OBJDUMP := $(TOOLPREFIX)objdump
+LIBGCC := $(shell $(CC) -m32 -print-libgcc-file-name 2>/dev/null)
+
+# x6/X11 compatibility wiring.
+#
+# Expected model:
+# - Headers are provided under $(ROOT)/include/X11/... (or override X11INC)
+# - Libraries come from auxv6 userspace build output (or override X11LIB)
+X11INC ?= $(ROOT)/include
+X11LIB ?= $(ROOT)/user
+
+# Keep defaults close to dwm upstream names; override as x6 shims land.
+XINERAMALIBS ?= -lXinerama
+XINERAMAFLAGS ?= -DXINERAMA
+FREETYPELIBS ?= -lfontconfig -lXft
+FREETYPEINC ?= /usr/include/freetype2
+
+INCS := -I$(X11INC) -I$(FREETYPEINC) -I$(ROOT)/include -I$(ROOT)/include/posix -I$(ROOT)/include/posix/sys
+LIBS := -L$(X11LIB) -lX11 $(XINERAMALIBS) $(FREETYPELIBS)
+
+CPPFLAGS := -D_DEFAULT_SOURCE -D_BSD_SOURCE -D_XOPEN_SOURCE=700L -DVERSION=\"$(VERSION)\" $(XINERAMAFLAGS)
+CFLAGS := -fno-pic -static -fno-builtin -fno-strict-aliasing -O2 -Wall -MD -ggdb -m32 \
+          -fno-omit-frame-pointer -nostdinc -fno-stack-protector -Wno-error \
+          -std=c99 -pedantic -Wno-deprecated-declarations \
+          $(INCS) $(CPPFLAGS)
+LDFLAGS := -N -e _start -Ttext 0 -m $(shell $(LD) -V 2>/dev/null | grep elf_i386 | head -1)
+
+SRC := drw.c dwm.c util.c
+OBJ := $(SRC:.c=.o)
+
+RUNTIME_OBJS := \
+  $(ROOT)/user/ulib.o \
+  $(ROOT)/user/string.o \
+  $(ROOT)/user/errstr.o \
+  $(ROOT)/user/umalloc.o \
+  $(ROOT)/user/tty.o \
+  $(ROOT)/user/inet.o \
+  $(ROOT)/user/fmt.o \
+  $(ROOT)/user/dirent.o \
+  $(ROOT)/user/fnmatch.o \
+  $(ROOT)/user/glob.o \
+  $(ROOT)/user/ftw.o \
+  $(ROOT)/user/fts.o \
+  $(ROOT)/user/locale.o \
+  $(ROOT)/user/pwdgrp.o \
+  $(ROOT)/user/env.o \
+  $(ROOT)/user/conf.o \
+  $(ROOT)/user/path.o \
+  $(ROOT)/user/tempfile.o \
+  $(ROOT)/user/timecore.o \
+  $(ROOT)/user/resource.o \
+  $(ROOT)/user/netdb.o \
+  $(ROOT)/user/stdlib.o \
+  $(ROOT)/user/posix_fs.o \
+  $(ROOT)/user/posix.o \
+  $(ROOT)/user/stdio.o \
+  $(ROOT)/user/regex.o \
+  $(ROOT)/user/calloc.o \
+  $(ROOT)/user/libterm.o \
+  $(ROOT)/user/checksum.o \
+  $(ROOT)/user/gzip.o \
+  $(ROOT)/user/crt0.o \
+  $(ROOT)/user/usys.o \
+  $(ROOT)/user/printf.o \
+  $(ROOT)/user/resolve.o
+
+.PHONY: all clean toolchain-check
+
+all: toolchain-check config.h $(OUT)
+
+toolchain-check:
+	@$(CC) -m32 -dM -E -x c /dev/null | grep -q '__i386__' || \
+		(echo "ERROR: $(CC) is not producing i386 output with -m32" >&2; exit 1)
+
+config.h:
+	cp config.def.h $@
+
+%.o: %.c config.h
+	$(CC) -c $(CFLAGS) -o $@ $<
+
+$(RUNTIME_OBJS):
+	$(MAKE) -C $(ROOT) $(patsubst $(ROOT)/%,%,$@)
+
+$(OUT): $(OBJ) $(RUNTIME_OBJS)
+	$(LD) $(LDFLAGS) -o $@ $(RUNTIME_OBJS) $(OBJ) $(LIBS) $(LIBGCC)
+	$(OBJDUMP) -S $@ > $(DWM_DIR)/dwm-auxv6.asm || true
+
+clean:
+	rm -f $(OBJ) $(OUT) config.h $(SRC:.c=.d)
