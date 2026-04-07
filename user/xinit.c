@@ -1,6 +1,7 @@
 #include "types.h"
 #include "auxv6/user.h"
 #include "socket.h"
+#include "fcntl.h"
 
 #define X6_DEFAULT_PORT 6006
 #define XINIT_READY_RETRIES 20
@@ -46,14 +47,61 @@ probe_x6_ready(int port)
 
   send(fd, "HELLO x6/1\n", 11);
   n = recv(fd, buf, sizeof(buf) - 1);
-  close(fd);
   if(n <= 0)
+  {
+    close(fd);
     return -1;
+  }
   buf[n] = 0;
 
-  if(strncmp(buf, "OK proto=", 9) != 0)
+  if(strncmp(buf, "OK proto=", 9) != 0) {
+    close(fd);
     return -1;
+  }
+
+  send(fd, "DETACH\n", 7);
+  n = recv(fd, buf, sizeof(buf) - 1);
+  close(fd);
+  if(n > 0) {
+    buf[n] = 0;
+    if(strncmp(buf, "BYE", 3) != 0)
+      return -1;
+  }
   return 0;
+}
+
+static int
+client_path_exists(const char *path)
+{
+  int fd;
+
+  if(!path || path[0] == 0)
+    return 0;
+  fd = open(path, O_RDONLY);
+  if(fd < 0)
+    return 0;
+  close(fd);
+  return 1;
+}
+
+static void
+stop_x6_or_kill(int x6_pid)
+{
+  int i;
+  int st;
+
+  if(x6_pid <= 0)
+    return;
+
+  kill(x6_pid, SIGTERM);
+  for(i = 0; i < 3; i++) {
+    if(waitpid(x6_pid, &st, WNOHANG) == x6_pid)
+      return;
+    sleep(1);
+  }
+
+  kill(x6_pid, SIGKILL);
+  waitpid(x6_pid, 0, 0);
 }
 
 int
@@ -98,6 +146,13 @@ main(int argc, char **argv)
   else
     client_argv = default_client;
 
+  if(client_argv[0] && client_argv[0][0] == '/' && !client_path_exists(client_argv[0])) {
+    dprintf(2, "xinit: client not found: %s\n", client_argv[0]);
+    return 1;
+  }
+
+  dprintf(1, "xinit: launching client %s\n", client_argv[0] ? client_argv[0] : "(null)");
+
   if(port < 1 || port > 65535) {
     dprintf(2, "xinit: invalid x6 port\n");
     return 1;
@@ -136,30 +191,37 @@ main(int argc, char **argv)
 
   if(ready < 0) {
     dprintf(2, "xinit: x6 did not become ready\n");
-    kill(x6_pid, SIGTERM);
-    waitpid(x6_pid, 0, 0);
+    stop_x6_or_kill(x6_pid);
     return 1;
   }
 
   client_pid = fork();
   if(client_pid < 0) {
     dprintf(2, "xinit: fork for client failed\n");
-    kill(x6_pid, SIGTERM);
-    waitpid(x6_pid, 0, 0);
+    stop_x6_or_kill(x6_pid);
     return 1;
   }
 
   if(client_pid == 0) {
+    dprintf(1, "xinit: exec client now: %s\n", client_argv[0]);
     exec(client_argv[0], client_argv);
     dprintf(2, "xinit: exec failed for %s\n", client_argv[0]);
     exit(1);
   }
 
+  dprintf(1, "xinit: client pid=%d\n", client_pid);
+
   if(waitpid(client_pid, &st, 0) < 0)
     st = 1;
 
-  kill(x6_pid, SIGTERM);
-  waitpid(x6_pid, 0, 0);
+  if(WIFEXITED(st))
+    dprintf(1, "xinit: client exited code=%d\n", WEXITSTATUS(st));
+  else if(WIFSIGNALED(st))
+    dprintf(1, "xinit: client signaled sig=%d\n", WTERMSIG(st));
+  else
+    dprintf(1, "xinit: client exited status=%d\n", st);
+
+  stop_x6_or_kill(x6_pid);
 
   return st;
 }

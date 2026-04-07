@@ -114,6 +114,16 @@ for src in "$@"; do
     _dmesg)
       install -m 0755 "$src" "$rootdir/sbin/dmesg"
       ;;
+    _startx)
+      install -d -m 0755 "$rootdir/usr/bin"
+      install -m 0755 "$src" "$rootdir/bin/startx"
+      install -m 0755 "$src" "$rootdir/usr/bin/startx"
+      chmod 0755 "$rootdir/bin/startx" "$rootdir/usr/bin/startx"
+      ;;
+    _dwm)
+      install -d -m 0755 "$rootdir/usr/bin"
+      install -m 0755 "$src" "$rootdir/usr/bin/dwm"
+      ;;
     _killall)
       install -m 0755 "$src" "$rootdir/sbin/killall"
       ;;
@@ -173,6 +183,12 @@ for src in "$@"; do
       ;;
     sbin/mount.*)
       install -m 0755 "$src" "$rootdir/sbin/${rel#sbin/}"
+      ;;
+    usr/bin/startx)
+      install -d -m 0755 "$rootdir/usr/bin"
+      install -m 0755 "$src" "$rootdir/usr/bin/startx"
+      install -m 0755 "$src" "$rootdir/bin/startx"
+      chmod 0755 "$rootdir/usr/bin/startx" "$rootdir/bin/startx"
       ;;
     */*)
       dest="$rootdir/$rel"

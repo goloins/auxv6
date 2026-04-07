@@ -1,13 +1,13 @@
 # startx
 
 ## NAME
-startx - convenience wrapper for xinit on auxv6
+startx - convenience launcher for xinit on auxv6
 
 ## SYNOPSIS
 `startx [xinit-args...]`
 
 ## DESCRIPTION
-`startx` is a thin wrapper that executes:
+`startx` is a tiny launcher binary that executes:
 
 `/bin/xinit "$@"`
 
@@ -23,5 +23,5 @@ startx
 Launch a specific client:
 
 ```sh
-startx /bin/dwm
+startx /usr/bin/dwm
 ```

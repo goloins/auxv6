@@ -4,6 +4,8 @@
 
 Define a practical, constrained path to run `dwm` on auxv6 with a new local display server (`x6`) that implements only the X11 surface needed for a comfortable dwm session.
 
+Implementation progress snapshot for the current state is tracked in `docs/x6-dwm-progress-2026-04-07.md`.
+
 This plan intentionally avoids "full Xorg" scope. The objective is:
 
 - `startx /bin/dwm`-style workflow

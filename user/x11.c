@@ -10,6 +10,7 @@
 #define X6_PORT 6006
 #define X6_BUF_SIZE 1024
 #define X11_MAX_ATOMS 256
+#define X11_MAX_GCS 128
 
 typedef struct {
   Atom atom;
@@ -22,6 +23,208 @@ static unsigned long g_next_atom = 128;
 static atom_entry g_atoms[X11_MAX_ATOMS];
 static int g_atom_count;
 static int (*g_error_handler)(Display *, XErrorEvent *);
+static int g_is_wm;
+static XEvent g_pending_event;
+static int g_has_pending_event;
+static unsigned long g_next_gc = 1;
+
+struct x11_gc_state {
+  int in_use;
+  GC id;
+  unsigned long fg;
+};
+
+static struct x11_gc_state g_gcs[X11_MAX_GCS];
+
+static struct x11_gc_state *
+x11_find_gc(GC gc)
+{
+  int i;
+  for (i = 0; i < X11_MAX_GCS; i++) {
+    if (g_gcs[i].in_use && g_gcs[i].id == gc)
+      return &g_gcs[i];
+  }
+  return 0;
+}
+
+static struct x11_gc_state *
+x11_alloc_gc(void)
+{
+  int i;
+  for (i = 0; i < X11_MAX_GCS; i++) {
+    if (!g_gcs[i].in_use) {
+      g_gcs[i].in_use = 1;
+      g_gcs[i].id = g_next_gc++;
+      g_gcs[i].fg = 0xffffffUL;
+      return &g_gcs[i];
+    }
+  }
+  return 0;
+}
+
+static int x11_read_line(int fd, char *line, int maxlen);
+
+static int
+x11_sanitize_rect(Display *display, int *x, int *y, unsigned int *w, unsigned int *h)
+{
+  int maxw;
+  int maxh;
+
+  if (!display || !x || !y || !w || !h)
+    return -1;
+
+  maxw = display->width > 0 ? display->width : 1024;
+  maxh = display->height > 0 ? display->height : 768;
+
+  if (*w == 0 || *h == 0)
+    return -1;
+
+  if (*w > (unsigned int)maxw)
+    *w = (unsigned int)maxw;
+  if (*h > (unsigned int)maxh)
+    *h = (unsigned int)maxh;
+
+  if (*x < 0) {
+    unsigned int drop = (unsigned int)(-*x);
+    if (drop >= *w)
+      return -1;
+    *w -= drop;
+    *x = 0;
+  }
+  if (*y < 0) {
+    unsigned int drop = (unsigned int)(-*y);
+    if (drop >= *h)
+      return -1;
+    *h -= drop;
+    *y = 0;
+  }
+
+  if (*x >= maxw || *y >= maxh)
+    return -1;
+
+  if (*x + (int)(*w) > maxw)
+    *w = (unsigned int)(maxw - *x);
+  if (*y + (int)(*h) > maxh)
+    *h = (unsigned int)(maxh - *y);
+
+  if (*w == 0 || *h == 0)
+    return -1;
+  return 0;
+}
+
+static int
+x11_parse_event_line(Display *display, const char *line, XEvent *event)
+{
+  if (!display || !line || !event)
+    return -1;
+  if (strncmp(line, "EVENT ", 6) != 0)
+    return -1;
+
+  memset(event, 0, sizeof(*event));
+  if (strncmp(line + 6, "MapRequest", 10) == 0) {
+    event->type = MapRequest;
+    sscanf(line, "EVENT MapRequest wid=%u", &event->xmaprequest.window);
+    event->xmaprequest.parent = display->root;
+    return 0;
+  }
+  if (strncmp(line + 6, "ConfigureRequest", 16) == 0) {
+    event->type = ConfigureRequest;
+    sscanf(line, "EVENT ConfigureRequest wid=%u geom=%d,%d %dx%d",
+           &event->xconfigurerequest.window,
+           &event->xconfigurerequest.x,
+           &event->xconfigurerequest.y,
+           &event->xconfigurerequest.width,
+           &event->xconfigurerequest.height);
+    event->xconfigurerequest.parent = display->root;
+    return 0;
+  }
+  if (strncmp(line + 6, "FocusIn", 7) == 0) {
+    event->type = FocusIn;
+    sscanf(line, "EVENT FocusIn wid=%u", &event->xfocus.window);
+    return 0;
+  }
+  if (strncmp(line + 6, "FocusOut", 8) == 0) {
+    event->type = FocusOut;
+    sscanf(line, "EVENT FocusOut wid=%u", &event->xfocus.window);
+    return 0;
+  }
+  if (strncmp(line + 6, "DestroyNotify", 13) == 0) {
+    event->type = DestroyNotify;
+    sscanf(line, "EVENT DestroyNotify wid=%u", &event->xdestroywindow.window);
+    return 0;
+  }
+  if (strncmp(line + 6, "KeyPress", 8) == 0) {
+    event->type = KeyPress;
+    sscanf(line, "EVENT KeyPress wid=%u keycode=%u state=%u",
+           &event->xkey.window, &event->xkey.keycode, &event->xkey.state);
+    return 0;
+  }
+  if (strncmp(line + 6, "ButtonPress", 11) == 0) {
+    event->type = ButtonPress;
+    sscanf(line, "EVENT ButtonPress wid=%u button=%u state=%u x=%d y=%d",
+           &event->xbutton.window, &event->xbutton.button, &event->xbutton.state,
+           &event->xbutton.x, &event->xbutton.y);
+    return 0;
+  }
+  if (strncmp(line + 6, "ButtonRelease", 13) == 0) {
+    event->type = ButtonRelease;
+    sscanf(line, "EVENT ButtonRelease wid=%u button=%u state=%u x=%d y=%d",
+           &event->xbutton.window, &event->xbutton.button, &event->xbutton.state,
+           &event->xbutton.x, &event->xbutton.y);
+    return 0;
+  }
+  if (strncmp(line + 6, "MotionNotify", 12) == 0) {
+    event->type = MotionNotify;
+    sscanf(line, "EVENT MotionNotify wid=%u x=%d y=%d state=%u",
+           &event->xmotion.window, &event->xmotion.x, &event->xmotion.y, &event->xmotion.state);
+    return 0;
+  }
+  return -1;
+}
+
+static long
+x11_event_mask_for_type(int type)
+{
+  switch (type) {
+  case KeyPress:
+    return KeyPressMask;
+  case KeyRelease:
+    return KeyReleaseMask;
+  case ButtonPress:
+    return ButtonPressMask;
+  case ButtonRelease:
+    return ButtonReleaseMask;
+  case MotionNotify:
+    return PointerMotionMask | ButtonMotionMask;
+  case Expose:
+    return ExposureMask;
+  case MapRequest:
+  case ConfigureRequest:
+    return SubstructureRedirectMask;
+  case FocusIn:
+  case FocusOut:
+    return FocusChangeMask;
+  case DestroyNotify:
+    return StructureNotifyMask;
+  default:
+    return 0;
+  }
+}
+
+static int
+x11_read_event(Display *display, XEvent *event)
+{
+  char line[X6_BUF_SIZE];
+  if (!display || !event)
+    return -1;
+
+  while (1) {
+    if (x11_read_line(display->fd, line, sizeof(line)) < 0)
+      return -1;
+    if (x11_parse_event_line(display, line, event) == 0)
+      return 0;
+  }
+}
 
 static int
 x11_read_line(int fd, char *line, int maxlen)
@@ -53,13 +256,28 @@ x11_send(int fd, const char *cmd)
 static int
 x11_cmd(Display *dpy, const char *cmd, char *resp, int maxlen)
 {
+  char line[X6_BUF_SIZE];
   if (!dpy || dpy->fd < 0)
     return -1;
   if (x11_send(dpy->fd, cmd) < 0)
     return -1;
   if (!resp)
     return 0;
-  return x11_read_line(dpy->fd, resp, maxlen);
+
+  while (1) {
+    if (x11_read_line(dpy->fd, line, sizeof(line)) < 0)
+      return -1;
+
+    if (strncmp(line, "EVENT ", 6) == 0) {
+      if (!g_has_pending_event && x11_parse_event_line(dpy, line, &g_pending_event) == 0)
+        g_has_pending_event = 1;
+      continue;
+    }
+
+    strncpy(resp, line, maxlen - 1);
+    resp[maxlen - 1] = '\0';
+    return (int)strlen(resp);
+  }
 }
 
 static const char *
@@ -95,6 +313,8 @@ XOpenDisplay(char *display_name)
   Display *dpy;
   (void)display_name;
 
+  dprintf(2, "x11: XOpenDisplay enter\n");
+
   if (g_display)
     return g_display;
 
@@ -104,22 +324,34 @@ XOpenDisplay(char *display_name)
   memset(dpy, 0, sizeof(*dpy));
 
   dpy->fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (dpy->fd < 0)
+  if (dpy->fd < 0) {
+    dprintf(2, "x11: socket failed\n");
     goto fail;
+  }
 
   memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
   addr.sin_port = (ushort)X6_PORT;
   addr.sin_addr = INADDR_LOOPBACK;
-  if (connect(dpy->fd, &addr, sizeof(addr)) < 0)
+  if (connect(dpy->fd, &addr, sizeof(addr)) < 0) {
+    dprintf(2, "x11: connect failed\n");
     goto fail;
+  }
+  dprintf(2, "x11: connect ok\n");
 
-  if (x11_read_line(dpy->fd, line, sizeof(line)) < 0)
+  if (x11_read_line(dpy->fd, line, sizeof(line)) < 0) {
+    dprintf(2, "x11: read READY failed\n");
     goto fail;
-  if (x11_cmd(dpy, "HELLO x6/1\n", line, sizeof(line)) < 0)
+  }
+  if (x11_cmd(dpy, "HELLO x6/1\n", line, sizeof(line)) < 0) {
+    dprintf(2, "x11: HELLO failed\n");
     goto fail;
-  if (strncmp(line, "OK proto=", 9) != 0)
+  }
+  if (strncmp(line, "OK proto=", 9) != 0) {
+    dprintf(2, "x11: HELLO bad reply: %s\n", line);
     goto fail;
+  }
+  dprintf(2, "x11: display handshake ok\n");
 
   dpy->screen = 0;
   dpy->root = 1;
@@ -130,6 +362,7 @@ XOpenDisplay(char *display_name)
   return dpy;
 
 fail:
+  dprintf(2, "x11: XOpenDisplay fail\n");
   if (dpy->fd >= 0)
     close(dpy->fd);
   free(dpy);
@@ -212,10 +445,17 @@ int
 XMapWindow(Display *display, Window w)
 {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
-  snprintf(cmd, sizeof(cmd), "MAP %u\n", (uint)w);
+
+  if (g_is_wm)
+    snprintf(cmd, sizeof(cmd), "WM_MAP %u\n", (uint)w);
+  else
+    snprintf(cmd, sizeof(cmd), "MAP %u\n", (uint)w);
+
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return -1;
-  if (strncmp(line, "OK map", 6) == 0 || strncmp(line, "PENDING map", 11) == 0)
+  if (strncmp(line, "OK map", 6) == 0 ||
+      strncmp(line, "OK mapped", 9) == 0 ||
+      strncmp(line, "PENDING map", 11) == 0)
     return 0;
   return -1;
 }
@@ -226,7 +466,12 @@ int
 XUnmapWindow(Display *display, Window w)
 {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
-  snprintf(cmd, sizeof(cmd), "UNMAP %u\n", (uint)w);
+
+  if (g_is_wm)
+    snprintf(cmd, sizeof(cmd), "WM_UNMAP %u\n", (uint)w);
+  else
+    snprintf(cmd, sizeof(cmd), "UNMAP %u\n", (uint)w);
+
   return x11_cmd(display, cmd, line, sizeof(line)) < 0 ? -1 : 0;
 }
 
@@ -234,10 +479,17 @@ int
 XMoveResizeWindow(Display *display, Window w, int x, int y, unsigned int width, unsigned int height)
 {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
-  snprintf(cmd, sizeof(cmd), "CONFIGURE %u %d %d %d %d\n", (uint)w, x, y, (int)width, (int)height);
+
+  if (g_is_wm)
+    snprintf(cmd, sizeof(cmd), "WM_CONFIGURE %u %d %d %d %d\n", (uint)w, x, y, (int)width, (int)height);
+  else
+    snprintf(cmd, sizeof(cmd), "CONFIGURE %u %d %d %d %d\n", (uint)w, x, y, (int)width, (int)height);
+
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return -1;
-  if (strncmp(line, "OK configure", 12) == 0 || strncmp(line, "PENDING configure", 17) == 0)
+  if (strncmp(line, "OK configure", 12) == 0 ||
+      strncmp(line, "OK configured", 13) == 0 ||
+      strncmp(line, "PENDING configure", 17) == 0)
     return 0;
   return -1;
 }
@@ -271,57 +523,82 @@ XGetWindowAttributes(Display *display, Window w, XWindowAttributes *attrs)
   return 1;
 }
 
-int XSelectInput(Display *display, Window w, long event_mask) { (void)display; (void)w; (void)event_mask; return 0; }
+int
+XSelectInput(Display *display, Window w, long event_mask)
+{
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+
+  if (!display)
+    return -1;
+
+  // Claim WM redirect role when selecting SubstructureRedirect on root.
+  if (w == display->root && (event_mask & SubstructureRedirectMask)) {
+    snprintf(cmd, sizeof(cmd), "REQUEST_REDIRECT %u\n", (uint)display->root);
+    if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+      return -1;
+    if (strncmp(line, "OK redirect_granted", 19) == 0)
+      g_is_wm = 1;
+    else if (strncmp(line, "ERR redirect-in-use", 19) == 0)
+      g_is_wm = 0;
+    else
+      return -1;
+  }
+
+  return 0;
+}
 
 int
 XNextEvent(Display *display, XEvent *event)
 {
-  char line[X6_BUF_SIZE];
+  if (g_has_pending_event) {
+    *event = g_pending_event;
+    g_has_pending_event = 0;
+    return 0;
+  }
+  return x11_read_event(display, event);
+}
+
+int
+XMaskEvent(Display *display, long event_mask, XEvent *event)
+{
+  XEvent tmp;
+
   if (!display || !event)
     return -1;
+
+  if (g_has_pending_event) {
+    if (x11_event_mask_for_type(g_pending_event.type) & event_mask) {
+      *event = g_pending_event;
+      g_has_pending_event = 0;
+      return 0;
+    }
+  }
+
   while (1) {
-    if (x11_read_line(display->fd, line, sizeof(line)) < 0)
+    if (x11_read_event(display, &tmp) < 0)
       return -1;
-    if (strncmp(line, "EVENT ", 6) != 0)
-      continue;
-    memset(event, 0, sizeof(*event));
-    if (strncmp(line + 6, "MapRequest", 10) == 0) {
-      event->type = MapRequest;
-      sscanf(line, "EVENT MapRequest wid=%u", &event->xmaprequest.window);
-      event->xmaprequest.parent = display->root;
+    if (x11_event_mask_for_type(tmp.type) & event_mask) {
+      *event = tmp;
       return 0;
     }
-    if (strncmp(line + 6, "ConfigureRequest", 16) == 0) {
-      event->type = ConfigureRequest;
-      sscanf(line, "EVENT ConfigureRequest wid=%u x=%d y=%d w=%d h=%d",
-             &event->xconfigurerequest.window,
-             &event->xconfigurerequest.x,
-             &event->xconfigurerequest.y,
-             &event->xconfigurerequest.width,
-             &event->xconfigurerequest.height);
-      event->xconfigurerequest.parent = display->root;
-      return 0;
-    }
-    if (strncmp(line + 6, "FocusIn", 7) == 0) {
-      event->type = FocusIn;
-      sscanf(line, "EVENT FocusIn wid=%u", &event->xfocus.window);
-      return 0;
-    }
-    if (strncmp(line + 6, "FocusOut", 8) == 0) {
-      event->type = FocusOut;
-      sscanf(line, "EVENT FocusOut wid=%u", &event->xfocus.window);
-      return 0;
-    }
-    if (strncmp(line + 6, "DestroyNotify", 13) == 0) {
-      event->type = DestroyNotify;
-      sscanf(line, "EVENT DestroyNotify wid=%u", &event->xdestroywindow.window);
-      return 0;
+    if (!g_has_pending_event) {
+      g_pending_event = tmp;
+      g_has_pending_event = 1;
     }
   }
 }
 
-int XMaskEvent(Display *display, long event_mask, XEvent *event) { (void)event_mask; return XNextEvent(display, event); }
-Bool XCheckMaskEvent(Display *display, long event_mask, XEvent *event) { (void)display; (void)event_mask; (void)event; return False; }
+Bool XCheckMaskEvent(Display *display, long event_mask, XEvent *event) {
+  (void)display;
+  if (!event)
+    return False;
+  if (g_has_pending_event && (x11_event_mask_for_type(g_pending_event.type) & event_mask)) {
+    *event = g_pending_event;
+    g_has_pending_event = 0;
+    return True;
+  }
+  return False;
+}
 int XPending(Display *display) { (void)display; return 0; }
 
 Atom
@@ -503,17 +780,63 @@ int XFreeCursor(Display *display, Cursor cursor) { (void)display; (void)cursor; 
 
 Pixmap XCreatePixmap(Display *display, Drawable d, unsigned int width, unsigned int height, unsigned int depth) { (void)display; (void)d; (void)width; (void)height; (void)depth; return 1; }
 int XFreePixmap(Display *display, Pixmap pixmap) { (void)display; (void)pixmap; return 0; }
-GC XCreateGC(Display *display, Drawable d, unsigned long valuemask, void *values) { (void)display; (void)d; (void)valuemask; (void)values; return 1; }
-int XFreeGC(Display *display, GC gc) { (void)display; (void)gc; return 0; }
-int XSetForeground(Display *display, GC gc, unsigned long foreground) { (void)display; (void)gc; (void)foreground; return 0; }
+GC XCreateGC(Display *display, Drawable d, unsigned long valuemask, void *values) {
+  struct x11_gc_state *gs;
+  (void)display;
+  (void)d;
+  (void)valuemask;
+  (void)values;
+  gs = x11_alloc_gc();
+  if (!gs)
+    return 0;
+  return gs->id;
+}
+int XFreeGC(Display *display, GC gc) {
+  struct x11_gc_state *gs;
+  (void)display;
+  gs = x11_find_gc(gc);
+  if (gs)
+    gs->in_use = 0;
+  return 0;
+}
+int XSetForeground(Display *display, GC gc, unsigned long foreground) {
+  struct x11_gc_state *gs;
+  (void)display;
+  gs = x11_find_gc(gc);
+  if (gs)
+    gs->fg = foreground;
+  return 0;
+}
 int XSetLineAttributes(Display *display, GC gc, unsigned int line_width, int line_style, int cap_style, int join_style) {
   (void)display; (void)gc; (void)line_width; (void)line_style; (void)cap_style; (void)join_style; return 0;
 }
 int XFillRectangle(Display *display, Drawable d, GC gc, int x, int y, unsigned int width, unsigned int height) {
-  (void)display; (void)d; (void)gc; (void)x; (void)y; (void)width; (void)height; return 0;
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  struct x11_gc_state *gs;
+  unsigned int color;
+  if (!display)
+    return -1;
+  if (x11_sanitize_rect(display, &x, &y, &width, &height) < 0)
+    return 0;
+  gs = x11_find_gc(gc);
+  color = (unsigned int)(gs ? (gs->fg & 0x00ffffffUL) : 0x00ffffffU);
+  snprintf(cmd, sizeof(cmd), "DRAW_RECT %u %d %d %u %u %u\n", (uint)d, x, y, width, height, color);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return -1;
+  return strncmp(line, "OK draw", 7) == 0 ? 0 : -1;
 }
 int XDrawRectangle(Display *display, Drawable d, GC gc, int x, int y, unsigned int width, unsigned int height) {
-  (void)display; (void)d; (void)gc; (void)x; (void)y; (void)width; (void)height; return 0;
+  if (width == 0 || height == 0)
+    return 0;
+  XFillRectangle(display, d, gc, x, y, width, 1);
+  if (height > 1)
+    XFillRectangle(display, d, gc, x, y + (int)height - 1, width, 1);
+  if (height > 2) {
+    XFillRectangle(display, d, gc, x, y + 1, 1, height - 2);
+    if (width > 1)
+      XFillRectangle(display, d, gc, x + (int)width - 1, y + 1, 1, height - 2);
+  }
+  return 0;
 }
 int XCopyArea(Display *display, Drawable src, Drawable dest, GC gc, int src_x, int src_y, unsigned int width, unsigned int height, int dest_x, int dest_y) {
   (void)display; (void)src; (void)dest; (void)gc; (void)src_x; (void)src_y; (void)width; (void)height; (void)dest_x; (void)dest_y; return 0;

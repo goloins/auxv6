@@ -91,7 +91,7 @@ Generated: 2026-04-06
 | sigtest | targetfs/usr/share/man/sigtest.md | 2026-04-01 | user/sigtest.c | source-derived usage/options |
 | sockettest | targetfs/usr/share/man/sockettest.md | 2026-04-01 | user/sockettest.c | source-derived usage/options |
 | sgrep | targetfs/usr/share/man/sgrep.md | 2026-04-01 | ports/sbase/grep.c | upstream sbase port via auxv6 Makefile |
-| startx | targetfs/usr/share/man/startx.md | 2026-04-06 | targetfs/usr/bin/startx | thin wrapper that forwards to xinit |
+| startx | targetfs/usr/share/man/startx.md | 2026-04-07 | user/startx.c | compiled wrapper that execs /bin/xinit; staged in /bin and /usr/bin |
 | stressfs | targetfs/usr/share/man/stressfs.md | 2026-04-01 | user/stressfs.c | source-derived usage/options |
 | su | targetfs/usr/share/man/su.md | 2026-04-01 | user/su.c | source-derived usage/options |
 | symlinktest | targetfs/usr/share/man/symlinktest.md | 2026-04-01 | user/symlinktest.c | source-derived usage/options |

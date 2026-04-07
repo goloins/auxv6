@@ -148,6 +148,7 @@ user/lockprobe
 user/server7
 user/x6
 user/xinit
+user/startx
 user/x6test
 user/date
 user/time

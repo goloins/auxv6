@@ -751,6 +751,9 @@ _x6: user/x6
 _xinit: user/xinit
 	cp user/xinit _xinit
 
+_startx: user/startx
+	cp user/startx _startx
+
 _x6test: user/x6test
 	cp user/x6test _x6test
 
@@ -766,6 +769,10 @@ _dmesg: user/dmesg
 _dash: ports/dash-0.5.12/Makefile.auxv6 $(ULIB) user/setjmp.o
 	$(MAKE) -f ports/dash-0.5.12/Makefile.auxv6 all
 	cp ports/dash-0.5.12/_dash _dash
+
+_dwm: ports/dwm-6.8/Makefile.auxv6 $(ULIB) user/x11.o
+	$(MAKE) -f ports/dwm-6.8/Makefile.auxv6 all
+	cp ports/dwm-6.8/_dwm _dwm
 
 _symlinktest: user/symlinktest
 	cp user/symlinktest _symlinktest
@@ -933,8 +940,10 @@ UPROGS=\
 	_server7\
 	_x6\
 	_xinit\
+	_startx\
 	_x6test\
 	_dash\
+	_dwm\
 	_symlinktest\
 	_nftwtest\
 	_ftwtest\
