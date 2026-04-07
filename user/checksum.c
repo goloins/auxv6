@@ -24,6 +24,50 @@ ror64(uint64_t v, int n)
   return (v >> n) | (v << (64 - n));
 }
 
+static uint32_t g_crc32_tab[256];
+static int g_crc32_ready;
+
+void
+aux_crc32_init(void)
+{
+  uint32_t i;
+
+  if(g_crc32_ready)
+    return;
+
+  for(i = 0; i < 256; i++) {
+    uint32_t c = i;
+    int j;
+    for(j = 0; j < 8; j++)
+      c = (c & 1U) ? ((c >> 1) ^ 0xedb88320U) : (c >> 1);
+    g_crc32_tab[i] = c;
+  }
+
+  g_crc32_ready = 1;
+}
+
+uint32_t
+aux_crc32_update_byte(uint32_t crc, uint8_t b)
+{
+  return g_crc32_tab[(crc ^ b) & 0xffU] ^ (crc >> 8);
+}
+
+uint32_t
+aux_crc32_update(uint32_t crc, const uint8_t *buf, size_t len)
+{
+  size_t i;
+
+  for(i = 0; i < len; i++)
+    crc = aux_crc32_update_byte(crc, buf[i]);
+  return crc;
+}
+
+uint32_t
+aux_crc32_finish(uint32_t crc)
+{
+  return crc ^ 0xffffffffU;
+}
+
 /* ---------------- MD5 ---------------- */
 
 typedef struct {

@@ -3,6 +3,7 @@
 #include "auxv6/gzip.h"
 #include "string.h"
 #include "stdint.h"
+#include "checksum.h"
 
 #define GZIP_INBUF_SZ 4096
 #define GZIP_OUTBUF_SZ 4096
@@ -43,9 +44,6 @@ struct huff_tree {
   short sym[HUFF_MAX_NODES];
   int nodes;
 };
-
-static uint crc_table[256];
-static int crc_ready;
 
 static const int len_base[29] = {
   3, 4, 5, 6, 7, 8, 9, 10,
@@ -148,35 +146,6 @@ gzip_write_all(int fd, const void *buf, int n)
     off += m;
   }
   return 0;
-}
-
-static void
-crc32_init(void)
-{
-  uint i;
-
-  if(crc_ready)
-    return;
-
-  for(i = 0; i < 256; i++) {
-    uint c = i;
-    int j;
-    for(j = 0; j < 8; j++) {
-      if(c & 1)
-        c = (c >> 1) ^ 0xedb88320U;
-      else
-        c >>= 1;
-    }
-    crc_table[i] = c;
-  }
-
-  crc_ready = 1;
-}
-
-static uint
-crc32_update(uint crc, uchar b)
-{
-  return crc_table[(crc ^ b) & 0xffU] ^ (crc >> 8);
 }
 
 static int
@@ -444,7 +413,7 @@ inflate_stored(struct bit_stream *bs,
       return -1;
     win[*wpos & (GZIP_WINSZ - 1)] = (uchar)c;
     *wpos = (*wpos + 1) & (GZIP_WINSZ - 1);
-    *crc = crc32_update(*crc, (uchar)c);
+    *crc = aux_crc32_update_byte(*crc, (uchar)c);
     *usize = *usize + 1;
   }
 
@@ -474,7 +443,7 @@ inflate_codes(struct bit_stream *bs,
         return -1;
       win[*wpos & (GZIP_WINSZ - 1)] = b;
       *wpos = (*wpos + 1) & (GZIP_WINSZ - 1);
-      *crc = crc32_update(*crc, b);
+      *crc = aux_crc32_update_byte(*crc, b);
       *usize = *usize + 1;
       continue;
     }
@@ -521,7 +490,7 @@ inflate_codes(struct bit_stream *bs,
           return -1;
         win[*wpos & (GZIP_WINSZ - 1)] = b;
         *wpos = (*wpos + 1) & (GZIP_WINSZ - 1);
-        *crc = crc32_update(*crc, b);
+        *crc = aux_crc32_update_byte(*crc, b);
         *usize = *usize + 1;
       }
     }
@@ -677,7 +646,7 @@ aux_gzip_inflate_fd(int in_fd, int out_fd)
   uint wpos;
   uint last;
 
-  crc32_init();
+  aux_crc32_init();
 
   in.fd = in_fd;
   in.pos = 0;
@@ -735,7 +704,7 @@ aux_gzip_inflate_fd(int in_fd, int out_fd)
              ((uint)trailer[6] << 16) |
              ((uint)trailer[7] << 24);
 
-  crc ^= 0xffffffffU;
+  crc = aux_crc32_finish(crc);
 
   if(got_crc != crc)
     return -1;
@@ -808,7 +777,7 @@ aux_gzip_deflate_store_fd(int in_fd, int out_fd)
   int n;
   int i;
 
-  crc32_init();
+  aux_crc32_init();
 
   if(gzip_write_all(out_fd, gzip_hdr, sizeof(gzip_hdr)) < 0)
     return -1;
@@ -856,7 +825,7 @@ aux_gzip_deflate_store_fd(int in_fd, int out_fd)
       return -1;
 
     for(i = 0; i < n; i++)
-      crc = crc32_update(crc, buf[i]);
+      crc = aux_crc32_update_byte(crc, buf[i]);
     usize += (uint)n;
 
     if(final)
@@ -865,7 +834,7 @@ aux_gzip_deflate_store_fd(int in_fd, int out_fd)
     n = nn;
   }
 
-  crc ^= 0xffffffffU;
+  crc = aux_crc32_finish(crc);
 
   {
     uchar tr[8];

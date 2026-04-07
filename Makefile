@@ -91,6 +91,7 @@ OBJS = \
 	kernel/core/kalloc.o\
 	kernel/core/kmalloc.o\
 	kernel/driver/kbd.o\
+	kernel/driver/mouse.o\
 	kernel/driver/lapic.o\
 	kernel/fs/log.o\
 	kernel/core/main.o\
@@ -757,6 +758,17 @@ _startx: user/startx
 _x6test: user/x6test
 	cp user/x6test _x6test
 
+user/wallpaper: user/wallpaper.o user/img.o user/img_png.o user/img_jpg.o $(ULIB) | toolchain-check
+	$(LD) $(LDFLAGS) -N -e _start -Ttext 0 -o $@ $^ $(LIBGCC)
+	$(OBJDUMP) -S $@ > $(basename $@).asm
+	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(basename $@).sym
+
+$(USER_STAGE_DIR)/wallpaper: user/wallpaper.o user/img.o user/img_png.o user/img_jpg.o $(ULIB) | $(USER_STAGE_DIR) toolchain-check
+	$(LD) $(LDFLAGS) -N -e _start -Ttext 0 -o $@ $^ $(LIBGCC)
+
+_wallpaper: user/wallpaper
+	cp user/wallpaper _wallpaper
+
 _date: user/date
 	cp user/date _date
 
@@ -942,6 +954,7 @@ UPROGS=\
 	_xinit\
 	_startx\
 	_x6test\
+	_wallpaper\
 	_dash\
 	_dwm\
 	_symlinktest\
@@ -1061,7 +1074,7 @@ clean:
 	user/audioctl user/audiostat user/audiotest user/audiotone user/audiopollstress user/audiod user/audiodctl \
 	user/server7 \
 	user/top \
-	user/date user/time user/killall user/halt \
+	user/date user/time user/killall user/halt user/wallpaper \
 	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/stackgrowtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/dmesg user/tail user/lspci user/v6init user/testdaemon \
 	user/schedperf user/fsperf user/gfxperf user/kallocstress user/kernperf user/bcachestress
 	user/kmemstress

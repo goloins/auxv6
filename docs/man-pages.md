@@ -110,6 +110,7 @@ Generated: 2026-04-06
 | usertests | targetfs/usr/share/man/usertests.md | 2026-04-01 | user/usertests.c | source-derived usage/options |
 | v6dhcpd | targetfs/usr/share/man/v6dhcpd.md | 2026-04-01 | user/v6dhcpd.c | source-derived usage/options |
 | vmprobe | targetfs/usr/share/man/vmprobe.md | 2026-04-06 | user/vmprobe.c | targeted VM/scheduler slowdown hypothesis probe correlating fork/tick phases with vmstat/schedstat deltas |
+| wallpaper | targetfs/usr/share/man/wallpaper.md | 2026-04-07 | user/wallpaper.c | framebuffer background setter for `#RRGGBB` colors and PNG image files |
 | wc | targetfs/usr/share/man/wc.md | 2026-04-01 | user/wc.c | source-derived usage/options |
 | whoami | targetfs/usr/share/man/whoami.md | 2026-04-01 | user/whoami.c | source-derived usage/options |
 | x6 | targetfs/usr/share/man/x6.md | 2026-04-06 | user/x6.c | phase-1 local display-server scaffold with simple bring-up protocol |
