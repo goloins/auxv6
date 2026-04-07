@@ -81,6 +81,8 @@ struct x6_window {
   int w;
   int h;
   int mapped;
+  int cursor_set;
+  uint cursor;
   struct x6_property props[X6_MAX_PROPERTIES_PER_WINDOW];
   int prop_count;
 };
@@ -125,6 +127,7 @@ static uint pointer_state;
 static uint x6_event_time;
 static int pointer_grab_active;
 static uint pointer_grab_window;
+static uint root_cursor;
 
 struct x6_fb_state {
   int fd;
@@ -137,8 +140,175 @@ struct x6_fb_state {
 };
 
 static struct x6_fb_state x6_fb = { -1, 0, 0, 0, 0, 0, 0 };
+static uint *x6_fb_shadow;
+static int x6_fb_shadow_w;
+static int x6_fb_shadow_h;
+
+struct x6_cursor_overlay {
+  int drawn;
+  int x;
+  int y;
+  int w;
+  int h;
+  uint saved[121];
+};
+
+static struct x6_cursor_overlay x6_cursor;
 
 static int x6_event_queue_enqueue(struct x6_event_queue *q, struct x6_event *evt);
+static struct x6_window *x6_pick_window_at(int px, int py);
+
+static uint
+x6_fb_shadow_pixel(int x, int y)
+{
+  size_t idx;
+
+  if(x6_fb_shadow == 0)
+    return 0;
+  if(x < 0 || y < 0 || x >= x6_fb_shadow_w || y >= x6_fb_shadow_h)
+    return 0;
+
+  idx = (size_t)y * (size_t)x6_fb_shadow_w + (size_t)x;
+  return x6_fb_shadow[idx];
+}
+
+static int
+x6_fb_write_pixel(int x, int y, uint pixel)
+{
+  uint64_t off;
+
+  if(x6_fb.fd < 0)
+    return -1;
+  if(x < 0 || y < 0 || x >= x6_fb.width || y >= x6_fb.height)
+    return -1;
+
+  off = (uint64_t)y * (uint64_t)x6_fb.stride + (uint64_t)x * 4ULL;
+  if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) < 0)
+    return -1;
+  if(write(x6_fb.fd, &pixel, sizeof(pixel)) != (int)sizeof(pixel))
+    return -1;
+  return 0;
+}
+
+static int
+x6_cursor_shape_hit(int dx, int dy)
+{
+  if(dx < 0 || dy < 0 || dx >= 11 || dy >= 11)
+    return 0;
+  if(dx == 5 || dy == 5)
+    return 2;
+  if(dx == 4 || dx == 6 || dy == 4 || dy == 6)
+    return 1;
+  return 0;
+}
+
+static uint
+x6_active_cursor(void)
+{
+  struct x6_window *hit;
+
+  hit = x6_pick_window_at(pointer_x, pointer_y);
+  if(hit && hit->cursor_set)
+    return hit->cursor;
+  return root_cursor;
+}
+
+static void
+x6_cursor_hide(void)
+{
+  int ix;
+  int iy;
+  int idx;
+
+  if(x6_backend != X6_BACKEND_FB || x6_fb.fd < 0)
+    return;
+  if(!x6_cursor.drawn)
+    return;
+
+  idx = 0;
+  for(iy = 0; iy < x6_cursor.h; iy++) {
+    for(ix = 0; ix < x6_cursor.w; ix++) {
+      x6_fb_write_pixel(x6_cursor.x + ix, x6_cursor.y + iy, x6_cursor.saved[idx]);
+      idx++;
+    }
+  }
+
+  x6_cursor.drawn = 0;
+}
+
+static void
+x6_cursor_show(void)
+{
+  int ox;
+  int oy;
+  int x0;
+  int y0;
+  int x1;
+  int y1;
+  int ix;
+  int iy;
+  int idx;
+  uint p;
+  uint active;
+
+  if(x6_backend != X6_BACKEND_FB || x6_fb.fd < 0)
+    return;
+
+  active = x6_active_cursor();
+  if(active == 0)
+    return;
+
+  ox = pointer_x - 5;
+  oy = pointer_y - 5;
+  x0 = ox < 0 ? 0 : ox;
+  y0 = oy < 0 ? 0 : oy;
+  x1 = ox + 11;
+  y1 = oy + 11;
+  if(x1 > x6_fb.width) x1 = x6_fb.width;
+  if(y1 > x6_fb.height) y1 = x6_fb.height;
+  if(x1 <= x0 || y1 <= y0)
+    return;
+
+  x6_cursor.x = x0;
+  x6_cursor.y = y0;
+  x6_cursor.w = x1 - x0;
+  x6_cursor.h = y1 - y0;
+
+  idx = 0;
+  for(iy = 0; iy < x6_cursor.h; iy++) {
+    for(ix = 0; ix < x6_cursor.w; ix++) {
+      int hit;
+      int dx;
+      int dy;
+      int px;
+      int py;
+
+      px = x6_cursor.x + ix;
+      py = x6_cursor.y + iy;
+      p = x6_fb_shadow_pixel(px, py);
+      x6_cursor.saved[idx] = p;
+
+      dx = px - ox;
+      dy = py - oy;
+      hit = x6_cursor_shape_hit(dx, dy);
+      if(hit == 2)
+        x6_fb_write_pixel(px, py, 0x00ffffffU);
+      else if(hit == 1)
+        x6_fb_write_pixel(px, py, 0x00000000U);
+
+      idx++;
+    }
+  }
+
+  x6_cursor.drawn = 1;
+}
+
+static void
+x6_cursor_refresh(void)
+{
+  x6_cursor_hide();
+  x6_cursor_show();
+}
 
 static int
 x6_parse_backend(const char *s)
@@ -274,6 +444,8 @@ x6_canvas_fill_pixels(int x, int y, int w, int h, uint pixel)
     int rw;
     uint p;
 
+    x6_cursor_hide();
+
     x0 = x;
     y0 = y;
     x1 = x + w;
@@ -282,15 +454,19 @@ x6_canvas_fill_pixels(int x, int y, int w, int h, uint pixel)
     if(y0 < 0) y0 = 0;
     if(x1 > x6_fb.width) x1 = x6_fb.width;
     if(y1 > x6_fb.height) y1 = x6_fb.height;
-    if(x1 <= x0 || y1 <= y0)
+    if(x1 <= x0 || y1 <= y0) {
+      x6_cursor_show();
       return;
+    }
 
     rw = x1 - x0;
     if(rw > x6_fb.rowcap) {
       uint *nbuf;
       nbuf = (uint *)malloc((size_t)rw * sizeof(uint));
-      if(!nbuf)
+      if(!nbuf) {
+        x6_cursor_show();
         return;
+      }
       if(x6_fb.rowbuf)
         free(x6_fb.rowbuf);
       x6_fb.rowbuf = nbuf;
@@ -302,13 +478,21 @@ x6_canvas_fill_pixels(int x, int y, int w, int h, uint pixel)
       x6_fb.rowbuf[i] = p;
 
     for(i = y0; i < y1; i++) {
+      int j;
+      size_t base;
       uint64_t off;
       off = (uint64_t)i * (uint64_t)x6_fb.stride + (uint64_t)x0 * 4ULL;
       if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) < 0)
         break;
       if(write(x6_fb.fd, x6_fb.rowbuf, rw * (int)sizeof(uint)) < 0)
         break;
+      if(x6_fb_shadow == 0)
+        continue;
+      base = (size_t)i * (size_t)x6_fb_shadow_w + (size_t)x0;
+      for(j = 0; j < rw; j++)
+        x6_fb_shadow[base + (size_t)j] = p;
     }
+    x6_cursor_show();
     return;
   }
 
@@ -394,9 +578,11 @@ x6_move_pointer(int dx, int dy)
   int sw;
   int sh;
 
+  x6_cursor_hide();
   x6_screen_size(&sw, &sh);
   pointer_x = x6_clamp_int(pointer_x + dx, 0, sw - 1);
   pointer_y = x6_clamp_int(pointer_y + dy, 0, sh - 1);
+  x6_cursor_show();
   x6_enqueue_pointer_event(X6_EVENT_MOTION_NOTIFY, 0);
 }
 
@@ -697,6 +883,11 @@ x6_fb_try_init(void)
   x6_fb.height = (int)vinfo.yres;
   x6_fb.stride = (int)finfo.line_length;
   x6_fb.bpp = (int)vinfo.bits_per_pixel;
+  x6_fb_shadow_w = x6_fb.width;
+  x6_fb_shadow_h = x6_fb.height;
+  x6_fb_shadow = (uint *)malloc((size_t)x6_fb_shadow_w * (size_t)x6_fb_shadow_h * sizeof(uint));
+  if(x6_fb_shadow)
+    memset(x6_fb_shadow, 0, (size_t)x6_fb_shadow_w * (size_t)x6_fb_shadow_h * sizeof(uint));
   x6_backend = X6_BACKEND_FB;
   dprintf(1, "x6: framebuffer backend active %dx%d stride=%d bpp=%d\n",
           x6_fb.width, x6_fb.height, x6_fb.stride, x6_fb.bpp);
@@ -718,6 +909,11 @@ x6_fb_shutdown(void)
     free(x6_fb.rowbuf);
   x6_fb.rowbuf = 0;
   x6_fb.rowcap = 0;
+  if(x6_fb_shadow)
+    free(x6_fb_shadow);
+  x6_fb_shadow = 0;
+  x6_fb_shadow_w = 0;
+  x6_fb_shadow_h = 0;
 }
 
 static int
@@ -806,6 +1002,8 @@ alloc_window(uint id)
       wins[i].w = 1;
       wins[i].h = 1;
       wins[i].mapped = 0;
+      wins[i].cursor_set = 0;
+      wins[i].cursor = 0;
       wins[i].prop_count = 0;  // Initialize properties (Phase 2.1d)
       return &wins[i];
     }
@@ -1282,10 +1480,50 @@ handle_one_command(int cfd, char *cmd)
   if(sscanf(cmd, "WARP_POINTER %d %d", &x, &y) == 2) {
     int sw;
     int sh;
+    x6_cursor_hide();
     x6_screen_size(&sw, &sh);
     pointer_x = x6_clamp_int(x, 0, sw - 1);
     pointer_y = x6_clamp_int(y, 0, sh - 1);
+    x6_cursor_show();
     x6_send_line(cfd, "OK pointer_warped\n");
+    return;
+  }
+
+  if(sscanf(cmd, "SET_CURSOR %u %u", &id, &color) == 2) {
+    if(id == (uint)wm_redirect_root) {
+      root_cursor = color;
+      x6_cursor_refresh();
+      x6_send_line(cfd, "OK cursor_set\n");
+      return;
+    }
+    win = find_window(id);
+    if(win == 0) {
+      x6_send_line(cfd, "ERR not-found\n");
+      return;
+    }
+    win->cursor_set = 1;
+    win->cursor = color;
+    x6_cursor_refresh();
+    x6_send_line(cfd, "OK cursor_set\n");
+    return;
+  }
+
+  if(sscanf(cmd, "UNSET_CURSOR %u", &id) == 1) {
+    if(id == (uint)wm_redirect_root) {
+      root_cursor = 1;
+      x6_cursor_refresh();
+      x6_send_line(cfd, "OK cursor_unset\n");
+      return;
+    }
+    win = find_window(id);
+    if(win == 0) {
+      x6_send_line(cfd, "ERR not-found\n");
+      return;
+    }
+    win->cursor_set = 0;
+    win->cursor = 0;
+    x6_cursor_refresh();
+    x6_send_line(cfd, "OK cursor_unset\n");
     return;
   }
 
@@ -1498,6 +1736,7 @@ handle_client(int cfd)
     keyboard_grab_owner = 0;
   }
 
+  x6_cursor_hide();
   current_event_queue = 0;
 }
 
@@ -1570,6 +1809,9 @@ main(int argc, char **argv)
   x6_event_time = 0;
   pointer_grab_active = 0;
   pointer_grab_window = 0;
+  root_cursor = 1;
+  memset(&x6_cursor, 0, sizeof(x6_cursor));
+  x6_cursor_show();
 
   fd = socket(AF_INET, SOCK_STREAM, 0);
   if(fd < 0) {

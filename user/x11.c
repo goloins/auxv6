@@ -816,7 +816,24 @@ int XAllowEvents(Display *display, int event_mode, Time time) { (void)display; (
 
 int XSetWindowBorder(Display *display, Window w, unsigned long border_pixel) { (void)display; (void)w; (void)border_pixel; return 0; }
 int XChangeWindowAttributes(Display *display, Window w, unsigned long valuemask, XSetWindowAttributes *attributes) { (void)display; (void)w; (void)valuemask; (void)attributes; return 0; }
-int XDefineCursor(Display *display, Window w, Cursor cursor) { (void)display; (void)w; (void)cursor; return 0; }
+int XDefineCursor(Display *display, Window w, Cursor cursor) {
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  if (!display)
+    return -1;
+  snprintf(cmd, sizeof(cmd), "SET_CURSOR %u %u\n", (uint)w, (uint)cursor);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return -1;
+  return strncmp(line, "OK cursor_set", 13) == 0 ? 0 : -1;
+}
+int XUndefineCursor(Display *display, Window w) {
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  if (!display)
+    return -1;
+  snprintf(cmd, sizeof(cmd), "UNSET_CURSOR %u\n", (uint)w);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return -1;
+  return strncmp(line, "OK cursor_unset", 15) == 0 ? 0 : -1;
+}
 Cursor XCreateFontCursor(Display *display, unsigned int shape) { (void)display; return (Cursor)(shape + 1); }
 int XFreeCursor(Display *display, Cursor cursor) { (void)display; (void)cursor; return 0; }
 
