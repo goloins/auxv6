@@ -11,6 +11,26 @@
 #define X6_PROC_PATH "/proc/server7"
 
 #define X6_MAX_WINDOWS 128
+#define X6_MAX_EVENTS_PER_CLIENT 64
+
+// Event types
+#define X6_EVENT_MAP_REQUEST 1
+#define X6_EVENT_CONFIGURE_REQUEST 2
+#define X6_EVENT_FOCUS_IN 3
+#define X6_EVENT_FOCUS_OUT 4
+#define X6_EVENT_DESTROY_NOTIFY 5
+
+struct x6_event {
+  int type;
+  uint wid;      // window ID
+  int x, y, w, h; // geometry for configure requests
+};
+
+struct x6_event_queue {
+  struct x6_event events[X6_MAX_EVENTS_PER_CLIENT];
+  int head;
+  int tail;
+};
 
 struct x6_window {
   int in_use;
@@ -22,8 +42,26 @@ struct x6_window {
   int mapped;
 };
 
+// Per-client context (for future expansion)
+struct x6_client {
+  int fd;
+  struct x6_event_queue queue;
+};
+
 static volatile sig_atomic_t keep_running = 1;
 static struct x6_window wins[X6_MAX_WINDOWS];
+
+// Per-client context (simplified for MVP: one connection at a time)
+static struct x6_event_queue *current_event_queue = 0;
+
+// WM state (Phase 2.1b: SubstructureRedirect semantics)
+static int wm_has_redirect = 0;  // Does WM hold SubstructureRedirect on root?
+static int wm_redirect_root = 1; // Root window ID is always 1
+
+// Focus and keyboard state (Phase 2.1c)
+static uint focus_wid = 0;          // Currently focused window (0 = no focus)
+static uint keyboard_grab_owner = 0; // Who holds exclusive keyboard grab (0 = nobody, typically WM)
+static int wm_has_kb_grab = 0;      // Does WM hold keyboard grab?
 
 static void
 usage(void)
@@ -202,6 +240,42 @@ destroy_window(uint id)
 }
 
 static void
+x6_event_queue_init(struct x6_event_queue *q)
+{
+  q->head = 0;
+  q->tail = 0;
+}
+
+static int
+x6_event_queue_empty(struct x6_event_queue *q)
+{
+  return q->head == q->tail;
+}
+
+static int
+x6_event_queue_enqueue(struct x6_event_queue *q, struct x6_event *evt)
+{
+  int next_tail;
+
+  next_tail = (q->tail + 1) % X6_MAX_EVENTS_PER_CLIENT;
+  if(next_tail == q->head)
+    return -1; // Queue full, drop oldest
+  q->events[q->tail] = *evt;
+  q->tail = next_tail;
+  return 0;
+}
+
+static int
+x6_event_queue_dequeue(struct x6_event_queue *q, struct x6_event *evt)
+{
+  if(q->head == q->tail)
+    return -1; // Empty
+  *evt = q->events[q->head];
+  q->head = (q->head + 1) % X6_MAX_EVENTS_PER_CLIENT;
+  return 0;
+}
+
+static void
 handle_one_command(int cfd, char *cmd)
 {
   uint id;
@@ -258,6 +332,20 @@ handle_one_command(int cfd, char *cmd)
       x6_send_line(cfd, "ERR not-found\n");
       return;
     }
+    
+    // Phase 2.1b: If WM holds SubstructureRedirect, queue MapRequest for WM approval
+    if(wm_has_redirect) {
+      struct x6_event evt;
+      evt.type = X6_EVENT_MAP_REQUEST;
+      evt.wid = id;
+      if(current_event_queue != 0) {
+        x6_event_queue_enqueue(current_event_queue, &evt);
+      }
+      x6_send_line(cfd, "PENDING map\n");  // Client is notified of pending state
+      return;
+    }
+    
+    // Otherwise, map directly
     win->mapped = 1;
     x6_send_line(cfd, "OK map\n");
     return;
@@ -280,6 +368,24 @@ handle_one_command(int cfd, char *cmd)
       x6_send_line(cfd, "ERR not-found\n");
       return;
     }
+    
+    // Phase 2.1b: If WM holds SubstructureRedirect, queue ConfigureRequest for WM approval
+    if(wm_has_redirect) {
+      struct x6_event evt;
+      evt.type = X6_EVENT_CONFIGURE_REQUEST;
+      evt.wid = id;
+      evt.x = x;
+      evt.y = y;
+      evt.w = (w < 1) ? 1 : w;
+      evt.h = (h < 1) ? 1 : h;
+      if(current_event_queue != 0) {
+        x6_event_queue_enqueue(current_event_queue, &evt);
+      }
+      x6_send_line(cfd, "PENDING configure\n");  // Client is notified of pending state
+      return;
+    }
+    
+    // Otherwise, configure directly
     if(w < 1)
       w = 1;
     if(h < 1)
@@ -295,6 +401,62 @@ handle_one_command(int cfd, char *cmd)
   if(sscanf(cmd, "DESTROY %u", &id) == 1) {
     destroy_window(id);
     x6_send_line(cfd, "OK destroy\n");
+    return;
+  }
+
+  // Phase 2.1b: REQUEST_REDIRECT for WM to claim SubstructureRedirect on root
+  if(sscanf(cmd, "REQUEST_REDIRECT %u", &id) == 1) {
+    if(id != wm_redirect_root) {
+      x6_send_line(cfd, "ERR invalid-window\n");
+      return;
+    }
+    if(wm_has_redirect) {
+      x6_send_line(cfd, "ERR redirect-in-use\n");
+      return;
+    }
+    wm_has_redirect = 1;
+    x6_send_line(cfd, "OK redirect_granted\n");
+    return;
+  }
+
+  // Phase 2.1b: WM-specific CONFIGURE response to honor child ConfigureRequest
+  // Format: WM_CONFIGURE <wid> <x> <y> <w> <h>
+  // Different from client CONFIGURE which is denied if WM holds redirect
+  if(sscanf(cmd, "WM_CONFIGURE %u %d %d %d %d", &id, &x, &y, &w, &h) == 5) {
+    if(!wm_has_redirect) {
+      x6_send_line(cfd, "ERR not-wm\n");
+      return;
+    }
+    win = find_window(id);
+    if(win == 0) {
+      x6_send_line(cfd, "ERR not-found\n");
+      return;
+    }
+    if(w < 1) w = 1;
+    if(h < 1) h = 1;
+    win->x = x;
+    win->y = y;
+    win->w = w;
+    win->h = h;
+    x6_send_line(cfd, "OK configured\n");
+    return;
+  }
+
+  if(sscanf(cmd, "QUEUE_EVENT %d %u", &x, &id) == 2) {
+    // Test command: manually queue an event for testing infrastructure (Phase 2.1a)
+    if(current_event_queue == 0) {
+      x6_send_line(cfd, "ERR not-ready\n");
+      return;
+    }
+    struct x6_event evt;
+    evt.type = x;  // x is reused as event type here
+    evt.wid = id;
+    evt.x = evt.y = evt.w = evt.h = 0;
+    if(x6_event_queue_enqueue(current_event_queue, &evt) < 0) {
+      x6_send_line(cfd, "ERR queue-full\n");
+      return;
+    }
+    x6_send_line(cfd, "OK queued\n");
     return;
   }
 
@@ -319,6 +481,64 @@ handle_one_command(int cfd, char *cmd)
     return;
   }
 
+  // Phase 2.1c: Focus and keyboard grab
+  if(sscanf(cmd, "SET_FOCUS %u", &id) == 1) {
+    struct x6_event evt;
+    uint old_focus = focus_wid;
+    
+    // Allow both WM and clients to set focus
+    focus_wid = id;
+    
+    // Queue FocusOut for old focus window FIRST
+    if(current_event_queue != 0 && old_focus != 0 && old_focus != focus_wid) {
+      evt.type = X6_EVENT_FOCUS_OUT;
+      evt.wid = old_focus;
+      x6_event_queue_enqueue(current_event_queue, &evt);
+    }
+    
+    // Queue FocusIn for new focus window AFTER
+    if(current_event_queue != 0 && focus_wid != 0) {
+      evt.type = X6_EVENT_FOCUS_IN;
+      evt.wid = focus_wid;
+      x6_event_queue_enqueue(current_event_queue, &evt);
+    }
+    
+    x6_send_line(cfd, "OK focused\n");
+    return;
+  }
+
+  if(strncmp(cmd, "GRAB_KEYBOARD", 13) == 0) {
+    // Only WM (client with redirect) can grab keyboard
+    if(!wm_has_redirect) {
+      x6_send_line(cfd, "ERR permission-denied\n");
+      return;
+    }
+    if(wm_has_kb_grab) {
+      x6_send_line(cfd, "ERR already-grabbed\n");
+      return;
+    }
+    wm_has_kb_grab = 1;
+    keyboard_grab_owner = focus_wid;  // Start with current focus
+    x6_send_line(cfd, "OK grab_active\n");
+    return;
+  }
+
+  if(strncmp(cmd, "UNGRAB_KEYBOARD", 15) == 0) {
+    // Only WM can release
+    if(!wm_has_redirect) {
+      x6_send_line(cfd, "ERR permission-denied\n");
+      return;
+    }
+    if(!wm_has_kb_grab) {
+      x6_send_line(cfd, "ERR not-grabbed\n");
+      return;
+    }
+    wm_has_kb_grab = 0;
+    keyboard_grab_owner = 0;
+    x6_send_line(cfd, "OK ungrab_done\n");
+    return;
+  }
+
   x6_send_line(cfd, "ERR unknown\n");
 }
 
@@ -326,9 +546,38 @@ static void
 handle_client(int cfd)
 {
   char line[192];
+  char eventbuf[256];
+  struct x6_event_queue q;
+  struct x6_event evt;
+
+  x6_event_queue_init(&q);
+  current_event_queue = &q;
 
   x6_send_line(cfd, "X6/1 READY\n");
+  
   while(keep_running) {
+    // Drain any queued events and send them to client
+    while(!x6_event_queue_empty(&q)) {
+      if(x6_event_queue_dequeue(&q, &evt) == 0) {
+        if(evt.type == X6_EVENT_MAP_REQUEST) {
+          snprintf(eventbuf, sizeof(eventbuf), "EVENT MapRequest wid=%u\n", evt.wid);
+        } else if(evt.type == X6_EVENT_CONFIGURE_REQUEST) {
+          snprintf(eventbuf, sizeof(eventbuf), 
+                   "EVENT ConfigureRequest wid=%u geom=%d,%d %dx%d\n",
+                   evt.wid, evt.x, evt.y, evt.w, evt.h);
+        } else if(evt.type == X6_EVENT_FOCUS_IN) {
+          snprintf(eventbuf, sizeof(eventbuf), "EVENT FocusIn wid=%u\n", evt.wid);
+        } else if(evt.type == X6_EVENT_FOCUS_OUT) {
+          snprintf(eventbuf, sizeof(eventbuf), "EVENT FocusOut wid=%u\n", evt.wid);
+        } else if(evt.type == X6_EVENT_DESTROY_NOTIFY) {
+          snprintf(eventbuf, sizeof(eventbuf), "EVENT DestroyNotify wid=%u\n", evt.wid);
+        } else {
+          continue;
+        }
+        x6_send_line(cfd, eventbuf);
+      }
+    }
+
     if(x6_recv_line(cfd, line, sizeof(line)) < 0)
       break;
     if(line[0] == 0)
@@ -337,6 +586,8 @@ handle_client(int cfd)
     if(strncmp(line, "QUIT", 4) == 0)
       break;
   }
+
+  current_event_queue = 0;
 }
 
 int

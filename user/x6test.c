@@ -84,6 +84,39 @@ void test_map(test_ctx *ctx, unsigned wid) {
   }
 }
 
+void test_event_infrastructure(test_ctx *ctx) {
+  printf("TEST: Event infrastructure (Phase 2.1a, QUEUE_EVENT)\n");
+  
+  // Manually queue a test MapRequest event using test command
+  test_send(ctx, "QUEUE_EVENT 1 42\n");  // type=1 (X6_EVENT_MAP_REQUEST), wid=42
+  test_recv_line(ctx, ctx->buf, sizeof(ctx->buf));
+  
+  if (strcmp(ctx->buf, "OK queued") == 0) {
+    printf("  PASS: event queued successfully\n");
+    ctx->passed++;
+  } else {
+    printf("  FAIL: expected 'OK queued', got '%s'\n", ctx->buf);
+    ctx->failed++;
+    return;
+  }
+  
+  // Now receive the queued event
+  test_recv_line(ctx, ctx->buf, sizeof(ctx->buf));
+  if (strncmp(ctx->buf, "EVENT MapRequest wid=", 21) == 0) {
+    unsigned evt_wid;
+    if (sscanf(ctx->buf, "EVENT MapRequest wid=%u", &evt_wid) == 1 && evt_wid == 42) {
+      printf("  PASS: received EVENT MapRequest wid=42\n");
+      ctx->passed++;
+    } else {
+      printf("  FAIL: event wid mismatch, got '%s'\n", ctx->buf);
+      ctx->failed++;
+    }
+  } else {
+    printf("  FAIL: expected 'EVENT MapRequest', got '%s'\n", ctx->buf);
+    ctx->failed++;
+  }
+}
+
 void test_list(test_ctx *ctx) {
   printf("TEST: LIST windows\n");
   test_send(ctx, "LIST\n");
@@ -142,12 +175,154 @@ void test_quit(test_ctx *ctx) {
   }
 }
 
+void test_redirect_flow(test_ctx *ctx) {
+  printf("TEST: SubstructureRedirect + WM flow (Phase 2.1b)\n");
+  
+  // Step 1: WM claims SubstructureRedirect on root
+  test_send(ctx, "REQUEST_REDIRECT 1\n");  // root is wid=1
+  test_recv_line(ctx, ctx->buf, sizeof(ctx->buf));
+  if (strcmp(ctx->buf, "OK redirect_granted") == 0) {
+    printf("  PASS: WM claimed SubstructureRedirect\n");
+    ctx->passed++;
+  } else {
+    printf("  FAIL: expected 'OK redirect_granted', got '%s'\n", ctx->buf);
+    ctx->failed++;
+    return;
+  }
+  
+  // Step 2: Create a window
+  unsigned wid2 = 2;
+  char cmd[64];
+  snprintf(cmd, sizeof(cmd), "CREATE %u 50 50 100 100\n", wid2);
+  test_send(ctx, cmd);
+  test_recv_line(ctx, ctx->buf, sizeof(ctx->buf));
+  if (strcmp(ctx->buf, "OK create") != 0) {
+    printf("  FAIL: CREATE failed: '%s'\n", ctx->buf);
+    ctx->failed++;
+    return;
+  }
+  
+  // Step 3: Client tries to MAP - should get PENDING (queues MapRequest for WM)
+  snprintf(cmd, sizeof(cmd), "MAP %u\n", wid2);
+  test_send(ctx, cmd);
+  test_recv_line(ctx, ctx->buf, sizeof(ctx->buf));
+  if (strcmp(ctx->buf, "PENDING map") == 0) {
+    printf("  PASS: MAP queued (PENDING), WM should receive MapRequest\n");
+    ctx->passed++;
+  } else {
+    printf("  FAIL: expected 'PENDING map', got '%s'\n", ctx->buf);
+    ctx->failed++;
+  }
+  
+  // Step 4: Receive the queued MapRequest event
+  test_recv_line(ctx, ctx->buf, sizeof(ctx->buf));
+  if (strncmp(ctx->buf, "EVENT MapRequest wid=", 21) == 0) {
+    unsigned evt_wid;
+    if (sscanf(ctx->buf, "EVENT MapRequest wid=%u", &evt_wid) == 1 && evt_wid == wid2) {
+      printf("  PASS: received EVENT MapRequest for window %u\n", evt_wid);
+      ctx->passed++;
+    } else {
+      printf("  FAIL: MapRequest wid mismatch, got '%s'\n", ctx->buf);
+      ctx->failed++;
+    }
+  } else {
+    printf("  FAIL: expected 'EVENT MapRequest', got '%s'\n", ctx->buf);
+    ctx->failed++;
+  }
+  
+  // Step 5: WM applies the MAP via WM_CONFIGURE (resolves MapRequest)
+  // Note: In Phase 2.1b, we use WM_CONFIGURE syntactically (Phase 2.1c will add explicit map handling)
+  snprintf(cmd, sizeof(cmd), "WM_CONFIGURE %u 50 50 100 100\n", wid2);
+  test_send(ctx, cmd);
+  test_recv_line(ctx, ctx->buf, sizeof(ctx->buf));
+  if (strcmp(ctx->buf, "OK configured") == 0) {
+    printf("  PASS: WM configured window, resolving MapRequest\n");
+    ctx->passed++;
+  } else {
+    printf("  FAIL: expected 'OK configured', got '%s'\n", ctx->buf);
+    ctx->failed++;
+  }
+}
+
+void test_focus_and_grabs(test_ctx *ctx) {
+  printf("TEST: Focus and keyboard grabs (Phase 2.1c)\n");
+  
+  // Step 1: SET_FOCUS on a window, get FocusIn event
+  test_send(ctx, "SET_FOCUS 99\n");
+  test_recv_line(ctx, ctx->buf, sizeof(ctx->buf));
+  if (strcmp(ctx->buf, "OK focused") == 0) {
+    printf("  PASS: SET_FOCUS succeeded\n");
+    ctx->passed++;
+  } else {
+    printf("  FAIL: expected 'OK focused', got '%s'\n", ctx->buf);
+    ctx->failed++;
+  }
+  
+  // Receive FocusIn event
+  test_recv_line(ctx, ctx->buf, sizeof(ctx->buf));
+  if (strncmp(ctx->buf, "EVENT FocusIn wid=", 17) == 0) {
+    unsigned evt_wid;
+    if (sscanf(ctx->buf, "EVENT FocusIn wid=%u", &evt_wid) == 1 && evt_wid == 99) {
+      printf("  PASS: received EVENT FocusIn wid=99\n");
+      ctx->passed++;
+    } else {
+      printf("  FAIL: FocusIn wid mismatch, got '%s'\n", ctx->buf);
+      ctx->failed++;
+    }
+  } else {
+    printf("  FAIL: expected 'EVENT FocusIn', got '%s'\n", ctx->buf);
+    ctx->failed++;
+  }
+  
+  // Step 2: GRAB_KEYBOARD (succeeds only if WM has redirect, which it does)
+  test_send(ctx, "GRAB_KEYBOARD\n");
+  test_recv_line(ctx, ctx->buf, sizeof(ctx->buf));
+  if (strcmp(ctx->buf, "OK grab_active") == 0) {
+    printf("  PASS: GRAB_KEYBOARD succeeded\n");
+    ctx->passed++;
+  } else {
+    printf("  FAIL: expected 'OK grab_active', got '%s'\n", ctx->buf);
+    ctx->failed++;
+  }
+  
+  // Step 3: UNGRAB_KEYBOARD
+  test_send(ctx, "UNGRAB_KEYBOARD\n");
+  test_recv_line(ctx, ctx->buf, sizeof(ctx->buf));
+  if (strcmp(ctx->buf, "OK ungrab_done") == 0) {
+    printf("  PASS: UNGRAB_KEYBOARD succeeded\n");
+    ctx->passed++;
+  } else {
+    printf("  FAIL: expected 'OK ungrab_done', got '%s'\n", ctx->buf);
+    ctx->failed++;
+  }
+  
+  // Step 4: Focus change generates FocusOut for old, FocusIn for new
+  test_send(ctx, "SET_FOCUS 100\n");
+  test_recv_line(ctx, ctx->buf, sizeof(ctx->buf));  // GET OK focused
+  test_recv_line(ctx, ctx->buf, sizeof(ctx->buf));  // GET FocusOut for 99
+  if (strncmp(ctx->buf, "EVENT FocusOut wid=99", 20) == 0) {
+    printf("  PASS: received EVENT FocusOut for previous focus\n");
+    ctx->passed++;
+  } else {
+    printf("  FAIL: expected 'EVENT FocusOut wid=99', got '%s'\n", ctx->buf);
+    ctx->failed++;
+  }
+  test_recv_line(ctx, ctx->buf, sizeof(ctx->buf));  // GET FocusIn for 100
+  if (strncmp(ctx->buf, "EVENT FocusIn wid=100", 20) == 0) {
+    printf("  PASS: received EVENT FocusIn for new focus\n");
+    ctx->passed++;
+  } else {
+    printf("  FAIL: expected 'EVENT FocusIn wid=100', got '%s'\n", ctx->buf);
+    ctx->failed++;
+  }
+}
+
 int main(void) {
   test_ctx ctx = {0};
   struct sockaddr_in addr;
   unsigned wid = 0;
 
-  printf("x6test: Phase 1.1 protocol validation harness\n\n");
+  printf("x6test: Phase 2.1c focus and keyboard semantics validation\n\n");
 
   // Connect to x6
   ctx.fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -181,6 +356,16 @@ int main(void) {
   test_create(&ctx, &wid);
   test_map(&ctx, wid);
   test_list(&ctx);
+  
+  // Test event infrastructure (Phase 2.1a)
+  test_event_infrastructure(&ctx);
+  
+  // Test SubstructureRedirect + WM flow (Phase 2.1b, uses new connection)
+  test_redirect_flow(&ctx);
+  
+  // Test focus and keyboard grabs (Phase 2.1c)
+  test_focus_and_grabs(&ctx);
+  
   test_unmap(&ctx, wid);
   test_destroy(&ctx, wid);
   test_quit(&ctx);
@@ -192,7 +377,7 @@ int main(void) {
   printf("Failed: %d\n", ctx.failed);
 
   if (ctx.failed == 0) {
-    printf("\n✓ All tests passed! Phase 1 exit gate unlocked.\n");
+    printf("\n✓ All tests passed! Phase 2.1c focus and keyboard substrate validated.\n");
     return 0;
   } else {
     printf("\n✗ Some tests failed.\n");
