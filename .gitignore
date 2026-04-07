@@ -105,6 +105,7 @@ user/schedperf
 user/fsperf
 user/gfxperf
 user/kallocstress
+user/kernperf
 user/kmemstress
 user/wc
 user/zombie

@@ -597,6 +597,9 @@ _gfxperf: user/gfxperf
 _kallocstress: user/kallocstress
 	cp user/kallocstress _kallocstress
 
+_kernperf: user/kernperf
+	cp user/kernperf _kernperf
+
 _kmemstress: user/kmemstress
 	cp user/kmemstress _kmemstress
 
@@ -863,6 +866,7 @@ UPROGS=\
 	_fsperf\
 	_gfxperf\
 	_kallocstress\
+	_kernperf\
 	_kmemstress\
 	_bcachestress\
 	_sigtest\
@@ -1034,7 +1038,7 @@ clean:
 	user/top \
 	user/date user/time user/killall user/halt \
 	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/stackgrowtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/dmesg user/tail user/lspci user/v6init user/testdaemon \
-	user/schedperf user/fsperf user/gfxperf user/kallocstress user/bcachestress
+	user/schedperf user/fsperf user/gfxperf user/kallocstress user/kernperf user/bcachestress
 	user/kmemstress
 
 # make a printout

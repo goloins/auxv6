@@ -51,6 +51,7 @@ Generated: 2026-04-06
 | init | targetfs/usr/share/man/init.md | 2026-04-01 | user/init.c | source-derived usage/options |
 | ip | targetfs/usr/share/man/ip.md | 2026-04-01 | user/ip.c | source-derived usage/options |
 | isotest | targetfs/usr/share/man/isotest.md | 2026-04-01 | user/isotest.c | source-derived usage/options |
+| kernperf | targetfs/usr/share/man/kernperf.md | 2026-04-06 | user/kernperf.c | general kernel before/after perf ruler (syscall/proc/ipc/vm/fs) |
 | killall | targetfs/usr/share/man/killall.md | 2026-04-01 | user/killall.c | source-derived usage/options |
 | kill | targetfs/usr/share/man/kill.md | 2026-04-01 | user/kill.c | source-derived usage/options |
 | ln | targetfs/usr/share/man/ln.md | 2026-04-01 | user/ln.c | source-derived usage/options |

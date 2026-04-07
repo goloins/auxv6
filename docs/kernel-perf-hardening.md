@@ -313,15 +313,15 @@ benefit/risk analysis.
 
 ---
 
-## Performance Ruler and Targets (`schedperf`, `fsperf`)
+## Performance Ruler and Targets (`schedperf`, `fsperf`, `kernperf`)
 
-Both stress binaries now report:
+All three performance rulers now report:
 
 - Functional status (`[PASS]` / `[FAIL]`) for regressions
 - Per-test throughput metrics (`[PERF] ...`)
 - A weighted score normalized to `0..100`
 
-Current target threshold for both tools:
+Current target threshold for all three tools:
 
 - **Target score:** `>= 75/100`
 
@@ -337,12 +337,17 @@ process-table capacity headroom.
 buffer-cache sequential throughput, concurrent open throughput, parallel write
 throughput, inode-capacity headroom, and hash verification throughput.
 
+`kernperf` is the general-purpose, system-agnostic before/after ruler.  It
+measures syscall rate, fork/wait churn, pipe ping-pong IPC throughput,
+VM page-touch throughput, and filesystem read/write throughput without relying
+on subsystem-specific `/proc` counters.
+
 ### Iteration Discipline (Required)
 
 For every performance-target iteration, update all three in the same commit:
 
-- `user/schedperf.c` and/or `user/fsperf.c` targets/tests/profile marker
-- corresponding manpage(s) in `targetfs/usr/share/man/`
+- `user/schedperf.c`, `user/fsperf.c`, and/or `user/kernperf.c` targets/tests/profile marker
+- corresponding manpage(s) in `targetfs/usr/share/man/` (including `kernperf.md` when touched)
 - this section (or roadmap section) with any changed threshold rationale
 
 This prevents score drift where binaries, docs, and expected outcomes diverge.
