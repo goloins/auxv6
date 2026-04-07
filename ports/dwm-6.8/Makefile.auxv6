@@ -60,7 +60,7 @@ CFLAGS := -fno-pic -static -fno-builtin -fno-strict-aliasing -O2 -Wall -MD -ggdb
           $(INCS) $(CPPFLAGS)
 LDFLAGS := -N -e _start -Ttext 0 -m $(shell $(LD) -V 2>/dev/null | grep elf_i386 | head -1)
 
-SRC := drw.c dwm.c util.c
+SRC := $(DWM_DIR)/drw.c $(DWM_DIR)/dwm.c $(DWM_DIR)/util.c
 OBJ := $(SRC:.c=.o)
 
 RUNTIME_OBJS := \
@@ -101,16 +101,16 @@ RUNTIME_OBJS := \
 
 .PHONY: all clean toolchain-check
 
-all: toolchain-check config.h $(OUT)
+all: toolchain-check $(DWM_DIR)/config.h $(OUT)
 
 toolchain-check:
 	@$(CC) -m32 -dM -E -x c /dev/null | grep -q '__i386__' || \
 		(echo "ERROR: $(CC) is not producing i386 output with -m32" >&2; exit 1)
 
-config.h:
-	cp config.def.h $@
+$(DWM_DIR)/config.h:
+	cp $(DWM_DIR)/config.def.h $@
 
-%.o: %.c config.h
+$(DWM_DIR)/%.o: $(DWM_DIR)/%.c $(DWM_DIR)/config.h
 	$(CC) -c $(CFLAGS) -o $@ $<
 
 $(RUNTIME_OBJS):
@@ -121,4 +121,4 @@ $(OUT): $(OBJ) $(RUNTIME_OBJS)
 	$(OBJDUMP) -S $@ > $(DWM_DIR)/dwm-auxv6.asm || true
 
 clean:
-	rm -f $(OBJ) $(OUT) config.h $(SRC:.c=.d)
+	rm -f $(OBJ) $(OUT) $(DWM_DIR)/config.h $(SRC:.c=.d)
