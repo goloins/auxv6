@@ -731,7 +731,7 @@ _dmesg: user/dmesg
 	cp user/dmesg _dmesg
 
 _dash: ports/dash-0.5.12/Makefile.auxv6 $(ULIB) user/setjmp.o
-	$(MAKE) -f ports/dash-0.5.12/Makefile.auxv6
+	$(MAKE) -f ports/dash-0.5.12/Makefile.auxv6 all
 	cp ports/dash-0.5.12/_dash _dash
 
 _symlinktest: user/symlinktest

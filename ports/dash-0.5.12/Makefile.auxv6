@@ -20,6 +20,8 @@ POSIXDIR := $(ROOT)/include/posix
 UBLIBDIR := $(ROOT)/user
 OUT      := $(ROOT)/ports/dash-0.5.12/_dash
 
+.DEFAULT_GOAL := all
+
 # ---------------------------------------------------------------------------
 # Toolchain — mirrors the root Makefile
 # ---------------------------------------------------------------------------

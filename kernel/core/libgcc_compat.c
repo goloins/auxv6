@@ -104,3 +104,19 @@ __moddi3(long long a, long long b)
 
   return (long long)rem;
 }
+
+/*
+ * Some toolchains targeting baseline i386 lower __sync CAS builtins
+ * to this libcall instead of inlining cmpxchg.
+ */
+_Bool
+__sync_bool_compare_and_swap_4(volatile void *ptr, unsigned int oldval, unsigned int newval)
+{
+  unsigned char ok;
+
+  asm volatile("lock; cmpxchgl %3, %1; sete %0"
+               : "=q" (ok), "+m" (*(volatile unsigned int*)ptr), "+a" (oldval)
+               : "r" (newval)
+               : "cc", "memory");
+  return (_Bool)ok;
+}

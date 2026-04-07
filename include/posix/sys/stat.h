@@ -10,7 +10,8 @@
 #define _SYS_STAT_H
 
 /* Use the native auxv6 stat surface directly in this toolchain layout. */
-#include "stat.h"
+#include "../../types.h"
+#include "../../stat.h"
 /* Pull in mode_t and friends */
 #include <sys/types.h>
 
