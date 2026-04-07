@@ -122,6 +122,9 @@ static int x6_mouse_fd = -1;
 static int pointer_x;
 static int pointer_y;
 static uint pointer_state;
+static uint x6_event_time;
+static int pointer_grab_active;
+static uint pointer_grab_window;
 
 struct x6_fb_state {
   int fd;
@@ -372,11 +375,14 @@ x6_enqueue_pointer_event(int type, int button)
 
   hit = x6_pick_window_at(pointer_x, pointer_y);
   evt.type = type;
-  evt.wid = hit ? hit->id : wm_redirect_root;
+  if(pointer_grab_active)
+    evt.wid = pointer_grab_window ? pointer_grab_window : wm_redirect_root;
+  else
+    evt.wid = hit ? hit->id : wm_redirect_root;
   evt.x = pointer_x;
   evt.y = pointer_y;
   evt.w = evt.h = 0;
-  evt.state = pointer_state;
+  evt.state = 0;
   evt.keycode = 0;
   evt.button = button;
   x6_event_queue_enqueue(target_q, &evt);
@@ -1258,11 +1264,17 @@ handle_one_command(int cfd, char *cmd)
   }
 
   if(strncmp(cmd, "GRAB_POINTER", 12) == 0) {
+    pointer_grab_active = 1;
+    pointer_grab_window = wm_redirect_root;
+    if(sscanf(cmd, "GRAB_POINTER %u", &id) == 1)
+      pointer_grab_window = id;
     x6_send_line(cfd, "OK pointer_grabbed\n");
     return;
   }
 
   if(strncmp(cmd, "UNGRAB_POINTER", 14) == 0) {
+    pointer_grab_active = 0;
+    pointer_grab_window = 0;
     x6_send_line(cfd, "OK pointer_ungrabbed\n");
     return;
   }
@@ -1403,6 +1415,8 @@ handle_client(int cfd)
     // Drain any queued events and send them to client
     while(!x6_event_queue_empty(&q)) {
       if(x6_event_queue_dequeue(&q, &evt) == 0) {
+        uint etime;
+        etime = ++x6_event_time;
         if(evt.type == X6_EVENT_MAP_REQUEST) {
           snprintf(eventbuf, sizeof(eventbuf), "EVENT MapRequest wid=%u\n", evt.wid);
         } else if(evt.type == X6_EVENT_CONFIGURE_REQUEST) {
@@ -1416,17 +1430,17 @@ handle_client(int cfd)
         } else if(evt.type == X6_EVENT_DESTROY_NOTIFY) {
           snprintf(eventbuf, sizeof(eventbuf), "EVENT DestroyNotify wid=%u\n", evt.wid);
         } else if(evt.type == X6_EVENT_KEY_PRESS) {
-          snprintf(eventbuf, sizeof(eventbuf), "EVENT KeyPress wid=%u keycode=%d state=%u\n",
-                   evt.wid, evt.keycode, evt.state);
+          snprintf(eventbuf, sizeof(eventbuf), "EVENT KeyPress wid=%u keycode=%d state=%u time=%u\n",
+                   evt.wid, evt.keycode, evt.state, etime);
         } else if(evt.type == X6_EVENT_BUTTON_PRESS) {
-          snprintf(eventbuf, sizeof(eventbuf), "EVENT ButtonPress wid=%u button=%d state=%u x=%d y=%d\n",
-                   evt.wid, evt.button, evt.state, evt.x, evt.y);
+          snprintf(eventbuf, sizeof(eventbuf), "EVENT ButtonPress wid=%u button=%d state=%u x=%d y=%d time=%u\n",
+                   evt.wid, evt.button, evt.state, evt.x, evt.y, etime);
         } else if(evt.type == X6_EVENT_BUTTON_RELEASE) {
-          snprintf(eventbuf, sizeof(eventbuf), "EVENT ButtonRelease wid=%u button=%d state=%u x=%d y=%d\n",
-                   evt.wid, evt.button, evt.state, evt.x, evt.y);
+          snprintf(eventbuf, sizeof(eventbuf), "EVENT ButtonRelease wid=%u button=%d state=%u x=%d y=%d time=%u\n",
+                   evt.wid, evt.button, evt.state, evt.x, evt.y, etime);
         } else if(evt.type == X6_EVENT_MOTION_NOTIFY) {
-          snprintf(eventbuf, sizeof(eventbuf), "EVENT MotionNotify wid=%u x=%d y=%d state=%u\n",
-                   evt.wid, evt.x, evt.y, evt.state);
+          snprintf(eventbuf, sizeof(eventbuf), "EVENT MotionNotify wid=%u x=%d y=%d state=%u time=%u\n",
+                   evt.wid, evt.x, evt.y, evt.state, etime);
         } else {
           continue;
         }
@@ -1553,6 +1567,9 @@ main(int argc, char **argv)
   pointer_x = x6_fb.width > 0 ? (x6_fb.width / 2) : 0;
   pointer_y = x6_fb.height > 0 ? (x6_fb.height / 2) : 0;
   pointer_state = 0;
+  x6_event_time = 0;
+  pointer_grab_active = 0;
+  pointer_grab_window = 0;
 
   fd = socket(AF_INET, SOCK_STREAM, 0);
   if(fd < 0) {

@@ -158,6 +158,7 @@ x11_parse_event_line(Display *display, const char *line, XEvent *event)
     event->type = KeyPress;
     sscanf(line, "EVENT KeyPress wid=%u keycode=%u state=%u",
            &event->xkey.window, &event->xkey.keycode, &event->xkey.state);
+    sscanf(line, "EVENT KeyPress wid=%*u keycode=%*u state=%*u time=%lu", &event->xkey.time);
     return 0;
   }
   if (strncmp(line + 6, "ButtonPress", 11) == 0) {
@@ -165,6 +166,7 @@ x11_parse_event_line(Display *display, const char *line, XEvent *event)
     sscanf(line, "EVENT ButtonPress wid=%u button=%u state=%u x=%d y=%d",
            &event->xbutton.window, &event->xbutton.button, &event->xbutton.state,
            &event->xbutton.x, &event->xbutton.y);
+    sscanf(line, "EVENT ButtonPress wid=%*u button=%*u state=%*u x=%*d y=%*d time=%lu", &event->xbutton.time);
     event->xbutton.x_root = event->xbutton.x;
     event->xbutton.y_root = event->xbutton.y;
     return 0;
@@ -174,6 +176,7 @@ x11_parse_event_line(Display *display, const char *line, XEvent *event)
     sscanf(line, "EVENT ButtonRelease wid=%u button=%u state=%u x=%d y=%d",
            &event->xbutton.window, &event->xbutton.button, &event->xbutton.state,
            &event->xbutton.x, &event->xbutton.y);
+    sscanf(line, "EVENT ButtonRelease wid=%*u button=%*u state=%*u x=%*d y=%*d time=%lu", &event->xbutton.time);
     event->xbutton.x_root = event->xbutton.x;
     event->xbutton.y_root = event->xbutton.y;
     return 0;
@@ -182,6 +185,7 @@ x11_parse_event_line(Display *display, const char *line, XEvent *event)
     event->type = MotionNotify;
     sscanf(line, "EVENT MotionNotify wid=%u x=%d y=%d state=%u",
            &event->xmotion.window, &event->xmotion.x, &event->xmotion.y, &event->xmotion.state);
+    sscanf(line, "EVENT MotionNotify wid=%*u x=%*d y=%*d state=%*u time=%lu", &event->xmotion.time);
     event->xmotion.x_root = event->xmotion.x;
     event->xmotion.y_root = event->xmotion.y;
     return 0;
@@ -776,9 +780,11 @@ int XUngrabKeyboard(Display *display, Time time) {
 }
 
 int XGrabPointer(Display *display, Window grab_window, Bool owner_events, unsigned int event_mask, int pointer_mode, int keyboard_mode, Window confine_to, Cursor cursor, Time time) {
+  char cmd[X6_BUF_SIZE];
   char line[X6_BUF_SIZE];
   (void)grab_window; (void)owner_events; (void)event_mask; (void)pointer_mode; (void)keyboard_mode; (void)confine_to; (void)cursor; (void)time;
-  if (x11_cmd(display, "GRAB_POINTER\n", line, sizeof(line)) < 0)
+  snprintf(cmd, sizeof(cmd), "GRAB_POINTER %u\n", (uint)grab_window);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return BadAccess;
   return strncmp(line, "OK pointer_grabbed", 18) == 0 ? GrabSuccess : BadAccess;
 }
