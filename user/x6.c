@@ -1,6 +1,9 @@
 #include "types.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
+#include "stat.h"
+#include "sys/ioctl.h"
+#include "graphics/drm_ioctls.h"
 #include "signal.h"
 #include "socket.h"
 #include "stdio.h"
@@ -14,11 +17,18 @@
 #define X6_CANVAS_ROWS 40
 #define X6_CELL_W 8
 #define X6_CELL_H 16
+#define X6_BACKEND_AUTO 0
+#define X6_BACKEND_ANSI 1
+#define X6_BACKEND_FB 2
 
 #define X6_DEFAULT_PORT 6006
 #define X6_BACKLOG 16
 #define X6_PROTO_VERSION 1
 #define X6_PROC_PATH "/proc/server7"
+#define X6_FBIOGET_VSCREENINFO 0x4600
+#define X6_FBIOGET_FSCREENINFO 0x4602
+#define X6_CONSOLE_MAJOR 1
+#define X6_CONSOLE_MINOR_FB0 100
 
 #define X6_MAX_WINDOWS 128
 #define X6_MAX_EVENTS_PER_CLIENT 64
@@ -96,8 +106,37 @@ static uint canvas_pixels[X6_CANVAS_ROWS][X6_CANVAS_COLS];
 static int canvas_ready;
 static uint x6_conn_seq;
 static uint x6_draw_rect_count;
+static int x6_backend_pref = X6_BACKEND_AUTO;
+static int x6_backend = X6_BACKEND_ANSI;
+static int x6_backend_claimed = 0;
+
+struct x6_fb_state {
+  int fd;
+  int width;
+  int height;
+  int stride;
+  int bpp;
+  uint *rowbuf;
+  int rowcap;
+};
+
+static struct x6_fb_state x6_fb = { -1, 0, 0, 0, 0, 0, 0 };
 
 static int x6_event_queue_enqueue(struct x6_event_queue *q, struct x6_event *evt);
+
+static int
+x6_parse_backend(const char *s)
+{
+  if(!s)
+    return -1;
+  if(strcmp(s, "auto") == 0)
+    return X6_BACKEND_AUTO;
+  if(strcmp(s, "ansi") == 0)
+    return X6_BACKEND_ANSI;
+  if(strcmp(s, "fb") == 0 || strcmp(s, "framebuffer") == 0)
+    return X6_BACKEND_FB;
+  return -1;
+}
 
 static int
 x6_clamp_int(int v, int lo, int hi)
@@ -120,6 +159,8 @@ x6_color_to_rgb(uint pixel, int *r, int *g, int *b)
 static void
 x6_canvas_init(void)
 {
+  if(x6_backend != X6_BACKEND_ANSI)
+    return;
   if(canvas_ready)
     return;
   memset(canvas_pixels, 0, sizeof(canvas_pixels));
@@ -162,9 +203,53 @@ x6_canvas_fill_pixels(int x, int y, int w, int h, uint pixel)
 {
   int c0, c1, r0, r1;
   int r, c;
+  int x0, y0, x1, y1;
 
   if(w <= 0 || h <= 0)
     return;
+
+  if(x6_backend == X6_BACKEND_FB && x6_fb.fd >= 0) {
+    int i;
+    int rw;
+    uint p;
+
+    x0 = x;
+    y0 = y;
+    x1 = x + w;
+    y1 = y + h;
+    if(x0 < 0) x0 = 0;
+    if(y0 < 0) y0 = 0;
+    if(x1 > x6_fb.width) x1 = x6_fb.width;
+    if(y1 > x6_fb.height) y1 = x6_fb.height;
+    if(x1 <= x0 || y1 <= y0)
+      return;
+
+    rw = x1 - x0;
+    if(rw > x6_fb.rowcap) {
+      uint *nbuf;
+      nbuf = (uint *)malloc((size_t)rw * sizeof(uint));
+      if(!nbuf)
+        return;
+      if(x6_fb.rowbuf)
+        free(x6_fb.rowbuf);
+      x6_fb.rowbuf = nbuf;
+      x6_fb.rowcap = rw;
+    }
+
+    p = pixel & 0x00ffffffU;
+    for(i = 0; i < rw; i++)
+      x6_fb.rowbuf[i] = p;
+
+    for(i = y0; i < y1; i++) {
+      uint64_t off;
+      off = (uint64_t)i * (uint64_t)x6_fb.stride + (uint64_t)x0 * 4ULL;
+      if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) < 0)
+        break;
+      if(write(x6_fb.fd, x6_fb.rowbuf, rw * (int)sizeof(uint)) < 0)
+        break;
+    }
+    return;
+  }
 
   x6_canvas_init();
 
@@ -251,9 +336,10 @@ x6_pump_console_input(void)
 static void
 usage(void)
 {
-  dprintf(2, "usage: x6 [-f] [-p port]\n");
+  dprintf(2, "usage: x6 [-f] [-p port] [-B auto|ansi|fb]\n");
   dprintf(2, "       -f   run in foreground (no daemonize)\n");
   dprintf(2, "       -p   listen port (default %d)\n", X6_DEFAULT_PORT);
+  dprintf(2, "       -B   display backend selection\n");
   exit(1);
 }
 
@@ -341,13 +427,104 @@ x6_proc_write(const char *cmd)
 static int
 x6_claim_display(void)
 {
-  return x6_proc_write("claim\n");
+  if(x6_proc_write("claim\n") < 0) {
+    dprintf(2, "x6: warning: display claim unavailable; continuing without server7 claim\n");
+    x6_backend_claimed = 0;
+    return 0;
+  }
+  x6_backend_claimed = 1;
+  return 0;
 }
 
 static void
 x6_release_display(void)
 {
-  x6_proc_write("release\n");
+  if(x6_backend_claimed)
+    x6_proc_write("release\n");
+}
+
+static int
+x6_fb_try_init(void)
+{
+  struct fb_var_screeninfo vinfo;
+  struct fb_fix_screeninfo finfo;
+
+  x6_fb.fd = open("/dev/fb0", O_RDWR);
+  if(x6_fb.fd < 0) {
+    // Self-heal if devman has not created /dev/fb0 yet.
+    mknod("/dev/fb0", M_IFCHR | 0600, X6_CONSOLE_MAJOR, X6_CONSOLE_MINOR_FB0);
+    x6_fb.fd = open("/dev/fb0", O_RDWR);
+  }
+  if(x6_fb.fd < 0) {
+    dprintf(2, "x6: fb open failed for /dev/fb0\n");
+    return -1;
+  }
+
+  if(ioctl(x6_fb.fd, X6_FBIOGET_VSCREENINFO, &vinfo) < 0) {
+    dprintf(2, "x6: fb ioctl FBIOGET_VSCREENINFO failed\n");
+    goto fail;
+  }
+  if(ioctl(x6_fb.fd, X6_FBIOGET_FSCREENINFO, &finfo) < 0) {
+    dprintf(2, "x6: fb ioctl FBIOGET_FSCREENINFO failed\n");
+    goto fail;
+  }
+
+  if(vinfo.xres == 0 || vinfo.yres == 0 || vinfo.bits_per_pixel != 32) {
+    dprintf(2, "x6: fb geometry unsupported xres=%u yres=%u bpp=%u\n",
+            vinfo.xres, vinfo.yres, vinfo.bits_per_pixel);
+    goto fail;
+  }
+
+  x6_fb.width = (int)vinfo.xres;
+  x6_fb.height = (int)vinfo.yres;
+  x6_fb.stride = (int)finfo.line_length;
+  x6_fb.bpp = (int)vinfo.bits_per_pixel;
+  x6_backend = X6_BACKEND_FB;
+  dprintf(1, "x6: framebuffer backend active %dx%d stride=%d bpp=%d\n",
+          x6_fb.width, x6_fb.height, x6_fb.stride, x6_fb.bpp);
+  return 0;
+
+fail:
+  close(x6_fb.fd);
+  x6_fb.fd = -1;
+  return -1;
+}
+
+static void
+x6_fb_shutdown(void)
+{
+  if(x6_fb.fd >= 0)
+    close(x6_fb.fd);
+  x6_fb.fd = -1;
+  if(x6_fb.rowbuf)
+    free(x6_fb.rowbuf);
+  x6_fb.rowbuf = 0;
+  x6_fb.rowcap = 0;
+}
+
+static int
+x6_init_backend(void)
+{
+  if(x6_backend_pref == X6_BACKEND_ANSI) {
+    x6_backend = X6_BACKEND_ANSI;
+    dprintf(1, "x6: backend=ansi (forced)\n");
+    return 0;
+  }
+
+  if(x6_backend_pref == X6_BACKEND_FB) {
+    if(x6_fb_try_init() < 0) {
+      dprintf(2, "x6: framebuffer backend requested but unavailable\n");
+      return -1;
+    }
+    return 0;
+  }
+
+  if(x6_fb_try_init() == 0)
+    return 0;
+
+  x6_backend = X6_BACKEND_ANSI;
+  dprintf(1, "x6: backend=ansi (framebuffer unavailable)\n");
+  return 0;
 }
 
 static void
@@ -1045,6 +1222,16 @@ main(int argc, char **argv)
         usage();
       continue;
     }
+    if(strcmp(argv[i], "-B") == 0) {
+      int b;
+      if(i + 1 >= argc)
+        usage();
+      b = x6_parse_backend(argv[++i]);
+      if(b < 0)
+        usage();
+      x6_backend_pref = b;
+      continue;
+    }
     usage();
   }
 
@@ -1062,6 +1249,11 @@ main(int argc, char **argv)
 
   if(x6_claim_display() < 0) {
     dprintf(2, "x6: display claim failed via %s\n", X6_PROC_PATH);
+    exit(1);
+  }
+
+  if(x6_init_backend() < 0) {
+    x6_release_display();
     exit(1);
   }
 
@@ -1109,6 +1301,7 @@ main(int argc, char **argv)
   }
 
   close(fd);
+  x6_fb_shutdown();
   x6_release_display();
   dprintf(1, "x6: exiting\n");
   return 0;

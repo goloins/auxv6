@@ -20,6 +20,7 @@
 #include "graphics/framebuffer.h"
 #include "graphics/font.h"
 #include "graphics/render.h"
+#include "graphics/drm_ioctls.h"
 
 struct console_tty_state;
 
@@ -3426,6 +3427,54 @@ console_ioctl(int fd, int request, uint arg)
   t = console_current_tty();
 
   switch(request) {
+  case 0x4600: { /* FBIOGET_VSCREENINFO */
+    struct fb_var_screeninfo *vinfo;
+
+    if(arg == 0)
+      return -1;
+    acquire(&cons.tty_lock);
+    if(console_gfx_ensure_locked(t) < 0 || !console_gfx_fb) {
+      release(&cons.tty_lock);
+      return -1;
+    }
+    vinfo = (struct fb_var_screeninfo *)arg;
+    memset(vinfo, 0, sizeof(*vinfo));
+    vinfo->xres = console_gfx_fb->width;
+    vinfo->yres = console_gfx_fb->height;
+    vinfo->xres_virtual = console_gfx_fb->width;
+    vinfo->yres_virtual = console_gfx_fb->height;
+    vinfo->bits_per_pixel = 32;
+    vinfo->red.offset = 16;
+    vinfo->red.length = 8;
+    vinfo->green.offset = 8;
+    vinfo->green.length = 8;
+    vinfo->blue.offset = 0;
+    vinfo->blue.length = 8;
+    vinfo->transp.offset = 24;
+    vinfo->transp.length = 8;
+    release(&cons.tty_lock);
+    return 0;
+  }
+
+  case 0x4602: { /* FBIOGET_FSCREENINFO */
+    struct fb_fix_screeninfo *finfo;
+
+    if(arg == 0)
+      return -1;
+    acquire(&cons.tty_lock);
+    if(console_gfx_ensure_locked(t) < 0 || !console_gfx_fb) {
+      release(&cons.tty_lock);
+      return -1;
+    }
+    finfo = (struct fb_fix_screeninfo *)arg;
+    memset(finfo, 0, sizeof(*finfo));
+    memmove(finfo->id, "auxv6fb", 7);
+    finfo->smem_len = console_gfx_fb->size_bytes;
+    finfo->line_length = console_gfx_fb->stride;
+    release(&cons.tty_lock);
+    return 0;
+  }
+
   case 0x5401:  /* TCGETS */
     if(arg == 0) return -1;
     acquire(&cons.tty_lock);
@@ -3889,8 +3938,70 @@ consolewrite(struct inode *ip, char *buf, uint64_t off, int n)
   int tty;
   int i, c;
 
-  (void)off;
   iunlock(ip);
+
+  if(ip && ip->minor == CONSOLE_MINOR_FB0) {
+    int copy_n;
+    uint size;
+    uint off32;
+    uint end32;
+    int bpp;
+    int stride;
+    int sx, sy, ex, ey;
+
+    acquire(&cons.tty_lock);
+    t = console_tty_by_index(console_current_tty_index());
+    if(console_gfx_ensure_locked(t) < 0 || !console_gfx_fb || !console_gfx_dev || !console_gfx_fb->pixels) {
+      release(&cons.tty_lock);
+      ilock(ip);
+      return -1;
+    }
+
+    size = console_gfx_fb->size_bytes;
+    if(off >= (uint64_t)size) {
+      release(&cons.tty_lock);
+      ilock(ip);
+      return 0;
+    }
+
+    off32 = (uint)off;
+
+    copy_n = n;
+    if(off32 + (uint)copy_n > size)
+      copy_n = (int)(size - off32);
+    if(copy_n <= 0) {
+      release(&cons.tty_lock);
+      ilock(ip);
+      return 0;
+    }
+
+    memmove((char *)console_gfx_fb->pixels + off32, buf, copy_n);
+
+    bpp = (int)console_gfx_fb->bpp;
+    if(bpp <= 0)
+      bpp = 4;
+    stride = (int)console_gfx_fb->stride;
+    if(stride <= 0)
+      stride = (int)(console_gfx_fb->width * (uint)bpp);
+
+    end32 = off32 + (uint)copy_n - 1U;
+    sx = (int)(off32 % (uint)stride) / bpp;
+    sy = (int)(off32 / (uint)stride);
+    ex = (int)((end32 % (uint)stride) / (uint)bpp);
+    ey = (int)(end32 / (uint)stride);
+
+    if(sy == ey)
+      display_flush_region(console_gfx_dev, console_gfx_fb, sx, sy, (uint)(ex - sx + 1), 1);
+    else
+      display_flush_region(console_gfx_dev, console_gfx_fb, 0, sy,
+                           console_gfx_fb->width, (uint)(ey - sy + 1));
+
+    release(&cons.tty_lock);
+    ilock(ip);
+    return copy_n;
+  }
+
+  (void)off;
   acquire(&cons.tty_lock);
   tty = console_tty_index_from_inode(ip);
   t = console_tty_by_index(tty);

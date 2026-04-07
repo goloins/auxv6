@@ -6,6 +6,15 @@ Define a practical, constrained path to run `dwm` on auxv6 with a new local disp
 
 Implementation progress snapshot for the current state is tracked in `docs/x6-dwm-progress-2026-04-07.md`.
 
+## Current Status Delta (2026-04-07)
+
+- Launch/control path is confirmed: `xinit` starts `x6`, forks `dwm`, and `dwm` reaches `run()`.
+- X11 handshake is confirmed live (`x11: display handshake ok`).
+- Paint commands are confirmed flowing (`DRAW_RECT` telemetry visible).
+- Remaining blocker for visible desktop is backend takeover:
+   - x6 currently falls back to ANSI backend when framebuffer path is unavailable.
+   - real `/dev/fb0` takeover plumbing is now being introduced incrementally.
+
 This plan intentionally avoids "full Xorg" scope. The objective is:
 
 - `startx /bin/dwm`-style workflow
@@ -150,6 +159,11 @@ If missing, these must be implemented before or during x6 bring-up.
 - query mode: width, height, stride, format, buffer size
 - userspace mapping of framebuffer memory
 - explicit present/flush operation
+
+Practical staging now in flight:
+- expose `/dev/fb0` through devman + console-major framebuffer minor
+- support framebuffer info ioctls and raw write path in console driver
+- make x6 backend switch to framebuffer automatically when available
 
 ### B) Userspace Input ABI
 

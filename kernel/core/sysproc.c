@@ -13,6 +13,7 @@
 #include "stat.h"
 #include "fs.h"
 #include "file.h"
+#include "graphics/drm_ioctls.h"
 #include "sys/resource.h"
 #include "sys/time.h"
 #include "sys/ioctl.h"
@@ -1027,6 +1028,29 @@ sys_setrlimit(void)
       }
       arg_int = tty_ioctl_dispatch(f, fd, tty_major, request, (uint)karg);
       if(arg_int >= 0 && copyout(p->pgdir, arg_u, karg, sizeof(int)) < 0)
+        arg_int = -1;
+      kmalloc_free(karg);
+      return arg_int;
+
+    case 0x4600:  /* FBIOGET_VSCREENINFO */
+    case 0x4602:  /* FBIOGET_FSCREENINFO */
+      if(tty_major != CONSOLE)
+        return -1;
+      if(argint(2, &arg_raw) < 0)
+        return -1;
+      arg_u = (uint)arg_raw;
+      p = myproc();
+      if(p == 0 || p->pgdir == 0)
+        return -1;
+      if(request == 0x4600)
+        arg_size = sizeof(struct fb_var_screeninfo);
+      else
+        arg_size = sizeof(struct fb_fix_screeninfo);
+      karg = (char*)kmalloc((uint)arg_size);
+      if(karg == 0)
+        return -1;
+      arg_int = console_ioctl(fd, request, (uint)karg);
+      if(arg_int >= 0 && copyout(p->pgdir, arg_u, karg, (uint)arg_size) < 0)
         arg_int = -1;
       kmalloc_free(karg);
       return arg_int;

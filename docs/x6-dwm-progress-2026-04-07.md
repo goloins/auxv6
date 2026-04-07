@@ -62,12 +62,27 @@ Implemented across `user/x11.c`, `user/x6.c`, and `ports/dwm-6.8/drw-auxv6.c`:
 
 This makes dwm paint activity visible in the active display path, even before a full framebuffer compositor lands.
 
+### Tranche: control-plane stabilization and handshake deadlock fix
+- Verified end-to-end launch path: `startx -> xinit -> dwm -> XOpenDisplay` is now live.
+- Fixed xinit probe deadlock by explicitly detaching readiness probe clients so x6 can accept dwm as a second client.
+- Added targeted runtime tracing in xinit/x6/x11/dwm to isolate startup stalls quickly.
+
+### Tranche: framebuffer takeover scaffold (server7-independent)
+- Added x6 backend selection (`-B auto|ansi|fb`) and automatic framebuffer probe path.
+- Added `/dev/fb0` device-node provisioning in `devman` (console-major framebuffer minor).
+- Added minimal framebuffer ioctls in console driver:
+  - `FBIOGET_VSCREENINFO` (0x4600)
+  - `FBIOGET_FSCREENINFO` (0x4602)
+- Added raw pixel write path for `/dev/fb0` via console framebuffer memory with flush-region calls.
+
+This is the first explicit handoff mechanism from text-console-only behavior toward real X scanout writes.
+
 ## What Is Still To Go
 
 ### Tranche A (highest user-visible impact): visible rendering path
-- Current draw path remains minimal/stubbed for practical bar/window visuals.
-- Need a concrete present path from dwm draw calls to framebuffer-backed output.
-- Immediate target: make bar/background updates visibly change pixels each frame.
+- Validate `/dev/fb0` availability and ioctl success in guest (`x6: framebuffer backend active ...`).
+- Verify dwm draw rectangles produce real pixel changes on scanout.
+- If needed, add explicit ownership/focus arbitration around fb writes so tty and x6 do not fight.
 
 ### Tranche B: real pointer (mouse) ingress
 - Current button/motion are protocol-injectable but not sourced from hardware input stream.
@@ -82,7 +97,8 @@ This makes dwm paint activity visible in the active display path, even before a 
 - Important for broader app compatibility after base interactivity is stable.
 
 ## Recommended Next Run Order
-1. Finish visible rendering tranche (framebuffer-present path for bar/basic primitives).
-2. Land hardware pointer ingress.
-3. Refine keyboard/modifier fidelity and remove temporary ALT-prefix assumptions where possible.
-4. Expand ICCCM/EWMH/query behavior based on first real client failures.
+1. Validate fb backend activation and visible scanout takeover (`/dev/fb0` path).
+2. Harden fb handoff semantics (ownership, restore-to-tty, crash cleanup).
+3. Land hardware pointer ingress.
+4. Refine keyboard/modifier fidelity and remove temporary ALT-prefix assumptions where possible.
+5. Expand ICCCM/EWMH/query behavior based on first real client failures.
