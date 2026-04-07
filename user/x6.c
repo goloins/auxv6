@@ -4,6 +4,7 @@
 #include "signal.h"
 #include "socket.h"
 #include "stdio.h"
+#include <string.h>
 
 #define X6_DEFAULT_PORT 6006
 #define X6_BACKLOG 16
@@ -32,6 +33,16 @@ struct x6_event_queue {
   int tail;
 };
 
+// Property storage for windows (Phase 2.1d)
+#define X6_MAX_PROPERTIES_PER_WINDOW 16
+#define X6_MAX_PROP_NAME 64
+#define X6_MAX_PROP_VALUE 256
+
+struct x6_property {
+  char name[X6_MAX_PROP_NAME];
+  char value[X6_MAX_PROP_VALUE];
+};
+
 struct x6_window {
   int in_use;
   uint id;
@@ -40,6 +51,8 @@ struct x6_window {
   int w;
   int h;
   int mapped;
+  struct x6_property props[X6_MAX_PROPERTIES_PER_WINDOW];
+  int prop_count;
 };
 
 // Per-client context (for future expansion)
@@ -222,6 +235,7 @@ alloc_window(uint id)
       wins[i].w = 1;
       wins[i].h = 1;
       wins[i].mapped = 0;
+      wins[i].prop_count = 0;  // Initialize properties (Phase 2.1d)
       return &wins[i];
     }
   }
@@ -272,6 +286,21 @@ x6_event_queue_dequeue(struct x6_event_queue *q, struct x6_event *evt)
     return -1; // Empty
   *evt = q->events[q->head];
   q->head = (q->head + 1) % X6_MAX_EVENTS_PER_CLIENT;
+  return 0;
+}
+
+// Find a property in a window's property array by name
+// Returns pointer to property or NULL if not found
+static struct x6_property *
+x6_find_property(struct x6_window *win, const char *atom)
+{
+  int i;
+  if(!win) return 0;
+  for(i = 0; i < win->prop_count; i++) {
+    if(strcmp(win->props[i].name, atom) == 0) {
+      return &win->props[i];
+    }
+  }
   return 0;
 }
 
@@ -538,7 +567,79 @@ handle_one_command(int cfd, char *cmd)
     x6_send_line(cfd, "OK ungrab_done\n");
     return;
   }
+  if(strncmp(cmd, "GET_PROPERTY", 12) == 0) {
+    uint wid;
+    char atom[128];
+    struct x6_window *win;
+    struct x6_property *prop;
 
+    // Parse: GET_PROPERTY <wid> <atom>
+    if(sscanf(cmd, "GET_PROPERTY %u %127s", &wid, atom) != 2) {
+      x6_send_line(cfd, "ERR bad-syntax\n");
+      return;
+    }
+
+    win = find_window(wid);
+    if(!win) {
+      x6_send_line(cfd, "ERR no-such-window\n");
+      return;
+    }
+
+    prop = x6_find_property(win, atom);
+    if(!prop) {
+      x6_send_line(cfd, "ERR no-such-property\n");
+      return;
+    }
+
+    // Return property value as VALUE <atom> <value>
+    char out[512];
+    snprintf(out, sizeof(out), "VALUE %s %s\n", atom, prop->value);
+    x6_send_line(cfd, out);
+    return;
+  }
+
+  if(strncmp(cmd, "SET_PROPERTY", 12) == 0) {
+    uint wid;
+    char atom[128];
+    char value[512];
+    struct x6_window *win;
+    struct x6_property *prop;
+
+    // Parse: SET_PROPERTY <wid> <atom> <value>
+    if(sscanf(cmd, "SET_PROPERTY %u %127s %511s", &wid, atom, value) != 3) {
+      x6_send_line(cfd, "ERR bad-syntax\n");
+      return;
+    }
+
+    win = find_window(wid);
+    if(!win) {
+      x6_send_line(cfd, "ERR no-such-window\n");
+      return;
+    }
+
+    // Find existing property or add new one
+    prop = x6_find_property(win, atom);
+    if(prop) {
+      // Update existing property
+      strncpy(prop->value, value, X6_MAX_PROP_VALUE - 1);
+      prop->value[X6_MAX_PROP_VALUE - 1] = '\0';
+    } else {
+      // Add new property if we have space
+      if(win->prop_count >= X6_MAX_PROPERTIES_PER_WINDOW) {
+        x6_send_line(cfd, "ERR no-property-space\n");
+        return;
+      }
+      prop = &win->props[win->prop_count];
+      strncpy(prop->name, atom, X6_MAX_PROP_NAME - 1);
+      prop->name[X6_MAX_PROP_NAME - 1] = '\0';
+      strncpy(prop->value, value, X6_MAX_PROP_VALUE - 1);
+      prop->value[X6_MAX_PROP_VALUE - 1] = '\0';
+      win->prop_count++;
+    }
+
+    x6_send_line(cfd, "OK property_set\n");
+    return;
+  }
   x6_send_line(cfd, "ERR unknown\n");
 }
 

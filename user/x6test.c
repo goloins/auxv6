@@ -317,12 +317,88 @@ void test_focus_and_grabs(test_ctx *ctx) {
   }
 }
 
+void test_properties(test_ctx *ctx, unsigned wid) {
+  printf("TEST: Properties/Atoms (Phase 2.1d)\n");
+  
+  // Step 1: SET_PROPERTY on the created window
+  char cmd[256];
+  snprintf(cmd, sizeof(cmd), "SET_PROPERTY %u WM_NAME TestWindow\n", wid);
+  test_send(ctx, cmd);
+  test_recv_line(ctx, ctx->buf, sizeof(ctx->buf));
+  if (strcmp(ctx->buf, "OK property_set") == 0) {
+    printf("  PASS: SET_PROPERTY succeeded\n");
+    ctx->passed++;
+  } else {
+    printf("  FAIL: expected 'OK property_set', got '%s'\n", ctx->buf);
+    ctx->failed++;
+  }
+  
+  // Step 2: GET_PROPERTY on existing property
+  snprintf(cmd, sizeof(cmd), "GET_PROPERTY %u WM_NAME\n", wid);
+  test_send(ctx, cmd);
+  test_recv_line(ctx, ctx->buf, sizeof(ctx->buf));
+  if (strcmp(ctx->buf, "VALUE WM_NAME TestWindow") == 0) {
+    printf("  PASS: GET_PROPERTY returned correct value\n");
+    ctx->passed++;
+  } else {
+    printf("  FAIL: expected 'VALUE WM_NAME TestWindow', got '%s'\n", ctx->buf);
+    ctx->failed++;
+  }
+  
+  // Step 3: GET_PROPERTY on non-existent property
+  snprintf(cmd, sizeof(cmd), "GET_PROPERTY %u WM_CLASS\n", wid);
+  test_send(ctx, cmd);
+  test_recv_line(ctx, ctx->buf, sizeof(ctx->buf));
+  if (strcmp(ctx->buf, "ERR no-such-property") == 0) {
+    printf("  PASS: GET_PROPERTY on missing property returns error\n");
+    ctx->passed++;
+  } else {
+    printf("  FAIL: expected 'ERR no-such-property', got '%s'\n", ctx->buf);
+    ctx->failed++;
+  }
+  
+  // Step 4: SET_PROPERTY twice (update)
+  snprintf(cmd, sizeof(cmd), "SET_PROPERTY %u WM_NAME UpdatedWindow\n", wid);
+  test_send(ctx, cmd);
+  test_recv_line(ctx, ctx->buf, sizeof(ctx->buf));
+  if (strcmp(ctx->buf, "OK property_set") == 0) {
+    printf("  PASS: SET_PROPERTY update succeeded\n");
+    ctx->passed++;
+  } else {
+    printf("  FAIL: expected 'OK property_set' for update, got '%s'\n", ctx->buf);
+    ctx->failed++;
+  }
+  
+  // Step 5: GET_PROPERTY to verify update
+  snprintf(cmd, sizeof(cmd), "GET_PROPERTY %u WM_NAME\n", wid);
+  test_send(ctx, cmd);
+  test_recv_line(ctx, ctx->buf, sizeof(ctx->buf));
+  if (strcmp(ctx->buf, "VALUE WM_NAME UpdatedWindow") == 0) {
+    printf("  PASS: GET_PROPERTY verified updated value\n");
+    ctx->passed++;
+  } else {
+    printf("  FAIL: expected 'VALUE WM_NAME UpdatedWindow', got '%s'\n", ctx->buf);
+    ctx->failed++;
+  }
+  
+  // Step 6: GET_PROPERTY on non-existent window
+  test_send(ctx, "GET_PROPERTY 9999 WM_NAME\n");
+  test_recv_line(ctx, ctx->buf, sizeof(ctx->buf));
+  if (strcmp(ctx->buf, "ERR no-such-window") == 0) {
+    printf("  PASS: GET_PROPERTY on non-existent window returns error\n");
+    ctx->passed++;
+  } else {
+    printf("  FAIL: expected 'ERR no-such-window', got '%s'\n", ctx->buf);
+    ctx->failed++;
+  }
+}
+
 int main(void) {
   test_ctx ctx = {0};
   struct sockaddr_in addr;
   unsigned wid = 0;
 
-  printf("x6test: Phase 2.1c focus and keyboard semantics validation\n\n");
+  printf("x6test: Phase 2.1d properties/atoms validation\n\n");
 
   // Connect to x6
   ctx.fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -366,6 +442,9 @@ int main(void) {
   // Test focus and keyboard grabs (Phase 2.1c)
   test_focus_and_grabs(&ctx);
   
+  // Test properties/atoms (Phase 2.1d)
+  test_properties(&ctx, wid);
+  
   test_unmap(&ctx, wid);
   test_destroy(&ctx, wid);
   test_quit(&ctx);
@@ -377,7 +456,7 @@ int main(void) {
   printf("Failed: %d\n", ctx.failed);
 
   if (ctx.failed == 0) {
-    printf("\n✓ All tests passed! Phase 2.1c focus and keyboard substrate validated.\n");
+    printf("\n✓ All tests passed! Phase 2.1d properties/atoms substrate validated.\n");
     return 0;
   } else {
     printf("\n✗ Some tests failed.\n");
