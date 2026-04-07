@@ -7,6 +7,7 @@
 #include "signal.h"
 #include "socket.h"
 #include "stdio.h"
+#include "poll.h"
 #include <string.h>
 
 #define XK_BackSpace 0xff08
@@ -72,6 +73,7 @@ struct x6_property {
 struct x6_window {
   int in_use;
   uint id;
+  int owner_fd;
   int x;
   int y;
   int w;
@@ -92,6 +94,8 @@ static struct x6_window wins[X6_MAX_WINDOWS];
 
 // Per-client context (simplified for MVP: one connection at a time)
 static struct x6_event_queue *current_event_queue = 0;
+static struct x6_event_queue *wm_event_queue = 0;
+static int wm_client_fd = -1;
 
 // WM state (Phase 2.1b: SubstructureRedirect semantics)
 static int wm_has_redirect = 0;  // Does WM hold SubstructureRedirect on root?
@@ -102,6 +106,7 @@ static uint focus_wid = 0;          // Currently focused window (0 = no focus)
 static uint keyboard_grab_owner = 0; // Who holds exclusive keyboard grab (0 = nobody, typically WM)
 static int wm_has_kb_grab = 0;      // Does WM hold keyboard grab?
 static int console_alt_prefix = 0;   // ESC-prefix to synthesize Mod1 for next keypress
+static int console_esc_seq = 0;
 static uint canvas_pixels[X6_CANVAS_ROWS][X6_CANVAS_COLS];
 static int canvas_ready;
 static uint x6_conn_seq;
@@ -109,6 +114,11 @@ static uint x6_draw_rect_count;
 static int x6_backend_pref = X6_BACKEND_AUTO;
 static int x6_backend = X6_BACKEND_ANSI;
 static int x6_backend_claimed = 0;
+static int x6_console_nonblock_ready = 0;
+static int x6_console_input_enabled = 0;
+static int pointer_x;
+static int pointer_y;
+static uint pointer_state;
 
 struct x6_fb_state {
   int fd;
@@ -146,6 +156,51 @@ x6_clamp_int(int v, int lo, int hi)
   if(v > hi)
     return hi;
   return v;
+}
+
+static struct x6_event_queue *
+x6_target_event_queue(void)
+{
+  if(wm_event_queue)
+    return wm_event_queue;
+  return current_event_queue;
+}
+
+static struct x6_window *
+x6_pick_window_at(int px, int py)
+{
+  int i;
+  struct x6_window *best;
+
+  best = 0;
+  for(i = 0; i < X6_MAX_WINDOWS; i++) {
+    struct x6_window *w;
+    if(!wins[i].in_use || !wins[i].mapped)
+      continue;
+    w = &wins[i];
+    if(px < w->x || py < w->y)
+      continue;
+    if(px >= w->x + w->w || py >= w->y + w->h)
+      continue;
+    best = w;
+  }
+  return best;
+}
+
+static void
+x6_screen_size(int *w, int *h)
+{
+  if(w == 0 || h == 0)
+    return;
+
+  if(x6_backend == X6_BACKEND_FB && x6_fb.width > 0 && x6_fb.height > 0) {
+    *w = x6_fb.width;
+    *h = x6_fb.height;
+    return;
+  }
+
+  *w = X6_CANVAS_COLS * X6_CELL_W;
+  *h = X6_CANVAS_ROWS * X6_CELL_H;
 }
 
 static void
@@ -276,9 +331,11 @@ static void __attribute__((unused))
 x6_enqueue_keypress(uint keycode, uint state)
 {
   struct x6_event evt;
+  struct x6_event_queue *target_q;
   uint target;
 
-  if(current_event_queue == 0)
+  target_q = x6_target_event_queue();
+  if(target_q == 0)
     return;
 
   if(wm_has_kb_grab && keyboard_grab_owner != 0)
@@ -292,9 +349,46 @@ x6_enqueue_keypress(uint keycode, uint state)
   evt.wid = target;
   evt.keycode = (int)keycode;
   evt.state = state;
-  evt.x = evt.y = evt.w = evt.h = 0;
+  evt.x = pointer_x;
+  evt.y = pointer_y;
+  evt.w = evt.h = 0;
   evt.button = 0;
-  x6_event_queue_enqueue(current_event_queue, &evt);
+  x6_event_queue_enqueue(target_q, &evt);
+}
+
+static void
+x6_enqueue_pointer_event(int type, int button)
+{
+  struct x6_event evt;
+  struct x6_event_queue *target_q;
+  struct x6_window *hit;
+
+  target_q = x6_target_event_queue();
+  if(target_q == 0)
+    return;
+
+  hit = x6_pick_window_at(pointer_x, pointer_y);
+  evt.type = type;
+  evt.wid = hit ? hit->id : wm_redirect_root;
+  evt.x = pointer_x;
+  evt.y = pointer_y;
+  evt.w = evt.h = 0;
+  evt.state = pointer_state;
+  evt.keycode = 0;
+  evt.button = button;
+  x6_event_queue_enqueue(target_q, &evt);
+}
+
+static void
+x6_move_pointer(int dx, int dy)
+{
+  int sw;
+  int sh;
+
+  x6_screen_size(&sw, &sh);
+  pointer_x = x6_clamp_int(pointer_x + dx, 0, sw - 1);
+  pointer_y = x6_clamp_int(pointer_y + dy, 0, sh - 1);
+  x6_enqueue_pointer_event(X6_EVENT_MOTION_NOTIFY, 0);
 }
 
 static void __attribute__((unused))
@@ -314,8 +408,39 @@ x6_pump_console_input(void)
     uint state;
 
     ch = (uchar)buf[i];
-    if(ch == 27) {
+    if(console_esc_seq == 1) {
+      if(ch == '[') {
+        console_esc_seq = 2;
+        continue;
+      }
       console_alt_prefix = 1;
+      console_esc_seq = 0;
+    }
+    if(console_esc_seq == 2) {
+      if(ch == 'A') {
+        x6_move_pointer(0, -8);
+        console_esc_seq = 0;
+        continue;
+      }
+      if(ch == 'B') {
+        x6_move_pointer(0, 8);
+        console_esc_seq = 0;
+        continue;
+      }
+      if(ch == 'C') {
+        x6_move_pointer(8, 0);
+        console_esc_seq = 0;
+        continue;
+      }
+      if(ch == 'D') {
+        x6_move_pointer(-8, 0);
+        console_esc_seq = 0;
+        continue;
+      }
+      console_esc_seq = 0;
+    }
+    if(ch == 27) {
+      console_esc_seq = 1;
       continue;
     }
 
@@ -323,14 +448,40 @@ x6_pump_console_input(void)
     console_alt_prefix = 0;
 
     if(ch == '\r' || ch == '\n')
-      keycode = XK_Return;
+      keycode = 13;
     else if(ch == 8 || ch == 127)
-      keycode = XK_BackSpace;
+      keycode = 8;
+    else if(ch == ' ')
+      keycode = 32;
+    else if(ch == 'm') {
+      pointer_state |= 0x0100U;
+      x6_enqueue_pointer_event(X6_EVENT_BUTTON_PRESS, 1);
+      continue;
+    } else if(ch == 'n') {
+      pointer_state &= ~0x0100U;
+      x6_enqueue_pointer_event(X6_EVENT_BUTTON_RELEASE, 1);
+      continue;
+    }
     else
       keycode = (uint)ch;
 
     x6_enqueue_keypress(keycode, state);
   }
+}
+
+static void
+x6_console_input_setup(void)
+{
+  int flags;
+
+  if(x6_console_nonblock_ready)
+    return;
+
+  flags = fcntl(0, F_GETFL, 0);
+  if(flags >= 0 && fcntl(0, F_SETFL, flags | O_NONBLOCK) >= 0)
+    x6_console_input_enabled = 1;
+
+  x6_console_nonblock_ready = 1;
 }
 
 static void
@@ -582,6 +733,7 @@ alloc_window(uint id)
     if(!wins[i].in_use) {
       wins[i].in_use = 1;
       wins[i].id = id;
+      wins[i].owner_fd = -1;
       wins[i].x = 0;
       wins[i].y = 0;
       wins[i].w = 1;
@@ -669,9 +821,12 @@ handle_one_command(int cfd, char *cmd)
 
   if(strncmp(cmd, "HELLO x6/1", 10) == 0) {
     char out[128];
+    int sw;
+    int sh;
+    x6_screen_size(&sw, &sh);
     snprintf(out, sizeof(out),
-             "OK proto=%d transport=tcp-loopback screen=0 root=1 visual=truecolor depth=32\n",
-             X6_PROTO_VERSION);
+             "OK proto=%d transport=tcp-loopback screen=0 root=1 visual=truecolor depth=32 width=%d height=%d\n",
+             X6_PROTO_VERSION, sw, sh);
     x6_send_line(cfd, out);
     return;
   }
@@ -710,6 +865,7 @@ handle_one_command(int cfd, char *cmd)
     win->y = y;
     win->w = w;
     win->h = h;
+    win->owner_fd = cfd;
     x6_send_line(cfd, "OK create\n");
     return;
   }
@@ -722,12 +878,12 @@ handle_one_command(int cfd, char *cmd)
     }
     
     // Phase 2.1b: If WM holds SubstructureRedirect, queue MapRequest for WM approval
-    if(wm_has_redirect) {
+    if(wm_has_redirect && cfd != wm_client_fd && win->owner_fd != wm_client_fd) {
       struct x6_event evt;
       evt.type = X6_EVENT_MAP_REQUEST;
       evt.wid = id;
-      if(current_event_queue != 0) {
-        x6_event_queue_enqueue(current_event_queue, &evt);
+      if(wm_event_queue != 0) {
+        x6_event_queue_enqueue(wm_event_queue, &evt);
       }
       x6_send_line(cfd, "PENDING map\n");  // Client is notified of pending state
       return;
@@ -758,7 +914,7 @@ handle_one_command(int cfd, char *cmd)
     }
     
     // Phase 2.1b: If WM holds SubstructureRedirect, queue ConfigureRequest for WM approval
-    if(wm_has_redirect) {
+    if(wm_has_redirect && cfd != wm_client_fd && win->owner_fd != wm_client_fd) {
       struct x6_event evt;
       evt.type = X6_EVENT_CONFIGURE_REQUEST;
       evt.wid = id;
@@ -766,8 +922,8 @@ handle_one_command(int cfd, char *cmd)
       evt.y = y;
       evt.w = (w < 1) ? 1 : w;
       evt.h = (h < 1) ? 1 : h;
-      if(current_event_queue != 0) {
-        x6_event_queue_enqueue(current_event_queue, &evt);
+      if(wm_event_queue != 0) {
+        x6_event_queue_enqueue(wm_event_queue, &evt);
       }
       x6_send_line(cfd, "PENDING configure\n");  // Client is notified of pending state
       return;
@@ -831,6 +987,8 @@ handle_one_command(int cfd, char *cmd)
       return;
     }
     wm_has_redirect = 1;
+    wm_event_queue = current_event_queue;
+    wm_client_fd = cfd;
     x6_send_line(cfd, "OK redirect_granted\n");
     return;
   }
@@ -1033,8 +1191,38 @@ handle_one_command(int cfd, char *cmd)
       return;
     }
     wm_has_kb_grab = 1;
-    keyboard_grab_owner = focus_wid;  // Start with current focus
+    keyboard_grab_owner = wm_redirect_root;
     x6_send_line(cfd, "OK grab_active\n");
+    return;
+  }
+
+  if(strncmp(cmd, "GRAB_POINTER", 12) == 0) {
+    x6_send_line(cfd, "OK pointer_grabbed\n");
+    return;
+  }
+
+  if(strncmp(cmd, "UNGRAB_POINTER", 14) == 0) {
+    x6_send_line(cfd, "OK pointer_ungrabbed\n");
+    return;
+  }
+
+  if(sscanf(cmd, "WARP_POINTER %d %d", &x, &y) == 2) {
+    int sw;
+    int sh;
+    x6_screen_size(&sw, &sh);
+    pointer_x = x6_clamp_int(x, 0, sw - 1);
+    pointer_y = x6_clamp_int(y, 0, sh - 1);
+    x6_send_line(cfd, "OK pointer_warped\n");
+    return;
+  }
+
+  if(strncmp(cmd, "QUERY_POINTER", 13) == 0) {
+    char out[128];
+    struct x6_window *hit;
+    hit = x6_pick_window_at(pointer_x, pointer_y);
+    snprintf(out, sizeof(out), "OK pointer root=1 child=%u x=%d y=%d state=%u\n",
+             hit ? hit->id : 0, pointer_x, pointer_y, pointer_state);
+    x6_send_line(cfd, out);
     return;
   }
 
@@ -1146,6 +1334,10 @@ handle_client(int cfd)
   x6_send_line(cfd, "X6/1 READY\n");
   
   while(keep_running) {
+    struct pollfd pfds[2];
+    int nfds;
+    int pr;
+
     // Drain any queued events and send them to client
     while(!x6_event_queue_empty(&q)) {
       if(x6_event_queue_dequeue(&q, &evt) == 0) {
@@ -1180,8 +1372,33 @@ handle_client(int cfd)
       }
     }
 
+    nfds = 0;
+    pfds[nfds].fd = cfd;
+    pfds[nfds].events = POLLIN;
+    pfds[nfds].revents = 0;
+    nfds++;
+    if(x6_console_input_enabled) {
+      pfds[nfds].fd = 0;
+      pfds[nfds].events = POLLIN;
+      pfds[nfds].revents = 0;
+      nfds++;
+    }
+
+    pr = poll(pfds, (nfds_t)nfds, 50);
+    if(pr < 0)
+      break;
+    if(pr == 0)
+      continue;
+
+    if(x6_console_input_enabled && nfds > 1 && (pfds[1].revents & POLLIN))
+      x6_pump_console_input();
+
+    if((pfds[0].revents & POLLIN) == 0)
+      continue;
+
     if(x6_recv_line(cfd, line, sizeof(line)) < 0)
       break;
+
     if(line[0] == 0)
       continue;
     if(!logged_first_cmd) {
@@ -1191,6 +1408,14 @@ handle_client(int cfd)
     handle_one_command(cfd, line);
     if(strncmp(line, "QUIT", 4) == 0 || strncmp(line, "DETACH", 6) == 0)
       break;
+  }
+
+  if(wm_event_queue == &q) {
+    wm_event_queue = 0;
+    wm_client_fd = -1;
+    wm_has_redirect = 0;
+    wm_has_kb_grab = 0;
+    keyboard_grab_owner = 0;
   }
 
   current_event_queue = 0;
@@ -1256,6 +1481,11 @@ main(int argc, char **argv)
     x6_release_display();
     exit(1);
   }
+
+  x6_console_input_setup();
+  pointer_x = x6_fb.width > 0 ? (x6_fb.width / 2) : 0;
+  pointer_y = x6_fb.height > 0 ? (x6_fb.height / 2) : 0;
+  pointer_state = 0;
 
   fd = socket(AF_INET, SOCK_STREAM, 0);
   if(fd < 0) {

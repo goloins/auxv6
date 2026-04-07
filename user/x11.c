@@ -4,6 +4,7 @@
 #include "stdio.h"
 #include "stdlib.h"
 #include "string.h"
+#include "poll.h"
 #include "X11/Xlib.h"
 #include "X11/Xutil.h"
 
@@ -164,6 +165,8 @@ x11_parse_event_line(Display *display, const char *line, XEvent *event)
     sscanf(line, "EVENT ButtonPress wid=%u button=%u state=%u x=%d y=%d",
            &event->xbutton.window, &event->xbutton.button, &event->xbutton.state,
            &event->xbutton.x, &event->xbutton.y);
+    event->xbutton.x_root = event->xbutton.x;
+    event->xbutton.y_root = event->xbutton.y;
     return 0;
   }
   if (strncmp(line + 6, "ButtonRelease", 13) == 0) {
@@ -171,12 +174,16 @@ x11_parse_event_line(Display *display, const char *line, XEvent *event)
     sscanf(line, "EVENT ButtonRelease wid=%u button=%u state=%u x=%d y=%d",
            &event->xbutton.window, &event->xbutton.button, &event->xbutton.state,
            &event->xbutton.x, &event->xbutton.y);
+    event->xbutton.x_root = event->xbutton.x;
+    event->xbutton.y_root = event->xbutton.y;
     return 0;
   }
   if (strncmp(line + 6, "MotionNotify", 12) == 0) {
     event->type = MotionNotify;
     sscanf(line, "EVENT MotionNotify wid=%u x=%d y=%d state=%u",
            &event->xmotion.window, &event->xmotion.x, &event->xmotion.y, &event->xmotion.state);
+    event->xmotion.x_root = event->xmotion.x;
+    event->xmotion.y_root = event->xmotion.y;
     return 0;
   }
   return -1;
@@ -280,6 +287,26 @@ x11_cmd(Display *dpy, const char *cmd, char *resp, int maxlen)
   }
 }
 
+static int
+x11_parse_hello_dim(const char *line, const char *key, int fallback)
+{
+  const char *p;
+  int v;
+
+  if (!line || !key)
+    return fallback;
+
+  p = strstr(line, key);
+  if (!p)
+    return fallback;
+  p += strlen(key);
+
+  v = atoi(p);
+  if (v <= 0)
+    return fallback;
+  return v;
+}
+
 static const char *
 atom_to_name(Atom a)
 {
@@ -355,8 +382,8 @@ XOpenDisplay(char *display_name)
 
   dpy->screen = 0;
   dpy->root = 1;
-  dpy->width = 1024;
-  dpy->height = 768;
+  dpy->width = x11_parse_hello_dim(line, "width=", 1024);
+  dpy->height = x11_parse_hello_dim(line, "height=", 768);
   dpy->depth = 32;
   g_display = dpy;
   return dpy;
@@ -512,12 +539,12 @@ XConfigureWindow(Display *display, Window w, unsigned int value_mask, XWindowCha
 int
 XGetWindowAttributes(Display *display, Window w, XWindowAttributes *attrs)
 {
-  (void)display; (void)w;
+  (void)w;
   if (!attrs)
     return 0;
   memset(attrs, 0, sizeof(*attrs));
-  attrs->width = 800;
-  attrs->height = 600;
+  attrs->width = (display && display->width > 0) ? display->width : 1024;
+  attrs->height = (display && display->height > 0) ? display->height : 768;
   attrs->depth = 32;
   attrs->map_state = IsViewable;
   return 1;
@@ -599,7 +626,6 @@ Bool XCheckMaskEvent(Display *display, long event_mask, XEvent *event) {
   }
   return False;
 }
-int XPending(Display *display) { (void)display; return 0; }
 
 Atom
 XInternAtom(Display *display, char *atom_name, Bool only_if_exists)
@@ -750,12 +776,22 @@ int XUngrabKeyboard(Display *display, Time time) {
 }
 
 int XGrabPointer(Display *display, Window grab_window, Bool owner_events, unsigned int event_mask, int pointer_mode, int keyboard_mode, Window confine_to, Cursor cursor, Time time) {
-  (void)display; (void)grab_window; (void)owner_events; (void)event_mask; (void)pointer_mode; (void)keyboard_mode; (void)confine_to; (void)cursor; (void)time;
-  return GrabSuccess;
+  char line[X6_BUF_SIZE];
+  (void)grab_window; (void)owner_events; (void)event_mask; (void)pointer_mode; (void)keyboard_mode; (void)confine_to; (void)cursor; (void)time;
+  if (x11_cmd(display, "GRAB_POINTER\n", line, sizeof(line)) < 0)
+    return BadAccess;
+  return strncmp(line, "OK pointer_grabbed", 18) == 0 ? GrabSuccess : BadAccess;
 }
-int XUngrabPointer(Display *display, Time time) { (void)display; (void)time; return 0; }
+int XUngrabPointer(Display *display, Time time) {
+  char line[X6_BUF_SIZE];
+  (void)time;
+  return x11_cmd(display, "UNGRAB_POINTER\n", line, sizeof(line)) < 0 ? -1 : 0;
+}
 int XWarpPointer(Display *display, Window src_w, Window dest_w, int src_x, int src_y, unsigned int src_width, unsigned int src_height, int dest_x, int dest_y) {
-  (void)display; (void)src_w; (void)dest_w; (void)src_x; (void)src_y; (void)src_width; (void)src_height; (void)dest_x; (void)dest_y; return 0;
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  (void)src_w; (void)dest_w; (void)src_x; (void)src_y; (void)src_width; (void)src_height;
+  snprintf(cmd, sizeof(cmd), "WARP_POINTER %d %d\n", dest_x, dest_y);
+  return x11_cmd(display, cmd, line, sizeof(line)) < 0 ? -1 : 0;
 }
 
 int XGrabKey(Display *display, int keycode, unsigned int modifiers, Window grab_window, Bool owner_events, int pointer_mode, int keyboard_mode) {
@@ -853,15 +889,51 @@ int XQueryTree(Display *display, Window w, Window *root_return, Window *parent_r
   return 1;
 }
 Bool XQueryPointer(Display *display, Window w, Window *root_return, Window *child_return, int *root_x_return, int *root_y_return, int *win_x_return, int *win_y_return, unsigned int *mask_return) {
-  (void)display; (void)w;
+  char line[X6_BUF_SIZE];
+  unsigned int child = 0;
+  int px = 0;
+  int py = 0;
+  unsigned int state = 0;
+  (void)w;
+
+  if (x11_cmd(display, "QUERY_POINTER\n", line, sizeof(line)) < 0)
+    return False;
+  if (sscanf(line, "OK pointer root=1 child=%u x=%d y=%d state=%u", &child, &px, &py, &state) < 4)
+    return False;
+
   if (root_return) *root_return = 1;
-  if (child_return) *child_return = None;
-  if (root_x_return) *root_x_return = 0;
-  if (root_y_return) *root_y_return = 0;
-  if (win_x_return) *win_x_return = 0;
-  if (win_y_return) *win_y_return = 0;
-  if (mask_return) *mask_return = 0;
+  if (child_return) *child_return = (Window)child;
+  if (root_x_return) *root_x_return = px;
+  if (root_y_return) *root_y_return = py;
+  if (win_x_return) *win_x_return = px;
+  if (win_y_return) *win_y_return = py;
+  if (mask_return) *mask_return = state;
   return True;
+}
+
+int
+XPending(Display *display)
+{
+  struct pollfd pfd;
+  XEvent ev;
+
+  if (!display)
+    return 0;
+  if (g_has_pending_event)
+    return 1;
+
+  pfd.fd = display->fd;
+  pfd.events = POLLIN;
+  pfd.revents = 0;
+  if (poll(&pfd, 1, 0) <= 0)
+    return 0;
+  if ((pfd.revents & POLLIN) == 0)
+    return 0;
+  if (x11_read_event(display, &ev) < 0)
+    return 0;
+  g_pending_event = ev;
+  g_has_pending_event = 1;
+  return 1;
 }
 
 int (*XSetErrorHandler(int (*handler)(Display *, XErrorEvent *)))(Display *, XErrorEvent *) {
