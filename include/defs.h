@@ -131,6 +131,8 @@ int             console_gfx_server_claim(int pid);
 int             console_gfx_server_release(int pid);
 int             console_gfx_server_owner(void);
 uint            console_input_events(void);
+void            console_mouse_packet(int dx, int dy, uchar buttons);
+void            console_mouse_poll_events(int *rd, int *wr, int *err);
 uint            console_gfx_stats_sync_calls(void);
 uint            console_gfx_stats_cells_changed(void);
 uint            console_gfx_stats_cells_rendered(void);
@@ -440,6 +442,10 @@ int             kpage_is_managed(uint pa);
 
 // kbd.c
 void            kbdintr(void);
+
+// mouse.c
+void            mouseinit(void);
+void            mouseintr(void);
 
 // ktime.c
 void            ktime_init(void);

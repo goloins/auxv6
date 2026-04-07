@@ -22,6 +22,7 @@
 
 #define CONSOLE 1
 #define CONSOLE_MINOR_FB0 100
+#define CONSOLE_MINOR_MOUSE0 101
 
 #define MAX_DEVICES 256
 #define MAX_LINE 256
@@ -562,6 +563,14 @@ devman_enumerate_pty_devices(void)
   }
 
   if(ndevices < MAX_DEVICES) {
+    strcpy(devices[ndevices].path, "/dev/mouse0");
+    devices[ndevices].major = CONSOLE;
+    devices[ndevices].minor = CONSOLE_MINOR_MOUSE0;
+    devices[ndevices].type = M_IFCHR;
+    ndevices++;
+  }
+
+  if(ndevices < MAX_DEVICES) {
     strcpy(devices[ndevices].path, "/dev/null");
     devices[ndevices].major = 1;
     devices[ndevices].minor = 3;
@@ -711,6 +720,7 @@ devman_remove_managed_nodes(void)
 
   devman_remove_node("/dev/console");
   devman_remove_node("/dev/fb0");
+  devman_remove_node("/dev/mouse0");
   devman_remove_node("/dev/null");
   devman_remove_node("/dev/zero");
 }
