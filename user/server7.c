@@ -3,6 +3,7 @@
 #include "fcntl.h"
 #include "signal.h"
 #include "socket.h"
+#include "stdio.h"
 
 #define SERVER7_DEFAULT_PORT 6007
 #define SERVER7_BACKLOG      8
@@ -264,18 +265,23 @@ server7_handle_client(int cfd)
     return;
 
   if(strncmp(req, "HELLO server7/1", 15) == 0) {
+    char out[384];
     server7_status_compact(status, sizeof(status));
-    dprintf(cfd,
-            "OK proto=%d flow=%s caps=claim,menu,wm,input-kbd,input-mouse %s\n",
-            SERVER7_PROTO_VERSION, server7_flow_name(server7_flow), status);
+    snprintf(out, sizeof(out),
+             "OK proto=%d flow=%s caps=claim,menu,wm,input-kbd,input-mouse %s\n",
+             SERVER7_PROTO_VERSION, server7_flow_name(server7_flow), status);
+    server7_send_client_line(cfd, out);
     return;
   }
 
   if(strncmp(req, "STATUS", 6) == 0) {
+    char out[96];
     int n;
 
-    dprintf(cfd, "flow %s\n", server7_flow_name(server7_flow));
-    dprintf(cfd, "uid %d tty %d\n", server7_uid, server7_has_tty);
+    snprintf(out, sizeof(out), "flow %s\n", server7_flow_name(server7_flow));
+    server7_send_client_line(cfd, out);
+    snprintf(out, sizeof(out), "uid %d tty %d\n", server7_uid, server7_has_tty);
+    server7_send_client_line(cfd, out);
 
     n = server7_read_status(status, sizeof(status));
     if(n < 0)

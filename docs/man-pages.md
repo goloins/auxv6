@@ -91,6 +91,7 @@ Generated: 2026-04-06
 | sigtest | targetfs/usr/share/man/sigtest.md | 2026-04-01 | user/sigtest.c | source-derived usage/options |
 | sockettest | targetfs/usr/share/man/sockettest.md | 2026-04-01 | user/sockettest.c | source-derived usage/options |
 | sgrep | targetfs/usr/share/man/sgrep.md | 2026-04-01 | ports/sbase/grep.c | upstream sbase port via auxv6 Makefile |
+| startx | targetfs/usr/share/man/startx.md | 2026-04-06 | targetfs/usr/bin/startx | thin wrapper that forwards to xinit |
 | stressfs | targetfs/usr/share/man/stressfs.md | 2026-04-01 | user/stressfs.c | source-derived usage/options |
 | su | targetfs/usr/share/man/su.md | 2026-04-01 | user/su.c | source-derived usage/options |
 | symlinktest | targetfs/usr/share/man/symlinktest.md | 2026-04-01 | user/symlinktest.c | source-derived usage/options |
@@ -111,6 +112,8 @@ Generated: 2026-04-06
 | vmprobe | targetfs/usr/share/man/vmprobe.md | 2026-04-06 | user/vmprobe.c | targeted VM/scheduler slowdown hypothesis probe correlating fork/tick phases with vmstat/schedstat deltas |
 | wc | targetfs/usr/share/man/wc.md | 2026-04-01 | user/wc.c | source-derived usage/options |
 | whoami | targetfs/usr/share/man/whoami.md | 2026-04-01 | user/whoami.c | source-derived usage/options |
+| x6 | targetfs/usr/share/man/x6.md | 2026-04-06 | user/x6.c | phase-1 local display-server scaffold with simple bring-up protocol |
+| xinit | targetfs/usr/share/man/xinit.md | 2026-04-06 | user/xinit.c | launcher that starts x6, waits for readiness, and runs a client session |
 | zombie | targetfs/usr/share/man/zombie.md | 2026-04-01 | user/zombie.c | source-derived usage/options |
 
 ## Task Notes

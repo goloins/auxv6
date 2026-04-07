@@ -745,6 +745,15 @@ _lockprobe: user/lockprobe
 _server7: user/server7
 	cp user/server7 _server7
 
+_x6: user/x6
+	cp user/x6 _x6
+
+_xinit: user/xinit
+	cp user/xinit _xinit
+
+_x6test: user/x6test
+	cp user/x6test _x6test
+
 _date: user/date
 	cp user/date _date
 
@@ -922,6 +931,9 @@ UPROGS=\
 	_time\
 	_dmesg\
 	_server7\
+	_x6\
+	_xinit\
+	_x6test\
 	_dash\
 	_symlinktest\
 	_nftwtest\
