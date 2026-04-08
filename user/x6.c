@@ -175,29 +175,6 @@ x6_fb_shadow_pixel(int x, int y)
 }
 
 static int
-x6_fb_write_pixel(int x, int y, uint pixel)
-{
-  uint64_t off;
-  uint p;
-
-  if(x6_fb.fd < 0)
-    return -1;
-  if(x < 0 || y < 0 || x >= x6_fb.width || y >= x6_fb.height)
-    return -1;
-
-  p = pixel & 0x00ffffffU;
-
-  off = (uint64_t)y * (uint64_t)x6_fb.stride + (uint64_t)x * 4ULL;
-  if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) < 0)
-    return -1;
-  if(write(x6_fb.fd, &p, sizeof(p)) != (int)sizeof(p))
-    return -1;
-  if(x6_fb_shadow && x >= 0 && y >= 0 && x < x6_fb_shadow_w && y < x6_fb_shadow_h)
-    x6_fb_shadow[(size_t)y * (size_t)x6_fb_shadow_w + (size_t)x] = p;
-  return 0;
-}
-
-static int
 x6_cursor_overlaps_rect(int x, int y, int w, int h)
 {
   if(!x6_cursor.drawn)
@@ -239,6 +216,9 @@ x6_cursor_hide(void)
   int ix;
   int iy;
   int idx;
+  int py;
+  int px;
+  uint64_t off;
 
   if(x6_backend != X6_BACKEND_FB || x6_fb.fd < 0)
     return;
@@ -247,10 +227,40 @@ x6_cursor_hide(void)
 
   idx = 0;
   for(iy = 0; iy < x6_cursor.h; iy++) {
-    for(ix = 0; ix < x6_cursor.w; ix++) {
-      x6_fb_write_pixel(x6_cursor.x + ix, x6_cursor.y + iy, x6_cursor.saved[idx]);
-      idx++;
+    py = x6_cursor.y + iy;
+    px = x6_cursor.x;
+    
+    // Ensure row buffer is large enough
+    if(x6_cursor.w > x6_fb.rowcap) {
+      uint *nbuf = (uint *)malloc((size_t)x6_cursor.w * sizeof(uint));
+      if(!nbuf)
+        return;
+      if(x6_fb.rowbuf)
+        free(x6_fb.rowbuf);
+      x6_fb.rowbuf = nbuf;
+      x6_fb.rowcap = x6_cursor.w;
     }
+    
+    // Fill row buffer with saved pixels
+    for(ix = 0; ix < x6_cursor.w; ix++)
+      x6_fb.rowbuf[ix] = x6_cursor.saved[idx + ix];
+    
+    // Write entire row in single syscall
+    off = (uint64_t)py * (uint64_t)x6_fb.stride + (uint64_t)px * 4ULL;
+    if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) < 0)
+      break;
+    if(write(x6_fb.fd, x6_fb.rowbuf, x6_cursor.w * (int)sizeof(uint)) < 0)
+      break;
+    
+    // Update shadow buffer
+    if(x6_fb_shadow) {
+      int j;
+      size_t base = (size_t)py * (size_t)x6_fb_shadow_w + (size_t)px;
+      for(j = 0; j < x6_cursor.w; j++)
+        x6_fb_shadow[base + j] = x6_fb.rowbuf[j];
+    }
+    
+    idx += x6_cursor.w;
   }
 
   x6_cursor.drawn = 0;
@@ -270,6 +280,8 @@ x6_cursor_show(void)
   int idx;
   uint p;
   uint active;
+  int py;
+  uint64_t off;
 
   if(x6_backend != X6_BACKEND_FB || x6_fb.fd < 0)
     return;
@@ -294,17 +306,28 @@ x6_cursor_show(void)
   x6_cursor.w = x1 - x0;
   x6_cursor.h = y1 - y0;
 
+  // Ensure row buffer is large enough
+  if(x6_cursor.w > x6_fb.rowcap) {
+    uint *nbuf = (uint *)malloc((size_t)x6_cursor.w * sizeof(uint));
+    if(!nbuf)
+      return;
+    if(x6_fb.rowbuf)
+      free(x6_fb.rowbuf);
+    x6_fb.rowbuf = nbuf;
+    x6_fb.rowcap = x6_cursor.w;
+  }
+
   idx = 0;
   for(iy = 0; iy < x6_cursor.h; iy++) {
+    py = x6_cursor.y + iy;
+    
     for(ix = 0; ix < x6_cursor.w; ix++) {
       int hit;
       int dx;
       int dy;
       int px;
-      int py;
 
       px = x6_cursor.x + ix;
-      py = x6_cursor.y + iy;
       p = x6_fb_shadow_pixel(px, py);
       x6_cursor.saved[idx] = p;
 
@@ -312,11 +335,28 @@ x6_cursor_show(void)
       dy = py - oy;
       hit = x6_cursor_shape_hit(dx, dy);
       if(hit == 2)
-        x6_fb_write_pixel(px, py, 0x00ffffffU);
+        x6_fb.rowbuf[ix] = 0x00ffffffU;  // White
       else if(hit == 1)
-        x6_fb_write_pixel(px, py, 0x00000000U);
+        x6_fb.rowbuf[ix] = 0x00000000U;  // Black cursor outline
+      else
+        x6_fb.rowbuf[ix] = p;  // Unchanged pixel
 
       idx++;
+    }
+    
+    // Write entire row in single syscall
+    off = (uint64_t)py * (uint64_t)x6_fb.stride + (uint64_t)x6_cursor.x * 4ULL;
+    if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) < 0)
+      break;
+    if(write(x6_fb.fd, x6_fb.rowbuf, x6_cursor.w * (int)sizeof(uint)) < 0)
+      break;
+    
+    // Update shadow buffer
+    if(x6_fb_shadow) {
+      int j;
+      size_t base = (size_t)py * (size_t)x6_fb_shadow_w + (size_t)x6_cursor.x;
+      for(j = 0; j < x6_cursor.w; j++)
+        x6_fb_shadow[base + j] = x6_fb.rowbuf[j];
     }
   }
 
@@ -559,12 +599,13 @@ x6_draw_text_pixels(int x, int baseline_y, uint color, const char *text, int len
 
   if(x6_backend == X6_BACKEND_FB && x6_fb.fd >= 0) {
     int need_cursor_refresh;
-    // Estimate text bounding box for cursor overlap check
     int text_w = user_font_text_width(font, text, len);
     int text_h = font->size;
     need_cursor_refresh = x6_cursor_overlaps_rect(x, baseline_y - text_h, text_w, text_h);
     if(need_cursor_refresh)
       x6_cursor_hide();
+    
+    // Use row-batched rendering: accumulate pixels per row, single syscall per row
     cx = x;
     for(i = 0; i < len; i++) {
       const struct user_glyph *g;
@@ -578,32 +619,107 @@ x6_draw_text_pixels(int x, int baseline_y, uint color, const char *text, int len
       gx = cx + g->bearing_x;
       gy = baseline_y - g->bearing_y;
 
+      // Process each row of the glyph
       for(r = 0; r < g->height; r++) {
         int c;
         int py;
+        int row_min_x;
+        int row_max_x;
         uchar rowbits;
+        uint p;
+        uint64_t off;
 
         py = gy + r;
         if(py < 0 || py >= x6_fb.height)
           continue;
+        
         rowbits = g->bitmap ? g->bitmap[r] : 0;
+        if(rowbits == 0)
+          continue;  // Skip empty rows
+        
+        // Find min/max x for this row
+        row_min_x = gx;
+        row_max_x = gx;
         for(c = 0; c < g->width && c < 8; c++) {
-          int px;
-          if((rowbits & (1U << (7 - c))) == 0)
-            continue;
-          px = gx + c;
-          if(px < 0 || px >= x6_fb.width)
-            continue;
-          x6_fb_write_pixel(px, py, color);
+          if((rowbits & (1U << (7 - c))) != 0) {
+            int px = gx + c;
+            if(px < row_min_x) row_min_x = px;
+            if(px > row_max_x) row_max_x = px;
+          }
+        }
+        
+        // Clamp to screen bounds
+        if(row_min_x < 0) row_min_x = 0;
+        if(row_max_x >= x6_fb.width) row_max_x = x6_fb.width - 1;
+        if(row_min_x > row_max_x)
+          continue;
+        
+        // Fill row buffer with background then glyph pixels
+        int row_width = row_max_x - row_min_x + 1;
+        
+        // Ensure row buffer is large enough
+        if(row_width > x6_fb.rowcap) {
+          uint *nbuf = (uint *)malloc((size_t)row_width * sizeof(uint));
+          if(!nbuf)
+            goto text_fallback;
+          if(x6_fb.rowbuf)
+            free(x6_fb.rowbuf);
+          x6_fb.rowbuf = nbuf;
+          x6_fb.rowcap = row_width;
+        }
+        
+        // Prefill row buffer with existing framebuffer contents from shadow buffer
+        // (don't try to read from /dev/fb0; use shadow as source of truth)
+        if(x6_fb_shadow) {
+          int j;
+          size_t base = (size_t)py * (size_t)x6_fb_shadow_w + (size_t)row_min_x;
+          for(j = 0; j < row_width; j++)
+            x6_fb.rowbuf[j] = x6_fb_shadow[base + j];
+        } else {
+          // No shadow buffer; fill with black background
+          memset(x6_fb.rowbuf, 0, (size_t)row_width * sizeof(uint));
+        }
+        
+        // Overlay glyph pixels on the buffer
+        p = color & 0x00ffffffU;
+        for(c = 0; c < g->width && c < 8; c++) {
+          int px = gx + c;
+          if(px >= 0 && px < x6_fb.width && (rowbits & (1U << (7 - c))) != 0) {
+            x6_fb.rowbuf[px - row_min_x] = p;
+          }
+        }
+        
+        // Write back entire row in single syscall
+        off = (uint64_t)py * (uint64_t)x6_fb.stride + (uint64_t)row_min_x * 4ULL;
+        if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) < 0)
+          goto text_fallback;
+        if(write(x6_fb.fd, x6_fb.rowbuf, row_width * (int)sizeof(uint)) < 0)
+          goto text_fallback;
+        
+        // Update shadow buffer
+        if(x6_fb_shadow) {
+          int j;
+          size_t base = (size_t)py * (size_t)x6_fb_shadow_w + (size_t)row_min_x;
+          for(j = 0; j < row_width; j++)
+            x6_fb_shadow[base + j] = x6_fb.rowbuf[j];
         }
       }
 
       cx += g->advance_x > 0 ? g->advance_x : g->width;
     }
+    
     if(need_cursor_refresh)
       x6_cursor_show();
     return;
+    
+text_fallback:
+    // Fallback to ANSI if row-batched rendering fails
+    if(need_cursor_refresh)
+      x6_cursor_show();
+    goto ansi_fallback;
   }
+  
+ansi_fallback:
 
   x6_canvas_fill_pixels(x, baseline_y - font->ascent,
                         user_font_text_width(font, text, len),
@@ -1963,7 +2079,6 @@ main(int argc, char **argv)
   pointer_grab_window = 0;
   root_cursor = 1;
   memset(&x6_cursor, 0, sizeof(x6_cursor));
-  memset(wins_by_id, 0, sizeof(wins_by_id));  // Initialize window hash table
 
   fd = socket(AF_INET, SOCK_STREAM, 0);
   if(fd < 0) {

@@ -789,6 +789,10 @@ _dwm: ports/dwm-6.8/Makefile.auxv6 $(ULIB) user/x11.o
 	$(MAKE) -f ports/dwm-6.8/Makefile.auxv6 all
 	cp ports/dwm-6.8/_dwm _dwm
 
+_st: ports/st-0.9.3/Makefile.auxv6 $(ULIB) user/x11.o
+	$(MAKE) -f ports/st-0.9.3/Makefile.auxv6 all
+	cp ports/st-0.9.3/_st _st
+
 _symlinktest: user/symlinktest
 	cp user/symlinktest _symlinktest
 
@@ -961,6 +965,7 @@ UPROGS=\
 	_wallpaper\
 	_dash\
 	_dwm\
+	_st\
 	_symlinktest\
 	_nftwtest\
 	_ftwtest\
