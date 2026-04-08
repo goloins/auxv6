@@ -13,6 +13,15 @@
 #include "X11/Xlib.h"
 #include "X11/Xutil.h"
 #include "X11/keysym.h"
+#include "X11/extensions/Xcomposite.h"
+#include "X11/extensions/Xdamage.h"
+#include "X11/extensions/Xfixes.h"
+#include "X11/extensions/Xinerama.h"
+#include "X11/extensions/Xrandr.h"
+#include "X11/extensions/Xrender.h"
+#include "X11/extensions/XRes.h"
+#include "X11/extensions/XShm.h"
+#include "X11/extensions/shape.h"
 #include "X11/Xft/Xft.h"
 
 #define X6_PORT 6006
@@ -22,6 +31,10 @@
 #define X11_MAX_GCS 128
 #define X11_MAX_PIXMAPS 256
 #define X11_MAX_FONTS 16
+#define X11_MAX_PICTURES 256
+#define X11_MAX_DAMAGE 256
+#define X11_MAX_COMPOSITE_REDIRECTS 128
+#define X11_MAX_SHAPE_WINDOWS 256
 #define X11_MAX_SELECTIONS 16
 #define X11_MAX_EVENTS 128
 #define X11_X6_ANY_MODIFIER (1U << 15)
@@ -188,6 +201,50 @@ struct x11_font_state {
   int width;  /* For monospace fonts */
 };
 
+struct x11_picture_state {
+  int in_use;
+  Picture id;
+  Drawable drawable;
+  XRenderPictFormat format;
+};
+
+struct x11_damage_state {
+  int in_use;
+  Damage id;
+  Drawable drawable;
+  int level;
+};
+
+struct x11_composite_redirect_state {
+  int in_use;
+  Window w;
+  int update;
+};
+
+struct x11_shape_state {
+  int in_use;
+  Window w;
+  Bool bounding_shaped;
+  int x_bounding;
+  int y_bounding;
+  unsigned int w_bounding;
+  unsigned int h_bounding;
+  Bool clip_shaped;
+  int x_clip;
+  int y_clip;
+  unsigned int w_clip;
+  unsigned int h_clip;
+  unsigned long event_mask;
+};
+
+struct _XOC {
+  Font font_id;
+  char *font_name;
+  XFontStruct font;
+  XFontStruct *font_list_entry[1];
+  char *font_name_list_entry[1];
+};
+
 /* Color allocation cache */
 #define X11_MAX_COLORS 256
 struct x11_color_entry {
@@ -205,6 +262,12 @@ static unsigned long g_next_font = 1;
 static struct x11_gc_state g_gcs[X11_MAX_GCS];
 static struct x11_pixmap_state g_pixmaps[X11_MAX_PIXMAPS];
 static unsigned long g_next_pixmap = 2;  // Start after window IDs
+static struct x11_picture_state g_pictures[X11_MAX_PICTURES];
+static unsigned long g_next_picture = 1;
+static struct x11_damage_state g_damages[X11_MAX_DAMAGE];
+static unsigned long g_next_damage = 1;
+static struct x11_composite_redirect_state g_composite_redirects[X11_MAX_COMPOSITE_REDIRECTS];
+static struct x11_shape_state g_shapes[X11_MAX_SHAPE_WINDOWS];
 static struct x11_pixmap_state *x11_find_pixmap(Pixmap pm);
 
 static int
@@ -503,6 +566,139 @@ x11_find_pixmap(Pixmap pm)
   return 0;
 }
 
+static struct x11_picture_state *
+x11_find_picture(Picture pic)
+{
+  int i;
+  for (i = 0; i < X11_MAX_PICTURES; i++) {
+    if (g_pictures[i].in_use && g_pictures[i].id == pic)
+      return &g_pictures[i];
+  }
+  return 0;
+}
+
+static struct x11_picture_state *
+x11_alloc_picture(Drawable d, const XRenderPictFormat *format)
+{
+  int i;
+
+  for (i = 0; i < X11_MAX_PICTURES; i++) {
+    if (!g_pictures[i].in_use) {
+      memset(&g_pictures[i], 0, sizeof(g_pictures[i]));
+      g_pictures[i].in_use = 1;
+      g_pictures[i].id = g_next_picture++;
+      g_pictures[i].drawable = d;
+      if (format)
+        g_pictures[i].format = *format;
+      return &g_pictures[i];
+    }
+  }
+  return 0;
+}
+
+static struct x11_damage_state *
+x11_find_damage(Damage id)
+{
+  int i;
+  for (i = 0; i < X11_MAX_DAMAGE; i++) {
+    if (g_damages[i].in_use && g_damages[i].id == id)
+      return &g_damages[i];
+  }
+  return 0;
+}
+
+static struct x11_damage_state *
+x11_alloc_damage(Drawable drawable, int level)
+{
+  int i;
+  for (i = 0; i < X11_MAX_DAMAGE; i++) {
+    if (!g_damages[i].in_use) {
+      memset(&g_damages[i], 0, sizeof(g_damages[i]));
+      g_damages[i].in_use = 1;
+      g_damages[i].id = g_next_damage++;
+      g_damages[i].drawable = drawable;
+      g_damages[i].level = level;
+      return &g_damages[i];
+    }
+  }
+  return 0;
+}
+
+static struct x11_composite_redirect_state *
+x11_find_composite_redirect(Window w)
+{
+  int i;
+  for (i = 0; i < X11_MAX_COMPOSITE_REDIRECTS; i++) {
+    if (g_composite_redirects[i].in_use && g_composite_redirects[i].w == w)
+      return &g_composite_redirects[i];
+  }
+  return 0;
+}
+
+static struct x11_composite_redirect_state *
+x11_alloc_composite_redirect(Window w, int update)
+{
+  int i;
+  struct x11_composite_redirect_state *slot;
+
+  slot = x11_find_composite_redirect(w);
+  if (slot) {
+    slot->update = update;
+    return slot;
+  }
+
+  for (i = 0; i < X11_MAX_COMPOSITE_REDIRECTS; i++) {
+    if (!g_composite_redirects[i].in_use) {
+      g_composite_redirects[i].in_use = 1;
+      g_composite_redirects[i].w = w;
+      g_composite_redirects[i].update = update;
+      return &g_composite_redirects[i];
+    }
+  }
+  return 0;
+}
+
+static struct x11_shape_state *
+x11_find_shape(Window w)
+{
+  int i;
+  for (i = 0; i < X11_MAX_SHAPE_WINDOWS; i++) {
+    if (g_shapes[i].in_use && g_shapes[i].w == w)
+      return &g_shapes[i];
+  }
+  return 0;
+}
+
+static struct x11_shape_state *
+x11_alloc_shape(Display *display, Window w)
+{
+  int i;
+  int ww;
+  int wh;
+
+  struct x11_shape_state *s = x11_find_shape(w);
+  if (s)
+    return s;
+
+  for (i = 0; i < X11_MAX_SHAPE_WINDOWS; i++) {
+    if (!g_shapes[i].in_use) {
+      memset(&g_shapes[i], 0, sizeof(g_shapes[i]));
+      g_shapes[i].in_use = 1;
+      g_shapes[i].w = w;
+      ww = 0;
+      wh = 0;
+      if (display && x11_drawable_size(display, w, &ww, &wh) == 0) {
+        g_shapes[i].w_bounding = (unsigned int)ww;
+        g_shapes[i].h_bounding = (unsigned int)wh;
+        g_shapes[i].w_clip = (unsigned int)ww;
+        g_shapes[i].h_clip = (unsigned int)wh;
+      }
+      return &g_shapes[i];
+    }
+  }
+  return 0;
+}
+
 static struct x11_pixmap_state *
 x11_alloc_pixmap(unsigned int width, unsigned int height, unsigned int depth)
 {
@@ -656,6 +852,44 @@ x11_alloc_font(const char *name)
     }
   }
   return 0;
+}
+
+static void
+x11_fill_font_struct(XFontStruct *out, const struct x11_font_state *fs)
+{
+  if (!out || !fs)
+    return;
+  memset(out, 0, sizeof(*out));
+  out->fid = fs->id;
+  out->ascent = fs->ascent;
+  out->descent = fs->descent;
+  out->max_bounds.width = fs->width;
+}
+
+static const char *
+x11_pick_fontset_name(const char *base_font_name_list)
+{
+  static char chosen[128];
+  int i;
+
+  if (!base_font_name_list || !*base_font_name_list)
+    return "fixed";
+
+  i = 0;
+  while (base_font_name_list[i] &&
+         base_font_name_list[i] != ',' &&
+         base_font_name_list[i] != ';' &&
+         i < (int)sizeof(chosen) - 1) {
+    chosen[i] = base_font_name_list[i];
+    i++;
+  }
+  while (i > 0 && (chosen[i - 1] == ' ' || chosen[i - 1] == '\t'))
+    i--;
+  chosen[i] = '\0';
+
+  if (i == 0)
+    return "fixed";
+  return chosen;
 }
 
 static int x11_read_line(int fd, char *line, int maxlen);
@@ -2980,12 +3214,7 @@ XFontStruct *XLoadQueryFont(Display *display, const char *name) {
     fs->in_use = 0;
     return 0;
   }
-  
-  memset(fs_out, 0, sizeof(*fs_out));
-  fs_out->fid = fs->id;
-  fs_out->ascent = fs->ascent;
-  fs_out->descent = fs->descent;
-  fs_out->max_bounds.width = fs->width;
+  x11_fill_font_struct(fs_out, fs);
   
   return fs_out;
 }
@@ -3003,14 +3232,97 @@ XFontStruct *XQueryFont(Display *display, XID fid) {
   fs_out = (XFontStruct *)malloc(sizeof(*fs_out));
   if (!fs_out)
     return 0;
-  
-  memset(fs_out, 0, sizeof(*fs_out));
-  fs_out->fid = fs->id;
-  fs_out->ascent = fs->ascent;
-  fs_out->descent = fs->descent;
-  fs_out->max_bounds.width = fs->width;
+  x11_fill_font_struct(fs_out, fs);
   
   return fs_out;
+}
+
+int XFreeFont(Display *display, XFontStruct *font_struct) {
+  struct x11_font_state *fs;
+
+  (void)display;
+  if (!font_struct)
+    return 0;
+
+  fs = x11_find_font(font_struct->fid);
+  if (fs)
+    fs->in_use = 0;
+  free(font_struct);
+  return 0;
+}
+
+XFontSet XCreateFontSet(Display *display, const char *base_font_name_list,
+                        char ***missing_charset_list_return,
+                        int *missing_charset_count_return,
+                        char **def_string_return) {
+  struct x11_font_state *fs;
+  struct _XOC *oc;
+  const char *picked;
+
+  (void)display;
+
+  if (missing_charset_list_return)
+    *missing_charset_list_return = 0;
+  if (missing_charset_count_return)
+    *missing_charset_count_return = 0;
+  if (def_string_return)
+    *def_string_return = 0;
+
+  picked = x11_pick_fontset_name(base_font_name_list);
+  fs = x11_alloc_font(picked);
+  if (!fs)
+    return 0;
+
+  oc = (struct _XOC *)malloc(sizeof(*oc));
+  if (!oc) {
+    fs->in_use = 0;
+    return 0;
+  }
+  memset(oc, 0, sizeof(*oc));
+
+  oc->font_id = fs->id;
+  oc->font_name = strdup(picked);
+  if (!oc->font_name) {
+    fs->in_use = 0;
+    free(oc);
+    return 0;
+  }
+
+  x11_fill_font_struct(&oc->font, fs);
+  oc->font_list_entry[0] = &oc->font;
+  oc->font_name_list_entry[0] = oc->font_name;
+  return (XFontSet)oc;
+}
+
+int XFontsOfFontSet(XFontSet font_set, XFontStruct ***font_struct_list_return,
+                    char ***font_name_list_return) {
+  struct _XOC *oc;
+
+  oc = (struct _XOC *)font_set;
+  if (!oc)
+    return 0;
+
+  if (font_struct_list_return)
+    *font_struct_list_return = oc->font_list_entry;
+  if (font_name_list_return)
+    *font_name_list_return = oc->font_name_list_entry;
+  return 1;
+}
+
+void XFreeFontSet(Display *display, XFontSet font_set) {
+  struct _XOC *oc;
+  struct x11_font_state *fs;
+
+  (void)display;
+  oc = (struct _XOC *)font_set;
+  if (!oc)
+    return;
+
+  fs = x11_find_font(oc->font_id);
+  if (fs)
+    fs->in_use = 0;
+  free(oc->font_name);
+  free(oc);
 }
 
 int XUnloadFont(Display *display, Font font) {
@@ -3883,6 +4195,786 @@ void XftTextExtentsUtf8(Display *display, XftFont *font, const FcChar8 *string, 
     extents->xOff = len * cw;
     extents->yOff = 0;
   }
+}
+
+XRenderPictFormat *XRenderFindVisualFormat(Display *display, Visual *visual) {
+  static XRenderPictFormat fmt;
+  (void)visual;
+
+  memset(&fmt, 0, sizeof(fmt));
+  fmt.type = 0;
+  fmt.depth = display ? display->depth : 24;
+  fmt.colormap = 1;
+  return &fmt;
+}
+
+XRenderPictFormat *XRenderFindStandardFormat(Display *display, int format) {
+  static XRenderPictFormat argb32;
+  static XRenderPictFormat rgb24;
+
+  (void)display;
+
+  memset(&argb32, 0, sizeof(argb32));
+  argb32.type = PictStandardARGB32;
+  argb32.depth = 32;
+  argb32.colormap = 1;
+
+  memset(&rgb24, 0, sizeof(rgb24));
+  rgb24.type = PictStandardRGB24;
+  rgb24.depth = 24;
+  rgb24.colormap = 1;
+
+  if (format == PictStandardARGB32)
+    return &argb32;
+  if (format == PictStandardRGB24)
+    return &rgb24;
+  return 0;
+}
+
+Picture XRenderCreatePicture(Display *display, Drawable drawable,
+                             XRenderPictFormat *format,
+                             unsigned long valuemask,
+                             XRenderPictureAttributes *attributes) {
+  struct x11_picture_state *ps;
+
+  (void)display;
+  (void)valuemask;
+  (void)attributes;
+
+  ps = x11_alloc_picture(drawable, format);
+  if (!ps)
+    return 0;
+  return ps->id;
+}
+
+void XRenderFreePicture(Display *display, Picture picture) {
+  struct x11_picture_state *ps;
+
+  (void)display;
+  ps = x11_find_picture(picture);
+  if (!ps)
+    return;
+  memset(ps, 0, sizeof(*ps));
+}
+
+void XRenderComposite(Display *display, int op,
+                      Picture src, Picture mask, Picture dst,
+                      int src_x, int src_y,
+                      int mask_x, int mask_y,
+                      int dst_x, int dst_y,
+                      unsigned int width, unsigned int height) {
+  struct x11_picture_state *srcp;
+  struct x11_picture_state *dstp;
+  GC gc;
+
+  (void)mask;
+  (void)mask_x;
+  (void)mask_y;
+
+  if (!display || width == 0 || height == 0)
+    return;
+
+  srcp = x11_find_picture(src);
+  dstp = x11_find_picture(dst);
+  if (!srcp || !dstp)
+    return;
+
+  gc = x11_xft_gc(display, dstp->drawable);
+  if (!gc)
+    return;
+
+  if (op == PictOpSrc || op == PictOpOver) {
+    XCopyArea(display, srcp->drawable, dstp->drawable, gc,
+              src_x, src_y, width, height, dst_x, dst_y);
+  }
+}
+
+void XRenderFillRectangle(Display *display, int op, Picture dst,
+                          const XRenderColor *color,
+                          int x, int y,
+                          unsigned int width, unsigned int height) {
+  struct x11_picture_state *dstp;
+  GC gc;
+  unsigned long pixel;
+
+  (void)op;
+
+  if (!display || !color || width == 0 || height == 0)
+    return;
+
+  dstp = x11_find_picture(dst);
+  if (!dstp)
+    return;
+
+  gc = x11_xft_gc(display, dstp->drawable);
+  if (!gc)
+    return;
+
+  pixel = ((unsigned long)(color->red >> 8) << 16) |
+          ((unsigned long)(color->green >> 8) << 8) |
+          (unsigned long)(color->blue >> 8);
+  XSetForeground(display, gc, pixel);
+  XFillRectangle(display, dstp->drawable, gc, x, y, width, height);
+}
+
+void XRenderSetPictureFilter(Display *display, Picture picture,
+                             const char *filter,
+                             XFixed *params, int nparams) {
+  (void)display;
+  (void)picture;
+  (void)filter;
+  (void)params;
+  (void)nparams;
+}
+
+void XRenderSetPictureTransform(Display *display, Picture picture,
+                                const XTransform *transform) {
+  (void)display;
+  (void)picture;
+  (void)transform;
+}
+
+Status XCompositeQueryExtension(Display *display,
+                                int *event_base_return,
+                                int *error_base_return) {
+  (void)display;
+  if (event_base_return)
+    *event_base_return = 0;
+  if (error_base_return)
+    *error_base_return = 0;
+  return 1;
+}
+
+Status XCompositeQueryVersion(Display *display,
+                              int *major_version_return,
+                              int *minor_version_return) {
+  (void)display;
+  if (major_version_return)
+    *major_version_return = 0;
+  if (minor_version_return)
+    *minor_version_return = 4;
+  return 1;
+}
+
+void XCompositeRedirectWindow(Display *display, Window w, int update) {
+  (void)display;
+  (void)x11_alloc_composite_redirect(w, update);
+}
+
+void XCompositeUnredirectWindow(Display *display, Window w, int update) {
+  struct x11_composite_redirect_state *slot;
+
+  (void)display;
+  (void)update;
+  slot = x11_find_composite_redirect(w);
+  if (!slot)
+    return;
+  memset(slot, 0, sizeof(*slot));
+}
+
+Pixmap XCompositeNameWindowPixmap(Display *display, Window w) {
+  struct x11_pixmap_state *pm;
+  int ww;
+  int wh;
+
+  if (!display)
+    return 0;
+  if (x11_drawable_size(display, w, &ww, &wh) < 0)
+    return 0;
+  if (ww <= 0 || wh <= 0)
+    return 0;
+
+  pm = x11_alloc_pixmap((unsigned int)ww, (unsigned int)wh,
+                        (unsigned int)(display->depth > 0 ? display->depth : 24));
+  if (!pm)
+    return 0;
+  return pm->id;
+}
+
+Status XDamageQueryExtension(Display *display,
+                             int *event_base_return,
+                             int *error_base_return) {
+  (void)display;
+  if (event_base_return)
+    *event_base_return = 0;
+  if (error_base_return)
+    *error_base_return = 0;
+  return 1;
+}
+
+Status XDamageQueryVersion(Display *display,
+                           int *major_version_return,
+                           int *minor_version_return) {
+  (void)display;
+  if (major_version_return)
+    *major_version_return = 1;
+  if (minor_version_return)
+    *minor_version_return = 1;
+  return 1;
+}
+
+Damage XDamageCreate(Display *display, Drawable drawable, int level) {
+  struct x11_damage_state *dmg;
+
+  (void)display;
+  dmg = x11_alloc_damage(drawable, level);
+  if (!dmg)
+    return 0;
+  return dmg->id;
+}
+
+void XDamageDestroy(Display *display, Damage damage) {
+  struct x11_damage_state *dmg;
+
+  (void)display;
+  dmg = x11_find_damage(damage);
+  if (!dmg)
+    return;
+  memset(dmg, 0, sizeof(*dmg));
+}
+
+void XDamageSubtract(Display *display, Damage damage,
+                     Region repair, Region parts) {
+  struct x11_damage_state *dmg;
+
+  (void)display;
+  (void)repair;
+  (void)parts;
+  dmg = x11_find_damage(damage);
+  if (!dmg)
+    return;
+}
+
+Status XRRQueryExtension(Display *display, int *event_base_return,
+                         int *error_base_return) {
+  (void)display;
+  if (event_base_return)
+    *event_base_return = 0;
+  if (error_base_return)
+    *error_base_return = 0;
+  return 1;
+}
+
+Status XRRQueryVersion(Display *display, int *major_version_return,
+                       int *minor_version_return) {
+  (void)display;
+  if (major_version_return)
+    *major_version_return = 1;
+  if (minor_version_return)
+    *minor_version_return = 5;
+  return 1;
+}
+
+XRRScreenResources *XRRGetScreenResources(Display *display, Window window) {
+  XRRScreenResources *res;
+
+  (void)window;
+  if (!display)
+    return 0;
+
+  res = (XRRScreenResources *)malloc(sizeof(*res));
+  if (!res)
+    return 0;
+  memset(res, 0, sizeof(*res));
+
+  res->ncrtc = 1;
+  res->noutput = 1;
+  res->nmode = 1;
+  res->crtcs = (RRCrtc *)malloc(sizeof(RRCrtc));
+  res->outputs = (RROutput *)malloc(sizeof(RROutput));
+  res->modes = (RRMode *)malloc(sizeof(RRMode));
+  if (!res->crtcs || !res->outputs || !res->modes) {
+    free(res->crtcs);
+    free(res->outputs);
+    free(res->modes);
+    free(res);
+    return 0;
+  }
+
+  res->crtcs[0] = 1;
+  res->outputs[0] = 1;
+  res->modes[0] = 1;
+  return res;
+}
+
+void XRRFreeScreenResources(XRRScreenResources *resources) {
+  if (!resources)
+    return;
+  free(resources->crtcs);
+  free(resources->outputs);
+  free(resources->modes);
+  free(resources);
+}
+
+XRROutputInfo *XRRGetOutputInfo(Display *display,
+                                XRRScreenResources *resources,
+                                RROutput output) {
+  XRROutputInfo *info;
+  const char *name = "Virtual-1";
+
+  (void)display;
+  (void)resources;
+  (void)output;
+
+  info = (XRROutputInfo *)malloc(sizeof(*info));
+  if (!info)
+    return 0;
+  memset(info, 0, sizeof(*info));
+
+  info->nameLen = (int)strlen(name);
+  info->name = strdup(name);
+  if (!info->name) {
+    free(info);
+    return 0;
+  }
+  info->crtc = 1;
+  info->ncrtc = 1;
+  info->crtcs = (RRCrtc *)malloc(sizeof(RRCrtc));
+  info->nmode = 1;
+  info->npreferred = 1;
+  info->modes = (RRMode *)malloc(sizeof(RRMode));
+  if (!info->crtcs || !info->modes) {
+    free(info->name);
+    free(info->crtcs);
+    free(info->modes);
+    free(info);
+    return 0;
+  }
+  info->crtcs[0] = 1;
+  info->modes[0] = 1;
+  return info;
+}
+
+void XRRFreeOutputInfo(XRROutputInfo *output_info) {
+  if (!output_info)
+    return;
+  free(output_info->name);
+  free(output_info->crtcs);
+  free(output_info->clones);
+  free(output_info->modes);
+  free(output_info);
+}
+
+XRRCrtcInfo *XRRGetCrtcInfo(Display *display,
+                            XRRScreenResources *resources,
+                            RRCrtc crtc) {
+  XRRCrtcInfo *info;
+
+  (void)resources;
+  (void)crtc;
+  if (!display)
+    return 0;
+
+  info = (XRRCrtcInfo *)malloc(sizeof(*info));
+  if (!info)
+    return 0;
+  memset(info, 0, sizeof(*info));
+
+  info->x = 0;
+  info->y = 0;
+  info->width = (unsigned int)(display->width > 0 ? display->width : 1024);
+  info->height = (unsigned int)(display->height > 0 ? display->height : 768);
+  info->mode = 1;
+  info->noutput = 1;
+  info->outputs = (RROutput *)malloc(sizeof(RROutput));
+  if (!info->outputs) {
+    free(info);
+    return 0;
+  }
+  info->outputs[0] = 1;
+  return info;
+}
+
+void XRRFreeCrtcInfo(XRRCrtcInfo *crtc_info) {
+  if (!crtc_info)
+    return;
+  free(crtc_info->outputs);
+  free(crtc_info->possible);
+  free(crtc_info);
+}
+
+void XRRSelectInput(Display *display, Window window,
+                    int mask) {
+  (void)display;
+  (void)window;
+  (void)mask;
+}
+
+int XRRUpdateConfiguration(XEvent *event) {
+  (void)event;
+  return 1;
+}
+
+Status XShapeQueryExtension(Display *display,
+                            int *event_base_return,
+                            int *error_base_return) {
+  (void)display;
+  if (event_base_return)
+    *event_base_return = 0;
+  if (error_base_return)
+    *error_base_return = 0;
+  return 1;
+}
+
+Status XShapeQueryVersion(Display *display,
+                          int *major_version_return,
+                          int *minor_version_return) {
+  (void)display;
+  if (major_version_return)
+    *major_version_return = 1;
+  if (minor_version_return)
+    *minor_version_return = 1;
+  return 1;
+}
+
+void XShapeCombineMask(Display *display, Window dest, int dest_kind,
+                       int x_off, int y_off, Pixmap src, int op) {
+  struct x11_shape_state *s;
+
+  (void)op;
+  s = x11_alloc_shape(display, dest);
+  if (!s)
+    return;
+
+  if (dest_kind == ShapeBounding) {
+    s->bounding_shaped = src ? 1 : 0;
+    s->x_bounding = x_off;
+    s->y_bounding = y_off;
+  } else if (dest_kind == ShapeClip) {
+    s->clip_shaped = src ? 1 : 0;
+    s->x_clip = x_off;
+    s->y_clip = y_off;
+  }
+}
+
+void XShapeCombineShape(Display *display, Window dest, int dest_kind,
+                        int x_off, int y_off,
+                        Window src, int src_kind, int op) {
+  struct x11_shape_state *s;
+  struct x11_shape_state *ssrc;
+
+  (void)op;
+  s = x11_alloc_shape(display, dest);
+  if (!s)
+    return;
+
+  ssrc = x11_find_shape(src);
+  if (dest_kind == ShapeBounding) {
+    s->bounding_shaped = ssrc ? ssrc->bounding_shaped : 1;
+    s->x_bounding = x_off;
+    s->y_bounding = y_off;
+    if (ssrc && src_kind == ShapeBounding) {
+      s->w_bounding = ssrc->w_bounding;
+      s->h_bounding = ssrc->h_bounding;
+    }
+  } else if (dest_kind == ShapeClip) {
+    s->clip_shaped = ssrc ? ssrc->clip_shaped : 1;
+    s->x_clip = x_off;
+    s->y_clip = y_off;
+    if (ssrc && src_kind == ShapeClip) {
+      s->w_clip = ssrc->w_clip;
+      s->h_clip = ssrc->h_clip;
+    }
+  }
+}
+
+void XShapeCombineRectangles(Display *display, Window dest, int dest_kind,
+                             int x_off, int y_off,
+                             XRectangle *rectangles, int n_rectangles,
+                             int op, int ordering) {
+  struct x11_shape_state *s;
+  int i;
+  int minx;
+  int miny;
+  int maxx;
+  int maxy;
+
+  (void)op;
+  (void)ordering;
+
+  s = x11_alloc_shape(display, dest);
+  if (!s)
+    return;
+
+  if (!rectangles || n_rectangles <= 0) {
+    if (dest_kind == ShapeBounding)
+      s->bounding_shaped = 0;
+    else if (dest_kind == ShapeClip)
+      s->clip_shaped = 0;
+    return;
+  }
+
+  minx = x_off + rectangles[0].x;
+  miny = y_off + rectangles[0].y;
+  maxx = minx + rectangles[0].width;
+  maxy = miny + rectangles[0].height;
+  for (i = 1; i < n_rectangles; i++) {
+    int rx = x_off + rectangles[i].x;
+    int ry = y_off + rectangles[i].y;
+    int rx2 = rx + rectangles[i].width;
+    int ry2 = ry + rectangles[i].height;
+    if (rx < minx) minx = rx;
+    if (ry < miny) miny = ry;
+    if (rx2 > maxx) maxx = rx2;
+    if (ry2 > maxy) maxy = ry2;
+  }
+
+  if (dest_kind == ShapeBounding) {
+    s->bounding_shaped = 1;
+    s->x_bounding = minx;
+    s->y_bounding = miny;
+    s->w_bounding = (unsigned int)((maxx > minx) ? (maxx - minx) : 0);
+    s->h_bounding = (unsigned int)((maxy > miny) ? (maxy - miny) : 0);
+  } else if (dest_kind == ShapeClip) {
+    s->clip_shaped = 1;
+    s->x_clip = minx;
+    s->y_clip = miny;
+    s->w_clip = (unsigned int)((maxx > minx) ? (maxx - minx) : 0);
+    s->h_clip = (unsigned int)((maxy > miny) ? (maxy - miny) : 0);
+  }
+}
+
+Status XShapeQueryExtents(Display *display, Window window,
+                          Bool *bounding_shaped,
+                          int *x_bounding, int *y_bounding,
+                          unsigned int *w_bounding,
+                          unsigned int *h_bounding,
+                          Bool *clip_shaped,
+                          int *x_clip, int *y_clip,
+                          unsigned int *w_clip,
+                          unsigned int *h_clip) {
+  struct x11_shape_state *s;
+  int ww;
+  int wh;
+
+  s = x11_find_shape(window);
+  ww = 0;
+  wh = 0;
+  if (!s && display && x11_drawable_size(display, window, &ww, &wh) == 0) {
+    if (w_bounding) *w_bounding = (unsigned int)ww;
+    if (h_bounding) *h_bounding = (unsigned int)wh;
+    if (w_clip) *w_clip = (unsigned int)ww;
+    if (h_clip) *h_clip = (unsigned int)wh;
+  }
+
+  if (bounding_shaped) *bounding_shaped = s ? s->bounding_shaped : 0;
+  if (x_bounding) *x_bounding = s ? s->x_bounding : 0;
+  if (y_bounding) *y_bounding = s ? s->y_bounding : 0;
+  if (w_bounding && s) *w_bounding = s->w_bounding;
+  if (h_bounding && s) *h_bounding = s->h_bounding;
+
+  if (clip_shaped) *clip_shaped = s ? s->clip_shaped : 0;
+  if (x_clip) *x_clip = s ? s->x_clip : 0;
+  if (y_clip) *y_clip = s ? s->y_clip : 0;
+  if (w_clip && s) *w_clip = s->w_clip;
+  if (h_clip && s) *h_clip = s->h_clip;
+  return 1;
+}
+
+void XShapeSelectInput(Display *display, Window window,
+                       unsigned long mask) {
+  struct x11_shape_state *s;
+
+  s = x11_alloc_shape(display, window);
+  if (!s)
+    return;
+  s->event_mask = mask;
+}
+
+Status XineramaQueryExtension(Display *display,
+                              int *event_base_return,
+                              int *error_base_return) {
+  (void)display;
+  if (event_base_return)
+    *event_base_return = 0;
+  if (error_base_return)
+    *error_base_return = 0;
+  return 1;
+}
+
+Status XineramaQueryVersion(Display *display,
+                            int *major_version_return,
+                            int *minor_version_return) {
+  (void)display;
+  if (major_version_return)
+    *major_version_return = 1;
+  if (minor_version_return)
+    *minor_version_return = 1;
+  return 1;
+}
+
+Bool XineramaIsActive(Display *display) {
+  (void)display;
+  return True;
+}
+
+XineramaScreenInfo *XineramaQueryScreens(Display *display, int *number) {
+  XineramaScreenInfo *info;
+  int w;
+  int h;
+
+  w = (display && display->width > 0) ? display->width : 1024;
+  h = (display && display->height > 0) ? display->height : 768;
+
+  info = (XineramaScreenInfo *)malloc(sizeof(*info));
+  if (!info) {
+    if (number)
+      *number = 0;
+    return 0;
+  }
+  memset(info, 0, sizeof(*info));
+  info->screen_number = 0;
+  info->x_org = 0;
+  info->y_org = 0;
+  info->width = (short)w;
+  info->height = (short)h;
+  if (number)
+    *number = 1;
+  return info;
+}
+
+Bool XFixesQueryExtension(Display *display, int *event_base_return,
+                          int *error_base_return) {
+  (void)display;
+  if (event_base_return)
+    *event_base_return = 0;
+  if (error_base_return)
+    *error_base_return = 0;
+  return True;
+}
+
+Status XFixesQueryVersion(Display *display, int *major_version_return,
+                          int *minor_version_return) {
+  (void)display;
+  if (major_version_return)
+    *major_version_return = 5;
+  if (minor_version_return)
+    *minor_version_return = 0;
+  return 1;
+}
+
+Bool XShmQueryExtension(Display *display) {
+  (void)display;
+  return False;
+}
+
+XImage *XShmCreateImage(Display *display, Visual *visual, unsigned int depth,
+                        int format, char *data,
+                        XShmSegmentInfo *shminfo,
+                        unsigned int width, unsigned int height) {
+  char *buf;
+
+  buf = data;
+  if (!buf && shminfo)
+    buf = shminfo->shmaddr;
+  return XCreateImage(display, visual, depth, format, 0, buf,
+                      width, height, 32, 0);
+}
+
+Bool XShmAttach(Display *display, XShmSegmentInfo *shminfo) {
+  (void)display;
+  if (!shminfo)
+    return False;
+  return True;
+}
+
+Bool XShmDetach(Display *display, XShmSegmentInfo *shminfo) {
+  (void)display;
+  (void)shminfo;
+  return True;
+}
+
+Bool XShmPutImage(Display *display, Drawable d, GC gc, XImage *image,
+                  int src_x, int src_y, int dst_x, int dst_y,
+                  unsigned int src_width, unsigned int src_height,
+                  Bool send_event) {
+  (void)send_event;
+  return XPutImage(display, d, gc, image,
+                   src_x, src_y, dst_x, dst_y,
+                   src_width, src_height) == 0;
+}
+
+Bool XShmGetImage(Display *display, Drawable d, XImage *image,
+                  int x, int y, unsigned long plane_mask) {
+  XImage *tmp;
+  size_t nbytes;
+
+  if (!display || !image || image->width <= 0 || image->height <= 0)
+    return False;
+
+  tmp = XGetImage(display, d, x, y,
+                  (unsigned int)image->width,
+                  (unsigned int)image->height,
+                  plane_mask, image->format);
+  if (!tmp)
+    return False;
+  if (!image->data || !tmp->data) {
+    XDestroyImage(tmp);
+    return False;
+  }
+
+  nbytes = (size_t)tmp->bytes_per_line * (size_t)tmp->height;
+  memmove(image->data, tmp->data, nbytes);
+  XDestroyImage(tmp);
+  return True;
+}
+
+Status XResQueryClientIds(Display *display, long num_specs,
+                          XResClientIdSpec *client_specs,
+                          long *num_ids, XResClientIdValue **client_ids) {
+  XResClientIdValue *out;
+  long pid;
+
+  (void)display;
+
+  if (!num_ids || !client_ids)
+    return 0;
+  *num_ids = 0;
+  *client_ids = 0;
+
+  if (num_specs < 0)
+    return 0;
+  if (num_specs == 0)
+    return 1;
+
+  out = (XResClientIdValue *)malloc((size_t)num_specs * sizeof(*out));
+  if (!out)
+    return 0;
+  memset(out, 0, (size_t)num_specs * sizeof(*out));
+
+  pid = (long)getpid();
+  out[0].spec = client_specs ? client_specs[0].spec : 0;
+  out[0].length = (long)sizeof(long);
+  out[0].value = (unsigned char *)malloc(sizeof(long));
+  if (!out[0].value) {
+    free(out);
+    return 0;
+  }
+  memmove(out[0].value, &pid, sizeof(long));
+
+  *num_ids = 1;
+  *client_ids = out;
+  return 1;
+}
+
+Status XResGetClientPid(Display *display, XID resource_base,
+                        long *pid_return) {
+  (void)display;
+  (void)resource_base;
+  if (!pid_return)
+    return 0;
+  *pid_return = (long)getpid();
+  return 1;
+}
+
+void XResClientIdsDestroy(long num_ids, XResClientIdValue *client_ids) {
+  long i;
+
+  if (!client_ids)
+    return;
+  for (i = 0; i < num_ids; i++)
+    free(client_ids[i].value);
+  free(client_ids);
 }
 
 FcCharSet *FcCharSetCreate(void) {

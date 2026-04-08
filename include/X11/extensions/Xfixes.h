@@ -14,5 +14,7 @@ typedef struct {
 
 Bool XFixesQueryExtension(Display *display, int *event_base_return,
                           int *error_base_return);
+Status XFixesQueryVersion(Display *display, int *major_version_return,
+                          int *minor_version_return);
 
 #endif

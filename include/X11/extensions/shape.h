@@ -30,6 +30,13 @@ typedef struct {
   Bool shaped;
 } XShapeEvent;
 
+Status XShapeQueryExtension(Display *display,
+                            int *event_base_return,
+                            int *error_base_return);
+Status XShapeQueryVersion(Display *display,
+                          int *major_version_return,
+                          int *minor_version_return);
+
 void XShapeCombineMask(Display *display, Window dest, int dest_kind,
                        int x_off, int y_off, Pixmap src, int op);
 void XShapeCombineShape(Display *display, Window dest, int dest_kind,

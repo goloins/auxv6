@@ -206,6 +206,25 @@ Exit criteria:
 
 - IceWM can run without extension-symbol crashes and can render/tray reasonably.
 
+### Tranche 2 Utility Track: Xorg/Xenocara runtime utilities
+
+Target utilities to stage as X extension behavior hardens:
+
+- RandR: xrandr
+- Render/composite diagnostics: xdpyinfo, xprop, xwininfo
+- Resource manager path: xrdb
+- Event/protocol inspection: xev, xlsclients
+
+Directive-aligned integration instructions for new binaries/utilities:
+
+- Treat X utilities as base-system tools, not optional ports.
+- Implement/build them in-tree under user/ and wire them directly into Makefile user program targets.
+- Add each utility to `UPROGS` so ext2-root staging picks it up as part of the base image flow.
+- Ensure `make clean` removes produced binaries/objects and add `.gitignore` entries for new top-level binaries.
+- Add man pages under `targetfs/usr/share/man/` for each new utility.
+- Stage/test through ext2-root flow (`tools/stage-ext2-root.sh` and ext2 targets), not xv6 mkfs.
+- Keep `docs/Prompt-Directive.md` policy as hard gate: xv6 mkfs is deprecated/legacy-gated and must not be used in normal flows.
+
 ### Tranche 3: Imlib2 static port
 
 - Port full Imlib2 needed by IceWM with static linkage model.
@@ -220,11 +239,16 @@ Exit criteria:
 - [x] Tranche 0.1: Extension/session/resource header set added.
 - [x] Tranche 0.2: Missing declarations added for tranche-1 symbols.
 - [x] Tranche 1.1: XImage core implemented and build-validated.
-- [ ] Tranche 1.2: FontSet primitives implemented and tested.
-- [ ] Tranche 2.1: Render extension minimum path wired.
-- [ ] Tranche 2.2: Composite + Damage minimum path wired.
-- [ ] Tranche 2.3: Shape extension minimum path wired.
-- [ ] Tranche 2.4: RandR extension minimum path wired.
+- [x] Tranche 1.2: FontSet primitives implemented and build-validated.
+- [x] Tranche 2.1: Render extension minimum path wired.
+- [x] Tranche 2.2: Composite + Damage minimum path wired.
+- [x] Tranche 2.3: Shape extension minimum path wired.
+- [x] Tranche 2.4: RandR extension minimum path wired.
+- [ ] Tranche 2.F1: Extension event/fidelity semantics pass.
+- [ ] Tranche 2.F2: Extension backend/protocol fidelity pass in x6.
+- [ ] Utility Track U1: xrandr base-system integration.
+- [ ] Utility Track U2: xrdb + xprop + xwininfo base-system integration.
+- [ ] Utility Track U3: xdpyinfo + xev + xlsclients base-system integration.
 - [ ] Tranche 3.1: Imlib2 static build integrated.
 - [ ] Tranche 3.2: Imlib2 runtime paths validated with IceWM assets.
 
@@ -279,6 +303,70 @@ Delivered:
 	- XGetImage
 	- XPutImage
 - Added local client-side pixmap backing store in user/x11.c for pixmap image reads/writes.
+- Implemented Tranche 1.2 FontSet runtime in user/x11.c:
+	- XCreateFontSet
+	- XFontsOfFontSet
+	- XFreeFontSet
+	- XFreeFont
+	- Internal FontSet object now binds to existing font metrics/state.
+- Started Tranche 2.1 (XRender minimum viability) in user/x11.c:
+	- XRenderFindVisualFormat
+	- XRenderFindStandardFormat
+	- XRenderCreatePicture
+	- XRenderFreePicture
+	- XRenderComposite (minimum src/over path via existing XCopyArea)
+	- XRenderFillRectangle
+	- XRenderSetPictureFilter (no-op placeholder)
+	- XRenderSetPictureTransform (no-op placeholder)
+	- Added local picture-state tracking for render picture handles.
+- Started Tranche 2.2 (XComposite + XDamage minimum viability) in user/x11.c and extension headers:
+	- XCompositeQueryExtension
+	- XCompositeQueryVersion
+	- XCompositeRedirectWindow
+	- XCompositeUnredirectWindow
+	- XCompositeNameWindowPixmap
+	- XDamageQueryExtension
+	- XDamageQueryVersion
+	- XDamageCreate
+	- XDamageDestroy
+	- XDamageSubtract
+	- Added local damage and composite redirect state tracking.
+- Started Tranche 2.4 (XRandR minimum viability) in user/x11.c:
+	- XRRQueryExtension
+	- XRRQueryVersion
+	- XRRGetScreenResources
+	- XRRFreeScreenResources
+	- XRRGetOutputInfo
+	- XRRFreeOutputInfo
+	- XRRGetCrtcInfo
+	- XRRFreeCrtcInfo
+	- XRRSelectInput
+	- XRRUpdateConfiguration
+- Started Tranche 2.3 (XShape minimum viability) in user/x11.c:
+	- XShapeCombineMask
+	- XShapeCombineShape
+	- XShapeCombineRectangles
+	- XShapeQueryExtents
+	- XShapeSelectInput
+	- XShapeQueryExtension
+	- XShapeQueryVersion
+	- Added per-window shape-state tracking for bounding/clip extents and selected shape event mask.
+- Added extension-compat probe/runtime floors in user/x11.c:
+	- XineramaQueryExtension
+	- XineramaQueryVersion
+	- XineramaIsActive
+	- XineramaQueryScreens
+	- XFixesQueryExtension
+	- XFixesQueryVersion
+	- XShmQueryExtension
+	- XShmCreateImage
+	- XShmAttach
+	- XShmDetach
+	- XShmPutImage
+	- XShmGetImage
+	- XResQueryClientIds
+	- XResGetClientPid
+	- XResClientIdsDestroy
 
 Validation evidence:
 
@@ -286,11 +374,54 @@ Validation evidence:
 - Header smoke compile (all new headers included in one TU) -> success (exit 0).
 - Forced rebuild: make -B _st -> success (exit 0).
 - Forced rebuild: make -B _dwm -> success (exit 0).
+- Forced rebuild: make -B _st -> ST_EXIT:0 (post FontSet tranche).
+- Forced rebuild: make -B _x6 -> X6_EXIT:0 (post FontSet tranche).
+- Forced rebuild: make -B _st -> ST_EXIT:0 (post XRender tranche start).
+- Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post XRender tranche start).
+- Forced rebuild: make -B _x6 -> X6_EXIT:0 (post XRender tranche start).
+- Forced rebuild: make -B _st -> ST_EXIT:0 (post Composite/Damage tranche start).
+- Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post Composite/Damage tranche start).
+- Forced rebuild: make -B _x6 -> X6_EXIT:0 (post Composite/Damage tranche start).
+- Forced rebuild: make -B _st -> ST_EXIT:0 (post RandR tranche start).
+- Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post RandR tranche start).
+- Forced rebuild: make -B _st -> ST_EXIT:0 (post Shape tranche start).
+- Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post Shape tranche start).
+- Forced rebuild: make -B _x6 -> X6_EXIT:0 (post Shape tranche start).
+- Forced rebuild: make -B _st -> ST_EXIT:0 (post Xinerama/XFixes/Shape-query compatibility pass).
+- Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post Xinerama/XFixes/Shape-query compatibility pass).
+- Forced rebuild: make -B _x6 -> X6_EXIT:0 (post Xinerama/XFixes/Shape-query compatibility pass).
+- Forced rebuild: make -B _st -> ST_EXIT:0 (post XRes/XShm compatibility pass).
+- Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post XRes/XShm compatibility pass).
+- Forced rebuild: make -B _x6 -> X6_EXIT:0 (post XRes/XShm compatibility pass).
+- Forced rebuild: make -B _st -> ST_EXIT:0 (post XShm API expansion pass).
+- Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post XShm API expansion pass).
+- Forced rebuild: make -B _x6 -> X6_EXIT:0 (post XShm API expansion pass).
 - Declaration diff now only shows parser-noise tokens (XFV/XIV/XSV/XRectangle/XRenderColor), no real missing function declarations.
 
 Remaining in this iteration:
 
-- Move to Tranche 1.2 (FontSet runtime behavior and i18n text paths), then begin extension runtime slices in Tranche 2.
+- Complete Tranche 2.F1/F2 fidelity work: extension event semantics and x6 backend behavior alignment.
+- Continue providing X functionality needed by downstream image libraries (Imlib2 dependency path), without integrating Imlib2 itself yet.
+
+Current Tranche 2.1 status:
+
+- Complete for minimum path: shim-side symbol/runtime floor implemented.
+- Pending: protocol/backend fidelity and focused runtime validation with an IceWM workload.
+
+Current Tranche 2.2 status:
+
+- Complete for minimum path: shim-side symbol/runtime floor implemented.
+- Pending: backend behavior fidelity for redirected window content and damage event semantics.
+
+Current Tranche 2.4 status:
+
+- Complete for minimum path: shim-side symbol/runtime floor implemented.
+- Pending: mode/output modeling fidelity and event emission semantics.
+
+Current Tranche 2.3 status:
+
+- Complete for minimum path: shim-side symbol/runtime floor implemented.
+- Pending: backend/event-path fidelity for full shape notify semantics.
 
 ## Update Rules
 

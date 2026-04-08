@@ -10,6 +10,13 @@ typedef XID Damage;
 #define XDamageReportBoundingBox 2
 #define XDamageReportNonEmpty 3
 
+Status XDamageQueryExtension(Display *display,
+                             int *event_base_return,
+                             int *error_base_return);
+Status XDamageQueryVersion(Display *display,
+                           int *major_version_return,
+                           int *minor_version_return);
+
 Damage XDamageCreate(Display *display, Drawable drawable, int level);
 void XDamageDestroy(Display *display, Damage damage);
 void XDamageSubtract(Display *display, Damage damage,

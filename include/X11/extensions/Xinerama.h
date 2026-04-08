@@ -11,6 +11,12 @@ typedef struct {
   short height;
 } XineramaScreenInfo;
 
+Status XineramaQueryExtension(Display *display,
+                              int *event_base_return,
+                              int *error_base_return);
+Status XineramaQueryVersion(Display *display,
+                            int *major_version_return,
+                            int *minor_version_return);
 Bool XineramaIsActive(Display *display);
 XineramaScreenInfo *XineramaQueryScreens(Display *display, int *number);
 
