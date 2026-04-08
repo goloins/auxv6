@@ -897,6 +897,31 @@ int XDrawRectangle(Display *display, Drawable d, GC gc, int x, int y, unsigned i
   }
   return 0;
 }
+int XDrawString(Display *display, Drawable d, GC gc, int x, int y, const char *string, int length) {
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  struct x11_gc_state *gs;
+  unsigned int color;
+  int n;
+  int i;
+
+  if (!display || !string || length <= 0)
+    return 0;
+
+  n = length;
+  if (n > 700)
+    n = 700;
+  for (i = 0; i < n; i++) {
+    if (string[i] == '\n' || string[i] == '\r')
+      n = i;
+  }
+
+  gs = x11_find_gc(gc);
+  color = (unsigned int)(gs ? (gs->fg & 0x00ffffffUL) : 0x00ffffffU);
+  snprintf(cmd, sizeof(cmd), "DRAW_TEXT %u %d %d %u %d %.*s\n", (uint)d, x, y, color, n, n, string);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return -1;
+  return strncmp(line, "OK text", 7) == 0 ? 0 : -1;
+}
 int XCopyArea(Display *display, Drawable src, Drawable dest, GC gc, int src_x, int src_y, unsigned int width, unsigned int height, int dest_x, int dest_y) {
   (void)display; (void)src; (void)dest; (void)gc; (void)src_x; (void)src_y; (void)width; (void)height; (void)dest_x; (void)dest_y; return 0;
 }

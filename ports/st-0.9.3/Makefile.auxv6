@@ -1,13 +1,13 @@
-# Makefile.auxv6 - dwm 6.8 build for auxv6/x6
+# Makefile.auxv6 - st 0.9.3 build for auxv6/x6
 #
-# This file is intentionally separate from upstream Makefile so we can
-# iterate on auxv6/x6 integration without changing default host builds.
+# This lane mirrors ports/dwm-6.8/Makefile.auxv6 so we can iterate on
+# auxv6 integration independently of upstream host build defaults.
 
 ROOT ?= $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST))))../..)
-DWM_DIR := $(ROOT)/ports/dwm-6.8
-OUT := $(DWM_DIR)/_dwm
+ST_DIR := $(ROOT)/ports/st-0.9.3
+OUT := $(ST_DIR)/_st
 
-VERSION = 6.8
+VERSION = 0.9.3
 
 # Toolchain detection mirrors the repo root Makefile style.
 CROSS_ROOT ?= /opt/cross
@@ -39,33 +39,24 @@ LIBGCC := $(shell $(CC) -m32 -print-libgcc-file-name 2>/dev/null)
 # x6/X11 compatibility wiring.
 #
 # Expected model:
-# - Headers are provided under $(ROOT)/include/X11/... (or override X11INC)
-# - Libraries come from auxv6 userspace build output (or override X11LIB)
+# - Headers under $(ROOT)/include/X11/... (or override X11INC)
+# - Runtime symbols from auxv6 userspace object set (or override X11LIB)
 X11INC ?= $(ROOT)/include
 X11LIB ?= $(ROOT)/user
 
-# Keep defaults close to dwm upstream names; override as x6 shims land.
-XINERAMALIBS ?=
-XINERAMAFLAGS ?=
-FREETYPELIBS ?=
-FREETYPEINC ?=
-
-INCS := -I$(X11INC) -I$(FREETYPEINC) -I$(ROOT)/include -I$(ROOT)/include/posix -I$(ROOT)/include/posix/sys
-LIBS := $(XINERAMALIBS) $(FREETYPELIBS)
-
-CPPFLAGS := -D_DEFAULT_SOURCE -D_BSD_SOURCE -D_XOPEN_SOURCE=700L -DVERSION=\"$(VERSION)\" -DAUXV6 $(XINERAMAFLAGS)
+INCS := -I$(X11INC) -I$(ROOT)/include -I$(ROOT)/include/posix -I$(ROOT)/include/posix/sys
+CPPFLAGS := -DVERSION=\"$(VERSION)\" -D_XOPEN_SOURCE=600 -D_DEFAULT_SOURCE -DAUXV6
 CFLAGS := -fno-pic -static -fno-builtin -fno-strict-aliasing -O2 -Wall -MD -ggdb -m32 \
           -fno-omit-frame-pointer -nostdinc -fno-stack-protector -Wno-error \
           -std=c99 -pedantic -Wno-deprecated-declarations \
           $(INCS) $(CPPFLAGS)
 LDFLAGS := -N -e _start -Ttext 0 -m $(shell $(LD) -V 2>/dev/null | grep elf_i386 | head -1)
 
-SRC := $(DWM_DIR)/drw-auxv6.c $(DWM_DIR)/dwm.c $(DWM_DIR)/util.c
+SRC := $(ST_DIR)/st.c $(ST_DIR)/x.c
 OBJ := $(SRC:.c=.o)
 
 RUNTIME_OBJS := \
      $(ROOT)/user/x11.o \
-     $(ROOT)/user/user_font.o \
   $(ROOT)/user/ulib.o \
   $(ROOT)/user/string.o \
   $(ROOT)/user/errstr.o \
@@ -103,24 +94,24 @@ RUNTIME_OBJS := \
 
 .PHONY: all clean toolchain-check
 
-all: toolchain-check $(DWM_DIR)/config.h $(OUT)
+all: toolchain-check $(ST_DIR)/config.h $(OUT)
 
 toolchain-check:
 	@$(CC) -m32 -dM -E -x c /dev/null | grep -q '__i386__' || \
 		(echo "ERROR: $(CC) is not producing i386 output with -m32" >&2; exit 1)
 
-$(DWM_DIR)/config.h:
-	cp $(DWM_DIR)/config.def.h $@
+$(ST_DIR)/config.h:
+	cp $(ST_DIR)/config.def.h $@
 
-$(DWM_DIR)/%.o: $(DWM_DIR)/%.c $(DWM_DIR)/config.h
+$(ST_DIR)/%.o: $(ST_DIR)/%.c $(ST_DIR)/config.h
 	$(CC) -c $(CFLAGS) -o $@ $<
 
 $(RUNTIME_OBJS):
 	$(MAKE) -C $(ROOT) $(patsubst $(ROOT)/%,%,$@)
 
 $(OUT): $(OBJ) $(RUNTIME_OBJS)
-	$(LD) $(LDFLAGS) -o $@ $(RUNTIME_OBJS) $(OBJ) $(LIBS) $(LIBGCC)
-	$(OBJDUMP) -S $@ > $(DWM_DIR)/dwm-auxv6.asm || true
+	$(LD) $(LDFLAGS) -o $@ $(RUNTIME_OBJS) $(OBJ) $(LIBGCC)
+	$(OBJDUMP) -S $@ > $(ST_DIR)/st-auxv6.asm || true
 
 clean:
-	rm -f $(OBJ) $(OUT) $(DWM_DIR)/config.h $(SRC:.c=.d)
+	rm -f $(OBJ) $(OUT) $(ST_DIR)/config.h $(SRC:.c=.d)

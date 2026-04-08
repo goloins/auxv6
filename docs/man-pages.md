@@ -11,6 +11,7 @@ Generated: 2026-04-06
 | Utility | Man Page | Last Updated | Source Audited | Notes |
 |---|---|---|---|---|
 | abrowse | targetfs/usr/share/man/abrowse.md | 2026-04-03 | user/abrowse.c | basic terminal HTTP browser (text/html/markdown/plain) |
+| 6fetch | targetfs/usr/share/man/6fetch.md | 2026-04-07 | user/6fetch.c | compact screenfetch-style system summary (user/host/os/kernel/machine/uptime/memory) |
 | 6get | targetfs/usr/share/man/6get.md | 2026-04-02 | user/6get.c | source-derived usage/options; see docs/6get-http-transfer-notes.md |
 | ahcitest | targetfs/usr/share/man/ahcitest.md | 2026-04-02 | user/ahcitest.c | AHCI regression binary |
 | audioctl | targetfs/usr/share/man/audioctl.md | 2026-04-05 | user/audioctl.c | Stage-0 audio ioctl control/query utility |

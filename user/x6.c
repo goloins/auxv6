@@ -5,6 +5,7 @@
 #include "sys/ioctl.h"
 #include "graphics/drm_ioctls.h"
 #include "graphics/input_events.h"
+#include "graphics/user_font.h"
 #include "signal.h"
 #include "socket.h"
 #include "stdio.h"
@@ -176,17 +177,22 @@ static int
 x6_fb_write_pixel(int x, int y, uint pixel)
 {
   uint64_t off;
+  uint p;
 
   if(x6_fb.fd < 0)
     return -1;
   if(x < 0 || y < 0 || x >= x6_fb.width || y >= x6_fb.height)
     return -1;
 
+  p = pixel & 0x00ffffffU;
+
   off = (uint64_t)y * (uint64_t)x6_fb.stride + (uint64_t)x * 4ULL;
   if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) < 0)
     return -1;
-  if(write(x6_fb.fd, &pixel, sizeof(pixel)) != (int)sizeof(pixel))
+  if(write(x6_fb.fd, &p, sizeof(p)) != (int)sizeof(p))
     return -1;
+  if(x6_fb_shadow && x >= 0 && y >= 0 && x < x6_fb_shadow_w && y < x6_fb_shadow_h)
+    x6_fb_shadow[(size_t)y * (size_t)x6_fb_shadow_w + (size_t)x] = p;
   return 0;
 }
 
@@ -515,6 +521,88 @@ x6_canvas_fill_pixels(int x, int y, int w, int h, uint pixel)
       canvas_pixels[r][c] = pixel;
 
   x6_canvas_flush_rows(r0, r1 - 1);
+}
+
+static void
+x6_draw_text_pixels(int x, int baseline_y, uint color, const char *text, int len)
+{
+  const struct user_font *font;
+  int i;
+  int cx;
+
+  if(!text || len <= 0)
+    return;
+
+  font = user_font_builtin_montecarlo();
+  if(!font)
+    return;
+
+  if(x6_backend == X6_BACKEND_FB && x6_fb.fd >= 0) {
+    x6_cursor_hide();
+    cx = x;
+    for(i = 0; i < len; i++) {
+      const struct user_glyph *g;
+      int gx;
+      int gy;
+      int r;
+
+      g = user_font_get_glyph(font, (uint)(uchar)text[i]);
+      if(!g)
+        continue;
+      gx = cx + g->bearing_x;
+      gy = baseline_y - g->bearing_y;
+
+      for(r = 0; r < g->height; r++) {
+        int c;
+        int py;
+        uchar rowbits;
+
+        py = gy + r;
+        if(py < 0 || py >= x6_fb.height)
+          continue;
+        rowbits = g->bitmap ? g->bitmap[r] : 0;
+        for(c = 0; c < g->width && c < 8; c++) {
+          int px;
+          if((rowbits & (1U << (7 - c))) == 0)
+            continue;
+          px = gx + c;
+          if(px < 0 || px >= x6_fb.width)
+            continue;
+          x6_fb_write_pixel(px, py, color);
+        }
+      }
+
+      cx += g->advance_x > 0 ? g->advance_x : g->width;
+    }
+    x6_cursor_show();
+    return;
+  }
+
+  x6_canvas_fill_pixels(x, baseline_y - font->ascent,
+                        user_font_text_width(font, text, len),
+                        font->size, color);
+}
+
+static int
+x6_parse_draw_text(char *cmd, uint *id, int *x, int *y, uint *color, int *len, char **text)
+{
+  int n;
+  char *p;
+
+  if(!cmd || !id || !x || !y || !color || !len || !text)
+    return -1;
+  if(sscanf(cmd, "DRAW_TEXT %u %d %d %u %d%n", id, x, y, color, len, &n) != 5)
+    return -1;
+  if(*len < 0)
+    return -1;
+
+  p = cmd + n;
+  while(*p == ' ')
+    p++;
+  *text = p;
+  if((int)strlen(p) < *len)
+    *len = (int)strlen(p);
+  return 0;
 }
 
 static void __attribute__((unused))
@@ -1241,6 +1329,32 @@ handle_one_command(int cfd, char *cmd)
     return;
   }
 
+  {
+    char *text;
+    int tlen;
+    if(x6_parse_draw_text(cmd, &id, &x, &y, &color, &tlen, &text) == 0) {
+      int ox;
+      int oy;
+
+      ox = 0;
+      oy = 0;
+      if(id != (uint)wm_redirect_root) {
+        win = find_window(id);
+        if(win == 0) {
+          x6_send_line(cfd, "ERR not-found\n");
+          return;
+        }
+        ox = win->x;
+        oy = win->y;
+      }
+
+      if(tlen > 0)
+        x6_draw_text_pixels(ox + x, oy + y, color, text, tlen);
+      x6_send_line(cfd, "OK text\n");
+      return;
+    }
+  }
+
   // Phase 2.1b: REQUEST_REDIRECT for WM to claim SubstructureRedirect on root
   if(sscanf(cmd, "REQUEST_REDIRECT %u", &id) == 1) {
     if(id != wm_redirect_root) {
@@ -1811,7 +1925,6 @@ main(int argc, char **argv)
   pointer_grab_window = 0;
   root_cursor = 1;
   memset(&x6_cursor, 0, sizeof(x6_cursor));
-  x6_cursor_show();
 
   fd = socket(AF_INET, SOCK_STREAM, 0);
   if(fd < 0) {
@@ -1841,6 +1954,8 @@ main(int argc, char **argv)
 
   dprintf(1, "x6: phase1 skeleton active proto=%d on 127.0.0.1:%d\n",
           X6_PROTO_VERSION, port);
+
+    x6_cursor_show();
 
   while(keep_running) {
     int cfd;

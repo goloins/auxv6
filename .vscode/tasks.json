@@ -67,6 +67,69 @@
 				"test-ahci-retry-stress-debug"
 			],
 			"isBackground": false
+		},
+		{
+			"label": "build-xinit-only",
+			"type": "shell",
+			"command": "make",
+			"args": [
+				"_xinit"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "build-text-and-xinit",
+			"type": "shell",
+			"command": "make",
+			"args": [
+				"_x6",
+				"_dwm",
+				"_xinit"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "build-text-and-xinit-sudo",
+			"type": "shell",
+			"command": "sudo",
+			"args": [
+				"make",
+				"_x6",
+				"_dwm",
+				"_xinit"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "rebuild-x6-cursor-trail-fix",
+			"type": "shell",
+			"command": "sudo",
+			"args": [
+				"make",
+				"_x6"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "rebuild-x6-wallpaper-fix",
+			"type": "shell",
+			"command": "sudo",
+			"args": [
+				"make",
+				"_x6",
+				"_wallpaper"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "rebuild-xinit-flow-fix",
+			"type": "shell",
+			"command": "sudo",
+			"args": [
+				"make",
+				"_xinit"
+			],
+			"isBackground": false
 		}
 	]
 }

@@ -34,6 +34,7 @@ user/grep
 user/init
 user/netcat
 user/6get
+user/6fetch
 user/abrowse
 user/telnet
 user/runlevel
@@ -178,3 +179,6 @@ ports/dwm-6.8/*
 !ports/dwm-6.8/Makefile.auxv6
 ports/dwm-6.8/_dwm
 ports/dwm-6.8/dwm
+ports/st-0.9.3.tar.gz
+ports/st-0.9.3/*
+!ports/st-0.9.3/Makefile.auxv6

@@ -1,13 +1,16 @@
 #include "types.h"
 #include "auxv6/user.h"
+#include "socket.h"
 #include "fcntl.h"
 #include "sys/ioctl.h"
 #include "graphics/drm_ioctls.h"
 #include "auxv6/img.h"
+#include "stdio.h"
 #include "string.h"
 
 #define WALLPAPER_FBIOGET_VSCREENINFO 0x4600
 #define WALLPAPER_FBIOGET_FSCREENINFO 0x4602
+#define WALLPAPER_X6_PORT 6006
 
 struct fb_ctx {
   int fd;
@@ -15,6 +18,96 @@ struct fb_ctx {
   int height;
   int stride;
 };
+
+static int
+wallpaper_read_line(int fd, char *buf, int bufsz)
+{
+  int pos;
+
+  if(fd < 0 || !buf || bufsz <= 1)
+    return -1;
+
+  pos = 0;
+  while(pos < bufsz - 1) {
+    char ch;
+    int n;
+    n = recv(fd, &ch, 1);
+    if(n <= 0)
+      return -1;
+    if(ch == '\n' || ch == '\r') {
+      buf[pos] = 0;
+      return 0;
+    }
+    buf[pos++] = ch;
+  }
+  buf[pos] = 0;
+  return 0;
+}
+
+static int
+wallpaper_parse_dim(const char *line, const char *key, int def)
+{
+  const char *p;
+  int v;
+
+  if(!line || !key)
+    return def;
+  p = strstr(line, key);
+  if(!p)
+    return def;
+  p += strlen(key);
+  v = atoi(p);
+  return v > 0 ? v : def;
+}
+
+static int
+wallpaper_try_x6_color(uint rgb)
+{
+  int fd;
+  struct sockaddr_in dst;
+  char line[256];
+  int w;
+  int h;
+
+  fd = socket(AF_INET, SOCK_STREAM, 0);
+  if(fd < 0)
+    return -1;
+
+  memset(&dst, 0, sizeof(dst));
+  dst.sin_family = AF_INET;
+  dst.sin_port = (ushort)WALLPAPER_X6_PORT;
+  dst.sin_addr = INADDR_LOOPBACK;
+  if(connect(fd, &dst, sizeof(dst)) < 0) {
+    close(fd);
+    return -1;
+  }
+
+  if(wallpaper_read_line(fd, line, sizeof(line)) < 0) {
+    close(fd);
+    return -1;
+  }
+  send(fd, "HELLO x6/1\n", 11);
+  if(wallpaper_read_line(fd, line, sizeof(line)) < 0) {
+    close(fd);
+    return -1;
+  }
+  if(strncmp(line, "OK proto=", 9) != 0) {
+    close(fd);
+    return -1;
+  }
+
+  w = wallpaper_parse_dim(line, "width=", 1024);
+  h = wallpaper_parse_dim(line, "height=", 768);
+  snprintf(line, sizeof(line), "DRAW_RECT 1 0 0 %d %d %u\n", w, h, rgb & 0x00ffffffU);
+  send(fd, line, strlen(line));
+  if(wallpaper_read_line(fd, line, sizeof(line)) < 0) {
+    close(fd);
+    return -1;
+  }
+  send(fd, "DETACH\n", 7);
+  close(fd);
+  return (strncmp(line, "OK draw", 7) == 0) ? 0 : -1;
+}
 
 static int
 parse_hex_byte(char a, char b)
@@ -211,15 +304,16 @@ main(int argc, char **argv)
   }
 
   fb.fd = -1;
-  if(fb_open(&fb) < 0) {
-    dprintf(2, "wallpaper: /dev/fb0 unavailable\n");
-    return 1;
-  }
 
   if(color_arg) {
     if(parse_color(color_arg, &color) < 0) {
       dprintf(2, "wallpaper: invalid color '%s'\n", color_arg);
-      fb_close(&fb);
+      return 1;
+    }
+    if(wallpaper_try_x6_color(color) == 0)
+      return 0;
+    if(fb_open(&fb) < 0) {
+      dprintf(2, "wallpaper: /dev/fb0 unavailable\n");
       return 1;
     }
     if(set_color(&fb, color) < 0) {
@@ -229,6 +323,11 @@ main(int argc, char **argv)
     }
     fb_close(&fb);
     return 0;
+  }
+
+  if(fb_open(&fb) < 0) {
+    dprintf(2, "wallpaper: /dev/fb0 unavailable\n");
+    return 1;
   }
 
   aux_img_init(&img);

@@ -550,6 +550,7 @@ int XSetForeground(Display *display, GC gc, unsigned long foreground);
 int XSetLineAttributes(Display *display, GC gc, unsigned int line_width, int line_style, int cap_style, int join_style);
 int XFillRectangle(Display *display, Drawable d, GC gc, int x, int y, unsigned int width, unsigned int height);
 int XDrawRectangle(Display *display, Drawable d, GC gc, int x, int y, unsigned int width, unsigned int height);
+int XDrawString(Display *display, Drawable d, GC gc, int x, int y, const char *string, int length);
 int XCopyArea(Display *display, Drawable src, Drawable dest, GC gc,
               int src_x, int src_y, unsigned int width, unsigned int height,
               int dest_x, int dest_y);

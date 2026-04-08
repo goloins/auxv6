@@ -16,7 +16,7 @@ Behavior:
 3. Launch the requested client command.
 4. When the client exits, terminate x6 and wait for clean shutdown.
 
-If no client is provided, `xinit` runs `/bin/sh`.
+If no client is provided, `xinit` checks rc scripts in this order: `$HOME/.xinitrc`, then `/.xinitrc`, then `/etc/xinitrc`. If found, it runs `/bin/dash <xinitrc>`. Otherwise it runs `/bin/dash`.
 
 ## ARGUMENTS
 - `client [args...]` command to run once x6 is ready

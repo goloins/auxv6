@@ -3819,8 +3819,8 @@ console_mouse_packet(int dx, int dy, uchar buttons)
 
   acquire(&cons.input_lock);
   cap = (uint)(sizeof(console_mouse.buf) / sizeof(console_mouse.buf[0]));
-  if(console_mouse.e - console_mouse.r < cap) {
-    console_mouse.buf[console_mouse.e++ % cap] = evt;
+  if(console_mouse.w - console_mouse.r < cap) {
+    console_mouse.buf[console_mouse.w++ % cap] = evt;
     console_input_event_count++;
     wakeup(&console_mouse.r);
   }

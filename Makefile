@@ -335,7 +335,7 @@ tags: $(OBJS) kernel/boot/entryother.S user/_init
 kernel/core/vectors.S: tools/vectors.pl
 	./tools/vectors.pl > kernel/core/vectors.S
 
-LIBC_OBJS = user/ulib.o user/string.o user/errstr.o user/umalloc.o user/tty.o user/inet.o user/fmt.o user/dirent.o user/fnmatch.o user/glob.o user/ftw.o user/fts.o user/locale.o user/pwdgrp.o user/env.o user/conf.o user/path.o user/tempfile.o user/timecore.o user/resource.o user/netdb.o user/stdlib.o user/posix_fs.o user/posix.o user/stdio.o user/regex.o user/calloc.o user/libterm.o user/checksum.o user/gzip.o
+LIBC_OBJS = user/ulib.o user/string.o user/errstr.o user/umalloc.o user/tty.o user/inet.o user/fmt.o user/dirent.o user/fnmatch.o user/glob.o user/ftw.o user/fts.o user/locale.o user/pwdgrp.o user/env.o user/conf.o user/path.o user/tempfile.o user/timecore.o user/resource.o user/netdb.o user/stdlib.o user/posix_fs.o user/posix.o user/stdio.o user/regex.o user/calloc.o user/libterm.o user/checksum.o user/gzip.o user/user_font.o
 LIBAUXV6_OBJS = user/crt0.o user/usys.o user/printf.o user/resolve.o
 ULIB = $(LIBC_OBJS) $(LIBAUXV6_OBJS)
 
@@ -462,6 +462,9 @@ _netcat: $(USER_STAGE_DIR)/netcat
 
 _6get: user/6get
 	cp user/6get _6get
+
+_6fetch: user/6fetch
+	cp user/6fetch _6fetch
 
 _abrowse: user/abrowse
 	cp user/abrowse _abrowse
@@ -876,6 +879,7 @@ UPROGS=\
 	_netstat\
 	_netcat\
 	_6get\
+	_6fetch\
 	_telnet\
 	_runlevel\
 	_telinit\
@@ -1068,6 +1072,7 @@ clean:
 	user/tuntapctl user/tuntest \
 	user/dhcp user/v6dhcpd user/ntpd user/nslookup \
 	user/6get \
+	user/6fetch \
 	user/abrowse \
 	user/lsof user/which user/file \
 	user/uniq user/sort user/sum user/sleep user/yes user/boolean user/sync user/touch user/hashsum user/baseenc user/asroot \

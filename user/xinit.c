@@ -2,9 +2,54 @@
 #include "auxv6/user.h"
 #include "socket.h"
 #include "fcntl.h"
+#include "stdio.h"
+#include "stdlib.h"
+#include "pwd.h"
 
 #define X6_DEFAULT_PORT 6006
 #define XINIT_READY_RETRIES 20
+
+static char xinitrc_path[128];
+static int client_path_exists(const char *path);
+
+static int
+resolve_xinitrc(char *out, int outsz)
+{
+  char cand[128];
+  char *home;
+  struct passwd *pw;
+
+  if(!out || outsz <= 0)
+    return -1;
+
+  home = getenv("HOME");
+  if((home == 0 || home[0] == 0)) {
+    pw = getpwuid(getuid());
+    if(pw && pw->pw_dir && pw->pw_dir[0])
+      home = pw->pw_dir;
+  }
+
+  if(home && home[0]) {
+    snprintf(cand, sizeof(cand), "%s/.xinitrc", home);
+    if(client_path_exists(cand)) {
+      snprintf(out, outsz, "%s", cand);
+      return 0;
+    }
+  }
+
+  if(client_path_exists("/.xinitrc")) {
+    snprintf(out, outsz, "/.xinitrc");
+    return 0;
+  }
+
+  if(client_path_exists("/etc/xinitrc")) {
+    snprintf(out, outsz, "/etc/xinitrc");
+    return 0;
+  }
+
+  out[0] = 0;
+  return 0;
+}
 
 static void
 usage(void)
@@ -107,7 +152,8 @@ stop_x6_or_kill(int x6_pid)
 int
 main(int argc, char **argv)
 {
-  char *default_client[] = { "/bin/sh", 0 };
+  char *default_client[] = { "/bin/dash", 0 };
+  char *xinitrc_client[3];
   char *x6_argv[24];
   char **client_argv;
   int x6_argc;
@@ -118,10 +164,12 @@ main(int argc, char **argv)
   int i;
   int ready;
   int st;
+  int using_xinitrc;
 
   client_idx = 1;
   x6_argc = 0;
   port = X6_DEFAULT_PORT;
+  using_xinitrc = 0;
 
   if(argc > 1 && strcmp(argv[1], "-h") == 0)
     usage();
@@ -143,11 +191,29 @@ main(int argc, char **argv)
 
   if(argc > 1)
     client_argv = &argv[client_idx];
-  else
-    client_argv = default_client;
+  else {
+    resolve_xinitrc(xinitrc_path, sizeof(xinitrc_path));
+    if(xinitrc_path[0]) {
+      xinitrc_client[0] = "/bin/dash";
+      xinitrc_client[1] = xinitrc_path;
+      xinitrc_client[2] = 0;
+      client_argv = xinitrc_client;
+      using_xinitrc = 1;
+    } else {
+      client_argv = default_client;
+    }
+  }
+
+  if(using_xinitrc)
+    dprintf(1, "xinit: using xinitrc %s\n", xinitrc_path);
 
   if(client_argv[0] && client_argv[0][0] == '/' && !client_path_exists(client_argv[0])) {
     dprintf(2, "xinit: client not found: %s\n", client_argv[0]);
+    return 1;
+  }
+
+  if(client_argv[1] && client_argv[1][0] == '/' && !client_path_exists(client_argv[1])) {
+    dprintf(2, "xinit: client argument not found: %s\n", client_argv[1]);
     return 1;
   }
 
