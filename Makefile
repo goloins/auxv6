@@ -772,6 +772,9 @@ _x6: user/x6
 _xinit: user/xinit
 	cp user/xinit _xinit
 
+_xwmtrace: user/xwmtrace
+	cp user/xwmtrace _xwmtrace
+
 _startx: user/startx
 	cp user/startx _startx
 
@@ -1042,6 +1045,7 @@ UPROGS=\
 	_server7\
 	_x6\
 	_xinit\
+	_xwmtrace\
 	_startx\
 	_x6test\
 	_wallpaper\

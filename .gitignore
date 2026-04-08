@@ -178,3 +178,4 @@ user/fdtest
 .btrfsroot/
 
 targetfs/usr/bin/st
+user/xwmtrace

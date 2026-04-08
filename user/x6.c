@@ -25,6 +25,8 @@
 #define X6_BACKEND_AUTO 0
 #define X6_BACKEND_ANSI 1
 #define X6_BACKEND_FB 2
+#define X6_TRACE_WMMAP (1U << 0)
+#define X6_TRACE_QUEUE (1U << 1)
 
 #define X6_DEFAULT_PORT 6006
 #define X6_BACKLOG 16
@@ -202,6 +204,7 @@ static int wm_client_fd = -1;
 static int x6_dbg_count;
 static int x6_draw_rx_count;
 static int x6_draw_reply_tx_count;
+static uint x6_trace_mask;
 
 static int
 x6_is_chatty_draw_cmd(const char *cmd)
@@ -218,7 +221,6 @@ x6dbg(const char *fmt, ...)
   char line[320];
   int n;
   int fd;
-  int cfd;
   va_list ap;
 
   if(x6_dbg_count >= 8000)
@@ -235,11 +237,6 @@ x6dbg(const char *fmt, ...)
   line[n++] = '\n';
   line[n] = '\0';
 
-  cfd = open("/dev/console", O_WRONLY);
-  if(cfd >= 0) {
-    write(cfd, line, (size_t)n);
-    close(cfd);
-  }
   fd = open("/tmp/x6-debug.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
   if(fd >= 0) {
     write(fd, line, (size_t)n);
@@ -248,11 +245,14 @@ x6dbg(const char *fmt, ...)
 }
 
 static void
-x6trace_console(const char *fmt, ...)
+x6trace_console(uint trace_flag, const char *fmt, ...)
 {
   char line[320];
   int n;
   va_list ap;
+
+  if((x6_trace_mask & trace_flag) == 0)
+    return;
 
   va_start(ap, fmt);
   n = vsnprintf(line, sizeof(line), fmt, ap);
@@ -1733,11 +1733,28 @@ x6_pump_mouse(void)
 static void
 usage(void)
 {
-  dprintf(2, "usage: x6 [-f] [-p port] [-B auto|ansi|fb]\n");
+  dprintf(2, "usage: x6 [-f] [-p port] [-B auto|ansi|fb] [-T none|wmmap|queue|all]\n");
   dprintf(2, "       -f   run in foreground (no daemonize)\n");
   dprintf(2, "       -p   listen port (default %d)\n", X6_DEFAULT_PORT);
   dprintf(2, "       -B   display backend selection\n");
+  dprintf(2, "       -T   enable x6 console trace categories\n");
   exit(1);
+}
+
+static int
+x6_parse_trace_mask(const char *s)
+{
+  if(!s)
+    return -1;
+  if(strcmp(s, "none") == 0)
+    return 0;
+  if(strcmp(s, "wmmap") == 0)
+    return (int)X6_TRACE_WMMAP;
+  if(strcmp(s, "queue") == 0)
+    return (int)X6_TRACE_QUEUE;
+  if(strcmp(s, "all") == 0)
+    return (int)(X6_TRACE_WMMAP | X6_TRACE_QUEUE);
+  return -1;
 }
 
 static int
@@ -2249,7 +2266,7 @@ x6_event_queue_drop_extension_for_window(struct x6_event_queue *q, uint wid)
 
     idx = (idx + 1) % X6_MAX_EVENTS_PER_CLIENT;
     if(++guard > X6_MAX_EVENTS_PER_CLIENT) {
-      x6trace_console("x6:queue guard hit drop_ext head=%d tail=%d wid=%u", q->head, q->tail, wid);
+      x6trace_console(X6_TRACE_QUEUE, "x6:queue guard hit drop_ext head=%d tail=%d wid=%u", q->head, q->tail, wid);
       x6dbg("x6:queue guard hit drop_ext head=%d tail=%d wid=%u", q->head, q->tail, wid);
       break;
     }
@@ -2291,7 +2308,7 @@ x6_event_queue_merge_expose(struct x6_event_queue *q, struct x6_event *evt)
     }
     idx = (idx + 1) % X6_MAX_EVENTS_PER_CLIENT;
     if(++guard > X6_MAX_EVENTS_PER_CLIENT) {
-      x6trace_console("x6:queue guard hit merge_expose head=%d tail=%d wid=%u", q->head, q->tail, evt->wid);
+      x6trace_console(X6_TRACE_QUEUE, "x6:queue guard hit merge_expose head=%d tail=%d wid=%u", q->head, q->tail, evt->wid);
       x6dbg("x6:queue guard hit merge_expose head=%d tail=%d wid=%u", q->head, q->tail, evt->wid);
       break;
     }
@@ -2345,7 +2362,7 @@ x6_event_queue_merge_damage(struct x6_event_queue *q, struct x6_event *evt)
     }
     idx = (idx + 1) % X6_MAX_EVENTS_PER_CLIENT;
     if(++guard > X6_MAX_EVENTS_PER_CLIENT) {
-      x6trace_console("x6:queue guard hit merge_damage head=%d tail=%d wid=%u", q->head, q->tail, evt->wid);
+      x6trace_console(X6_TRACE_QUEUE, "x6:queue guard hit merge_damage head=%d tail=%d wid=%u", q->head, q->tail, evt->wid);
       x6dbg("x6:queue guard hit merge_damage head=%d tail=%d wid=%u", q->head, q->tail, evt->wid);
       break;
     }
@@ -2385,7 +2402,7 @@ x6_event_queue_upsert_randr(struct x6_event_queue *q, struct x6_event *evt)
       randr_idx = idx;
     idx = (idx + 1) % X6_MAX_EVENTS_PER_CLIENT;
     if(++guard > X6_MAX_EVENTS_PER_CLIENT) {
-      x6trace_console("x6:queue guard hit upsert_randr head=%d tail=%d wid=%u", q->head, q->tail, evt->wid);
+      x6trace_console(X6_TRACE_QUEUE, "x6:queue guard hit upsert_randr head=%d tail=%d wid=%u", q->head, q->tail, evt->wid);
       x6dbg("x6:queue guard hit upsert_randr head=%d tail=%d wid=%u", q->head, q->tail, evt->wid);
       break;
     }
@@ -2548,31 +2565,31 @@ handle_one_command(int cfd, char *cmd)
     }
     win->mapped = 1;
     x6_raise_window(win);
-    x6trace_console("x6:wm_map step=after_raise wid=%u", id);
+    x6trace_console(X6_TRACE_WMMAP, "x6:wm_map step=after_raise wid=%u", id);
     x6_enqueue_randr_notify(win->id, win->w, win->h);
-    x6trace_console("x6:wm_map step=after_randr wid=%u", id);
+    x6trace_console(X6_TRACE_WMMAP, "x6:wm_map step=after_randr wid=%u", id);
     x6dbg("x6:wm_map wid=%u owner_fd=%d geom=%d,%d %dx%d", id, win->owner_fd, win->x, win->y, win->w, win->h);
     {
       struct x6_client *owner = x6_find_client_by_fd(win->owner_fd);
       if(owner && owner->in_use && owner->hello_done) {
         struct x6_event me;
-        x6trace_console("x6:wm_map step=owner_pre_drop wid=%u head=%d tail=%d", id, owner->queue.head, owner->queue.tail);
+        x6trace_console(X6_TRACE_WMMAP, "x6:wm_map step=owner_pre_drop wid=%u head=%d tail=%d", id, owner->queue.head, owner->queue.tail);
         x6_event_queue_drop_extension_for_window(&owner->queue, id);
-        x6trace_console("x6:wm_map step=owner_post_drop wid=%u head=%d tail=%d", id, owner->queue.head, owner->queue.tail);
+        x6trace_console(X6_TRACE_WMMAP, "x6:wm_map step=owner_post_drop wid=%u head=%d tail=%d", id, owner->queue.head, owner->queue.tail);
         memset(&me, 0, sizeof(me));
         me.type = X6_EVENT_MAP_NOTIFY;
         me.wid = id;
         x6_event_queue_enqueue(&owner->queue, &me);
-        x6trace_console("x6:wm_map step=after_mapnotify wid=%u head=%d tail=%d", id, owner->queue.head, owner->queue.tail);
+        x6trace_console(X6_TRACE_WMMAP, "x6:wm_map step=after_mapnotify wid=%u head=%d tail=%d", id, owner->queue.head, owner->queue.tail);
         x6_enqueue_expose_notify(win, 0, 0, win->w, win->h);
-        x6trace_console("x6:wm_map step=after_expose wid=%u head=%d tail=%d", id, owner->queue.head, owner->queue.tail);
+        x6trace_console(X6_TRACE_WMMAP, "x6:wm_map step=after_expose wid=%u head=%d tail=%d", id, owner->queue.head, owner->queue.tail);
         x6_enqueue_shape_notify(win, 0, 1);
-        x6trace_console("x6:wm_map step=after_shape wid=%u head=%d tail=%d", id, owner->queue.head, owner->queue.tail);
+        x6trace_console(X6_TRACE_WMMAP, "x6:wm_map step=after_shape wid=%u head=%d tail=%d", id, owner->queue.head, owner->queue.tail);
       }
     }
-    x6trace_console("x6:wm_map step=before_reply wid=%u", id);
+    x6trace_console(X6_TRACE_WMMAP, "x6:wm_map step=before_reply wid=%u", id);
     x6_send_line(cfd, "OK map\n");
-    x6trace_console("x6:wm_map step=after_reply wid=%u", id);
+    x6trace_console(X6_TRACE_WMMAP, "x6:wm_map step=after_reply wid=%u", id);
     return;
   }
 
@@ -2629,33 +2646,48 @@ handle_one_command(int cfd, char *cmd)
   }
 
   if(sscanf(cmd, "CONFIGURE %u %d %d %d %d", &id, &x, &y, &w, &h) == 5) {
+    int redirected_client;
+    int apply_direct;
+
     win = find_window(id);
     if(win == 0) {
       x6_send_line(cfd, "ERR not-found\n");
       return;
     }
+
+    if(w < 1)
+      w = 1;
+    if(h < 1)
+      h = 1;
+
+    redirected_client = (wm_has_redirect && cfd != wm_client_fd && win->owner_fd != wm_client_fd);
+    apply_direct = 1;
+    if(redirected_client && !win->override_redirect) {
+      /* Compatibility fallback: when WM does not actively process configure
+       * requests, still apply geometry so client-side resize paths work.
+       * Keep queuing ConfigureRequest for WM observability. */
+      apply_direct = 1;
+    }
     
-    // Phase 2.1b: If WM holds SubstructureRedirect, queue ConfigureRequest for WM approval
-    if(wm_has_redirect && cfd != wm_client_fd && win->owner_fd != wm_client_fd) {
+    // If WM holds redirect, always queue ConfigureRequest for WM observability.
+    if(redirected_client) {
       struct x6_event evt;
       evt.type = X6_EVENT_CONFIGURE_REQUEST;
       evt.wid = id;
       evt.x = x;
       evt.y = y;
-      evt.w = (w < 1) ? 1 : w;
-      evt.h = (h < 1) ? 1 : h;
+      evt.w = w;
+      evt.h = h;
       if(wm_event_queue != 0) {
         x6_event_queue_enqueue(wm_event_queue, &evt);
       }
-      x6_send_line(cfd, "PENDING configure\n");  // Client is notified of pending state
-      return;
+      if(!apply_direct) {
+        x6_send_line(cfd, "PENDING configure\n");
+        return;
+      }
     }
     
-    // Otherwise, configure directly
-    if(w < 1)
-      w = 1;
-    if(h < 1)
-      h = 1;
+    // Configure directly (default path and fallback path).
     win->x = x;
     win->y = y;
     win->w = w;
@@ -4161,6 +4193,16 @@ main(int argc, char **argv)
       if(b < 0)
         usage();
       x6_backend_pref = b;
+      continue;
+    }
+    if(strcmp(argv[i], "-T") == 0) {
+      int t;
+      if(i + 1 >= argc)
+        usage();
+      t = x6_parse_trace_mask(argv[++i]);
+      if(t < 0)
+        usage();
+      x6_trace_mask = (uint)t;
       continue;
     }
     usage();

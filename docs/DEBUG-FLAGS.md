@@ -28,6 +28,33 @@ debug=1
 
 This is separate from `AUXV6_DEBUG`: kernel compile-time debug flags remain compile-time, while `devman` logging is tuned at runtime via config.
 
+### `x6` Runtime Trace Categories
+
+Controls targeted userspace x6 console tracing for X11 protocol debugging.
+
+**Default:** disabled (`none`)  
+**Type:** Runtime CLI flag (no rebuild required)  
+**Binary:** `x6`
+
+**Flag:** `-T <category>`
+
+Accepted values:
+- `none`: disable x6 console tracing.
+- `wmmap`: trace `WM_MAP` critical-path progression markers.
+- `queue`: trace queue-guard diagnostics for queue scan protections.
+- `all`: enable both `wmmap` and `queue` categories.
+
+Examples:
+```sh
+x6 -f -T wmmap
+x6 -f -T queue
+x6 -f -T all
+```
+
+Notes:
+- These are userspace x6 traces, separate from kernel `AUXV6_DEBUG` flags.
+- Use `wmmap` only when diagnosing mapping stalls to keep console output minimal.
+
 ## Master Flags
 
 ### `AUXV6_DEBUG` - Global Debug Master Flag

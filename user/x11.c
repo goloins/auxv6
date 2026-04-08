@@ -128,7 +128,6 @@ x11dbg(const char *fmt, ...)
   char line[320];
   int n;
   int fd;
-  int cfd;
   va_list ap;
 
   if (g_x11_dbg_count >= 5000)
@@ -145,11 +144,6 @@ x11dbg(const char *fmt, ...)
 
   line[n++] = '\n';
   line[n] = '\0';
-  cfd = open("/dev/console", O_WRONLY);
-  if (cfd >= 0) {
-    write(cfd, line, (size_t)n);
-    close(cfd);
-  }
 
   fd = open("/tmp/x11-debug.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
   if (fd >= 0) {
@@ -165,7 +159,6 @@ x11crit(const char *fmt, ...)
   char line[320];
   int n;
   int fd;
-  int cfd;
   va_list ap;
 
   va_start(ap, fmt);
@@ -178,12 +171,6 @@ x11crit(const char *fmt, ...)
 
   line[n++] = '\n';
   line[n] = '\0';
-
-  cfd = open("/dev/console", O_WRONLY);
-  if (cfd >= 0) {
-    write(cfd, line, (size_t)n);
-    close(cfd);
-  }
 
   fd = open("/tmp/x11-debug.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
   if (fd >= 0) {
@@ -3081,9 +3068,12 @@ Status XSendEvent(Display *display, Window w, Bool propagate, long event_mask, X
              event_send->xconfigure.y,
              event_send->xconfigure.width,
              event_send->xconfigure.height);
-    if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    /* ConfigureNotify is frequently emitted from WM map/manage paths.
+     * Avoid a synchronous round-trip here so queued async events cannot
+     * wedge or re-enter command/response handling in legacy clients. */
+    if (x11_send(display->fd, cmd) < 0)
       return 0;
-    return Success;
+    return 1;
   }
 
   if (event_send->type == ClientMessage) {
@@ -3093,7 +3083,7 @@ Status XSendEvent(Display *display, Window w, Bool propagate, long event_mask, X
              (uint)event_send->xclient.data.l[0]);
     if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
       return 0;
-    return Success;
+    return 1;
   }
 
   if (event_send->type == SelectionNotify) {
@@ -3108,10 +3098,10 @@ Status XSendEvent(Display *display, Window w, Bool propagate, long event_mask, X
              (uint)event_send->xselection.time);
     if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
       return 0;
-    return Success;
+    return 1;
   }
 
-  return Success;
+  return 1;
 }
 
 int
