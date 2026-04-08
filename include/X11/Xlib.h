@@ -2,6 +2,8 @@
 #define _X11_XLIB_H_
 
 #include <stddef.h>
+#include <stdio.h>
+#include <limits.h>
 
 typedef unsigned long XID;
 typedef XID Window;
@@ -17,8 +19,220 @@ typedef unsigned long KeySym;
 typedef unsigned char KeyCode;
 typedef unsigned long GC;
 
+/* Input method enumeration */
+typedef int XICCEncodingStyle;
+
 typedef int Bool;
 typedef int Status;
+
+/* Visual and XColor types */
+typedef struct {
+  XID visualid;
+  int class;
+  unsigned long red_mask;
+  unsigned long green_mask;
+  unsigned long blue_mask;
+  int bits_per_rgb;
+  int map_entries;
+} Visual;
+
+typedef struct {
+  unsigned long pixel;
+  unsigned short red;
+  unsigned short green;
+  unsigned short blue;
+  char flags;
+} XColor;
+
+/* Additional types for st/dwm compatibility */
+typedef struct _XIM *XIM;
+typedef struct _XIC *XIC;
+typedef void *XVaNestedList;
+
+/* Input Method callback structures */
+typedef struct {
+  void *client_data;
+  void (*callback)(void);
+} XIMCallback;
+
+typedef struct {
+  void *client_data;
+  void (*callback)(void);
+} XICCallback;
+
+typedef struct {
+  short x;
+  short y;
+} XPoint;
+
+/* st application types - defined in x.c, not here */
+typedef unsigned int uint;
+
+typedef struct {
+  short x, y;
+  unsigned short width, height;
+} XRectangle;
+
+/* XKeysym values */
+#define XK_BackSpace 0xff08
+#define XK_Tab 0xff09
+#define XK_Return 0xff0d
+#define XK_Escape 0xff1b
+#define XK_Home 0xff50
+#define XK_Left 0xff51
+#define XK_Up 0xff52
+#define XK_Right 0xff53
+#define XK_Down 0xff54
+#define XK_Prior 0xff55
+#define XK_Next 0xff56
+#define XK_End 0xff57
+#define XK_Insert 0xff63
+#define XK_Delete 0xffff
+#define XK_Break 0xff6b
+#define XK_KP_Home 0xff95
+#define XK_KP_Up 0xff97
+#define XK_KP_Prior 0xff99
+#define XK_KP_Down 0xff99
+#define XK_KP_Begin 0xff9d
+#define XK_KP_End 0xff9c
+#define XK_KP_Next 0xff9a
+#define XK_KP_Insert 0xff9e
+#define XK_KP_Delete 0xff9f
+#define XK_KP_Left 0xff96
+#define XK_KP_Right 0xff98
+#define XK_F1 0xffbe
+#define XK_F2 0xffbf
+#define XK_F3 0xffc0
+#define XK_F4 0xffc1
+#define XK_F5 0xffc2
+#define XK_F6 0xffc3
+#define XK_F7 0xffc4
+#define XK_F8 0xffc5
+#define XK_F9 0xffc6
+#define XK_F10 0xffc7
+#define XK_F11 0xffc8
+#define XK_F12 0xffc9
+#define XK_F13 0xffca
+#define XK_F14 0xffcb
+#define XK_F15 0xffcc
+#define XK_F16 0xffcd
+#define XK_F17 0xffce
+#define XK_F18 0xffcf
+#define XK_F19 0xffd0
+#define XK_F20 0xffd1
+#define XK_F21 0xffd2
+#define XK_F22 0xffd3
+#define XK_F23 0xffd4
+#define XK_F24 0xffd5
+#define XK_F25 0xffd6
+#define XK_F26 0xffd7
+#define XK_F27 0xffd8
+#define XK_F28 0xffd9
+#define XK_F29 0xffda
+#define XK_F30 0xffdb
+#define XK_F31 0xffdc
+#define XK_F32 0xffdd
+#define XK_F33 0xffde
+#define XK_F34 0xffdf
+#define XK_F35 0xffe0
+#define XK_Num_Lock 0xff7f
+#define XK_Y 0x0079
+#define XK_NO_MOD 0
+#define XK_SWITCH_MOD Mod5Mask
+/* Additional keysyms for config shortcuts */
+#define XK_Print 0xff61
+#define XK_C 0x0063
+#define XK_V 0x0076
+#define XK_ISO_Left_Tab 0xfe20
+#define XK_KP_Multiply 0xffaa
+#define XK_KP_Add 0xffab
+#define XK_KP_Enter 0xff8d
+#define XK_KP_Subtract 0xffad
+#define XK_KP_Decimal 0xffae
+#define XK_KP_Divide 0xffaf
+#define XK_KP_0 0xfff0
+#define XK_KP_1 0xfff1
+#define XK_KP_2 0xfff2
+#define XK_KP_3 0xfff3
+#define XK_KP_4 0xfff4
+#define XK_KP_5 0xfff5
+#define XK_KP_6 0xfff6
+#define XK_KP_7 0xfff7
+#define XK_KP_8 0xfff8
+#define XK_KP_9 0xfff9
+
+typedef char *XPointer;
+
+/* Event type codes */
+#define KeyPress 2
+#define KeyRelease 3
+#define ButtonPress 4
+#define ButtonRelease 5
+#define MotionNotify 6
+#define EnterNotify 7
+#define LeaveNotify 8
+#define FocusIn 9
+#define FocusOut 10
+#define KeymapNotify 11
+#define Expose 12
+#define GraphicsExpose 13
+#define NoExpose 14
+#define VisibilityNotify 15
+#define CreateNotify 16
+#define DestroyNotify 17
+#define UnmapNotify 18
+#define MapNotify 19
+#define MapRequest 20
+#define ReparentNotify 21
+#define ConfigureNotify 22
+#define ConfigureRequest 23
+#define GravityNotify 24
+#define ResizeRequest 25
+#define CirculateNotify 26
+#define CirculateRequest 27
+#define PropertyNotify 28
+#define SelectionClear 29
+#define SelectionRequest 30
+#define SelectionNotify 31
+#define ColormapNotify 32
+#define ClientMessage 33
+#define MappingNotify 34
+
+/* Button masks */
+#define Button1Mask (1 << 8)
+#define Button2Mask (1 << 9)
+#define Button3Mask (1 << 10)
+#define Button4Mask (1 << 11)
+#define Button5Mask (1 << 12)
+
+/* Modifier masks */
+#define ShiftMask (1 << 0)
+#define LockMask (1 << 1)
+#define ControlMask (1 << 2)
+#define Mod1Mask (1 << 3)
+#define Mod2Mask (1 << 4)
+#define Mod3Mask (1 << 5)
+#define Mod4Mask (1 << 6)
+#define Mod5Mask (1 << 7)
+#define XK_SWITCH_MOD Mod5Mask
+#define XK_ANY_MOD ~0
+
+/* Property notify states */
+#define PropertyNewValue 0
+#define PropertyDelete 1
+
+/* Cursor font shapes */
+#define XC_arrow 0
+#define XC_xterm 152
+#define XC_hand2 60
+#define XC_watch 150
+
+/* Input Method constants */
+#define XNDestroyCallback "destroyCallback"
+#define XNSpotLocation "spotLocation"
+#define XNInputStyle "inputStyle"
+#define XIMPreeditNothing 0
+#define XIMStatusNothing 0
 
 #ifndef True
 #define True 1
@@ -231,6 +445,31 @@ typedef struct {
   unsigned long serial;
   Bool send_event;
   Display *display;
+  Window owner;
+  Window requestor;
+  Atom selection;
+  Atom target;
+  Atom property;
+  Time time;
+} XSelectionRequestEvent;
+
+typedef struct {
+  int type;
+  unsigned long serial;
+  Bool send_event;
+  Display *display;
+  Window requestor;
+  Atom selection;
+  Atom target;
+  Atom property;
+  Time time;
+} XSelectionEvent;
+
+typedef struct {
+  int type;
+  unsigned long serial;
+  Bool send_event;
+  Display *display;
   Window window;
   int request;
   int first_keycode;
@@ -254,6 +493,15 @@ typedef struct {
 
 typedef struct {
   int type;
+  unsigned long serial;
+  Bool send_event;
+  Display *display;
+  Window window;
+  int state;
+} XVisibilityEvent;
+
+typedef struct {
+  int type;
   Display *display;
   XID resourceid;
   unsigned long serial;
@@ -271,6 +519,7 @@ typedef union {
   XCrossingEvent xcrossing;
   XFocusChangeEvent xfocus;
   XExposeEvent xexpose;
+  XVisibilityEvent xvisibility;
   XCreateWindowEvent xcreatewindow;
   XMapEvent xmap;
   XMapRequestEvent xmaprequest;
@@ -279,6 +528,8 @@ typedef union {
   XConfigureRequestEvent xconfigurerequest;
   XDestroyWindowEvent xdestroywindow;
   XPropertyEvent xproperty;
+  XSelectionRequestEvent xselectionrequest;
+  XSelectionEvent xselection;
   XClientMessageEvent xclient;
   XMappingEvent xmapping;
   long pad[24];
@@ -372,6 +623,7 @@ typedef struct {
 #define SubstructureRedirectMask (1L << 20)
 #define FocusChangeMask (1L << 21)
 #define PropertyChangeMask (1L << 22)
+#define VisibilityChangeMask (1L << 15)
 
 #define ShiftMask (1 << 0)
 #define LockMask (1 << 1)
@@ -459,6 +711,73 @@ typedef struct {
 #define XA_WM_NORMAL_HINTS 40L
 #define XA_WM_TRANSIENT_FOR 68L
 
+#define NotifyNormal 0
+#define NotifyInferior 2
+#define NotifyGrab 3
+
+#define VisibilityUnobscured 0
+#define VisibilityPartiallyObscured 1
+#define VisibilityFullyObscured 2
+
+#define NoSymbol 0L
+#define XBufferOverflow 0
+
+#define GCFunction (1 << 0)
+#define GCPlaneMask (1 << 1)
+#define GCForeground (1 << 2)
+#define GCBackground (1 << 3)
+#define GCLineWidth (1 << 4)
+#define GCLineStyle (1 << 5)
+#define GCCapStyle (1 << 6)
+#define GCJoinStyle (1 << 7)
+#define GCFillStyle (1 << 8)
+#define GCFillRule (1 << 9)
+#define GCTile (1 << 10)
+#define GCStipple (1 << 11)
+#define GCTileStipXOrigin (1 << 12)
+#define GCTileStipYOrigin (1 << 13)
+#define GCFont (1 << 14)
+#define GCSubwindowMode (1 << 15)
+#define GCGraphicsExposures (1 << 16)
+#define GCClipXOrigin (1 << 17)
+#define GCClipYOrigin (1 << 18)
+#define GCClipMask (1 << 19)
+#define GCDashOffset (1 << 20)
+#define GCDashList (1 << 21)
+#define GCArcMode (1 << 22)
+
+/* Graphics context values structure */
+typedef struct {
+  int function;       /* logical operation */
+  unsigned long plane_mask;  /* plane mask */
+  unsigned long foreground;  /* foreground pixel */
+  unsigned long background;  /* background pixel */
+  int line_width;     /* line width */
+  int line_style;     /* LineSolid, LineOnOffDash, LineDoubleDash */
+  int cap_style;      /* CapNotLast, CapButt, CapRound, CapProjecting */
+  int join_style;     /* JoinMiter, JoinBevel, JoinRound */
+  int fill_style;     /* FillSolid, FillTiled, FillStippled, FillOpaqueStippled */
+  int fill_rule;      /* EvenOddRule, WindingRule */
+  Pixmap tile;        /* tile pixmap for tiling operations */
+  Pixmap stipple;     /* stipple 1 plane pixmap for stippling */
+  int ts_x_origin;    /* offset for tile or stipple operations */
+  int ts_y_origin;
+  Font font;          /* default text font for text operations */
+  int subwindow_mode; /* ClipByChildren, IncludeInferiors */
+  Bool graphics_exposures;  /* boolean, should exposures be generated */
+  int clip_x_origin;  /* origin for clipping */
+  int clip_y_origin;
+  Pixmap clip_mask;   /* bitmap clipping; other calls for rects */
+  int dash_offset;    /* patterned/dashed line information */
+  char dashes;
+  int arc_mode;       /* ArcChord or ArcPieSlice */
+} XGCValues;
+
+/* Input method attribute names and constants */
+#define XUTF8StringStyle 0
+#define XNClientWindow "clientWindow"
+#define XNPreeditAttributes "preeditAttributes"
+
 #define DefaultScreen(dpy) ((dpy)->screen)
 #define DefaultRootWindow(dpy) ((dpy)->root)
 #define RootWindow(dpy, scr) ((dpy)->root)
@@ -466,6 +785,7 @@ typedef struct {
 #define DisplayHeight(dpy, scr) ((dpy)->height)
 #define DefaultDepth(dpy, scr) ((dpy)->depth)
 #define DefaultVisual(dpy, scr) ((void *)0)
+#define DefaultColormap(dpy, scr) (XDefaultColormap((dpy), (scr)))
 #define ConnectionNumber(dpy) ((dpy)->fd)
 
 Display *XOpenDisplay(char *display_name);
@@ -512,6 +832,9 @@ int XGetWindowProperty(Display *display, Window w, Atom property,
                        unsigned long *bytes_after_return,
                        unsigned char **prop_return);
 int XDeleteProperty(Display *display, Window w, Atom property);
+int XSetSelectionOwner(Display *display, Atom selection, Window owner, Time time);
+int XGetSelectionOwner(Display *display, Atom selection);
+int XConvertSelection(Display *display, Atom selection, Atom target, Atom property, Window requestor, Time time);
 Status XSendEvent(Display *display, Window w, Bool propagate, long event_mask, XEvent *event_send);
 
 int XSetInputFocus(Display *display, Window focus, int revert_to, Time time);
@@ -582,5 +905,34 @@ int XFreeModifiermap(XModifierKeymap *modmap);
 int XRefreshKeyboardMapping(XMappingEvent *event_map);
 
 int XSupportsLocale(void);
+
+int XDefaultDepth(Display *display, int screen);
+int XReparentWindow(Display *display, Window w, Window parent, int x, int y);
+int XRegisterIMInstantiateCallback(Display *display, void *rdb, char *res_name, char *res_class, void (*callback)(Display *, void *, void *), void *client_data);
+int XSetWMProtocols(Display *display, Window w, Atom *protocols, int count);
+int XConnectionNumber(Display *display);
+Bool XFilterEvent(XEvent *event, Window w);
+int XParseGeometry(const char *parsestring, int *x_return, int *y_return, unsigned int *width_return, unsigned int *height_return);
+int XSetWMName(Display *display, Window w, void *text_prop);
+int XSetTextProperty(Display *display, Window w, void *text_prop, Atom property);
+int Xutf8TextListToTextProperty(Display *display, char **list, int count, XICCEncodingStyle style, void *text_prop_return);
+int XSetWMIconName(Display *display, Window w, void *text_prop);
+int XSetICValues(XIC ic, ...);
+char *XSetLocaleModifiers(const char *modifier_list);
+XIM XOpenIM(Display *display, void *rdb, char *res_name, char *res_class);
+int XSetIMValues(XIM im, ...);
+void *XVaCreateNestedList(int dummy, ...);
+void *XAllocSizeHints(void);
+int XSetWMProperties(Display *display, Window w, void *window_name, void *icon_name, char **argv, int argc, void *normal_hints, void *wm_hints, void *class_hints);
+int XmbLookupString(XIC ic, XKeyEvent *event, char *buffer, int nbytes, KeySym *keysym, void *status);
+int XSetICFocus(XIC ic);
+int XUnsetICFocus(XIC ic);
+int XDefaultScreen(Display *display);
+Visual *XDefaultVisual(Display *display, int screen);
+Colormap XDefaultColormap(Display *display, int screen);
+Window XRootWindow(Display *display, int screen);
+int XRecolorCursor(Display *display, Cursor cursor, XColor *foreground, XColor *background);
+XIC XCreateIC(XIM im, ...);
+int XUnregisterIMInstantiateCallback(Display *display, void *rdb, char *res_name, char *res_class, void (*callback)(Display *, void *, void *), void *client_data);
 
 #endif

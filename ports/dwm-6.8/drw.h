@@ -9,14 +9,14 @@ struct user_font;
 typedef struct Fnt {
 	Display *dpy;
 	unsigned int h;
-	const struct user_font *ufont;
+	XftFont *xfont;           /* Upstream compatibility */
+	FcPattern *pattern;       /* Upstream compatibility */
+	const struct user_font *ufont;  /* auxv6 specific */
 	struct Fnt *next;
 } Fnt;
 
 enum { ColFg, ColBg, ColBorder }; /* Clr scheme index */
-typedef struct {
-	unsigned long pixel;
-} Clr;
+typedef XftColor Clr;  /* Match upstream XftColor for compatibility */
 #else
 typedef struct Fnt {
 	Display *dpy;

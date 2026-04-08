@@ -399,9 +399,19 @@ aux_xinit(int cols, int rows)
 {
 	int w;
 	int h;
+	XFontStruct *fontinfo;
 
-	auxw.cw = MAX((int)(8 * cwscale), 1);
-	auxw.ch = MAX((int)(16 * chscale), 1);
+	/* Load configured font and get actual metrics */
+	fontinfo = XLoadQueryFont(auxw.dpy, font);
+	if (fontinfo) {
+		auxw.cw = MAX((int)(fontinfo->max_bounds.width * cwscale), 1);
+		auxw.ch = MAX((int)((fontinfo->ascent + fontinfo->descent) * chscale), 1);
+		XFree(fontinfo);
+	} else {
+		/* Fallback to 8x16 if font load fails */
+		auxw.cw = MAX((int)(8 * cwscale), 1);
+		auxw.ch = MAX((int)(16 * chscale), 1);
+	}
 	w = 2 * borderpx + cols * auxw.cw;
 	h = 2 * borderpx + rows * auxw.ch;
 

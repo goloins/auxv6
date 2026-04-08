@@ -52,7 +52,7 @@ CFLAGS := -fno-pic -static -fno-builtin -fno-strict-aliasing -O2 -Wall -MD -ggdb
           $(INCS) $(CPPFLAGS)
 LDFLAGS := -N -e _start -Ttext 0 -m $(shell $(LD) -V 2>/dev/null | grep elf_i386 | head -1)
 
-SRC := $(ST_DIR)/st.c $(ST_DIR)/x-auxv6.c $(ST_DIR)/compat/wchar.c $(ST_DIR)/compat/stubs.c
+SRC := $(ST_DIR)/st.c $(ST_DIR)/x.c $(ST_DIR)/compat/wchar.c $(ST_DIR)/compat/stubs.c
 OBJ := $(SRC:.c=.o)
 
 RUNTIME_OBJS := \

@@ -60,7 +60,7 @@ CFLAGS := -fno-pic -static -fno-builtin -fno-strict-aliasing -O2 -Wall -MD -ggdb
           $(INCS) $(CPPFLAGS)
 LDFLAGS := -N -e _start -Ttext 0 -m $(shell $(LD) -V 2>/dev/null | grep elf_i386 | head -1)
 
-SRC := $(DWM_DIR)/drw-auxv6.c $(DWM_DIR)/dwm.c $(DWM_DIR)/util.c
+SRC := $(DWM_DIR)/drw.c $(DWM_DIR)/dwm.c $(DWM_DIR)/util.c
 OBJ := $(SRC:.c=.o)
 
 RUNTIME_OBJS := \

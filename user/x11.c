@@ -5,9 +5,13 @@
 #include "stdlib.h"
 #include "string.h"
 #include "poll.h"
+#include "sys/select.h"
+#include "signal.h"
+#include "time.h"
 #include "X11/Xlib.h"
 #include "X11/Xutil.h"
 #include "X11/keysym.h"
+#include "X11/Xft/Xft.h"
 
 #define X6_PORT 6006
 #define X6_BUF_SIZE 1024
@@ -72,26 +76,6 @@ typedef struct {
   } max_bounds;
   void *per_char;  /* Not used in our impl but in X protocol */
 } XFontStruct;
-
-/* XColor - minimal definition for auxv6 */
-typedef struct {
-  unsigned long pixel;
-  unsigned short red;
-  unsigned short green;
-  unsigned short blue;
-  char flags;
-} XColor;
-
-/* Visual - minimal definition for auxv6 */
-typedef struct {
-  XID visualid;
-  int class;
-  unsigned long red_mask;
-  unsigned long green_mask;
-  unsigned long blue_mask;
-  int bits_per_rgb;
-  int map_entries;
-} Visual;
 
 /* Color allocation cache */
 #define X11_MAX_COLORS 256
@@ -1107,6 +1091,30 @@ int XDeleteProperty(Display *display, Window w, Atom property) {
   return 0;
 }
 
+int XSetSelectionOwner(Display *display, Atom selection, Window owner, Time time) {
+  (void)display;
+  (void)selection;
+  (void)owner;
+  (void)time;
+  return 1;  /* Simplified: just succeed */
+}
+
+int XGetSelectionOwner(Display *display, Atom selection) {
+  (void)display;
+  (void)selection;
+  return 0;  /* No selection owner */
+}
+
+int XConvertSelection(Display *display, Atom selection, Atom target, Atom property, Window requestor, Time time) {
+  (void)display;
+  (void)selection;
+  (void)target;
+  (void)property;
+  (void)requestor;
+  (void)time;
+  return 1;  /* Simplified: just succeed */
+}
+
 Status XSendEvent(Display *display, Window w, Bool propagate, long event_mask, XEvent *event_send) {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
   (void)w;
@@ -2087,3 +2095,558 @@ int XSetClassHint(Display *display, Window w, XClassHint *class_hints) {
   return XChangeProperty(display, w, XInternAtom(display, "WM_CLASS", False), XA_STRING, 8,
                          PropModeReplace, (unsigned char *)buf, (int)strlen(buf));
 }
+
+/* ------- Xft function implementations for st compatibility ------- */
+
+XftDraw *XftDrawCreate(Display *display, Drawable drawable, Visual *visual, Colormap colormap) {
+  XftDraw *d = (XftDraw *)malloc(sizeof(*d));
+  if (d) {
+    d->drawable = drawable;
+    d->display = display;
+  }
+  (void)visual;
+  (void)colormap;
+  return d;
+}
+
+void XftDrawChange(XftDraw *draw, Drawable drawable) {
+  if (draw)
+    draw->drawable = drawable;
+}
+
+void XftDrawDestroy(XftDraw *draw) {
+  free(draw);
+}
+
+void XftDrawRect(XftDraw *draw, XftColor *color, int x, int y, unsigned int width, unsigned int height) {
+  (void)draw;
+  (void)color;
+  (void)x;
+  (void)y;
+  (void)width;
+  (void)height;
+  /* Stub: rect drawing not needed for st */
+}
+
+void XftDrawSetClipRectangles(XftDraw *draw, int xOrigin, int yOrigin, XRectangle *rects, int nrects) {
+  (void)draw;
+  (void)xOrigin;
+  (void)yOrigin;
+  (void)rects;
+  (void)nrects;
+  /* Stub: clipping not needed for basic rendering */
+}
+
+void XftDrawSetClip(XftDraw *draw, void *clip) {
+  (void)draw;
+  (void)clip;
+  /* Stub: clipping not needed for basic rendering */
+}
+
+void XftDrawGlyphFontSpec(XftDraw *draw, XftColor *color, XftGlyphFontSpec *glyphs, int nglyphs) {
+  (void)draw;
+  (void)color;
+  (void)glyphs;
+  (void)nglyphs;
+  /* Stub: glyph-spec rendering not needed for basic st */
+}
+
+int XftColorAllocValue(Display *display, Visual *visual, Colormap colormap, XColor *color, XftColor *result) {
+  if (!color || !result)
+    return 0;
+  (void)display;
+  (void)visual;
+  (void)colormap;
+  result->pixel = color->pixel;
+  result->color.red = color->red;
+  result->color.green = color->green;
+  result->color.blue = color->blue;
+  result->color.alpha = 65535; /* fully opaque */
+  return 1;
+}
+
+int XftColorAllocName(Display *display, Visual *visual, Colormap colormap, const char *name, XftColor *result) {
+  XColor xc;
+  if (!XParseColor(display, colormap, name, &xc))
+    return 0;
+  if (!XAllocColor(display, colormap, &xc))
+    return 0;
+  return XftColorAllocValue(display, visual, colormap, &xc, result);
+}
+
+void XftColorFree(Display *display, Visual *visual, Colormap colormap, XftColor *color) {
+  (void)display;
+  (void)visual;
+  (void)colormap;
+  (void)color;
+  /* Pixel is already allocated; XAllocColor handles caching */
+}
+
+XftFont *XftFontOpenPattern(Display *display, XftPattern *pattern) {
+  XftFont *f;
+  (void)display;
+  (void)pattern;
+  
+  f = (XftFont *)malloc(sizeof(*f));
+  if (f) {
+    f->pattern = pattern;
+    f->charset = 0;
+    f->ascent = 12;
+    f->descent = 4;
+    f->height = 16;
+    f->max_advance_width = 8;
+  }
+  return f;
+}
+
+void XftFontClose(Display *display, XftFont *font) {
+  (void)display;
+  free(font);
+}
+
+XftFont *XftFontOpenName(Display *display, int screen, const char *xlfd) {
+  XftFont *f;
+  (void)screen;
+  (void)xlfd;
+  
+  f = (XftFont *)malloc(sizeof(*f));
+  if (f) {
+    f->pattern = 0;
+    f->charset = 0;
+    f->ascent = 12;
+    f->descent = 4;
+    f->height = 16;
+    f->max_advance_width = 8;
+  }
+  return f;
+}
+
+XftPattern *XftPatternCreate(void) {
+  return (XftPattern *)malloc(1);
+}
+
+void XftPatternDestroy(XftPattern *p) {
+  free(p);
+}
+
+void XftDefaultSubstitute(Display *display, int screen, XftPattern *pattern) {
+  (void)display;
+  (void)screen;
+  (void)pattern;
+  /* Stub - no substitution needed */
+}
+
+XftResult XftPatternGetInteger(XftPattern *p, const char *object, int id, int *i) {
+  (void)p;
+  (void)object;
+  (void)id;
+  (void)i;
+  return XftResultNoMatch;
+}
+
+int XftCharExists(Display *display, XftFont *font, FcChar32 ucs4) {
+  (void)display;
+  (void)font;
+  (void)ucs4;
+  return 1;  /* Assume all chars exist */
+}
+
+unsigned int XftCharIndex(XftFont *font, FcChar32 ucs4) {
+  (void)font;
+  return (unsigned int)ucs4;  /* Simplified: treat codepoint as index */
+}
+
+XftPattern *XftFontMatch(Display *display, int screen, XftPattern *pattern, XftResult *result) {
+  (void)display;
+  (void)screen;
+  (void)pattern;
+  if (result)
+    *result = XftResultMatch;
+  return (XftPattern *)malloc(1);
+}
+
+void XftDrawStringUtf8(XftDraw *draw, XftColor *color, XftFont *font, int x, int y, const XftChar8 *string, int len) {
+  (void)draw;
+  (void)color;
+  (void)font;
+  (void)x;
+  (void)y;
+  (void)string;
+  (void)len;
+  /* Stub: text rendering to be implemented when pixmap text support is added */
+}
+
+void XftTextExtentsUtf8(Display *display, XftFont *font, const XftChar8 *string, int len, XGlyphInfo *extents) {
+  (void)display;
+  (void)font;
+  (void)string;
+  
+  if (extents) {
+    /* Stub: return reasonable defaults (8x16 font metrics) */
+    extents->width = len * 8;
+    extents->height = 16;
+    extents->x = 0;
+    extents->y = -12;
+    extents->xOff = len * 8;
+    extents->yOff = 0;
+  }
+}
+
+FcCharSet *FcCharSetCreate(void) {
+  return (FcCharSet *)malloc(1);
+}
+
+void FcCharSetDestroy(FcCharSet *fcs) {
+  free(fcs);
+}
+
+FcBool FcCharSetAddChar(FcCharSet *fcs, FcChar32 ucs4) {
+  (void)fcs;
+  (void)ucs4;
+  return 1;
+}
+
+FcPattern *FcNameParse(const FcChar8 *name) {
+  FcPattern *p = (FcPattern *)malloc(1);
+  (void)name;
+  return p;
+}
+
+void FcPatternDestroy(FcPattern *p) {
+  free(p);
+}
+
+void FcFontSetDestroy(FcFontSet *ffs) {
+  free(ffs);
+}
+
+FcPattern *FcPatternDuplicate(FcPattern *p) {
+  FcPattern *dup = (FcPattern *)malloc(1);
+  (void)p;
+  return dup;
+}
+
+FcBool FcPatternAddCharSet(FcPattern *p, const char *object, FcCharSet *charset) {
+  (void)p;
+  (void)object;
+  (void)charset;
+  return 1;
+}
+
+FcBool FcPatternAddBool(FcPattern *p, const char *object, FcBool b) {
+  (void)p;
+  (void)object;
+  (void)b;
+  return 1;
+}
+
+FcBool FcConfigSubstitute(void *config, FcPattern *p, FcMatchKind kind) {
+  (void)config;
+  (void)p;
+  (void)kind;
+  return 1;
+}
+
+void FcDefaultSubstitute(FcPattern *pattern) {
+  (void)pattern;
+  /* Stub */
+}
+
+FcPattern *FcFontSetMatch(void *config, FcFontSet **sets, int nsets, FcPattern *p, FcResult *result) {
+  (void)config;
+  (void)sets;
+  (void)nsets;
+  (void)p;
+  if (result)
+    *result = FcResultMatch;
+  return (FcPattern *)malloc(1);
+}
+
+FcFontSet *FcFontSort(void *config, FcPattern **patterns, int npatterns, FcBool trim, FcCharSet **csp, FcResult *result) {
+  FcFontSet *fs = (FcFontSet *)malloc(sizeof(*fs));
+  (void)config;
+  (void)patterns;
+  (void)npatterns;
+  (void)trim;
+  (void)csp;
+  if (result)
+    *result = FcResultMatch;
+  return fs;
+}
+
+FcPattern *FcFontMatch(void *config, FcPattern *p, FcResult *result) {
+  (void)config;
+  (void)p;
+  if (result)
+    *result = FcResultMatch;
+  return (FcPattern *)malloc(1);
+}
+
+FcBool FcPatternDel(FcPattern *p, const char *object) {
+  (void)p;
+  (void)object;
+  return 1;
+}
+
+FcBool FcPatternAddDouble(FcPattern *p, const char *object, double d) {
+  (void)p;
+  (void)object;
+  (void)d;
+  return 1;
+}
+
+FcBool FcPatternAddInteger(FcPattern *p, const char *object, int i) {
+  (void)p;
+  (void)object;
+  (void)i;
+  return 1;
+}
+
+FcResult FcPatternGetDouble(FcPattern *p, const char *object, int id, double *d) {
+  (void)p;
+  (void)object;
+  (void)id;
+  if (d)
+    *d = 12.0;  /* Default font size */
+  return FcResultMatch;
+}
+
+XftPattern *XftXlfdParse(const char *xlfd, int expand, FcBool ignore_scalable) {
+  XftPattern *p = (XftPattern *)malloc(1);
+  (void)xlfd;
+  (void)expand;
+  (void)ignore_scalable;
+  return p;
+}
+
+int XDefaultDepth(Display *display, int screen) {
+  (void)screen;
+  if (!display)
+    return 24;
+  return display->depth;
+}
+
+int XReparentWindow(Display *display, Window w, Window parent, int x, int y) {
+  (void)display;
+  (void)w;
+  (void)parent;
+  (void)x;
+  (void)y;
+  return 0;
+}
+
+int XRegisterIMInstantiateCallback(Display *display, void *rdb, char *res_name, char *res_class, void (*callback)(Display *, void *, void *), void *client_data) {
+  (void)display;
+  (void)rdb;
+  (void)res_name;
+  (void)res_class;
+  (void)callback;
+  (void)client_data;
+  return 1;
+}
+
+int XSetWMProtocols(Display *display, Window w, Atom *protocols, int count) {
+  (void)display;
+  (void)w;
+  (void)protocols;
+  (void)count;
+  return 1;
+}
+
+int XConnectionNumber(Display *display) {
+  if (!display)
+    return -1;
+  return display->fd;
+}
+
+Bool XFilterEvent(XEvent *event, Window w) {
+  (void)event;
+  (void)w;
+  return False;
+}
+
+int XParseGeometry(const char *parsestring, int *x_return, int *y_return, unsigned int *width_return, unsigned int *height_return) {
+  (void)parsestring;
+  (void)x_return;
+  (void)y_return;
+  (void)width_return;
+  (void)height_return;
+  return 0;
+}
+
+/* POSIX select wrapper for st */
+int pselect(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
+            const struct timespec *timeout, const sigset_t *sigmask) {
+  struct timeval tv, *tvp = NULL;
+  
+  (void)sigmask; /* ignore signal mask for this stub */
+  
+  if (timeout) {
+    tv.tv_sec = timeout->tv_sec;
+    tv.tv_usec = timeout->tv_nsec / 1000;
+    tvp = &tv;
+  }
+  
+  return select(nfds, readfds, writefds, exceptfds, tvp);
+}
+
+/* Additional X11 functions for st */
+int XSetWMName(Display *display, Window w, void *text_prop) {
+  (void)display;
+  (void)w;
+  (void)text_prop;
+  return 1;
+}
+
+int XSetTextProperty(Display *display, Window w, void *text_prop, Atom property) {
+  (void)display;
+  (void)w;
+  (void)text_prop;
+  (void)property;
+  return 1;
+}
+
+int Xutf8TextListToTextProperty(Display *display, char **list, int count, XICCEncodingStyle style, void *text_prop_return) {
+  (void)display;
+  (void)list;
+  (void)count;
+  (void)style;
+  (void)text_prop_return;
+  return 0; /* Success */
+}
+
+int XSetICValues(XIC ic, ...) {
+  (void)ic;
+  return 0;
+}
+
+int XSetWMIconName(Display *display, Window w, void *text_prop) {
+  (void)display;
+  (void)w;
+  (void)text_prop;
+  return 1;
+}
+
+char *XSetLocaleModifiers(const char *modifier_list) {
+  (void)modifier_list;
+  return "";
+}
+
+XIC XCreateIC(XIM im, ...) {
+  (void)im;
+  return NULL;
+}
+
+int XUnregisterIMInstantiateCallback(Display *display, void *rdb, char *res_name, char *res_class, void (*callback)(Display *, void *, void *), void *client_data) {
+  (void)display;
+  (void)rdb;
+  (void)res_name;
+  (void)res_class;
+  (void)callback;
+  (void)client_data;
+  return 1;
+}
+
+XIM XOpenIM(Display *display, void *rdb, char *res_name, char *res_class) {
+  (void)display;
+  (void)rdb;
+  (void)res_name;
+  (void)res_class;
+  return NULL;
+}
+
+int XSetIMValues(XIM im, ...) {
+  (void)im;
+  return 0;
+}
+
+void *XVaCreateNestedList(int dummy, ...) {
+  (void)dummy;
+  return NULL;
+}
+
+void *XAllocSizeHints(void) {
+  return malloc(sizeof(int) * 18);  /* Approximate size of XSizeHints */
+}
+
+int XSetWMProperties(Display *display, Window w, void *window_name, void *icon_name, char **argv, int argc, void *normal_hints, void *wm_hints, void *class_hints) {
+  (void)display;
+  (void)w;
+  (void)window_name;
+  (void)icon_name;
+  (void)argv;
+  (void)argc;
+  (void)normal_hints;
+  (void)wm_hints;
+  (void)class_hints;
+  return 1;
+}
+
+int XmbLookupString(XIC ic, XKeyEvent *event, char *buffer, int nbytes, KeySym *keysym, void *status) {
+  (void)ic;
+  (void)event;
+  (void)buffer;
+  (void)nbytes;
+  (void)keysym;
+  (void)status;
+  return 0;
+}
+
+int XSetICFocus(XIC ic) {
+  (void)ic;
+  return 0;
+}
+
+int XUnsetICFocus(XIC ic) {
+  (void)ic;
+  return 0;
+}
+
+int XDefaultScreen(Display *display) {
+  if (!display)
+    return 0;
+  return display->screen;
+}
+
+Visual *XDefaultVisual(Display *display, int screen) {
+  (void)screen;
+  static Visual v = {
+    .visualid = 0,
+    .class = 1,
+    .red_mask = 0xFF0000,
+    .green_mask = 0x00FF00,
+    .blue_mask = 0x0000FF,
+    .bits_per_rgb = 8,
+    .map_entries = 256
+  };
+  (void)display;
+  return &v;
+}
+
+FcBool FcInit(void) {
+  return 1;
+}
+
+Colormap XDefaultColormap(Display *display, int screen) {
+  (void)screen;
+  if (!display)
+    return 1;
+  return 1;
+}
+
+Window XRootWindow(Display *display, int screen) {
+  (void)screen;
+  if (!display)
+    return 1;
+  return display->root;
+}
+
+int XRecolorCursor(Display *display, Cursor cursor, XColor *foreground, XColor *background) {
+  (void)display;
+  (void)cursor;
+  (void)foreground;
+  (void)background;
+  return 0;
+}
+
+
