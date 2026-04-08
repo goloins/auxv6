@@ -41,6 +41,7 @@
 #define X6_MAX_EVENTS_PER_CLIENT 64
 #define X6_MAX_CLIENTS 16
 #define X6_MAX_KEY_GRABS 256
+#define X6_MAX_PIXMAPS 32
 #define X6_ANY_MODIFIER (1U << 15)
 
 // Event types
@@ -110,6 +111,17 @@ struct x6_window {
   int prop_count;
 };
 
+struct x6_pixmap {
+  int in_use;
+  uint id;
+  int width;
+  int height;
+  int depth;
+  /* Pixel data: store as uint (assuming 32-bit color ARGB) */
+  uint *pixels;
+  int pixels_size;
+};
+
 struct x6_client {
   int in_use;
   int fd;
@@ -125,7 +137,9 @@ static struct x6_window wins[X6_MAX_WINDOWS];
 static struct x6_window *wins_by_id[256];  // Hash table for O(1) window lookup by ID (id % 256)
 static struct x6_client clients[X6_MAX_CLIENTS];
 static struct x6_key_grab key_grabs[X6_MAX_KEY_GRABS];
+static struct x6_pixmap pixmaps[X6_MAX_PIXMAPS];
 static uint x6_next_wid = 2;  // Server-assigned window IDs; 0=none, 1=root
+static uint x6_next_pmid = 1001;  // Pixmap IDs start at 1001 (windows use < 1000)
 
 static struct x6_event_queue *current_event_queue = 0;
 static struct x6_event_queue *wm_event_queue = 0;
@@ -1482,6 +1496,73 @@ alloc_window(uint id)
   return 0;
 }
 
+static struct x6_pixmap *
+find_pixmap(uint id)
+{
+  int i;
+  for(i = 0; i < X6_MAX_PIXMAPS; i++) {
+    if(pixmaps[i].in_use && pixmaps[i].id == id)
+      return &pixmaps[i];
+  }
+  return 0;
+}
+
+static struct x6_pixmap *
+alloc_pixmap(int width, int height, int depth)
+{
+  int i;
+  struct x6_pixmap *pm;
+  int size;
+  
+  if(width < 1 || height < 1 || depth < 1)
+    return 0;
+  
+  /* Limit pixmap size to prevent excessive memory use
+   * Allow up to ~4MB per pixmap (assuming 4 bytes per pixel)
+   */
+  if((long)width * height > 1000000)
+    return 0;
+  
+  for(i = 0; i < X6_MAX_PIXMAPS; i++) {
+    if(!pixmaps[i].in_use) {
+      pm = &pixmaps[i];
+      size = width * height;
+      
+      /* Allocate pixel buffer */
+      pm->pixels = (uint*)malloc(size * sizeof(uint));
+      if(!pm->pixels)
+        return 0;
+      
+      pm->in_use = 1;
+      pm->id = x6_next_pmid++;
+      pm->width = width;
+      pm->height = height;
+      pm->depth = depth;
+      pm->pixels_size = size;
+      
+      /* Initialize to black */
+      memset(pm->pixels, 0, size * sizeof(uint));
+      return pm;
+    }
+  }
+  return 0;
+}
+
+static void
+destroy_pixmap(uint id)
+{
+  struct x6_pixmap *pm;
+  
+  pm = find_pixmap(id);
+  if(pm) {
+    if(pm->pixels) {
+      free(pm->pixels);
+      pm->pixels = 0;
+    }
+    pm->in_use = 0;
+  }
+}
+
 static void
 destroy_window(uint id)
 {
@@ -1690,15 +1771,59 @@ handle_one_command(int cfd, char *cmd)
     return;
   }
 
+  /* Pixmap management commands */
+  if(sscanf(cmd, "CREATE_PIXMAP %u %d %d %d", &id, &w, &h, &x) == 4) {
+    /* CREATE_PIXMAP <depth> <width> <height> <format> */
+    struct x6_pixmap *pm;
+    pm = alloc_pixmap(w, h, x);  /* x is actually depth/format */
+    if(!pm) {
+      x6_send_line(cfd, "ERR no-slots\n");
+      return;
+    }
+    {
+      char out[64];
+      snprintf(out, sizeof(out), "OK create_pixmap pmid=%u\n", pm->id);
+      x6_send_line(cfd, out);
+    }
+    return;
+  }
+
+  if(sscanf(cmd, "DESTROY_PIXMAP %u", &id) == 1) {
+    destroy_pixmap(id);
+    x6_send_line(cfd, "OK destroy_pixmap\n");
+    return;
+  }
+
   if(sscanf(cmd, "DRAW_RECT %u %d %d %u %u %u", &id, &x, &y, &uw, &uh, &color) == 6) {
     int ox = 0;
     int oy = 0;
+    struct x6_pixmap *pm = 0;
+    
     if(uw == 0 || uh == 0 || uw > 4096U || uh > 4096U) {
       x6_send_line(cfd, "OK draw\n");
       return;
     }
     w = (int)uw;
     h = (int)uh;
+    
+    /* Check if target is a pixmap */
+    pm = find_pixmap((uint)id);
+    if(pm) {
+      /* Draw to pixmap buffer */
+      int i, j, px, py;
+      for(j = 0; j < h && (y + j) < pm->height; j++) {
+        for(i = 0; i < w && (x + i) < pm->width; i++) {
+          px = x + i;
+          py = y + j;
+          if(px >= 0 && px < pm->width && py >= 0 && py < pm->height)
+            pm->pixels[py * pm->width + px] = color;
+        }
+      }
+      x6_send_line(cfd, "OK draw\n");
+      return;
+    }
+    
+    /* Otherwise, treat as window */
     if(id != (uint)wm_redirect_root) {
       win = find_window(id);
       if(win == 0) {
@@ -1723,6 +1848,16 @@ handle_one_command(int cfd, char *cmd)
     if(x6_parse_draw_text(cmd, &id, &x, &y, &color, &tlen, &text) == 0) {
       int ox;
       int oy;
+      struct x6_pixmap *pm;
+
+      /* Check if target is a pixmap */
+      pm = find_pixmap((uint)id);
+      if(pm) {
+        /* FIXME: Implement text rendering to pixmap pixel buffer */
+        /* For now, silently skip (don't display text in pixmap) */
+        x6_send_line(cfd, "OK text\n");
+        return;
+      }
 
       ox = 0;
       oy = 0;
@@ -1745,6 +1880,66 @@ handle_one_command(int cfd, char *cmd)
       x6_send_line(cfd, "OK text\n");
       return;
     }
+  }
+
+  /* COPY_AREA command: Copy pixels from source drawable (pixmap or window) to destination drawable */
+  if(sscanf(cmd, "COPY_AREA %lu %lu %d %d %u %u %d %d", &id, &w, &x, &y, &uw, &uh, &h, &color) == 8) {
+    struct x6_pixmap *src_pm = 0;
+    struct x6_window *dest_win = 0;
+    int src_x, src_y, dest_x, dest_y;
+    unsigned int width, height;
+    int i, j, si, sj;
+    uint pixel;
+    
+    /* Parse: COPY_AREA <src> <dest> <src_x> <src_y> <width> <height> <dest_x> <dest_y> */
+    /* id=src, w=dest, x=src_x, y=src_y, uw=width, uh=height, h=dest_x, color=dest_y */
+    src_x = x;
+    src_y = y;
+    width = uw;
+    height = uh;
+    dest_x = h;
+    dest_y = color;
+    
+    /* Source should be a pixmap */
+    src_pm = find_pixmap((uint)id);
+    if(!src_pm) {
+      x6_send_line(cfd, "ERR source-not-found\n");
+      return;
+    }
+    
+    /* Destination should be a window */
+    dest_win = find_window((uint)w);
+    if(!dest_win) {
+      x6_send_line(cfd, "ERR dest-not-found\n");
+      return;
+    }
+    
+    if(!dest_win->mapped) {
+      /* Silently succeed even if dest not mapped (happens in redraw) */
+      x6_send_line(cfd, "OK copy_area\n");
+      return;
+    }
+    
+    /* Copy pixels from pixmap to window framebuffer */
+    for(j = 0; j < (int)height && (src_y + j) < src_pm->height; j++) {
+      for(i = 0; i < (int)width && (src_x + i) < src_pm->width; i++) {
+        si = src_y + j;
+        sj = src_x + i;
+        pixel = src_pm->pixels[si * src_pm->width + sj];
+        /* Draw this pixel to the destination window */
+        /* For now, we convert pixels to the canvas color space */
+        /* TODO: Handle depth conversion if needed */
+        int canvas_x = dest_win->x + dest_x + i;
+        int canvas_y = dest_win->y + dest_y + j;
+        if(canvas_x >= 0 && canvas_x < X6_CANVAS_COLS && 
+           canvas_y >= 0 && canvas_y < X6_CANVAS_ROWS) {
+          canvas_pixels[canvas_y][canvas_x] = pixel;
+        }
+      }
+    }
+    
+    x6_send_line(cfd, "OK copy_area\n");
+    return;
   }
 
   // Phase 2.1b: REQUEST_REDIRECT for WM to claim SubstructureRedirect on root

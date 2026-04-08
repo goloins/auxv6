@@ -14,6 +14,11 @@
 #define X11_RXBUF_SIZE 4096
 #define X11_MAX_ATOMS 256
 #define X11_MAX_GCS 128
+#define X11_MAX_PIXMAPS 256
+#define X11_MAX_FONTS 16
+#define DoRed 1
+#define DoGreen 2
+#define DoBlue 4
 
 typedef struct {
   Atom atom;
@@ -39,7 +44,72 @@ struct x11_gc_state {
   unsigned long fg;
 };
 
+struct x11_pixmap_state {
+  int in_use;
+  Pixmap id;
+  unsigned int width;
+  unsigned int height;
+  unsigned int depth;
+};
+
+struct x11_font_state {
+  int in_use;
+  Font id;
+  char name[128];
+  int ascent;
+  int descent;
+  int height;
+  int width;  /* For monospace fonts */
+};
+
+/* XFontStruct - minimal definition for auxv6 */
+typedef struct {
+  Font fid;
+  int ascent;
+  int descent;
+  struct {
+    int width;
+  } max_bounds;
+  void *per_char;  /* Not used in our impl but in X protocol */
+} XFontStruct;
+
+/* XColor - minimal definition for auxv6 */
+typedef struct {
+  unsigned long pixel;
+  unsigned short red;
+  unsigned short green;
+  unsigned short blue;
+  char flags;
+} XColor;
+
+/* Visual - minimal definition for auxv6 */
+typedef struct {
+  XID visualid;
+  int class;
+  unsigned long red_mask;
+  unsigned long green_mask;
+  unsigned long blue_mask;
+  int bits_per_rgb;
+  int map_entries;
+} Visual;
+
+/* Color allocation cache */
+#define X11_MAX_COLORS 256
+struct x11_color_entry {
+  int in_use;
+  unsigned long pixel;
+  unsigned short red;
+  unsigned short green;
+  unsigned short blue;
+};
+static struct x11_color_entry g_colors[X11_MAX_COLORS];
+
+static struct x11_font_state g_fonts[X11_MAX_FONTS];
+static unsigned long g_next_font = 1;
+
 static struct x11_gc_state g_gcs[X11_MAX_GCS];
+static struct x11_pixmap_state g_pixmaps[X11_MAX_PIXMAPS];
+static unsigned long g_next_pixmap = 2;  // Start after window IDs
 
 static struct x11_gc_state *
 x11_find_gc(GC gc)
@@ -62,6 +132,119 @@ x11_alloc_gc(void)
       g_gcs[i].id = g_next_gc++;
       g_gcs[i].fg = 0xffffffUL;
       return &g_gcs[i];
+    }
+  }
+  return 0;
+}
+
+static struct x11_pixmap_state *
+x11_find_pixmap(Pixmap pm)
+{
+  int i;
+  for (i = 0; i < X11_MAX_PIXMAPS; i++) {
+    if (g_pixmaps[i].in_use && g_pixmaps[i].id == pm)
+      return &g_pixmaps[i];
+  }
+  return 0;
+}
+
+static struct x11_pixmap_state *
+x11_alloc_pixmap(unsigned int width, unsigned int height, unsigned int depth)
+{
+  int i;
+  if (width == 0 || height == 0)
+    return 0;
+  for (i = 0; i < X11_MAX_PIXMAPS; i++) {
+    if (!g_pixmaps[i].in_use) {
+      g_pixmaps[i].in_use = 1;
+      g_pixmaps[i].id = g_next_pixmap++;
+      g_pixmaps[i].width = width;
+      g_pixmaps[i].height = height;
+      g_pixmaps[i].depth = depth;
+      return &g_pixmaps[i];
+    }
+  }
+  return 0;
+}
+
+static struct x11_color_entry *
+x11_alloc_color(unsigned short red, unsigned short green, unsigned short blue)
+{
+  int i;
+  for (i = 0; i < X11_MAX_COLORS; i++) {
+    if (!g_colors[i].in_use) {
+      g_colors[i].in_use = 1;
+      g_colors[i].red = red;
+      g_colors[i].green = green;
+      g_colors[i].blue = blue;
+      /* Convert 16-bit color to 24-bit pixel value */
+      g_colors[i].pixel = ((unsigned long)(red >> 8) << 16) | 
+                          ((unsigned long)(green >> 8) << 8) | 
+                          (unsigned long)(blue >> 8);
+      return &g_colors[i];
+    }
+  }
+  return 0;
+}
+
+static struct x11_font_state *
+x11_find_font(Font fid)
+{
+  int i;
+  for (i = 0; i < X11_MAX_FONTS; i++) {
+    if (g_fonts[i].in_use && g_fonts[i].id == fid)
+      return &g_fonts[i];
+  }
+  return 0;
+}
+
+/* Parse font name to extract metrics.
+ * Handles formats like "montecarlo-8x16" or standard XLFD.
+ * Returns width, height, ascent, descent from name. */
+static int
+x11_parse_font_metrics(const char *name, int *width, int *height, int *ascent, int *descent)
+{
+  int w, h;
+  
+  if (!name || !width || !height || !ascent || !descent)
+    return -1;
+  
+  /* Try to parse "name-WxH" format (e.g., "montecarlo-8x16") */
+  if (sscanf(name, "%*[^-]-%dx%d", &w, &h) == 2) {
+    *width = w;
+    *height = h;
+    *ascent = (h * 3) / 4;  /* Approximate: 3/4 of height */
+    *descent = h / 4;       /* Approximate: 1/4 of height */
+    return 0;
+  }
+  
+  /* Default fallback */
+  *width = 8;
+  *height = 16;
+  *ascent = 12;
+  *descent = 4;
+  return 0;
+}
+
+static struct x11_font_state *
+x11_alloc_font(const char *name)
+{
+  int i, w, h, a, d;
+  
+  if (!name || x11_parse_font_metrics(name, &w, &h, &a, &d) < 0)
+    return 0;
+  
+  for (i = 0; i < X11_MAX_FONTS; i++) {
+    if (!g_fonts[i].in_use) {
+      g_fonts[i].in_use = 1;
+      g_fonts[i].id = g_next_font++;
+      strncpy(g_fonts[i].name, name, sizeof(g_fonts[i].name) - 1);
+      g_fonts[i].name[sizeof(g_fonts[i].name) - 1] = 0;
+      g_fonts[i].width = w;
+      g_fonts[i].height = h;
+      g_fonts[i].ascent = a;
+      g_fonts[i].descent = d;
+      return &g_fonts[i];
     }
   }
   return 0;
@@ -1106,8 +1289,56 @@ int XUndefineCursor(Display *display, Window w) {
 Cursor XCreateFontCursor(Display *display, unsigned int shape) { (void)display; return (Cursor)(shape + 1); }
 int XFreeCursor(Display *display, Cursor cursor) { (void)display; (void)cursor; return 0; }
 
-Pixmap XCreatePixmap(Display *display, Drawable d, unsigned int width, unsigned int height, unsigned int depth) { (void)display; (void)d; (void)width; (void)height; (void)depth; return 1; }
-int XFreePixmap(Display *display, Pixmap pixmap) { (void)display; (void)pixmap; return 0; }
+Pixmap XCreatePixmap(Display *display, Drawable d, unsigned int width, unsigned int height, unsigned int depth) {
+  struct x11_pixmap_state *pm;
+  char cmd[256];
+  char response[128];
+  
+  if (!display || width == 0 || height == 0)
+    return 0;
+  
+  /* Allocate client-side pixmap tracking struct first */
+  pm = x11_alloc_pixmap(width, height, depth);
+  if (!pm)
+    return 0;
+  
+  /* Send CREATE_PIXMAP command to x6 server */
+  snprintf(cmd, sizeof(cmd), "CREATE_PIXMAP %u %u %u %u\n", depth, width, height, depth);
+  
+  /* For now, we don't synchronously wait for the response
+   * The pixmap ID we return is our server-generated ID
+   * In a full implementation, we'd match against x6's ID
+   */
+  if (x11_cmd(display, cmd, response, sizeof(response)) == 0) {
+    /* Parse "OK create_pixmap pmid=XXXX" response if needed */
+    /* For now, just return our allocated pixmap ID */
+    (void)response;  /* Suppress unused warning */
+  }
+  
+  return pm->id;
+}
+
+int XFreePixmap(Display *display, Pixmap pixmap) {
+  struct x11_pixmap_state *pm;
+  char cmd[256];
+  char response[128];
+  
+  pm = x11_find_pixmap(pixmap);
+  if (!pm)
+    return 0;
+  
+  /* Send DESTROY_PIXMAP command to x6 server */
+  snprintf(cmd, sizeof(cmd), "DESTROY_PIXMAP %u\n", pixmap);
+  
+  if (display) {
+    x11_cmd(display, cmd, response, sizeof(response));
+  }
+  
+  /* Mark as unused in client tracking */
+  pm->in_use = 0;
+  
+  return 0;
+}
 GC XCreateGC(Display *display, Drawable d, unsigned long valuemask, void *values) {
   struct x11_gc_state *gs;
   (void)display;
@@ -1138,6 +1369,210 @@ int XSetForeground(Display *display, GC gc, unsigned long foreground) {
 int XSetLineAttributes(Display *display, GC gc, unsigned int line_width, int line_style, int cap_style, int join_style) {
   (void)display; (void)gc; (void)line_width; (void)line_style; (void)cap_style; (void)join_style; return 0;
 }
+
+int XParseColor(Display *display, Colormap colormap, const char *spec, XColor *exact_def_return) {
+  int r, g, b;
+  
+  (void)display;
+  (void)colormap;
+  
+  if (!spec || !exact_def_return)
+    return 0;
+  
+  /* Parse hex color "#RRGGBB" */
+  if (spec[0] == '#' && strlen(spec) == 7) {
+    if (sscanf(spec, "#%02x%02x%02x", &r, &g, &b) == 3) {
+      exact_def_return->red = (unsigned short)(r << 8);
+      exact_def_return->green = (unsigned short)(g << 8);
+      exact_def_return->blue = (unsigned short)(b << 8);
+      exact_def_return->pixel = ((r & 0xff) << 16) | ((g & 0xff) << 8) | (b & 0xff);
+      exact_def_return->flags = DoRed | DoGreen | DoBlue;
+      return 1;
+    }
+  }
+  
+  /* Parse common color names */
+  if (!strcmp(spec, "black")) {
+    exact_def_return->red = 0;
+    exact_def_return->green = 0;
+    exact_def_return->blue = 0;
+    exact_def_return->pixel = 0;
+    exact_def_return->flags = DoRed | DoGreen | DoBlue;
+    return 1;
+  } else if (!strcmp(spec, "white")) {
+    exact_def_return->red = 0xffff;
+    exact_def_return->green = 0xffff;
+    exact_def_return->blue = 0xffff;
+    exact_def_return->pixel = 0xffffff;
+    exact_def_return->flags = DoRed | DoGreen | DoBlue;
+    return 1;
+  }
+  
+  return 0;
+}
+
+int XAllocColor(Display *display, Colormap colormap, XColor *screen_in_out) {
+  struct x11_color_entry *ce;
+  unsigned long pixel;
+  
+  (void)display;
+  (void)colormap;
+  
+  if (!screen_in_out)
+    return 0;
+  
+  /* Allocate and store the color */
+  ce = x11_alloc_color(screen_in_out->red, screen_in_out->green, screen_in_out->blue);
+  if (!ce)
+    return 0;
+  
+  /* Return the allocated pixel value */
+  pixel = ce->pixel;
+  screen_in_out->pixel = pixel & 0xffffff; /* 24-bit RGB */
+  screen_in_out->flags = DoRed | DoGreen | DoBlue;
+  
+  return 1;
+}
+
+Colormap XCreateColormap(Display *display, Window w, Visual *visual, int alloc) {
+  (void)display;
+  (void)w;
+  (void)visual;
+  (void)alloc;
+  
+  /* Return dummy colormap ID (we don't track colormaps) */
+  return 1;
+}
+
+int XFreeColormap(Display *display, Colormap colormap) {
+  (void)display;
+  (void)colormap;
+  return 0;
+}
+
+Font XLoadFont(Display *display, const char *name) {
+  struct x11_font_state *fs;
+  (void)display;
+  
+  if (!name)
+    return 0;
+  
+  fs = x11_alloc_font(name);
+  if (!fs)
+    return 0;
+  
+  return fs->id;
+}
+
+XFontStruct *XLoadQueryFont(Display *display, const char *name) {
+  XFontStruct *fs_out;
+  struct x11_font_state *fs;
+  
+  (void)display;
+  
+  if (!name)
+    return 0;
+  
+  fs = x11_alloc_font(name);
+  if (!fs)
+    return 0;
+  
+  /* Allocate XFontStruct and populate it */
+  fs_out = (XFontStruct *)malloc(sizeof(*fs_out));
+  if (!fs_out) {
+    fs->in_use = 0;
+    return 0;
+  }
+  
+  memset(fs_out, 0, sizeof(*fs_out));
+  fs_out->fid = fs->id;
+  fs_out->ascent = fs->ascent;
+  fs_out->descent = fs->descent;
+  fs_out->max_bounds.width = fs->width;
+  
+  return fs_out;
+}
+
+XFontStruct *XQueryFont(Display *display, XID fid) {
+  XFontStruct *fs_out;
+  struct x11_font_state *fs;
+  
+  (void)display;
+  
+  fs = x11_find_font((Font)fid);
+  if (!fs)
+    return 0;
+  
+  fs_out = (XFontStruct *)malloc(sizeof(*fs_out));
+  if (!fs_out)
+    return 0;
+  
+  memset(fs_out, 0, sizeof(*fs_out));
+  fs_out->fid = fs->id;
+  fs_out->ascent = fs->ascent;
+  fs_out->descent = fs->descent;
+  fs_out->max_bounds.width = fs->width;
+  
+  return fs_out;
+}
+
+int XUnloadFont(Display *display, Font font) {
+  struct x11_font_state *fs;
+  (void)display;
+  
+  fs = x11_find_font(font);
+  if (fs)
+    fs->in_use = 0;
+  return 0;
+}
+
+int XFreeFontInfo(char **names, XFontStruct *info, int count) {
+  int i;
+  
+  if (info) {
+    for (i = 0; i < count; i++) {
+      free(info[i].per_char);
+    }
+    free(info);
+  }
+  
+  if (names) {
+    for (i = 0; i < count; i++)
+      free(names[i]);
+    free(names);
+  }
+  
+  return 0;
+}
+
+int XTextWidth(XFontStruct *font_struct, const char *string, int count) {
+  struct x11_font_state *fs;
+  
+  if (!font_struct || !string || count <= 0)
+    return 0;
+  
+  /* font_struct->fid is the Font ID we allocated */
+  fs = x11_find_font(font_struct->fid);
+  if (!fs)
+    return 0;
+  
+  /* For monospace fonts, width = char_count * char_width */
+  return count * fs->width;
+}
+
+int XSetFont(Display *display, GC gc, Font font) {
+  struct x11_gc_state *gs;
+  (void)display;
+  (void)font;
+  
+  gs = x11_find_gc(gc);
+  if (!gs)
+    return 0;
+  
+  /* Accept font changes, though we don't track them in GC yet */
+  return 0;
+}
+
 int XFillRectangle(Display *display, Drawable d, GC gc, int x, int y, unsigned int width, unsigned int height) {
   char cmd[X6_BUF_SIZE];
   struct x11_gc_state *gs;
@@ -1194,7 +1629,25 @@ int XDrawString(Display *display, Drawable d, GC gc, int x, int y, const char *s
   return 0;
 }
 int XCopyArea(Display *display, Drawable src, Drawable dest, GC gc, int src_x, int src_y, unsigned int width, unsigned int height, int dest_x, int dest_y) {
-  (void)display; (void)src; (void)dest; (void)gc; (void)src_x; (void)src_y; (void)width; (void)height; (void)dest_x; (void)dest_y; return 0;
+  struct x11_gc_state *gs;
+  char cmd[256];
+  char response[32];
+  int ret;
+  
+  (void)display;
+  
+  gs = x11_find_gc(gc);
+  if (!gs)
+    return 0;
+  
+  /* Send COPY_AREA command to x6 server
+   * Format: COPY_AREA <src> <dest> <src_x> <src_y> <width> <height> <dest_x> <dest_y>
+   */
+  snprintf(cmd, sizeof(cmd), "COPY_AREA %lu %lu %d %d %u %u %d %d\n",
+           src, dest, src_x, src_y, width, height, dest_x, dest_y);
+  
+  ret = x11_cmd(display, cmd, response, sizeof(response));
+  return ret;
 }
 
 int XGetTransientForHint(Display *display, Window w, Window *prop_window_return) {
