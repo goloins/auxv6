@@ -41,8 +41,16 @@
 #define X6_MAX_EVENTS_PER_CLIENT 64
 #define X6_MAX_CLIENTS 16
 #define X6_MAX_KEY_GRABS 256
+#define X6_MAX_BUTTON_GRABS 256
 #define X6_MAX_PIXMAPS 32
+#define X6_MAX_SELECTIONS 16
 #define X6_ANY_MODIFIER (1U << 15)
+#define X6_STATE_BUTTON1 (1U << 8)
+#define X6_STATE_BUTTON2 (1U << 9)
+#define X6_STATE_BUTTON3 (1U << 10)
+#define X6_MASK_ENTER_WINDOW (1L << 4)
+#define X6_MASK_LEAVE_WINDOW (1L << 5)
+#define X6_MASK_PROPERTY_CHANGE (1L << 22)
 
 // Event types
 #define X6_EVENT_MAP_REQUEST 1
@@ -57,6 +65,14 @@
 #define X6_EVENT_CONFIGURE_NOTIFY 10
 #define X6_EVENT_EXPOSE 11
 #define X6_EVENT_CLIENT_MESSAGE 12
+#define X6_EVENT_KEY_RELEASE 13
+#define X6_EVENT_PROPERTY_NOTIFY 14
+#define X6_EVENT_ENTER_NOTIFY 15
+#define X6_EVENT_LEAVE_NOTIFY 16
+#define X6_EVENT_SELECTION_CLEAR 17
+#define X6_EVENT_SELECTION_REQUEST 18
+#define X6_EVENT_SELECTION_NOTIFY 19
+#define X6_EVENT_MAP_NOTIFY 20
 
 struct x6_event {
   int type;
@@ -66,6 +82,15 @@ struct x6_event {
   int button;
   uint state;
   uint data0;
+  uint requestor;
+  uint time;
+  int mode;
+  int detail;
+  int focus;
+  int same_screen;
+  char atom[64];
+  char target_atom[64];
+  char property_atom[64];
 };
 
 struct x6_key_grab {
@@ -73,6 +98,14 @@ struct x6_key_grab {
   int owner_fd;
   uint wid;
   uint keycode;
+  uint modifiers;
+};
+
+struct x6_button_grab {
+  int in_use;
+  int owner_fd;
+  uint wid;
+  uint button;
   uint modifiers;
 };
 
@@ -85,11 +118,18 @@ struct x6_event_queue {
 // Property storage for windows (Phase 2.1d)
 #define X6_MAX_PROPERTIES_PER_WINDOW 16
 #define X6_MAX_PROP_NAME 64
-#define X6_MAX_PROP_VALUE 256
+#define X6_MAX_PROP_VALUE 3072
 
 struct x6_property {
   char name[X6_MAX_PROP_NAME];
   char value[X6_MAX_PROP_VALUE];
+};
+
+struct x6_selection {
+  int in_use;
+  char name[64];
+  uint owner;
+  uint time;
 };
 
 struct x6_window {
@@ -106,6 +146,7 @@ struct x6_window {
   int override_redirect;
   int cursor_set;
   uint cursor;
+  int z;
   long event_mask;  /* X11 event mask registered via SELECT_EVENTS / XSelectInput */
   struct x6_property props[X6_MAX_PROPERTIES_PER_WINDOW];
   int prop_count;
@@ -137,9 +178,12 @@ static struct x6_window wins[X6_MAX_WINDOWS];
 static struct x6_window *wins_by_id[256];  // Hash table for O(1) window lookup by ID (id % 256)
 static struct x6_client clients[X6_MAX_CLIENTS];
 static struct x6_key_grab key_grabs[X6_MAX_KEY_GRABS];
+static struct x6_button_grab button_grabs[X6_MAX_BUTTON_GRABS];
 static struct x6_pixmap pixmaps[X6_MAX_PIXMAPS];
+static struct x6_selection selections[X6_MAX_SELECTIONS];
 static uint x6_next_wid = 2;  // Server-assigned window IDs; 0=none, 1=root
 static uint x6_next_pmid = 1001;  // Pixmap IDs start at 1001 (windows use < 1000)
+static int x6_next_z = 1;
 
 static struct x6_event_queue *current_event_queue = 0;
 static struct x6_event_queue *wm_event_queue = 0;
@@ -163,7 +207,9 @@ static int x6_kbd_fd = -1;
 static int pointer_x;
 static int pointer_y;
 static uint pointer_state;
+static uint keyboard_mod_state;
 static uint x6_event_time;
+static uint pointer_hover_wid;
 static int pointer_grab_active;
 static uint pointer_grab_window;
 static uint root_cursor;
@@ -200,9 +246,45 @@ static struct x6_window *find_window(uint id);
 static struct x6_client *x6_find_client_by_fd(int fd);
 static struct x6_event_queue *x6_queue_for_window(uint wid);
 static int x6_find_key_grab_target(uint keycode, uint state, uint *target_wid);
+static int x6_find_button_grab_target(uint button, uint mods, uint *target_wid);
+static uint x6_pointer_event_state(void);
+static void x6_enqueue_crossing_event(int type, uint wid);
+static struct x6_selection *x6_find_selection(const char *name);
+static struct x6_selection *x6_find_or_alloc_selection(const char *name);
 static void x6_clear_key_grabs_for_fd(int owner_fd);
+static void x6_clear_button_grabs_for_fd(int owner_fd);
 static void x6_disconnect_client(struct x6_client *client);
 static void x6_flush_client_events(struct x6_client *client);
+static void x6_enqueue_property_notify(struct x6_window *win, const char *atom, int state);
+
+static void
+x6_raise_window(struct x6_window *w)
+{
+  if(!w)
+    return;
+  w->z = x6_next_z++;
+  if(x6_next_z < 1)
+    x6_next_z = 1;
+}
+
+static void
+x6_lower_window(struct x6_window *w)
+{
+  int i;
+  int minz;
+
+  if(!w)
+    return;
+
+  minz = w->z;
+  for(i = 0; i < X6_MAX_WINDOWS; i++) {
+    if(!wins[i].in_use)
+      continue;
+    if(wins[i].z < minz)
+      minz = wins[i].z;
+  }
+  w->z = minz - 1;
+}
 
 static uint
 x6_fb_shadow_pixel(int x, int y)
@@ -492,6 +574,113 @@ x6_find_key_grab_target(uint keycode, uint state, uint *target_wid)
   return 0;
 }
 
+static int
+x6_find_button_grab_target(uint button, uint mods, uint *target_wid)
+{
+  int i;
+
+  for(i = 0; i < X6_MAX_BUTTON_GRABS; i++) {
+    struct x6_button_grab *g;
+    g = &button_grabs[i];
+    if(!g->in_use)
+      continue;
+    if(g->button != 0 && g->button != button)
+      continue;
+    if(g->modifiers != X6_ANY_MODIFIER && g->modifiers != mods)
+      continue;
+    if(target_wid)
+      *target_wid = g->wid;
+    return 1;
+  }
+  return 0;
+}
+
+static uint
+x6_pointer_event_state(void)
+{
+  uint state;
+
+  state = keyboard_mod_state & 0xffU;
+  if(pointer_state & 0x01U)
+    state |= X6_STATE_BUTTON1;
+  if(pointer_state & 0x02U)
+    state |= X6_STATE_BUTTON2;
+  if(pointer_state & 0x04U)
+    state |= X6_STATE_BUTTON3;
+  return state;
+}
+
+static void
+x6_enqueue_crossing_event(int type, uint wid)
+{
+  struct x6_event evt;
+  struct x6_event_queue *q;
+  struct x6_window *w;
+
+  if(wid == 0)
+    return;
+
+  w = find_window(wid);
+  if(w) {
+    if(type == X6_EVENT_ENTER_NOTIFY && (w->event_mask & X6_MASK_ENTER_WINDOW) == 0)
+      return;
+    if(type == X6_EVENT_LEAVE_NOTIFY && (w->event_mask & X6_MASK_LEAVE_WINDOW) == 0)
+      return;
+  }
+
+  q = x6_queue_for_window(wid);
+  if(!q)
+    return;
+
+  memset(&evt, 0, sizeof(evt));
+  evt.type = type;
+  evt.wid = wid;
+  evt.x = pointer_x;
+  evt.y = pointer_y;
+  evt.state = x6_pointer_event_state();
+  evt.mode = 0;
+  evt.detail = 0;
+  evt.focus = (focus_wid == wid) ? 1 : 0;
+  evt.same_screen = 1;
+  x6_event_queue_enqueue(q, &evt);
+}
+
+static struct x6_selection *
+x6_find_selection(const char *name)
+{
+  int i;
+
+  if(!name || !*name)
+    return 0;
+  for(i = 0; i < X6_MAX_SELECTIONS; i++) {
+    if(selections[i].in_use && strcmp(selections[i].name, name) == 0)
+      return &selections[i];
+  }
+  return 0;
+}
+
+static struct x6_selection *
+x6_find_or_alloc_selection(const char *name)
+{
+  int i;
+  struct x6_selection *s;
+
+  s = x6_find_selection(name);
+  if(s)
+    return s;
+
+  for(i = 0; i < X6_MAX_SELECTIONS; i++) {
+    if(selections[i].in_use)
+      continue;
+    memset(&selections[i], 0, sizeof(selections[i]));
+    selections[i].in_use = 1;
+    strncpy(selections[i].name, name, sizeof(selections[i].name) - 1);
+    selections[i].name[sizeof(selections[i].name) - 1] = '\0';
+    return &selections[i];
+  }
+  return 0;
+}
+
 static void
 x6_clear_key_grabs_for_fd(int owner_fd)
 {
@@ -500,6 +689,17 @@ x6_clear_key_grabs_for_fd(int owner_fd)
   for(i = 0; i < X6_MAX_KEY_GRABS; i++) {
     if(key_grabs[i].in_use && key_grabs[i].owner_fd == owner_fd)
       memset(&key_grabs[i], 0, sizeof(key_grabs[i]));
+  }
+}
+
+static void
+x6_clear_button_grabs_for_fd(int owner_fd)
+{
+  int i;
+
+  for(i = 0; i < X6_MAX_BUTTON_GRABS; i++) {
+    if(button_grabs[i].in_use && button_grabs[i].owner_fd == owner_fd)
+      memset(&button_grabs[i], 0, sizeof(button_grabs[i]));
   }
 }
 
@@ -519,7 +719,8 @@ x6_pick_window_at(int px, int py)
       continue;
     if(px >= w->x + w->w || py >= w->y + w->h)
       continue;
-    best = w;
+    if(!best || w->z >= best->z)
+      best = w;
   }
   return best;
 }
@@ -1008,7 +1209,7 @@ x6_parse_draw_text(char *cmd, uint *id, int *x, int *y, uint *color, int *len, c
 }
 
 static void __attribute__((unused))
-x6_enqueue_keypress(uint keycode, uint state)
+x6_enqueue_keyevent(int type, uint keycode, uint state)
 {
   struct x6_event evt;
   struct x6_event_queue *target_q;
@@ -1033,7 +1234,7 @@ x6_enqueue_keypress(uint keycode, uint state)
   if(target_q == 0)
     return;
 
-  evt.type = X6_EVENT_KEY_PRESS;
+  evt.type = type;
   evt.wid = target;
   evt.keycode = (int)keycode;
   evt.state = state;
@@ -1041,6 +1242,8 @@ x6_enqueue_keypress(uint keycode, uint state)
   evt.y = pointer_y;
   evt.w = evt.h = 0;
   evt.button = 0;
+  evt.data0 = 0;
+  evt.atom[0] = '\0';
   x6_event_queue_enqueue(target_q, &evt);
 }
 
@@ -1050,11 +1253,17 @@ x6_enqueue_pointer_event(int type, int button)
   struct x6_event evt;
   struct x6_event_queue *target_q;
   struct x6_window *hit;
+  uint grab_wid;
+  uint mods;
 
   hit = x6_pick_window_at(pointer_x, pointer_y);
   evt.type = type;
+  mods = keyboard_mod_state & 0xffU;
   if(pointer_grab_active)
     evt.wid = pointer_grab_window ? pointer_grab_window : wm_redirect_root;
+  else if(type == X6_EVENT_BUTTON_PRESS &&
+          x6_find_button_grab_target((uint)button, mods, &grab_wid))
+    evt.wid = grab_wid;
   else
     evt.wid = hit ? hit->id : wm_redirect_root;
 
@@ -1065,9 +1274,11 @@ x6_enqueue_pointer_event(int type, int button)
   evt.x = pointer_x;
   evt.y = pointer_y;
   evt.w = evt.h = 0;
-  evt.state = 0;
+  evt.state = x6_pointer_event_state();
   evt.keycode = 0;
   evt.button = button;
+  evt.data0 = 0;
+  evt.atom[0] = '\0';
   x6_event_queue_enqueue(target_q, &evt);
 }
 
@@ -1076,12 +1287,31 @@ x6_move_pointer(int dx, int dy)
 {
   int sw;
   int sh;
+  uint old_wid;
+  uint new_wid;
+  struct x6_window *hit;
+
+  hit = x6_pick_window_at(pointer_x, pointer_y);
+  old_wid = hit ? hit->id : 0;
 
   x6_cursor_hide();
   x6_screen_size(&sw, &sh);
   pointer_x = x6_clamp_int(pointer_x + dx, 0, sw - 1);
   pointer_y = x6_clamp_int(pointer_y + dy, 0, sh - 1);
   x6_cursor_show();  // Always refresh on pointer move
+
+  if(!pointer_grab_active) {
+    hit = x6_pick_window_at(pointer_x, pointer_y);
+    new_wid = hit ? hit->id : 0;
+    if(new_wid != old_wid) {
+      x6_enqueue_crossing_event(X6_EVENT_LEAVE_NOTIFY, old_wid);
+      x6_enqueue_crossing_event(X6_EVENT_ENTER_NOTIFY, new_wid);
+    }
+    pointer_hover_wid = new_wid;
+  } else {
+    pointer_hover_wid = 0;
+  }
+
   x6_enqueue_pointer_event(X6_EVENT_MOTION_NOTIFY, 0);
 }
 
@@ -1111,6 +1341,30 @@ x6_format_modifiers(uint state, char *buf, int buflen)
     off += snprintf(buf + off, buflen - off, "%sMod5", off ? "+" : "");
   if(off == 0)
     snprintf(buf, buflen, "none");
+}
+
+static void
+x6_enqueue_property_notify(struct x6_window *win, const char *atom, int state)
+{
+  struct x6_event evt;
+  struct x6_event_queue *q;
+
+  if(!win || !atom)
+    return;
+  if((win->event_mask & X6_MASK_PROPERTY_CHANGE) == 0)
+    return;
+
+  q = x6_queue_for_window(win->id);
+  if(!q)
+    return;
+
+  memset(&evt, 0, sizeof(evt));
+  evt.type = X6_EVENT_PROPERTY_NOTIFY;
+  evt.wid = win->id;
+  evt.state = (uint)state;
+  strncpy(evt.atom, atom, sizeof(evt.atom) - 1);
+  evt.atom[sizeof(evt.atom) - 1] = '\0';
+  x6_event_queue_enqueue(q, &evt);
 }
 
 static void
@@ -1171,9 +1425,12 @@ x6_pump_keyboard(void)
     return;
   n /= (int)sizeof(struct aux_kbd_event);
   for(i = 0; i < n; i++) {
+    keyboard_mod_state = (uint)evbuf[i].state;
     if(evbuf[i].value == AUX_KBD_VALUE_PRESS ||
        evbuf[i].value == AUX_KBD_VALUE_REPEAT) {
-      x6_enqueue_keypress((uint)evbuf[i].keycode, (uint)evbuf[i].state);
+      x6_enqueue_keyevent(X6_EVENT_KEY_PRESS, (uint)evbuf[i].keycode, (uint)evbuf[i].state);
+    } else if(evbuf[i].value == AUX_KBD_VALUE_RELEASE) {
+      x6_enqueue_keyevent(X6_EVENT_KEY_RELEASE, (uint)evbuf[i].keycode, (uint)evbuf[i].state);
     }
   }
 }
@@ -1545,6 +1802,7 @@ alloc_window(uint id)
       wins[i].override_redirect = 0;
       wins[i].cursor_set = 0;
       wins[i].cursor = 0;
+      wins[i].z = x6_next_z++;
       wins[i].event_mask = 0;
       wins[i].prop_count = 0;  // Initialize properties (Phase 2.1d)
       // Hash table insert for O(1) lookup
@@ -1774,6 +2032,43 @@ handle_one_command(int cfd, char *cmd)
     
     // Otherwise, map directly
     win->mapped = 1;
+    x6_raise_window(win);
+    {
+      struct x6_client *owner = x6_find_client_by_fd(win->owner_fd);
+      if(owner && owner->in_use && owner->hello_done) {
+        struct x6_event me;
+        memset(&me, 0, sizeof(me));
+        me.type = X6_EVENT_MAP_NOTIFY;
+        me.wid = id;
+        x6_event_queue_enqueue(&owner->queue, &me);
+      }
+    }
+    x6_send_line(cfd, "OK map\n");
+    return;
+  }
+
+  if(sscanf(cmd, "WM_MAP %u", &id) == 1) {
+    if(!wm_has_redirect) {
+      x6_send_line(cfd, "ERR not-wm\n");
+      return;
+    }
+    win = find_window(id);
+    if(win == 0) {
+      x6_send_line(cfd, "ERR not-found\n");
+      return;
+    }
+    win->mapped = 1;
+    x6_raise_window(win);
+    {
+      struct x6_client *owner = x6_find_client_by_fd(win->owner_fd);
+      if(owner && owner->in_use && owner->hello_done) {
+        struct x6_event me;
+        memset(&me, 0, sizeof(me));
+        me.type = X6_EVENT_MAP_NOTIFY;
+        me.wid = id;
+        x6_event_queue_enqueue(&owner->queue, &me);
+      }
+    }
     x6_send_line(cfd, "OK map\n");
     return;
   }
@@ -1786,6 +2081,43 @@ handle_one_command(int cfd, char *cmd)
     }
     win->mapped = 0;
     x6_send_line(cfd, "OK unmap\n");
+    return;
+  }
+
+  if(sscanf(cmd, "WM_UNMAP %u", &id) == 1) {
+    if(!wm_has_redirect) {
+      x6_send_line(cfd, "ERR not-wm\n");
+      return;
+    }
+    win = find_window(id);
+    if(win == 0) {
+      x6_send_line(cfd, "ERR not-found\n");
+      return;
+    }
+    win->mapped = 0;
+    x6_send_line(cfd, "OK unmap\n");
+    return;
+  }
+
+  if(sscanf(cmd, "RAISE %u", &id) == 1) {
+    win = find_window(id);
+    if(win == 0) {
+      x6_send_line(cfd, "ERR not-found\n");
+      return;
+    }
+    x6_raise_window(win);
+    x6_send_line(cfd, "OK raised\n");
+    return;
+  }
+
+  if(sscanf(cmd, "LOWER %u", &id) == 1) {
+    win = find_window(id);
+    if(win == 0) {
+      x6_send_line(cfd, "ERR not-found\n");
+      return;
+    }
+    x6_lower_window(win);
+    x6_send_line(cfd, "OK lowered\n");
     return;
   }
 
@@ -1942,32 +2274,33 @@ handle_one_command(int cfd, char *cmd)
   }
 
   /* COPY_AREA command: Copy pixels from source drawable (pixmap or window) to destination drawable */
-  if(sscanf(cmd, "COPY_AREA %lu %lu %d %d %u %u %d %d", &id, &w, &x, &y, &uw, &uh, &h, &color) == 8) {
+  {
+    uint src_id;
+    uint dst_id;
+    int src_x;
+    int src_y;
+    uint width;
+    uint height;
+    int dest_x;
+    int dest_y;
+
+    if(sscanf(cmd, "COPY_AREA %u %u %d %d %u %u %d %d",
+              &src_id, &dst_id, &src_x, &src_y,
+              &width, &height, &dest_x, &dest_y) == 8) {
     struct x6_pixmap *src_pm = 0;
     struct x6_window *dest_win = 0;
-    int src_x, src_y, dest_x, dest_y;
-    unsigned int width, height;
-    int i, j, si, sj;
+    int i, j;
     uint pixel;
     
-    /* Parse: COPY_AREA <src> <dest> <src_x> <src_y> <width> <height> <dest_x> <dest_y> */
-    /* id=src, w=dest, x=src_x, y=src_y, uw=width, uh=height, h=dest_x, color=dest_y */
-    src_x = x;
-    src_y = y;
-    width = uw;
-    height = uh;
-    dest_x = h;
-    dest_y = color;
-    
     /* Source should be a pixmap */
-    src_pm = find_pixmap((uint)id);
+    src_pm = find_pixmap(src_id);
     if(!src_pm) {
       x6_send_line(cfd, "ERR source-not-found\n");
       return;
     }
     
     /* Destination should be a window */
-    dest_win = find_window((uint)w);
+    dest_win = find_window(dst_id);
     if(!dest_win) {
       x6_send_line(cfd, "ERR dest-not-found\n");
       return;
@@ -1979,26 +2312,127 @@ handle_one_command(int cfd, char *cmd)
       return;
     }
     
-    /* Copy pixels from pixmap to window framebuffer */
-    for(j = 0; j < (int)height && (src_y + j) < src_pm->height; j++) {
-      for(i = 0; i < (int)width && (src_x + i) < src_pm->width; i++) {
-        si = src_y + j;
-        sj = src_x + i;
-        pixel = src_pm->pixels[si * src_pm->width + sj];
-        /* Draw this pixel to the destination window */
-        /* For now, we convert pixels to the canvas color space */
-        /* TODO: Handle depth conversion if needed */
-        int canvas_x = dest_win->x + dest_x + i;
-        int canvas_y = dest_win->y + dest_y + j;
-        if(canvas_x >= 0 && canvas_x < X6_CANVAS_COLS && 
-           canvas_y >= 0 && canvas_y < X6_CANVAS_ROWS) {
-          canvas_pixels[canvas_y][canvas_x] = pixel;
+    /* Copy pixels from pixmap to destination window. */
+    if(x6_backend == X6_BACKEND_FB && x6_fb.fd >= 0) {
+      int need_cursor_refresh;
+
+      need_cursor_refresh = x6_cursor_overlaps_rect(dest_win->x + dest_x,
+                                                    dest_win->y + dest_y,
+                                                    (int)width, (int)height);
+      if(need_cursor_refresh)
+        x6_cursor_hide();
+
+      for(j = 0; j < (int)height; j++) {
+        int sy;
+        int dy;
+        int sx0;
+        int dx0;
+        int copy_w;
+        uint64_t off;
+        int k;
+
+        sy = src_y + j;
+        dy = dest_win->y + dest_y + j;
+        if(sy < 0 || sy >= src_pm->height)
+          continue;
+        if(dy < 0 || dy >= x6_fb.height)
+          continue;
+
+        sx0 = src_x;
+        dx0 = dest_win->x + dest_x;
+        copy_w = (int)width;
+
+        if(sx0 < 0) {
+          dx0 -= sx0;
+          copy_w += sx0;
+          sx0 = 0;
+        }
+        if(dx0 < 0) {
+          sx0 -= dx0;
+          copy_w += dx0;
+          dx0 = 0;
+        }
+        if(sx0 + copy_w > src_pm->width)
+          copy_w = src_pm->width - sx0;
+        if(dx0 + copy_w > x6_fb.width)
+          copy_w = x6_fb.width - dx0;
+        if(copy_w <= 0)
+          continue;
+
+        if(copy_w > x6_fb.rowcap) {
+          uint *nbuf;
+          nbuf = (uint *)malloc((size_t)copy_w * sizeof(uint));
+          if(!nbuf)
+            continue;
+          if(x6_fb.rowbuf)
+            free(x6_fb.rowbuf);
+          x6_fb.rowbuf = nbuf;
+          x6_fb.rowcap = copy_w;
+        }
+
+        for(k = 0; k < copy_w; k++) {
+          pixel = src_pm->pixels[sy * src_pm->width + (sx0 + k)] & 0x00ffffffU;
+          x6_fb.rowbuf[k] = pixel;
+        }
+
+        off = (uint64_t)dy * (uint64_t)x6_fb.stride + (uint64_t)dx0 * 4ULL;
+        if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) >= 0)
+          write(x6_fb.fd, x6_fb.rowbuf, copy_w * (int)sizeof(uint));
+
+        if(x6_fb_shadow) {
+          size_t base;
+          base = (size_t)dy * (size_t)x6_fb_shadow_w + (size_t)dx0;
+          for(k = 0; k < copy_w; k++)
+            x6_fb_shadow[base + (size_t)k] = x6_fb.rowbuf[k];
         }
       }
+
+      if(need_cursor_refresh)
+        x6_cursor_show();
+    } else {
+      int row0;
+      int row1;
+      row0 = X6_CANVAS_ROWS;
+      row1 = -1;
+
+      for(j = 0; j < (int)height; j++) {
+        for(i = 0; i < (int)width; i++) {
+          int sx;
+          int sy;
+          int px;
+          int py;
+          int cx;
+          int cy;
+
+          sx = src_x + i;
+          sy = src_y + j;
+          if(sx < 0 || sy < 0 || sx >= src_pm->width || sy >= src_pm->height)
+            continue;
+
+          px = dest_win->x + dest_x + i;
+          py = dest_win->y + dest_y + j;
+          if(px < 0 || py < 0)
+            continue;
+
+          cx = px / X6_CELL_W;
+          cy = py / X6_CELL_H;
+          if(cx < 0 || cy < 0 || cx >= X6_CANVAS_COLS || cy >= X6_CANVAS_ROWS)
+            continue;
+
+          pixel = src_pm->pixels[sy * src_pm->width + sx] & 0x00ffffffU;
+          canvas_pixels[cy][cx] = pixel;
+          if(cy < row0) row0 = cy;
+          if(cy > row1) row1 = cy;
+        }
+      }
+
+      if(row1 >= row0)
+        x6_canvas_flush_rows(row0, row1);
     }
     
     x6_send_line(cfd, "OK copy_area\n");
     return;
+  }
   }
 
   // Phase 2.1b: REQUEST_REDIRECT for WM to claim SubstructureRedirect on root
@@ -2279,8 +2713,11 @@ handle_one_command(int cfd, char *cmd)
     if(old_focus != 0 && old_focus != focus_wid) {
       target_q = x6_queue_for_window(old_focus);
       if(target_q != 0) {
+        memset(&evt, 0, sizeof(evt));
         evt.type = X6_EVENT_FOCUS_OUT;
         evt.wid = old_focus;
+        evt.mode = 0;
+        evt.detail = 0;
         x6_event_queue_enqueue(target_q, &evt);
       }
     }
@@ -2288,8 +2725,11 @@ handle_one_command(int cfd, char *cmd)
     if(focus_wid != 0) {
       target_q = x6_queue_for_window(focus_wid);
       if(target_q != 0) {
+        memset(&evt, 0, sizeof(evt));
         evt.type = X6_EVENT_FOCUS_IN;
         evt.wid = focus_wid;
+        evt.mode = 0;
+        evt.detail = 0;
         x6_event_queue_enqueue(target_q, &evt);
       }
     }
@@ -2475,6 +2915,242 @@ handle_one_command(int cfd, char *cmd)
     return;
   }
 
+  if(sscanf(cmd, "GRAB_BUTTON %u %u %u", &id, &color, &uw) == 3) {
+    int slot;
+    uint button;
+    uint modifiers;
+    uint grab_wid;
+
+    button = id;
+    modifiers = color;
+    grab_wid = uw;
+
+    slot = -1;
+    for(i = 0; i < X6_MAX_BUTTON_GRABS; i++) {
+      if(button_grabs[i].in_use &&
+         button_grabs[i].owner_fd == cfd &&
+         button_grabs[i].wid == grab_wid &&
+         button_grabs[i].button == button &&
+         button_grabs[i].modifiers == modifiers) {
+        x6_send_line(cfd, "OK button_grabbed\n");
+        return;
+      }
+      if(slot < 0 && !button_grabs[i].in_use)
+        slot = i;
+    }
+
+    if(slot < 0) {
+      x6_send_line(cfd, "ERR no-grab-slots\n");
+      return;
+    }
+
+    button_grabs[slot].in_use = 1;
+    button_grabs[slot].owner_fd = cfd;
+    button_grabs[slot].wid = grab_wid;
+    button_grabs[slot].button = button;
+    button_grabs[slot].modifiers = modifiers;
+    x6_send_line(cfd, "OK button_grabbed\n");
+    return;
+  }
+
+  if(sscanf(cmd, "UNGRAB_BUTTON %u %u %u", &id, &color, &uw) == 3) {
+    uint button;
+    uint modifiers;
+    uint grab_wid;
+
+    button = id;
+    modifiers = color;
+    grab_wid = uw;
+
+    for(i = 0; i < X6_MAX_BUTTON_GRABS; i++) {
+      if(!button_grabs[i].in_use)
+        continue;
+      if(button_grabs[i].owner_fd != cfd)
+        continue;
+      if((button == 0 || button_grabs[i].button == button) &&
+         (modifiers == X6_ANY_MODIFIER || button_grabs[i].modifiers == modifiers) &&
+         button_grabs[i].wid == grab_wid)
+        memset(&button_grabs[i], 0, sizeof(button_grabs[i]));
+    }
+
+    x6_send_line(cfd, "OK button_ungrabbed\n");
+    return;
+  }
+
+  if(strncmp(cmd, "SET_SELECTION_OWNER", 19) == 0) {
+    char sel[64];
+    uint owner;
+    uint t;
+    struct x6_selection *s;
+    uint prev_owner;
+
+    if(sscanf(cmd, "SET_SELECTION_OWNER %63s %u %u", sel, &owner, &t) != 3) {
+      x6_send_line(cfd, "ERR bad-syntax\n");
+      return;
+    }
+
+    if(owner != 0 && owner != (uint)wm_redirect_root && !find_window(owner)) {
+      x6_send_line(cfd, "ERR no-such-window\n");
+      return;
+    }
+
+    s = x6_find_or_alloc_selection(sel);
+    if(!s) {
+      x6_send_line(cfd, "ERR no-selection-slots\n");
+      return;
+    }
+
+    prev_owner = s->owner;
+    s->owner = owner;
+    s->time = t;
+
+    if(prev_owner != 0 && prev_owner != owner) {
+      struct x6_event evt;
+      struct x6_event_queue *q;
+
+      q = x6_queue_for_window(prev_owner);
+      if(q) {
+        memset(&evt, 0, sizeof(evt));
+        evt.type = X6_EVENT_SELECTION_CLEAR;
+        evt.wid = prev_owner;
+        evt.time = t;
+        strncpy(evt.atom, s->name, sizeof(evt.atom) - 1);
+        evt.atom[sizeof(evt.atom) - 1] = '\0';
+        x6_event_queue_enqueue(q, &evt);
+      }
+    }
+
+    x6_send_line(cfd, "OK selection_owner_set\n");
+    return;
+  }
+
+  if(strncmp(cmd, "GET_SELECTION_OWNER", 19) == 0) {
+    char sel[64];
+    struct x6_selection *s;
+    char out[96];
+
+    if(sscanf(cmd, "GET_SELECTION_OWNER %63s", sel) != 1) {
+      x6_send_line(cfd, "ERR bad-syntax\n");
+      return;
+    }
+
+    s = x6_find_selection(sel);
+    snprintf(out, sizeof(out), "OK selection_owner %u\n", s ? s->owner : 0U);
+    x6_send_line(cfd, out);
+    return;
+  }
+
+  if(strncmp(cmd, "CONVERT_SELECTION", 17) == 0) {
+    char sel[64];
+    char target[64];
+    char property[64];
+    uint requestor;
+    uint t;
+    struct x6_selection *s;
+    struct x6_event evt;
+    struct x6_event_queue *q;
+
+    if(sscanf(cmd, "CONVERT_SELECTION %63s %63s %63s %u %u",
+              sel, target, property, &requestor, &t) != 5) {
+      x6_send_line(cfd, "ERR bad-syntax\n");
+      return;
+    }
+
+    if(target[0] == '\0') {
+      x6_send_line(cfd, "ERR bad-target\n");
+      return;
+    }
+    if(strcmp(property, "NONE") != 0 && property[0] == '\0') {
+      x6_send_line(cfd, "ERR bad-property\n");
+      return;
+    }
+    if(requestor != (uint)wm_redirect_root && !find_window(requestor)) {
+      x6_send_line(cfd, "ERR no-requestor\n");
+      return;
+    }
+
+    s = x6_find_selection(sel);
+    if(!s || s->owner == 0 || (t != 0 && s->time != 0 && t < s->time)) {
+      q = x6_queue_for_window(requestor);
+      if(q) {
+        memset(&evt, 0, sizeof(evt));
+        evt.type = X6_EVENT_SELECTION_NOTIFY;
+        evt.wid = requestor;
+        evt.requestor = requestor;
+        evt.time = t;
+        strncpy(evt.atom, sel, sizeof(evt.atom) - 1);
+        strncpy(evt.target_atom, target, sizeof(evt.target_atom) - 1);
+        strncpy(evt.property_atom, "NONE", sizeof(evt.property_atom) - 1);
+        x6_event_queue_enqueue(q, &evt);
+      }
+      x6_send_line(cfd, "OK selection_convert_none\n");
+      return;
+    }
+
+    q = x6_queue_for_window(s->owner);
+    if(!q) {
+      x6_send_line(cfd, "ERR owner-unreachable\n");
+      return;
+    }
+
+    memset(&evt, 0, sizeof(evt));
+    evt.type = X6_EVENT_SELECTION_REQUEST;
+    evt.wid = s->owner;
+    evt.requestor = requestor;
+    evt.time = t;
+    strncpy(evt.atom, sel, sizeof(evt.atom) - 1);
+    strncpy(evt.target_atom, target, sizeof(evt.target_atom) - 1);
+    strncpy(evt.property_atom, property, sizeof(evt.property_atom) - 1);
+    x6_event_queue_enqueue(q, &evt);
+
+    x6_send_line(cfd, "OK selection_convert_queued\n");
+    return;
+  }
+
+  if(strncmp(cmd, "QUEUE_SELECTION_NOTIFY", 22) == 0) {
+    char sel[64];
+    char target[64];
+    char property[64];
+    uint requestor;
+    uint t;
+    struct x6_event evt;
+    struct x6_event_queue *q;
+
+    if(sscanf(cmd, "QUEUE_SELECTION_NOTIFY %u %63s %63s %63s %u",
+              &requestor, sel, target, property, &t) != 5) {
+      x6_send_line(cfd, "ERR bad-syntax\n");
+      return;
+    }
+
+    if(target[0] == '\0') {
+      x6_send_line(cfd, "ERR bad-target\n");
+      return;
+    }
+    if(strcmp(property, "NONE") != 0 && property[0] == '\0') {
+      x6_send_line(cfd, "ERR bad-property\n");
+      return;
+    }
+
+    q = x6_queue_for_window(requestor);
+    if(!q) {
+      x6_send_line(cfd, "ERR no-requestor\n");
+      return;
+    }
+
+    memset(&evt, 0, sizeof(evt));
+    evt.type = X6_EVENT_SELECTION_NOTIFY;
+    evt.wid = requestor;
+    evt.requestor = requestor;
+    evt.time = t;
+    strncpy(evt.atom, sel, sizeof(evt.atom) - 1);
+    strncpy(evt.target_atom, target, sizeof(evt.target_atom) - 1);
+    strncpy(evt.property_atom, property, sizeof(evt.property_atom) - 1);
+    x6_event_queue_enqueue(q, &evt);
+
+    x6_send_line(cfd, "OK selection_notify_queued\n");
+    return;
+  }
+
   if(strncmp(cmd, "GET_PROPERTY", 12) == 0) {
     uint wid;
     char atom[128];
@@ -2500,7 +3176,7 @@ handle_one_command(int cfd, char *cmd)
     }
 
     // Return property value as VALUE <atom> <value>
-    char out[512];
+    char out[4096];
     snprintf(out, sizeof(out), "VALUE %s %s\n", atom, prop->value);
     x6_send_line(cfd, out);
     return;
@@ -2509,7 +3185,7 @@ handle_one_command(int cfd, char *cmd)
   if(strncmp(cmd, "SET_PROPERTY", 12) == 0) {
     uint wid;
     char atom[128];
-    char value[512];
+    char value[4096];
     int n;
     char *p;
     struct x6_window *win;
@@ -2553,6 +3229,8 @@ handle_one_command(int cfd, char *cmd)
       win->prop_count++;
     }
 
+    x6_enqueue_property_notify(win, atom, 0);
+
     x6_send_line(cfd, "OK property_set\n");
     return;
   }
@@ -2579,6 +3257,7 @@ handle_one_command(int cfd, char *cmd)
       for(; pi + 1 < win->prop_count; pi++)
         win->props[pi] = win->props[pi + 1];
       win->prop_count--;
+      x6_enqueue_property_notify(win, atom, 1);
       x6_send_line(cfd, "OK property_deleted\n");
       return;
     }
@@ -2729,13 +3408,18 @@ x6_flush_client_events(struct x6_client *client)
                "EVENT ConfigureRequest wid=%u geom=%d,%d %dx%d\n",
                evt.wid, evt.x, evt.y, evt.w, evt.h);
     } else if(evt.type == X6_EVENT_FOCUS_IN) {
-      snprintf(eventbuf, sizeof(eventbuf), "EVENT FocusIn wid=%u\n", evt.wid);
+      snprintf(eventbuf, sizeof(eventbuf), "EVENT FocusIn wid=%u mode=%d detail=%d\n",
+               evt.wid, evt.mode, evt.detail);
     } else if(evt.type == X6_EVENT_FOCUS_OUT) {
-      snprintf(eventbuf, sizeof(eventbuf), "EVENT FocusOut wid=%u\n", evt.wid);
+      snprintf(eventbuf, sizeof(eventbuf), "EVENT FocusOut wid=%u mode=%d detail=%d\n",
+               evt.wid, evt.mode, evt.detail);
     } else if(evt.type == X6_EVENT_DESTROY_NOTIFY) {
       snprintf(eventbuf, sizeof(eventbuf), "EVENT DestroyNotify wid=%u\n", evt.wid);
     } else if(evt.type == X6_EVENT_KEY_PRESS) {
       snprintf(eventbuf, sizeof(eventbuf), "EVENT KeyPress wid=%u keycode=%d state=%u time=%u\n",
+               evt.wid, evt.keycode, evt.state, ++x6_event_time);
+    } else if(evt.type == X6_EVENT_KEY_RELEASE) {
+      snprintf(eventbuf, sizeof(eventbuf), "EVENT KeyRelease wid=%u keycode=%d state=%u time=%u\n",
                evt.wid, evt.keycode, evt.state, ++x6_event_time);
     } else if(evt.type == X6_EVENT_BUTTON_PRESS) {
       snprintf(eventbuf, sizeof(eventbuf), "EVENT ButtonPress wid=%u button=%d state=%u x=%d y=%d time=%u\n",
@@ -2746,6 +3430,35 @@ x6_flush_client_events(struct x6_client *client)
     } else if(evt.type == X6_EVENT_MOTION_NOTIFY) {
       snprintf(eventbuf, sizeof(eventbuf), "EVENT MotionNotify wid=%u x=%d y=%d state=%u time=%u\n",
                evt.wid, evt.x, evt.y, evt.state, ++x6_event_time);
+    } else if(evt.type == X6_EVENT_PROPERTY_NOTIFY) {
+      snprintf(eventbuf, sizeof(eventbuf), "EVENT PropertyNotify wid=%u atom=%s state=%u time=%u\n",
+               evt.wid, evt.atom[0] ? evt.atom : "", evt.state, ++x6_event_time);
+    } else if(evt.type == X6_EVENT_ENTER_NOTIFY) {
+      snprintf(eventbuf, sizeof(eventbuf),
+               "EVENT EnterNotify wid=%u x=%d y=%d state=%u mode=%d detail=%d focus=%d same=%d time=%u\n",
+               evt.wid, evt.x, evt.y, evt.state, evt.mode, evt.detail,
+               evt.focus, evt.same_screen, ++x6_event_time);
+    } else if(evt.type == X6_EVENT_LEAVE_NOTIFY) {
+      snprintf(eventbuf, sizeof(eventbuf),
+               "EVENT LeaveNotify wid=%u x=%d y=%d state=%u mode=%d detail=%d focus=%d same=%d time=%u\n",
+               evt.wid, evt.x, evt.y, evt.state, evt.mode, evt.detail,
+               evt.focus, evt.same_screen, ++x6_event_time);
+    } else if(evt.type == X6_EVENT_SELECTION_CLEAR) {
+      snprintf(eventbuf, sizeof(eventbuf), "EVENT SelectionClear wid=%u selection=%s time=%u\n",
+               evt.wid, evt.atom, evt.time ? evt.time : ++x6_event_time);
+    } else if(evt.type == X6_EVENT_SELECTION_REQUEST) {
+      snprintf(eventbuf, sizeof(eventbuf),
+               "EVENT SelectionRequest owner=%u requestor=%u selection=%s target=%s property=%s time=%u\n",
+               evt.wid, evt.requestor, evt.atom, evt.target_atom, evt.property_atom,
+               evt.time ? evt.time : ++x6_event_time);
+    } else if(evt.type == X6_EVENT_SELECTION_NOTIFY) {
+      snprintf(eventbuf, sizeof(eventbuf),
+               "EVENT SelectionNotify requestor=%u selection=%s target=%s property=%s time=%u\n",
+               evt.requestor ? evt.requestor : evt.wid,
+               evt.atom, evt.target_atom, evt.property_atom,
+               evt.time ? evt.time : ++x6_event_time);
+    } else if(evt.type == X6_EVENT_MAP_NOTIFY) {
+      snprintf(eventbuf, sizeof(eventbuf), "EVENT MapNotify wid=%u\n", evt.wid);
     } else {
       continue;
     }
@@ -2756,6 +3469,8 @@ x6_flush_client_events(struct x6_client *client)
 static void
 x6_disconnect_client(struct x6_client *client)
 {
+  int si;
+
   if(client == 0 || !client->in_use)
     return;
 
@@ -2768,6 +3483,18 @@ x6_disconnect_client(struct x6_client *client)
   }
 
   x6_clear_key_grabs_for_fd(client->fd);
+  x6_clear_button_grabs_for_fd(client->fd);
+
+  for(si = 0; si < X6_MAX_SELECTIONS; si++) {
+    struct x6_window *owner;
+    if(!selections[si].in_use || selections[si].owner == 0)
+      continue;
+    owner = find_window(selections[si].owner);
+    if(owner && owner->owner_fd == client->fd) {
+      selections[si].owner = 0;
+      selections[si].time = 0;
+    }
+  }
 
   close(client->fd);
   memset(client, 0, sizeof(*client));

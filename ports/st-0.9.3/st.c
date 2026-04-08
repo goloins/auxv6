@@ -163,6 +163,34 @@ static void stty(char **);
 static void sigchld(int);
 static void ttywriteraw(const char *, size_t);
 
+/* Temporary startup/debug tracing shared with x.c bring-up. */
+static void
+stdbg2(const char *fmt, ...)
+{
+	char line[256];
+	int n;
+	va_list ap;
+	int fd;
+
+	va_start(ap, fmt);
+	n = vsnprintf(line, sizeof(line), fmt, ap);
+	va_end(ap);
+	if (n < 0)
+		return;
+	if ((size_t)n >= sizeof(line))
+		n = (int)sizeof(line) - 1;
+
+	line[n++] = '\n';
+	line[n] = '\0';
+
+	write(2, line, (size_t)n);
+	fd = open("/tmp/st-debug.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+	if (fd >= 0) {
+		write(fd, line, (size_t)n);
+		close(fd);
+	}
+}
+
 static void csidump(void);
 static void csihandle(void);
 static void csiparse(void);
@@ -699,6 +727,8 @@ execsh(char *cmd, char **args)
 		arg = NULL;
 	}
 	DEFAULT(args, ((char *[]) {prog, arg, NULL}));
+	stdbg2("st:execsh:prog=%s arg0=%s", prog ? prog : "(null)",
+	       (args && args[0]) ? args[0] : "(null)");
 
 	unsetenv("COLUMNS");
 	unsetenv("LINES");
@@ -717,6 +747,7 @@ execsh(char *cmd, char **args)
 	signal(SIGALRM, SIG_DFL);
 
 	execvp(prog, args);
+	stdbg2("st:execsh:execvp failed prog=%s errno=%d", prog ? prog : "(null)", errno);
 	_exit(1);
 }
 
@@ -725,6 +756,11 @@ sigchld(int a)
 {
 	int stat;
 	pid_t p;
+	int fd;
+	static const char msg_chld[] = "st:sigchld:received\n";
+	static const char msg_exit[] = "st:sigchld:child exited nonzero\n";
+	static const char msg_sig[] = "st:sigchld:child signaled\n";
+	static const char msg_clean[] = "st:sigchld:child clean exit\n";
 
 	if ((p = waitpid(pid, &stat, WNOHANG)) < 0)
 		die("waiting for pid %hd failed: %s\n", pid, strerror(errno));
@@ -732,10 +768,38 @@ sigchld(int a)
 	if (pid != p)
 		return;
 
-	if (WIFEXITED(stat) && WEXITSTATUS(stat))
+	write(2, msg_chld, sizeof(msg_chld) - 1);
+	fd = open("/tmp/st-debug.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+	if (fd >= 0) {
+		write(fd, msg_chld, sizeof(msg_chld) - 1);
+		close(fd);
+	}
+
+	if (WIFEXITED(stat) && WEXITSTATUS(stat)) {
+		write(2, msg_exit, sizeof(msg_exit) - 1);
+		fd = open("/tmp/st-debug.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+		if (fd >= 0) {
+			write(fd, msg_exit, sizeof(msg_exit) - 1);
+			close(fd);
+		}
 		die("child exited with status %d\n", WEXITSTATUS(stat));
-	else if (WIFSIGNALED(stat))
+        }
+	else if (WIFSIGNALED(stat)) {
+		write(2, msg_sig, sizeof(msg_sig) - 1);
+		fd = open("/tmp/st-debug.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+		if (fd >= 0) {
+			write(fd, msg_sig, sizeof(msg_sig) - 1);
+			close(fd);
+		}
 		die("child terminated due to signal %d\n", WTERMSIG(stat));
+        }
+
+	write(2, msg_clean, sizeof(msg_clean) - 1);
+	fd = open("/tmp/st-debug.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+	if (fd >= 0) {
+		write(fd, msg_clean, sizeof(msg_clean) - 1);
+		close(fd);
+	}
 	_exit(0);
 }
 
@@ -769,6 +833,10 @@ ttynew(const char *line, char *cmd, const char *out, char **args)
 #if !defined(AUXV6_ST_HACK_NOPTY)
 	int m, s;
 #endif
+	stdbg2("st:ttynew:enter line=%s cmd=%s out=%s",
+	       line ? line : "(null)",
+	       cmd ? cmd : "(null)",
+	       out ? out : "(null)");
 
 	if (out) {
 		term.mode |= MODE_PRINT;
@@ -801,12 +869,15 @@ ttynew(const char *line, char *cmd, const char *out, char **args)
 		/* AUXV6_ST_HACK: no PTY yet; emulate terminal child I/O with pipes. */
 		if (pipe(pin) < 0 || pipe(pout) < 0)
 			die("pipe failed: %s\n", strerror(errno));
+		stdbg2("st:ttynew:nopty pipes ok pin={%d,%d} pout={%d,%d}",
+		       pin[0], pin[1], pout[0], pout[1]);
 
 		switch (pid = fork()) {
 		case -1:
 			die("fork failed: %s\n", strerror(errno));
 			break;
 		case 0:
+			stdbg2("st:ttynew:child fork ok pid=%d", (int)getpid());
 			close(iofd);
 			close(pin[1]);
 			close(pout[0]);
@@ -820,11 +891,13 @@ ttynew(const char *line, char *cmd, const char *out, char **args)
 			execsh(cmd, args);
 			break;
 		default:
+			stdbg2("st:ttynew:parent fork ok child=%d", (int)pid);
 			close(pin[0]);
 			close(pout[1]);
 			cmdfd_w = pin[1];
 			cmdfd_r = pout[0];
 			cmdfd = cmdfd_r;
+			stdbg2("st:ttynew:nopty cmdfd_r=%d cmdfd_w=%d", cmdfd_r, cmdfd_w);
 			signal(SIGCHLD, sigchld);
 			break;
 		}
@@ -875,6 +948,7 @@ ttyread(void)
 {
 	static char buf[BUFSIZ];
 	static int buflen = 0;
+	static int dbg_reads = 0;
 	int ret, written;
 
 	/* append read bytes to unprocessed bytes */
@@ -892,6 +966,10 @@ ttyread(void)
 	default:
 		buflen += ret;
 		written = twrite(buf, buflen, 0);
+		if (dbg_reads < 64) {
+			stdbg2("st:ttyread:ret=%d buflen=%d written=%d", ret, buflen, written);
+			dbg_reads++;
+		}
 		buflen -= written;
 		/* keep any incomplete UTF-8 byte sequence for the next call */
 		if (buflen > 0)

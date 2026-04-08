@@ -124,6 +124,10 @@ for src in "$@"; do
       install -d -m 0755 "$rootdir/usr/bin"
       install -m 0755 "$src" "$rootdir/usr/bin/dwm"
       ;;
+    _st)
+      install -d -m 0755 "$rootdir/usr/bin"
+      install -m 0755 "$src" "$rootdir/usr/bin/st"
+      ;;
     _killall)
       install -m 0755 "$src" "$rootdir/sbin/killall"
       ;;

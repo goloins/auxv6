@@ -80,6 +80,8 @@ typedef enum {
 typedef struct {
   Drawable drawable;
   Display *display;
+  int has_clip;
+  XRectangle clip;
 } XftDraw;
 
 typedef struct {

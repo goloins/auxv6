@@ -1,9 +1,11 @@
 /* See LICENSE for license details. */
 #include <errno.h>
+#include <fcntl.h>
 #include <math.h>
 #include <limits.h>
 #include <locale.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/select.h>
@@ -255,6 +257,37 @@ static char *opt_name  = NULL;
 static char *opt_title = NULL;
 
 static uint buttons; /* bit field of pressed buttons */
+
+/* Temporary bring-up debug logging for auxv6 st startup issues. */
+static void
+stdbg(const char *fmt, ...)
+{
+	char line[256];
+	int n;
+	va_list ap;
+	int fd;
+
+	va_start(ap, fmt);
+	n = vsnprintf(line, sizeof(line), fmt, ap);
+	va_end(ap);
+	if (n < 0)
+		return;
+
+	if ((size_t)n >= sizeof(line))
+		n = (int)sizeof(line) - 1;
+
+	line[n++] = '\n';
+	line[n] = '\0';
+
+	/* Keep stderr breadcrumbs for immediate visibility. */
+	write(2, line, (size_t)n);
+
+	fd = open("/tmp/st-debug.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+	if (fd >= 0) {
+		write(fd, line, (size_t)n);
+		close(fd);
+	}
+}
 
 void
 clipcopy(const Arg *dummy)
@@ -1137,21 +1170,27 @@ xinit(int cols, int rows)
 	pid_t thispid = getpid();
 	XColor xmousefg, xmousebg;
 
+	stdbg("st:xinit:enter cols=%d rows=%d", cols, rows);
+
 	if (!(xw.dpy = XOpenDisplay(NULL)))
 		die("can't open display\n");
+	stdbg("st:xinit:XOpenDisplay ok");
 	xw.scr = XDefaultScreen(xw.dpy);
 	xw.vis = XDefaultVisual(xw.dpy, xw.scr);
 
 	/* font */
 	if (!FcInit())
 		die("could not init fontconfig.\n");
+	stdbg("st:xinit:FcInit ok");
 
 	usedfont = (opt_font == NULL)? font : opt_font;
 	xloadfonts(usedfont, 0);
+	stdbg("st:xinit:xloadfonts ok font=%s", usedfont ? usedfont : "(null)");
 
 	/* colors */
 	xw.cmap = XDefaultColormap(xw.dpy, xw.scr);
 	xloadcols();
+	stdbg("st:xinit:xloadcols ok");
 
 	/* adjust fixed window geometry */
 	win.w = 2 * borderpx + cols * win.cw;
@@ -1177,6 +1216,7 @@ xinit(int cols, int rows)
 			win.w, win.h, 0, XDefaultDepth(xw.dpy, xw.scr), InputOutput,
 			xw.vis, CWBackPixel | CWBorderPixel | CWBitGravity
 			| CWEventMask | CWColormap, &xw.attrs);
+	stdbg("st:xinit:XCreateWindow ok win=%lu size=%dx%d", (unsigned long)xw.win, win.w, win.h);
 	if (parent != root)
 		XReparentWindow(xw.dpy, xw.win, parent, xw.l, xw.t);
 
@@ -1233,7 +1273,9 @@ xinit(int cols, int rows)
 	resettitle();
 	xhints();
 	XMapWindow(xw.dpy, xw.win);
+	stdbg("st:xinit:XMapWindow sent");
 	XSync(xw.dpy, False);
+	stdbg("st:xinit:XSync complete");
 
 	clock_gettime(CLOCK_MONOTONIC, &xsel.tclick1);
 	clock_gettime(CLOCK_MONOTONIC, &xsel.tclick2);
@@ -1242,6 +1284,7 @@ xinit(int cols, int rows)
 	xsel.xtarget = XInternAtom(xw.dpy, "UTF8_STRING", 0);
 	if (xsel.xtarget == None)
 		xsel.xtarget = XA_STRING;
+	stdbg("st:xinit:complete xtarget=%lu", (unsigned long)xsel.xtarget);
 }
 
 int
@@ -1929,10 +1972,12 @@ run(void)
 	int w = win.w, h = win.h;
 	fd_set rfd;
 	int xfd = XConnectionNumber(xw.dpy), ttyfd, xev, drawing;
+	int dbg_loop_count = 0;
 	struct timespec seltv, *tv, now, lastblink, trigger;
 	double timeout;
 
 	/* Waiting for window mapping */
+	stdbg("st:run:waiting-for-map");
 	do {
 		XNextEvent(xw.dpy, &ev);
 		/*
@@ -1945,13 +1990,25 @@ run(void)
 		if (ev.type == ConfigureNotify) {
 			w = ev.xconfigure.width;
 			h = ev.xconfigure.height;
+			stdbg("st:run:ConfigureNotify %dx%d", w, h);
 		}
 	} while (ev.type != MapNotify);
+	stdbg("st:run:MapNotify received");
+	win.mode |= MODE_VISIBLE;
+	stdbg("st:run:MODE_VISIBLE forced-on after MapNotify");
 
 	ttyfd = ttynew(opt_line, shell, opt_io, opt_cmd);
+	stdbg("st:run:ttynew fd=%d", ttyfd);
 	cresize(w, h);
+	stdbg("st:run:cresize done %dx%d", w, h);
+	draw();
+	XFlush(xw.dpy);
+	stdbg("st:run:initial draw+flush done");
+	stdbg("st:run:enter-loop");
 
 	for (timeout = -1, drawing = 0, lastblink = (struct timespec){0};;) {
+		double effective_timeout;
+		int selret;
 		FD_ZERO(&rfd);
 		FD_SET(ttyfd, &rfd);
 		FD_SET(xfd, &rfd);
@@ -1959,24 +2016,60 @@ run(void)
 		if (XPending(xw.dpy))
 			timeout = 0;  /* existing events might not set xfd */
 
-		seltv.tv_sec = timeout / 1E3;
-		seltv.tv_nsec = 1E6 * (timeout - 1E3 * seltv.tv_sec);
-		tv = timeout >= 0 ? &seltv : NULL;
+		effective_timeout = timeout;
+		if (effective_timeout < 0 && dbg_loop_count < 10)
+			effective_timeout = 250;
 
-		if (pselect(MAX(xfd, ttyfd)+1, &rfd, NULL, NULL, tv, NULL) < 0) {
+		seltv.tv_sec = effective_timeout / 1E3;
+		seltv.tv_nsec = 1E6 * (effective_timeout - 1E3 * seltv.tv_sec);
+		tv = effective_timeout >= 0 ? &seltv : NULL;
+
+		if (dbg_loop_count < 64) {
+			stdbg("st:run:loop[%d] pre-select ttyfd=%d xfd=%d eff_timeout=%.3f",
+			      dbg_loop_count, ttyfd, xfd, effective_timeout);
+		}
+
+#if defined(AUXV6_ST_HACK_NOPTY)
+		if (dbg_loop_count < 128) {
+			struct timeval tv0;
+			tv0.tv_sec = 0;
+			tv0.tv_usec = 0;
+			selret = select(MAX(xfd, ttyfd)+1, &rfd, NULL, NULL, &tv0);
+			if (selret == 0)
+				usleep(50000);
+		} else {
+			selret = pselect(MAX(xfd, ttyfd)+1, &rfd, NULL, NULL, tv, NULL);
+		}
+#else
+		selret = pselect(MAX(xfd, ttyfd)+1, &rfd, NULL, NULL, tv, NULL);
+#endif
+		if (selret < 0) {
 			if (errno == EINTR)
 				continue;
 			die("select failed: %s\n", strerror(errno));
 		}
+		if (dbg_loop_count < 64) {
+			stdbg("st:run:loop[%d] post-select ret=%d tty=%d xfd=%d timeout=%.3f",
+			      dbg_loop_count,
+			      selret,
+			      FD_ISSET(ttyfd, &rfd) ? 1 : 0,
+			      FD_ISSET(xfd, &rfd) ? 1 : 0,
+			      timeout);
+		}
 		clock_gettime(CLOCK_MONOTONIC, &now);
 
-		if (FD_ISSET(ttyfd, &rfd))
+		if (FD_ISSET(ttyfd, &rfd)) {
+			if (dbg_loop_count < 64)
+				stdbg("st:run:loop[%d] ttyread", dbg_loop_count);
 			ttyread();
+		}
 
 		xev = 0;
 		while (XPending(xw.dpy)) {
 			xev = 1;
 			XNextEvent(xw.dpy, &ev);
+			if (dbg_loop_count < 64)
+				stdbg("st:run:loop[%d] xevent type=%d", dbg_loop_count, ev.type);
 			if (XFilterEvent(&ev, None))
 				continue;
 			if (handler[ev.type])
@@ -2019,9 +2112,15 @@ run(void)
 			}
 		}
 
+		if (!IS_SET(MODE_VISIBLE))
+			stdbg("st:run:draw skipped MODE_VISIBLE=0");
+
 		draw();
 		XFlush(xw.dpy);
+		if (dbg_loop_count < 64)
+			stdbg("st:run:loop[%d] draw+flush", dbg_loop_count);
 		drawing = 0;
+		dbg_loop_count++;
 	}
 }
 
@@ -2041,6 +2140,7 @@ usage(void)
 int
 main(int argc, char *argv[])
 {
+	stdbg("st:main:enter argc=%d", argc);
 	xw.l = xw.t = 0;
 	xw.isfixed = False;
 	xsetcursor(cursorshape);
@@ -2101,9 +2201,12 @@ run:
 	cols = MAX(cols, 1);
 	rows = MAX(rows, 1);
 	tnew(cols, rows);
+	stdbg("st:main:tnew done cols=%d rows=%d", cols, rows);
 	xinit(cols, rows);
+	stdbg("st:main:xinit done");
 	xsetenv();
 	selinit();
+	stdbg("st:main:about-to-run");
 	run();
 
 	return 0;

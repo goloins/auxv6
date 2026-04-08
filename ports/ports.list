@@ -1,0 +1,8 @@
+# name|url|class|source_dir|binary_name
+# class: system/helper -> /bin, user -> /usr/bin
+# source_dir defaults to name when omitted.
+# binary_name defaults to name when omitted.
+# In-tree ports dash,dwm,st are ignored by sync/build automation.
+
+# Example:
+# icewm|https://github.com/ice-wm/icewm/releases/download/3.8.0/icewm-3.8.0.tar.gz|user|icewm-3.8.0|icewm

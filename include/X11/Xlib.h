@@ -444,6 +444,16 @@ typedef struct {
   unsigned long serial;
   Bool send_event;
   Display *display;
+  Window window;
+  Atom selection;
+  Time time;
+} XSelectionClearEvent;
+
+typedef struct {
+  int type;
+  unsigned long serial;
+  Bool send_event;
+  Display *display;
   Window owner;
   Window requestor;
   Atom selection;
@@ -527,6 +537,7 @@ typedef union {
   XConfigureRequestEvent xconfigurerequest;
   XDestroyWindowEvent xdestroywindow;
   XPropertyEvent xproperty;
+  XSelectionClearEvent xselectionclear;
   XSelectionRequestEvent xselectionrequest;
   XSelectionEvent xselection;
   XClientMessageEvent xclient;
@@ -709,6 +720,7 @@ typedef struct {
 #define XA_WM_NAME 39L
 #define XA_WM_NORMAL_HINTS 40L
 #define XA_WM_TRANSIENT_FOR 68L
+#define AnyPropertyType 0L
 
 #define NotifyNormal 0
 #define NotifyInferior 2
@@ -814,8 +826,14 @@ int XConfigureWindow(Display *display, Window w, unsigned int value_mask, XWindo
 int XGetWindowAttributes(Display *display, Window w, XWindowAttributes *attrs);
 int XSelectInput(Display *display, Window w, long event_mask);
 int XNextEvent(Display *display, XEvent *event);
+int XPeekEvent(Display *display, XEvent *event);
+int XPutBackEvent(Display *display, XEvent *event);
 int XMaskEvent(Display *display, long event_mask, XEvent *event);
 Bool XCheckMaskEvent(Display *display, long event_mask, XEvent *event);
+Bool XCheckTypedEvent(Display *display, int event_type, XEvent *event_return);
+Bool XCheckTypedWindowEvent(Display *display, Window w, int event_type, XEvent *event_return);
+Bool XCheckWindowEvent(Display *display, Window w, long event_mask, XEvent *event_return);
+int XWindowEvent(Display *display, Window w, long event_mask, XEvent *event_return);
 int XLookupString(XKeyEvent *event_struct, char *buffer_return, int bytes_buffer,
                   KeySym *keysym_return, void *status_in_out);
 int XPending(Display *display);

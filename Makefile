@@ -349,6 +349,11 @@ ULIB = $(LIBC_OBJS) $(LIBAUXV6_OBJS)
 
 USER_STAGE_DIR = user/.stage
 USER_PROG_JOBS ?= $(shell nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
+PORTS ?= 1
+PORTS_MANIFEST ?= ports/ports.list
+PORTS_SYNC_SCRIPT ?= tools/sync-ports.sh
+PORTS_BUILD_LOG ?= ports/ports-build.log
+PORTS_SKIP_LIST ?= dash dwm st
 
 # sh is close to xv6 MAXFILE; compile with -Os to keep the binary under limit.
 user/sh.o: user/sh.c
@@ -819,10 +824,75 @@ _ftstest: user/ftstest
 
 .PHONY: userprogs userprogs-oldinit
 userprogs:
+	+$(MAKE) ports-progs PORTS=$(PORTS)
 	+$(MAKE) -j$(USER_PROG_JOBS) $(UPROGS)
 
 userprogs-oldinit:
+	+$(MAKE) ports-progs PORTS=$(PORTS)
 	+$(MAKE) -j$(USER_PROG_JOBS) $(UPROGS_OLDINIT)
+
+.PHONY: ports-sync ports-progs
+ports-sync:
+	$(PORTS_SYNC_SCRIPT) $(PORTS_MANIFEST)
+
+ports-progs:
+	@if [ "$(PORTS)" != "1" ]; then \
+		echo "ports: skipped (PORTS=$(PORTS))"; \
+		exit 0; \
+	fi
+	@mkdir -p ports
+	@: > $(PORTS_BUILD_LOG)
+	@if [ ! -f "$(PORTS_MANIFEST)" ]; then \
+		echo "ports: manifest $(PORTS_MANIFEST) not found; skipping" | tee -a $(PORTS_BUILD_LOG); \
+		exit 0; \
+	fi
+	@while IFS='|' read -r name url pclass srcdir binname; do \
+		case "$$name" in ''|'#'*) continue ;; esac; \
+		skip=0; \
+		for builtin in $(PORTS_SKIP_LIST); do \
+			if [ "$$name" = "$$builtin" ]; then \
+				skip=1; \
+				break; \
+			fi; \
+		done; \
+		if [ "$$skip" = "1" ]; then \
+			echo "ports: skipping in-tree port $$name" >> $(PORTS_BUILD_LOG); \
+			continue; \
+		fi; \
+		if [ -z "$$pclass" ]; then pclass=user; fi; \
+		if [ -z "$$srcdir" ]; then srcdir="$$name"; fi; \
+		if [ -z "$$binname" ]; then binname="$$name"; fi; \
+		portdir="ports/$$srcdir"; \
+		if [ ! -d "$$portdir" ]; then \
+			echo "ports: source directory missing for $$name (expected $$portdir); run make ports-sync" | tee -a $(PORTS_BUILD_LOG); \
+			continue; \
+		fi; \
+		if [ ! -f "$$portdir/Makefile.auxv6" ]; then \
+			echo "ports: missing Makefile.auxv6 for $$name (expected $$portdir/Makefile.auxv6)" | tee -a $(PORTS_BUILD_LOG); \
+			continue; \
+		fi; \
+		echo "ports: building $$name from $$portdir" | tee -a $(PORTS_BUILD_LOG); \
+		if ! $(MAKE) -C "$$portdir" -f Makefile.auxv6 all; then \
+			echo "ports: build failed for $$name" | tee -a $(PORTS_BUILD_LOG); \
+			continue; \
+		fi; \
+		if [ -f "$$portdir/_$$name" ]; then \
+			portbin="$$portdir/_$$name"; \
+		elif [ -f "$$portdir/$$binname" ]; then \
+			portbin="$$portdir/$$binname"; \
+		else \
+			echo "ports: built binary not found for $$name (looked for _$$name and $$binname)" | tee -a $(PORTS_BUILD_LOG); \
+			continue; \
+		fi; \
+		case "$$pclass" in \
+			system|helper) destdir="$(TARGETFS_DIR)/bin" ;; \
+			user) destdir="$(TARGETFS_DIR)/usr/bin" ;; \
+			*) echo "ports: invalid class '$$pclass' for $$name (use system/helper/user)" | tee -a $(PORTS_BUILD_LOG); continue ;; \
+		esac; \
+		install -d "$$destdir"; \
+		install -m 0755 "$$portbin" "$$destdir/$$binname"; \
+		echo "ports: installed $$name -> $$destdir/$$binname" | tee -a $(PORTS_BUILD_LOG); \
+	done < "$(PORTS_MANIFEST)"
 
 ifeq ($(LEGACY_XV6FS),1)
 mkfs: tools/mkfs.c include/fs.h

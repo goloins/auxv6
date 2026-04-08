@@ -14,12 +14,15 @@
 #include "X11/Xft/Xft.h"
 
 #define X6_PORT 6006
-#define X6_BUF_SIZE 1024
+#define X6_BUF_SIZE 4096
 #define X11_RXBUF_SIZE 4096
 #define X11_MAX_ATOMS 256
 #define X11_MAX_GCS 128
 #define X11_MAX_PIXMAPS 256
 #define X11_MAX_FONTS 16
+#define X11_MAX_SELECTIONS 16
+#define X11_MAX_EVENTS 128
+#define X11_X6_ANY_MODIFIER (1U << 15)
 #define DoRed 1
 #define DoGreen 2
 #define DoBlue 4
@@ -48,13 +51,22 @@ static atom_entry g_atoms[X11_MAX_ATOMS];
 static int g_atom_count;
 static int (*g_error_handler)(Display *, XErrorEvent *);
 static int g_is_wm;
-static XEvent g_pending_event;
-static int g_has_pending_event;
+static XEvent g_events[X11_MAX_EVENTS];
+static int g_event_count;
 static unsigned long g_next_gc = 1;
 static char g_rxbuf[X11_RXBUF_SIZE];
 static int g_rxlen;
 static int g_pending_draw_replies;
 static GC g_xft_gc;
+
+struct x11_selection_state {
+  int in_use;
+  Atom selection;
+  Window owner;
+  Time time;
+};
+
+static struct x11_selection_state g_selections[X11_MAX_SELECTIONS];
 
 struct x11_fc_pattern {
   char name[128];
@@ -118,6 +130,7 @@ static unsigned long g_next_font = 1;
 static struct x11_gc_state g_gcs[X11_MAX_GCS];
 static struct x11_pixmap_state g_pixmaps[X11_MAX_PIXMAPS];
 static unsigned long g_next_pixmap = 2;  // Start after window IDs
+static struct x11_pixmap_state *x11_find_pixmap(Pixmap pm);
 
 static int
 x11_tolower_ascii(int c)
@@ -262,6 +275,109 @@ x11_xft_gc(Display *display, Drawable d)
     return g_xft_gc;
   g_xft_gc = XCreateGC(display, d, 0, 0);
   return g_xft_gc;
+}
+
+static int
+x11_encode_modifiers(unsigned int modifiers)
+{
+  if (modifiers == AnyModifier)
+    return X11_X6_ANY_MODIFIER;
+  return (int)(modifiers & 0xffffU);
+}
+
+static struct x11_selection_state *
+x11_find_selection(Atom selection, int create)
+{
+  int i;
+  struct x11_selection_state *free_slot;
+
+  free_slot = 0;
+  for (i = 0; i < X11_MAX_SELECTIONS; i++) {
+    if (g_selections[i].in_use && g_selections[i].selection == selection)
+      return &g_selections[i];
+    if (!g_selections[i].in_use && !free_slot)
+      free_slot = &g_selections[i];
+  }
+  if (!create || !free_slot)
+    return 0;
+
+  memset(free_slot, 0, sizeof(*free_slot));
+  free_slot->in_use = 1;
+  free_slot->selection = selection;
+  return free_slot;
+}
+
+static int
+x11_drawable_size(Display *display, Drawable d, int *w, int *h)
+{
+  struct x11_pixmap_state *pm;
+
+  if (!display || !w || !h)
+    return -1;
+
+  pm = x11_find_pixmap((Pixmap)d);
+  if (pm) {
+    *w = (int)pm->width;
+    *h = (int)pm->height;
+    return 0;
+  }
+
+  *w = display->width > 0 ? display->width : 1024;
+  *h = display->height > 0 ? display->height : 768;
+  return 0;
+}
+
+static int
+x11_clip_box(XftDraw *draw, int *x, int *y, unsigned int *w, unsigned int *h)
+{
+  int rx;
+  int ry;
+  int rw;
+  int rh;
+  int x2;
+  int y2;
+
+  if (!draw || !x || !y || !w || !h || !draw->has_clip)
+    return 0;
+
+  rx = draw->clip.x;
+  ry = draw->clip.y;
+  rw = draw->clip.width;
+  rh = draw->clip.height;
+  if (rw <= 0 || rh <= 0)
+    return -1;
+
+  x2 = *x + (int)(*w);
+  y2 = *y + (int)(*h);
+  if (*x < rx)
+    *x = rx;
+  if (*y < ry)
+    *y = ry;
+  if (x2 > rx + rw)
+    x2 = rx + rw;
+  if (y2 > ry + rh)
+    y2 = ry + rh;
+
+  if (x2 <= *x || y2 <= *y)
+    return -1;
+
+  *w = (unsigned int)(x2 - *x);
+  *h = (unsigned int)(y2 - *y);
+  return 0;
+}
+
+static int
+x11_point_in_clip(XftDraw *draw, int x, int y)
+{
+  if (!draw || !draw->has_clip)
+    return 1;
+  if (x < draw->clip.x || y < draw->clip.y)
+    return 0;
+  if (x >= draw->clip.x + (int)draw->clip.width)
+    return 0;
+  if (y >= draw->clip.y + (int)draw->clip.height)
+    return 0;
+  return 1;
 }
 
 static struct x11_fc_pattern *
@@ -454,6 +570,116 @@ x11_alloc_font(const char *name)
 
 static int x11_read_line(int fd, char *line, int maxlen);
 static int x11_parse_event_line(Display *display, const char *line, XEvent *event);
+static long x11_event_mask_for_type(int type);
+static Window x11_event_window(const XEvent *event);
+
+static int
+x11_event_push_back(const XEvent *ev)
+{
+  if (!ev)
+    return -1;
+  if (g_event_count >= X11_MAX_EVENTS) {
+    memmove(&g_events[0], &g_events[1], (size_t)(X11_MAX_EVENTS - 1) * sizeof(XEvent));
+    g_event_count = X11_MAX_EVENTS - 1;
+  }
+  g_events[g_event_count++] = *ev;
+  return 0;
+}
+
+static int
+x11_event_push_front(const XEvent *ev)
+{
+  if (!ev)
+    return -1;
+  if (g_event_count >= X11_MAX_EVENTS)
+    g_event_count = X11_MAX_EVENTS - 1;
+  if (g_event_count > 0)
+    memmove(&g_events[1], &g_events[0], (size_t)g_event_count * sizeof(XEvent));
+  g_events[0] = *ev;
+  g_event_count++;
+  return 0;
+}
+
+static int
+x11_event_pop_front(XEvent *ev)
+{
+  if (!ev || g_event_count <= 0)
+    return -1;
+  *ev = g_events[0];
+  if (g_event_count > 1)
+    memmove(&g_events[0], &g_events[1], (size_t)(g_event_count - 1) * sizeof(XEvent));
+  g_event_count--;
+  return 0;
+}
+
+static int
+x11_event_peek_front(XEvent *ev)
+{
+  if (!ev || g_event_count <= 0)
+    return -1;
+  *ev = g_events[0];
+  return 0;
+}
+
+static int
+x11_event_pop_index(int idx, XEvent *ev)
+{
+  if (idx < 0 || idx >= g_event_count || !ev)
+    return -1;
+  *ev = g_events[idx];
+  if (idx + 1 < g_event_count)
+    memmove(&g_events[idx], &g_events[idx + 1], (size_t)(g_event_count - idx - 1) * sizeof(XEvent));
+  g_event_count--;
+  return 0;
+}
+
+static int
+x11_event_find_and_pop_mask(long mask, XEvent *ev)
+{
+  int i;
+
+  if (!ev)
+    return -1;
+  for (i = 0; i < g_event_count; i++) {
+    if (x11_event_mask_for_type(g_events[i].type) & mask)
+      return x11_event_pop_index(i, ev);
+  }
+  return -1;
+}
+
+static int
+x11_event_find_and_pop_type(int type, Window w, int check_window, XEvent *ev)
+{
+  int i;
+
+  if (!ev)
+    return -1;
+  for (i = 0; i < g_event_count; i++) {
+    if (g_events[i].type != type)
+      continue;
+    if (check_window && x11_event_window(&g_events[i]) != w)
+      continue;
+    return x11_event_pop_index(i, ev);
+  }
+  return -1;
+}
+
+static int
+x11_event_find_and_pop_window_mask(Window w, long mask, XEvent *ev)
+{
+  int i;
+
+  if (!ev)
+    return -1;
+  for (i = 0; i < g_event_count; i++) {
+    if (x11_event_window(&g_events[i]) != w)
+      continue;
+    if ((x11_event_mask_for_type(g_events[i].type) & mask) == 0)
+      continue;
+    return x11_event_pop_index(i, ev);
+  }
+  return -1;
+}
 
 static int
 x11_handle_unsolicited_line(Display *display, const char *line)
@@ -462,8 +688,9 @@ x11_handle_unsolicited_line(Display *display, const char *line)
     return 0;
 
   if (strncmp(line, "EVENT ", 6) == 0) {
-    if (!g_has_pending_event && x11_parse_event_line(display, line, &g_pending_event) == 0)
-      g_has_pending_event = 1;
+    XEvent ev;
+    if (x11_parse_event_line(display, line, &ev) == 0)
+      x11_event_push_back(&ev);
     return 1;
   }
 
@@ -557,6 +784,13 @@ x11_parse_event_line(Display *display, const char *line, XEvent *event)
     event->xmaprequest.parent = display->root;
     return 0;
   }
+  if (strncmp(line + 6, "MapNotify", 9) == 0) {
+    event->type = MapNotify;
+    sscanf(line, "EVENT MapNotify wid=%u", &event->xmap.window);
+    event->xmap.event = event->xmap.window;
+    event->xmap.override_redirect = False;
+    return 0;
+  }
   if (strncmp(line + 6, "ConfigureRequest", 16) == 0) {
     event->type = ConfigureRequest;
     sscanf(line, "EVENT ConfigureRequest wid=%u geom=%d,%d %dx%d",
@@ -570,12 +804,18 @@ x11_parse_event_line(Display *display, const char *line, XEvent *event)
   }
   if (strncmp(line + 6, "FocusIn", 7) == 0) {
     event->type = FocusIn;
-    sscanf(line, "EVENT FocusIn wid=%u", &event->xfocus.window);
+    event->xfocus.mode = 0;
+    event->xfocus.detail = 0;
+    sscanf(line, "EVENT FocusIn wid=%u mode=%d detail=%d",
+           &event->xfocus.window, &event->xfocus.mode, &event->xfocus.detail);
     return 0;
   }
   if (strncmp(line + 6, "FocusOut", 8) == 0) {
     event->type = FocusOut;
-    sscanf(line, "EVENT FocusOut wid=%u", &event->xfocus.window);
+    event->xfocus.mode = 0;
+    event->xfocus.detail = 0;
+    sscanf(line, "EVENT FocusOut wid=%u mode=%d detail=%d",
+           &event->xfocus.window, &event->xfocus.mode, &event->xfocus.detail);
     return 0;
   }
   if (strncmp(line + 6, "DestroyNotify", 13) == 0) {
@@ -588,6 +828,13 @@ x11_parse_event_line(Display *display, const char *line, XEvent *event)
     sscanf(line, "EVENT KeyPress wid=%u keycode=%u state=%u",
            &event->xkey.window, &event->xkey.keycode, &event->xkey.state);
     sscanf(line, "EVENT KeyPress wid=%*u keycode=%*u state=%*u time=%lu", &event->xkey.time);
+    return 0;
+  }
+  if (strncmp(line + 6, "KeyRelease", 10) == 0) {
+    event->type = KeyRelease;
+    sscanf(line, "EVENT KeyRelease wid=%u keycode=%u state=%u",
+           &event->xkey.window, &event->xkey.keycode, &event->xkey.state);
+    sscanf(line, "EVENT KeyRelease wid=%*u keycode=%*u state=%*u time=%lu", &event->xkey.time);
     return 0;
   }
   if (strncmp(line + 6, "ButtonPress", 11) == 0) {
@@ -619,6 +866,40 @@ x11_parse_event_line(Display *display, const char *line, XEvent *event)
     event->xmotion.y_root = event->xmotion.y;
     return 0;
   }
+      if (strncmp(line + 6, "EnterNotify", 11) == 0) {
+        event->type = EnterNotify;
+          event->xcrossing.mode = 0;
+          event->xcrossing.detail = 0;
+          event->xcrossing.focus = 0;
+          event->xcrossing.same_screen = True;
+          sscanf(line, "EVENT EnterNotify wid=%u x=%d y=%d state=%u mode=%d detail=%d focus=%d same=%d",
+          &event->xcrossing.window, &event->xcrossing.x,
+            &event->xcrossing.y, &event->xcrossing.state,
+            &event->xcrossing.mode, &event->xcrossing.detail,
+            &event->xcrossing.focus, &event->xcrossing.same_screen);
+          sscanf(line, "EVENT EnterNotify wid=%*u x=%*d y=%*d state=%*u mode=%*d detail=%*d focus=%*d same=%*d time=%lu",
+          &event->xcrossing.time);
+        event->xcrossing.x_root = event->xcrossing.x;
+        event->xcrossing.y_root = event->xcrossing.y;
+        return 0;
+      }
+      if (strncmp(line + 6, "LeaveNotify", 11) == 0) {
+        event->type = LeaveNotify;
+          event->xcrossing.mode = 0;
+          event->xcrossing.detail = 0;
+          event->xcrossing.focus = 0;
+          event->xcrossing.same_screen = True;
+          sscanf(line, "EVENT LeaveNotify wid=%u x=%d y=%d state=%u mode=%d detail=%d focus=%d same=%d",
+          &event->xcrossing.window, &event->xcrossing.x,
+            &event->xcrossing.y, &event->xcrossing.state,
+            &event->xcrossing.mode, &event->xcrossing.detail,
+            &event->xcrossing.focus, &event->xcrossing.same_screen);
+          sscanf(line, "EVENT LeaveNotify wid=%*u x=%*d y=%*d state=%*u mode=%*d detail=%*d focus=%*d same=%*d time=%lu",
+          &event->xcrossing.time);
+        event->xcrossing.x_root = event->xcrossing.x;
+        event->xcrossing.y_root = event->xcrossing.y;
+        return 0;
+      }
   if (strncmp(line + 6, "ConfigureNotify", 15) == 0) {
     event->type = ConfigureNotify;
     sscanf(line, "EVENT ConfigureNotify wid=%u x=%d y=%d w=%d h=%d",
@@ -646,6 +927,58 @@ x11_parse_event_line(Display *display, const char *line, XEvent *event)
     event->xclient.data.l[0] = (long)d0;
     return 0;
   }
+  if (strncmp(line + 6, "PropertyNotify", 14) == 0) {
+    char atom_name[64];
+    unsigned int st = 0;
+    event->type = PropertyNotify;
+    atom_name[0] = '\0';
+    sscanf(line, "EVENT PropertyNotify wid=%u atom=%63s state=%u",
+           &event->xproperty.window, atom_name, &st);
+    sscanf(line, "EVENT PropertyNotify wid=%*u atom=%*s state=%*u time=%lu",
+           &event->xproperty.time);
+    event->xproperty.state = (int)st;
+    event->xproperty.atom = atom_name[0] ? XInternAtom(display, atom_name, False) : None;
+    return 0;
+  }
+  if (strncmp(line + 6, "SelectionClear", 14) == 0) {
+    char sel_name[64];
+    sel_name[0] = '\0';
+    event->type = SelectionClear;
+    sscanf(line, "EVENT SelectionClear wid=%u selection=%63s time=%lu",
+           &event->xselectionclear.window, sel_name, &event->xselectionclear.time);
+    event->xselectionclear.selection = sel_name[0] ? XInternAtom(display, sel_name, False) : None;
+    return 0;
+  }
+  if (strncmp(line + 6, "SelectionRequest", 16) == 0) {
+    char sel_name[64];
+    char target_name[64];
+    char prop_name[64];
+    sel_name[0] = target_name[0] = prop_name[0] = '\0';
+    event->type = SelectionRequest;
+    sscanf(line, "EVENT SelectionRequest owner=%u requestor=%u selection=%63s target=%63s property=%63s time=%lu",
+           &event->xselectionrequest.owner, &event->xselectionrequest.requestor,
+           sel_name, target_name, prop_name, &event->xselectionrequest.time);
+    event->xselectionrequest.selection = sel_name[0] ? XInternAtom(display, sel_name, False) : None;
+    event->xselectionrequest.target = target_name[0] ? XInternAtom(display, target_name, False) : None;
+    event->xselectionrequest.property = (!strcmp(prop_name, "NONE") || prop_name[0] == '\0')
+                                        ? None : XInternAtom(display, prop_name, False);
+    return 0;
+  }
+  if (strncmp(line + 6, "SelectionNotify", 15) == 0) {
+    char sel_name[64];
+    char target_name[64];
+    char prop_name[64];
+    sel_name[0] = target_name[0] = prop_name[0] = '\0';
+    event->type = SelectionNotify;
+    sscanf(line, "EVENT SelectionNotify requestor=%u selection=%63s target=%63s property=%63s time=%lu",
+           &event->xselection.requestor, sel_name, target_name, prop_name,
+           &event->xselection.time);
+    event->xselection.selection = sel_name[0] ? XInternAtom(display, sel_name, False) : None;
+    event->xselection.target = target_name[0] ? XInternAtom(display, target_name, False) : None;
+    event->xselection.property = (!strcmp(prop_name, "NONE") || prop_name[0] == '\0')
+                                 ? None : XInternAtom(display, prop_name, False);
+    return 0;
+  }
   return -1;
 }
 
@@ -663,24 +996,32 @@ x11_event_mask_for_type(int type)
     return ButtonReleaseMask;
   case MotionNotify:
     return PointerMotionMask | ButtonMotionMask;
+  case EnterNotify:
+    return EnterWindowMask;
+  case LeaveNotify:
+    return LeaveWindowMask;
   case Expose:
     return ExposureMask;
   case MapRequest:
   case ConfigureRequest:
     return SubstructureRedirectMask;
+  case MapNotify:
+    return StructureNotifyMask;
   case FocusIn:
   case FocusOut:
     return FocusChangeMask;
   case DestroyNotify:
   case ConfigureNotify:
     return StructureNotifyMask;
+  case PropertyNotify:
+    return PropertyChangeMask;
   default:
     return 0;
   }
 }
 
 static int
-x11_read_event(Display *display, XEvent *event)
+x11_read_event_from_wire(Display *display, XEvent *event)
 {
   char line[X6_BUF_SIZE];
   if (!display || !event)
@@ -689,17 +1030,19 @@ x11_read_event(Display *display, XEvent *event)
   while (1) {
     if (x11_read_line(display->fd, line, sizeof(line)) < 0)
       return -1;
-    if (x11_handle_unsolicited_line(display, line)) {
-      if (g_has_pending_event) {
-        *event = g_pending_event;
-        g_has_pending_event = 0;
-        return 0;
-      }
+    if (x11_handle_unsolicited_line(display, line))
       continue;
-    }
     if (x11_parse_event_line(display, line, event) == 0)
       return 0;
   }
+}
+
+static int
+x11_read_event(Display *display, XEvent *event)
+{
+  if (x11_event_pop_front(event) == 0)
+    return 0;
+  return x11_read_event_from_wire(display, event);
 }
 
 static int
@@ -1028,8 +1371,24 @@ int XMoveWindow(Display *display, Window w, int x, int y) {
     return -1;
   return XMoveResizeWindow(display, w, x, y, (unsigned int)attrs.width, (unsigned int)attrs.height);
 }
-int XRaiseWindow(Display *display, Window w) { (void)display; (void)w; return 0; }
-int XLowerWindow(Display *display, Window w) { (void)display; (void)w; return 0; }
+int XRaiseWindow(Display *display, Window w) {
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  if (!display)
+    return -1;
+  snprintf(cmd, sizeof(cmd), "RAISE %u\n", (uint)w);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return -1;
+  return strncmp(line, "OK raised", 9) == 0 ? 0 : -1;
+}
+int XLowerWindow(Display *display, Window w) {
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  if (!display)
+    return -1;
+  snprintf(cmd, sizeof(cmd), "LOWER %u\n", (uint)w);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return -1;
+  return strncmp(line, "OK lowered", 10) == 0 ? 0 : -1;
+}
 
 int
 XConfigureWindow(Display *display, Window w, unsigned int value_mask, XWindowChanges *values)
@@ -1142,57 +1501,180 @@ XSelectInput(Display *display, Window w, long event_mask)
   return 0;
 }
 
+static Window
+x11_event_window(const XEvent *event)
+{
+  if (!event)
+    return None;
+
+  switch (event->type) {
+  case KeyPress:
+  case KeyRelease:
+    return event->xkey.window;
+  case ButtonPress:
+  case ButtonRelease:
+    return event->xbutton.window;
+  case MotionNotify:
+    return event->xmotion.window;
+  case EnterNotify:
+  case LeaveNotify:
+    return event->xcrossing.window;
+  case Expose:
+    return event->xexpose.window;
+  case ConfigureNotify:
+    return event->xconfigure.window;
+  case ConfigureRequest:
+    return event->xconfigurerequest.window;
+  case MapRequest:
+    return event->xmaprequest.window;
+  case MapNotify:
+    return event->xmap.window;
+  case DestroyNotify:
+    return event->xdestroywindow.window;
+  case FocusIn:
+  case FocusOut:
+    return event->xfocus.window;
+  case PropertyNotify:
+    return event->xproperty.window;
+  case SelectionClear:
+    return event->xselectionclear.window;
+  case SelectionRequest:
+    return event->xselectionrequest.owner;
+  case SelectionNotify:
+    return event->xselection.requestor;
+  case ClientMessage:
+    return event->xclient.window;
+  default:
+    return event->xany.window;
+  }
+}
+
 int
 XNextEvent(Display *display, XEvent *event)
 {
-  if (g_has_pending_event) {
-    *event = g_pending_event;
-    g_has_pending_event = 0;
+  if (x11_event_pop_front(event) == 0)
     return 0;
-  }
   return x11_read_event(display, event);
 }
 
 int
-XMaskEvent(Display *display, long event_mask, XEvent *event)
+XPeekEvent(Display *display, XEvent *event)
 {
   XEvent tmp;
 
   if (!display || !event)
     return -1;
+  if (x11_event_peek_front(event) == 0)
+    return 0;
+  if (x11_read_event(display, &tmp) < 0)
+    return -1;
+  x11_event_push_front(&tmp);
+  *event = tmp;
+  return 0;
+}
 
-  if (g_has_pending_event) {
-    if (x11_event_mask_for_type(g_pending_event.type) & event_mask) {
-      *event = g_pending_event;
-      g_has_pending_event = 0;
-      return 0;
-    }
-  }
+int
+XPutBackEvent(Display *display, XEvent *event)
+{
+  (void)display;
+  if (!event)
+    return 0;
+  x11_event_push_front(event);
+  return 0;
+}
+
+int
+XMaskEvent(Display *display, long event_mask, XEvent *event)
+{
+  if (!display || !event)
+    return -1;
+
+  if (x11_event_find_and_pop_mask(event_mask, event) == 0)
+    return 0;
 
   while (1) {
-    if (x11_read_event(display, &tmp) < 0)
+    XEvent tmp;
+    if (x11_read_event_from_wire(display, &tmp) < 0)
       return -1;
     if (x11_event_mask_for_type(tmp.type) & event_mask) {
       *event = tmp;
       return 0;
     }
-    if (!g_has_pending_event) {
-      g_pending_event = tmp;
-      g_has_pending_event = 1;
-    }
+    x11_event_push_back(&tmp);
   }
 }
 
 Bool XCheckMaskEvent(Display *display, long event_mask, XEvent *event) {
-  (void)display;
+  if (!display)
+    return False;
   if (!event)
     return False;
-  if (g_has_pending_event && (x11_event_mask_for_type(g_pending_event.type) & event_mask)) {
-    *event = g_pending_event;
-    g_has_pending_event = 0;
+  return x11_event_find_and_pop_mask(event_mask, event) == 0 ? True : False;
+}
+
+Bool
+XCheckTypedEvent(Display *display, int event_type, XEvent *event_return)
+{
+  if (!display || !event_return)
+    return False;
+  if (x11_event_find_and_pop_type(event_type, None, 0, event_return) == 0)
     return True;
-  }
+  if (!XPending(display))
+    return False;
+  if (x11_event_find_and_pop_type(event_type, None, 0, event_return) == 0)
+    return True;
   return False;
+}
+
+Bool
+XCheckTypedWindowEvent(Display *display, Window w, int event_type, XEvent *event_return)
+{
+  if (!display || !event_return)
+    return False;
+  if (x11_event_find_and_pop_type(event_type, w, 1, event_return) == 0)
+    return True;
+  if (!XPending(display))
+    return False;
+  if (x11_event_find_and_pop_type(event_type, w, 1, event_return) == 0)
+    return True;
+  return False;
+}
+
+Bool
+XCheckWindowEvent(Display *display, Window w, long event_mask, XEvent *event_return)
+{
+  if (!display || !event_return)
+    return False;
+  if (x11_event_find_and_pop_window_mask(w, event_mask, event_return) == 0)
+    return True;
+  if (!XPending(display))
+    return False;
+  if (x11_event_find_and_pop_window_mask(w, event_mask, event_return) == 0)
+    return True;
+  return False;
+}
+
+int
+XWindowEvent(Display *display, Window w, long event_mask, XEvent *event_return)
+{
+  XEvent ev;
+
+  if (!display || !event_return)
+    return -1;
+
+  if (x11_event_find_and_pop_window_mask(w, event_mask, event_return) == 0)
+    return 0;
+
+  while (1) {
+    if (x11_read_event_from_wire(display, &ev) < 0)
+      return -1;
+    if (x11_event_window(&ev) == w &&
+        (x11_event_mask_for_type(ev.type) & event_mask)) {
+      *event_return = ev;
+      return 0;
+    }
+    x11_event_push_back(&ev);
+  }
 }
 
 Atom
@@ -1233,17 +1715,222 @@ XGetAtomName(Display *display, Atom atom)
   return (char *)atom_to_name(atom);
 }
 
+static int
+x11_prop_unit_bytes(int format)
+{
+  if (format == 8)
+    return 1;
+  if (format == 16)
+    return 2;
+  if (format == 32)
+    return 4;
+  return 0;
+}
+
+static int
+x11_hex_nibble(int c)
+{
+  if (c >= '0' && c <= '9')
+    return c - '0';
+  if (c >= 'a' && c <= 'f')
+    return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F')
+    return c - 'A' + 10;
+  return -1;
+}
+
+static char *
+x11_prop_pack(Atom type, int format, const unsigned char *data, unsigned long nelements)
+{
+  static const char hexd[] = "0123456789abcdef";
+  unsigned long nbytes;
+  unsigned long i;
+  char *out;
+  int unit;
+  int hdr;
+
+  unit = x11_prop_unit_bytes(format);
+  if (unit <= 0)
+    return 0;
+
+  nbytes = nelements * (unsigned long)unit;
+  out = (char *)malloc((size_t)(nbytes * 2 + 96));
+  if (!out)
+    return 0;
+
+  hdr = snprintf(out, 96, "@AUXP1@%lu@%d@%lu@", (unsigned long)type, format, nelements);
+  if (hdr < 0) {
+    free(out);
+    return 0;
+  }
+
+  for (i = 0; i < nbytes; i++) {
+    unsigned char b = data ? data[i] : 0;
+    out[hdr + (int)(2 * i)] = hexd[(b >> 4) & 0x0f];
+    out[hdr + (int)(2 * i) + 1] = hexd[b & 0x0f];
+  }
+  out[hdr + (int)(2 * nbytes)] = '\0';
+  return out;
+}
+
+static int
+x11_prop_unpack(const char *wire,
+                Atom *type_out,
+                int *format_out,
+                unsigned long *nitems_out,
+                unsigned char **bytes_out)
+{
+  unsigned long typev;
+  int fmt;
+  unsigned long nitems;
+  const char *hex;
+  unsigned long nbytes;
+  unsigned long i;
+  int unit;
+  unsigned char *buf;
+
+  if (!wire || !type_out || !format_out || !nitems_out || !bytes_out)
+    return -1;
+
+  if (strncmp(wire, "@AUXP1@", 7) != 0) {
+    nbytes = strlen(wire);
+    buf = (unsigned char *)malloc((size_t)nbytes + 1);
+    if (!buf)
+      return -1;
+    if (nbytes > 0)
+      memmove(buf, wire, (size_t)nbytes);
+    buf[nbytes] = '\0';
+    *type_out = XA_STRING;
+    *format_out = 8;
+    *nitems_out = nbytes;
+    *bytes_out = buf;
+    return 0;
+  }
+
+  if (sscanf(wire, "@AUXP1@%lu@%d@%lu@", &typev, &fmt, &nitems) != 3)
+    return -1;
+
+  unit = x11_prop_unit_bytes(fmt);
+  if (unit <= 0)
+    return -1;
+
+  hex = wire;
+  hex = strchr(hex + 7, '@');
+  if (!hex) return -1;
+  hex = strchr(hex + 1, '@');
+  if (!hex) return -1;
+  hex = strchr(hex + 1, '@');
+  if (!hex) return -1;
+  hex++;
+
+  nbytes = nitems * (unsigned long)unit;
+  if (strlen(hex) < nbytes * 2)
+    return -1;
+
+  buf = (unsigned char *)malloc((size_t)nbytes + 1);
+  if (!buf)
+    return -1;
+
+  for (i = 0; i < nbytes; i++) {
+    int hi = x11_hex_nibble(hex[2 * i]);
+    int lo = x11_hex_nibble(hex[2 * i + 1]);
+    if (hi < 0 || lo < 0) {
+      free(buf);
+      return -1;
+    }
+    buf[i] = (unsigned char)((hi << 4) | lo);
+  }
+  buf[nbytes] = '\0';
+
+  *type_out = (Atom)typev;
+  *format_out = fmt;
+  *nitems_out = nitems;
+  *bytes_out = buf;
+  return 0;
+}
+
 int
 XChangeProperty(Display *display, Window w, Atom property, Atom type,
                 int format, int mode, unsigned char *data, int nelements)
 {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
   const char *name = atom_to_name(property);
-  (void)type;
-  (void)mode;
-  if (!display || format != 8 || !data)
+  char *packed;
+  unsigned long base_nitems;
+  Atom base_type;
+  int base_format;
+  int unit;
+
+  if (!display)
     return -1;
-  snprintf(cmd, sizeof(cmd), "SET_PROPERTY %u %s %.*s\n", (uint)w, name, nelements, (char *)data);
+
+  if (mode == PropModeReplace || nelements <= 0) {
+    packed = x11_prop_pack(type, format, data, nelements > 0 ? (unsigned long)nelements : 0UL);
+    if (!packed)
+      return -1;
+  } else {
+    unsigned char *old_bytes;
+    unsigned char *merged;
+    unsigned long merged_items;
+    unsigned long old_bytes_len;
+    unsigned long add_bytes_len;
+    int new_off;
+
+    old_bytes = 0;
+    base_nitems = 0;
+    base_type = type;
+    base_format = format;
+
+    if (XGetWindowProperty(display, w, property, 0, 1L << 20, False, type,
+                           &base_type, &base_format, &base_nitems, 0, &old_bytes) != Success) {
+      old_bytes = 0;
+      base_nitems = 0;
+      base_type = type;
+      base_format = format;
+    }
+
+    unit = x11_prop_unit_bytes(format);
+    if (unit <= 0 || base_format != format || base_type != type) {
+      if (old_bytes) XFree(old_bytes);
+      return -1;
+    }
+
+    old_bytes_len = base_nitems * (unsigned long)unit;
+    add_bytes_len = (unsigned long)nelements * (unsigned long)unit;
+    merged = (unsigned char *)malloc((size_t)(old_bytes_len + add_bytes_len));
+    if (!merged) {
+      if (old_bytes) XFree(old_bytes);
+      return -1;
+    }
+
+    if (mode == PropModePrepend) {
+      if (add_bytes_len > 0 && data)
+        memmove(merged, data, (size_t)add_bytes_len);
+      if (old_bytes_len > 0 && old_bytes)
+        memmove(merged + add_bytes_len, old_bytes, (size_t)old_bytes_len);
+    } else {
+      if (old_bytes_len > 0 && old_bytes)
+        memmove(merged, old_bytes, (size_t)old_bytes_len);
+      if (add_bytes_len > 0 && data)
+        memmove(merged + old_bytes_len, data, (size_t)add_bytes_len);
+    }
+
+    merged_items = (old_bytes_len + add_bytes_len) / (unsigned long)unit;
+    packed = x11_prop_pack(type, format, merged, merged_items);
+    free(merged);
+    if (old_bytes) XFree(old_bytes);
+    if (!packed)
+      return -1;
+
+    new_off = (int)strlen(packed);
+    if (new_off + 64 >= (int)sizeof(cmd)) {
+      free(packed);
+      return -1;
+    }
+  }
+
+  snprintf(cmd, sizeof(cmd), "SET_PROPERTY %u %s %s\n", (uint)w, name, packed);
+  free(packed);
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return -1;
   return strncmp(line, "OK property_set", 15) == 0 ? 0 : -1;
@@ -1258,12 +1945,18 @@ XGetWindowProperty(Display *display, Window w, Atom property,
                    unsigned char **prop_return)
 {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  unsigned char *all_bytes;
+  unsigned long all_nitems;
+  Atom all_type;
+  int all_format;
+  int unit;
+  unsigned long start_item;
+  unsigned long want_items;
+  unsigned long avail_items;
+  unsigned long copy_items;
+  unsigned long copy_bytes;
   char *space;
   const char *name = atom_to_name(property);
-  (void)long_offset;
-  (void)long_length;
-  (void)del;
-  (void)req_type;
 
   if (!display || !prop_return)
     return -1;
@@ -1287,15 +1980,60 @@ XGetWindowProperty(Display *display, Window w, Atom property,
     return -1;
   space++;
 
-  *prop_return = (unsigned char *)malloc(strlen(space) + 1);
-  if (!*prop_return)
+  all_bytes = 0;
+  all_nitems = 0;
+  all_type = XA_STRING;
+  all_format = 8;
+  if (x11_prop_unpack(space, &all_type, &all_format, &all_nitems, &all_bytes) < 0)
     return -1;
-  strcpy((char *)*prop_return, space);
 
-  if (actual_type_return) *actual_type_return = XA_STRING;
-  if (actual_format_return) *actual_format_return = 8;
-  if (nitems_return) *nitems_return = strlen(space);
-  if (bytes_after_return) *bytes_after_return = 0;
+  if (req_type != 0 && req_type != all_type) {
+    if (actual_type_return) *actual_type_return = all_type;
+    if (actual_format_return) *actual_format_return = all_format;
+    if (nitems_return) *nitems_return = 0;
+    if (bytes_after_return) *bytes_after_return = all_nitems * (unsigned long)x11_prop_unit_bytes(all_format);
+    if (del)
+      XDeleteProperty(display, w, property);
+    XFree(all_bytes);
+    *prop_return = 0;
+    return Success;
+  }
+
+  unit = x11_prop_unit_bytes(all_format);
+  if (unit <= 0) {
+    XFree(all_bytes);
+    return -1;
+  }
+
+  start_item = (long_offset < 0) ? 0UL : (unsigned long)long_offset;
+  if (start_item > all_nitems)
+    start_item = all_nitems;
+
+  avail_items = all_nitems - start_item;
+  want_items = (long_length < 0) ? avail_items : (unsigned long)long_length;
+  if (want_items > avail_items)
+    want_items = avail_items;
+  copy_items = want_items;
+  copy_bytes = copy_items * (unsigned long)unit;
+
+  *prop_return = (unsigned char *)malloc((size_t)copy_bytes + 1);
+  if (!*prop_return) {
+    XFree(all_bytes);
+    return -1;
+  }
+  if (copy_bytes > 0)
+    memmove(*prop_return, all_bytes + start_item * (unsigned long)unit, (size_t)copy_bytes);
+  (*prop_return)[copy_bytes] = '\0';
+
+  if (actual_type_return) *actual_type_return = all_type;
+  if (actual_format_return) *actual_format_return = all_format;
+  if (nitems_return) *nitems_return = copy_items;
+  if (bytes_after_return)
+    *bytes_after_return = (all_nitems - (start_item + copy_items)) * (unsigned long)unit;
+
+  if (del && (all_nitems - (start_item + copy_items) == 0))
+    XDeleteProperty(display, w, property);
+  XFree(all_bytes);
   return Success;
 }
 
@@ -1311,27 +2049,68 @@ int XDeleteProperty(Display *display, Window w, Atom property) {
 }
 
 int XSetSelectionOwner(Display *display, Atom selection, Window owner, Time time) {
-  (void)display;
-  (void)selection;
-  (void)owner;
-  (void)time;
-  return 1;  /* Simplified: just succeed */
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  const char *sel_name;
+  struct x11_selection_state *s;
+
+  if (!display)
+    return 0;
+  sel_name = atom_to_name(selection);
+  snprintf(cmd, sizeof(cmd), "SET_SELECTION_OWNER %s %u %u\n",
+           sel_name, (uint)owner, (uint)time);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return 0;
+  if (strncmp(line, "OK selection_owner_set", 22) != 0)
+    return 0;
+
+  s = x11_find_selection(selection, 1);
+  if (s) {
+    s->owner = owner;
+    s->time = time;
+  }
+  return 1;
 }
 
 int XGetSelectionOwner(Display *display, Atom selection) {
-  (void)display;
-  (void)selection;
-  return 0;  /* No selection owner */
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  const char *sel_name;
+  unsigned int owner = 0;
+  struct x11_selection_state *s;
+
+  if (!display)
+    return None;
+  sel_name = atom_to_name(selection);
+  snprintf(cmd, sizeof(cmd), "GET_SELECTION_OWNER %s\n", sel_name);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    goto fallback;
+  if (sscanf(line, "OK selection_owner %u", &owner) == 1)
+    return (Window)owner;
+
+fallback:
+  s = x11_find_selection(selection, 0);
+  return s ? s->owner : None;
 }
 
 int XConvertSelection(Display *display, Atom selection, Atom target, Atom property, Window requestor, Time time) {
-  (void)display;
-  (void)selection;
-  (void)target;
-  (void)property;
-  (void)requestor;
-  (void)time;
-  return 1;  /* Simplified: just succeed */
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  const char *sel_name;
+  const char *target_name;
+  const char *prop_name;
+
+  if (!display)
+    return 0;
+  if (selection == None || target == None || requestor == None)
+    return 0;
+
+  sel_name = atom_to_name(selection);
+  target_name = atom_to_name(target);
+  prop_name = (property == None) ? "NONE" : atom_to_name(property);
+
+  snprintf(cmd, sizeof(cmd), "CONVERT_SELECTION %s %s %s %u %u\n",
+           sel_name, target_name, prop_name, (uint)requestor, (uint)time);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return 0;
+  return strncmp(line, "OK selection_convert", 19) == 0 ? 1 : 0;
 }
 
 Status XSendEvent(Display *display, Window w, Bool propagate, long event_mask, XEvent *event_send) {
@@ -1359,6 +2138,21 @@ Status XSendEvent(Display *display, Window w, Bool propagate, long event_mask, X
              (uint)event_send->xclient.window,
              (uint)event_send->xclient.message_type,
              (uint)event_send->xclient.data.l[0]);
+    if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+      return 0;
+    return Success;
+  }
+
+  if (event_send->type == SelectionNotify) {
+    const char *sel_name = atom_to_name(event_send->xselection.selection);
+    const char *target_name = atom_to_name(event_send->xselection.target);
+    const char *prop_name = (event_send->xselection.property == None)
+                            ? "NONE"
+                            : atom_to_name(event_send->xselection.property);
+    snprintf(cmd, sizeof(cmd), "QUEUE_SELECTION_NOTIFY %u %s %s %s %u\n",
+             (uint)event_send->xselection.requestor,
+             sel_name, target_name, prop_name,
+             (uint)event_send->xselection.time);
     if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
       return 0;
     return Success;
@@ -1430,30 +2224,64 @@ int XWarpPointer(Display *display, Window src_w, Window dest_w, int src_x, int s
 
 int XGrabKey(Display *display, int keycode, unsigned int modifiers, Window grab_window, Bool owner_events, int pointer_mode, int keyboard_mode) {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  int x6_mods;
   (void)owner_events; (void)pointer_mode; (void)keyboard_mode;
   if (!display)
     return -1;
-  snprintf(cmd, sizeof(cmd), "GRAB_KEY %u %u %u\n", (uint)keycode, (uint)modifiers, (uint)grab_window);
+  x6_mods = x11_encode_modifiers(modifiers);
+  snprintf(cmd, sizeof(cmd), "GRAB_KEY %u %u %u\n", (uint)keycode, (uint)x6_mods, (uint)grab_window);
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return -1;
   return 0;
 }
 int XUngrabKey(Display *display, int keycode, unsigned int modifiers, Window grab_window) {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  int x6_mods;
   if (!display)
     return -1;
-  snprintf(cmd, sizeof(cmd), "UNGRAB_KEY %u %u %u\n", (uint)keycode, (uint)modifiers, (uint)grab_window);
+  x6_mods = x11_encode_modifiers(modifiers);
+  snprintf(cmd, sizeof(cmd), "UNGRAB_KEY %u %u %u\n", (uint)keycode, (uint)x6_mods, (uint)grab_window);
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return -1;
   return 0;
 }
 int XGrabButton(Display *display, unsigned int button, unsigned int modifiers, Window grab_window, Bool owner_events, unsigned int event_mask, int pointer_mode, int keyboard_mode, Window confine_to, Cursor cursor) {
-  (void)display; (void)button; (void)modifiers; (void)grab_window; (void)owner_events; (void)event_mask; (void)pointer_mode; (void)keyboard_mode; (void)confine_to; (void)cursor; return 0;
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  int x6_mods;
+  (void)owner_events;
+  (void)event_mask;
+  (void)pointer_mode;
+  (void)keyboard_mode;
+  (void)confine_to;
+  (void)cursor;
+  if (!display)
+    return -1;
+  x6_mods = x11_encode_modifiers(modifiers);
+  snprintf(cmd, sizeof(cmd), "GRAB_BUTTON %u %u %u\n", (uint)button, (uint)x6_mods, (uint)grab_window);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return -1;
+  return strncmp(line, "OK button_grabbed", 17) == 0 ? 0 : -1;
 }
 int XUngrabButton(Display *display, unsigned int button, unsigned int modifiers, Window grab_window) {
-  (void)display; (void)button; (void)modifiers; (void)grab_window; return 0;
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  int x6_mods;
+  if (!display)
+    return -1;
+  x6_mods = x11_encode_modifiers(modifiers);
+  snprintf(cmd, sizeof(cmd), "UNGRAB_BUTTON %u %u %u\n", (uint)button, (uint)x6_mods, (uint)grab_window);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return -1;
+  return strncmp(line, "OK button_ungrabbed", 19) == 0 ? 0 : -1;
 }
-int XAllowEvents(Display *display, int event_mode, Time time) { (void)display; (void)event_mode; (void)time; return 0; }
+int XAllowEvents(Display *display, int event_mode, Time time) {
+  char line[X6_BUF_SIZE];
+  (void)time;
+  if (!display)
+    return -1;
+  if (event_mode == ReplayPointer)
+    x11_cmd(display, "UNGRAB_POINTER\n", line, sizeof(line));
+  return 0;
+}
 
 int XSetWindowBorder(Display *display, Window w, unsigned long border_pixel) {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
@@ -1956,20 +2784,18 @@ int
 XPending(Display *display)
 {
   struct pollfd pfd;
-  XEvent ev;
 
   if (!display)
     return 0;
-  if (g_has_pending_event)
+  if (g_event_count > 0)
     return 1;
 
   /* Check if we already have bytes buffered from a previous recv */
   if (g_rxlen > 0) {
-    if (x11_read_event(display, &ev) < 0)
-      return 0;
-    g_pending_event = ev;
-    g_has_pending_event = 1;
-    return 1;
+    XEvent ev;
+    if (x11_read_event_from_wire(display, &ev) == 0)
+      x11_event_push_back(&ev);
+    return g_event_count > 0 ? 1 : 0;
   }
 
   pfd.fd = display->fd;
@@ -1979,11 +2805,12 @@ XPending(Display *display)
     return 0;
   if ((pfd.revents & POLLIN) == 0)
     return 0;
-  if (x11_read_event(display, &ev) < 0)
-    return 0;
-  g_pending_event = ev;
-  g_has_pending_event = 1;
-  return 1;
+  {
+    XEvent ev;
+    if (x11_read_event_from_wire(display, &ev) == 0)
+      x11_event_push_back(&ev);
+  }
+  return g_event_count > 0 ? 1 : 0;
 }
 
 int (*XSetErrorHandler(int (*handler)(Display *, XErrorEvent *)))(Display *, XErrorEvent *) {
@@ -2170,7 +2997,7 @@ int XGetTextProperty(Display *display, Window w, XTextProperty *text_prop_return
   Atom actual = 0;
   int fmt = 0;
   if (!text_prop_return) return 0;
-  if (XGetWindowProperty(display, w, property, 0, 1024, False, XA_STRING, &actual, &fmt, &nitems, 0, &prop) != Success)
+  if (XGetWindowProperty(display, w, property, 0, 1024, False, 0, &actual, &fmt, &nitems, 0, &prop) != Success)
     return 0;
   text_prop_return->value = (char *)prop;
   text_prop_return->encoding = actual;
@@ -2201,9 +3028,7 @@ int XGetWMProtocols(Display *display, Window w, Atom **protocols_return, int *co
   unsigned long nitems = 0;
   Atom actual = 0;
   int fmt = 0;
-  int count = 0;
-  char *tok;
-  char *tmp;
+  unsigned long i;
 
   if (protocols_return)
     *protocols_return = 0;
@@ -2213,55 +3038,28 @@ int XGetWMProtocols(Display *display, Window w, Atom **protocols_return, int *co
     return 0;
 
   if (XGetWindowProperty(display, w, XInternAtom(display, "WM_PROTOCOLS", False),
-                         0, 256, False, XA_STRING, &actual, &fmt, &nitems, 0, &prop) != Success)
+                         0, 256, False, XA_ATOM, &actual, &fmt, &nitems, 0, &prop) != Success)
     return 0;
-  if (!prop)
+  if (!prop || actual != XA_ATOM || fmt != 32 || nitems == 0) {
+    if (prop)
+      XFree(prop);
     return 0;
+  }
 
-  tmp = strdup((char *)prop);
+  *protocols_return = (Atom *)malloc((size_t)nitems * sizeof(Atom));
+  if (!*protocols_return) {
+    XFree(prop);
+    return 0;
+  }
+
+  for (i = 0; i < nitems; i++) {
+    unsigned long v = ((unsigned long *)prop)[i];
+    (*protocols_return)[i] = (Atom)v;
+  }
   XFree(prop);
-  if (!tmp)
-    return 0;
 
-  for (tok = strtok(tmp, ","); tok; tok = strtok(0, ","))
-    count++;
-  free(tmp);
-  if (count <= 0)
-    return 0;
-
-  *protocols_return = (Atom *)malloc((size_t)count * sizeof(Atom));
-  if (!*protocols_return)
-    return 0;
-
-  if (XGetWindowProperty(display, w, XInternAtom(display, "WM_PROTOCOLS", False),
-                         0, 256, False, XA_STRING, &actual, &fmt, &nitems, 0, &prop) != Success) {
-    free(*protocols_return);
-    *protocols_return = 0;
-    return 0;
-  }
-  if (!prop) {
-    free(*protocols_return);
-    *protocols_return = 0;
-    return 0;
-  }
-
-  tmp = strdup((char *)prop);
-  XFree(prop);
-  if (!tmp) {
-    free(*protocols_return);
-    *protocols_return = 0;
-    return 0;
-  }
-
-  count = 0;
-  for (tok = strtok(tmp, ","); tok; tok = strtok(0, ",")) {
-    while (*tok == ' ' || *tok == '\t') tok++;
-    (*protocols_return)[count++] = XInternAtom(display, tok, False);
-  }
-  free(tmp);
-
-  *count_return = count;
-  return count > 0;
+  *count_return = (int)nitems;
+  return *count_return > 0;
 }
 XWMHints *XGetWMHints(Display *display, Window w) {
   XWMHints *h = malloc(sizeof(*h));
@@ -2340,6 +3138,8 @@ XftDraw *XftDrawCreate(Display *display, Drawable drawable, Visual *visual, Colo
   if (d) {
     d->drawable = drawable;
     d->display = display;
+    d->has_clip = 0;
+    memset(&d->clip, 0, sizeof(d->clip));
   }
   (void)visual;
   (void)colormap;
@@ -2357,7 +3157,17 @@ void XftDrawDestroy(XftDraw *draw) {
 
 void XftDrawRect(XftDraw *draw, XftColor *color, int x, int y, unsigned int width, unsigned int height) {
   GC gc;
+  int dw;
+  int dh;
   if (!draw || !draw->display || width == 0 || height == 0)
+    return;
+  if (x11_drawable_size(draw->display, draw->drawable, &dw, &dh) == 0) {
+    (void)dw;
+    (void)dh;
+    if (x11_sanitize_rect(draw->display, &x, &y, &width, &height) < 0)
+      return;
+  }
+  if (x11_clip_box(draw, &x, &y, &width, &height) < 0)
     return;
   gc = x11_xft_gc(draw->display, draw->drawable);
   if (!gc)
@@ -2367,18 +3177,61 @@ void XftDrawRect(XftDraw *draw, XftColor *color, int x, int y, unsigned int widt
 }
 
 void XftDrawSetClipRectangles(XftDraw *draw, int xOrigin, int yOrigin, XRectangle *rects, int nrects) {
-  (void)draw;
-  (void)xOrigin;
-  (void)yOrigin;
-  (void)rects;
-  (void)nrects;
-  /* Stub: clipping not needed for basic rendering */
+  int i;
+  int minx;
+  int miny;
+  int maxx;
+  int maxy;
+
+  if (!draw)
+    return;
+  if (!rects || nrects <= 0) {
+    draw->has_clip = 0;
+    memset(&draw->clip, 0, sizeof(draw->clip));
+    return;
+  }
+
+  minx = xOrigin + rects[0].x;
+  miny = yOrigin + rects[0].y;
+  maxx = minx + rects[0].width;
+  maxy = miny + rects[0].height;
+  for (i = 1; i < nrects; i++) {
+    int rx;
+    int ry;
+    int rx2;
+    int ry2;
+    rx = xOrigin + rects[i].x;
+    ry = yOrigin + rects[i].y;
+    rx2 = rx + rects[i].width;
+    ry2 = ry + rects[i].height;
+    if (rx < minx) minx = rx;
+    if (ry < miny) miny = ry;
+    if (rx2 > maxx) maxx = rx2;
+    if (ry2 > maxy) maxy = ry2;
+  }
+
+  if (maxx <= minx || maxy <= miny) {
+    draw->has_clip = 1;
+    draw->clip.x = 0;
+    draw->clip.y = 0;
+    draw->clip.width = 0;
+    draw->clip.height = 0;
+    return;
+  }
+
+  draw->has_clip = 1;
+  draw->clip.x = (short)minx;
+  draw->clip.y = (short)miny;
+  draw->clip.width = (unsigned short)(maxx - minx);
+  draw->clip.height = (unsigned short)(maxy - miny);
 }
 
 void XftDrawSetClip(XftDraw *draw, void *clip) {
-  (void)draw;
   (void)clip;
-  /* Stub: clipping not needed for basic rendering */
+  if (!draw)
+    return;
+  draw->has_clip = 0;
+  memset(&draw->clip, 0, sizeof(draw->clip));
 }
 
 void XftDrawGlyphFontSpec(XftDraw *draw, XftColor *color, XftGlyphFontSpec *glyphs, int nglyphs) {
@@ -2396,6 +3249,8 @@ void XftDrawGlyphFontSpec(XftDraw *draw, XftColor *color, XftGlyphFontSpec *glyp
   for (i = 0; i < nglyphs; i++) {
     char ch;
     unsigned int g = glyphs[i].glyph;
+    if (!x11_point_in_clip(draw, glyphs[i].x, glyphs[i].y))
+      continue;
     if (g >= 32 && g < 127)
       ch = (char)g;
     else
@@ -2533,9 +3388,26 @@ XftPattern *XftFontMatch(Display *display, int screen, XftPattern *pattern, XftR
 
 void XftDrawStringUtf8(XftDraw *draw, XftColor *color, XftFont *font, int x, int y, const XftChar8 *string, int len) {
   GC gc;
-  (void)font;
+  int cw;
+  int asc;
+  int h;
+  int bx;
+  int by;
+  unsigned int bw;
+  unsigned int bh;
   if (!draw || !draw->display || !string || len <= 0)
     return;
+  if (draw->has_clip) {
+    cw = (font && font->max_advance_width > 0) ? font->max_advance_width : 8;
+    asc = (font && font->ascent > 0) ? font->ascent : 12;
+    h = (font && font->height > 0) ? font->height : 16;
+    bx = x;
+    by = y - asc;
+    bw = (unsigned int)(len * cw);
+    bh = (unsigned int)h;
+    if (x11_clip_box(draw, &bx, &by, &bw, &bh) < 0)
+      return;
+  }
   gc = x11_xft_gc(draw->display, draw->drawable);
   if (!gc)
     return;
@@ -2760,11 +3632,14 @@ int XRegisterIMInstantiateCallback(Display *display, void *rdb, char *res_name, 
 }
 
 int XSetWMProtocols(Display *display, Window w, Atom *protocols, int count) {
-  (void)display;
-  (void)w;
-  (void)protocols;
-  (void)count;
-  return 1;
+  Atom wm_protocols;
+  if (!display)
+    return 0;
+  wm_protocols = XInternAtom(display, "WM_PROTOCOLS", False);
+  if (!protocols || count <= 0)
+    return XDeleteProperty(display, w, wm_protocols) == 0;
+  return XChangeProperty(display, w, wm_protocols, XA_ATOM, 32,
+                         PropModeReplace, (unsigned char *)protocols, count) == 0;
 }
 
 int XConnectionNumber(Display *display) {
@@ -2851,7 +3726,6 @@ int XSetTextProperty(Display *display, Window w, void *text_prop, Atom property)
 }
 
 int Xutf8TextListToTextProperty(Display *display, char **list, int count, XICCEncodingStyle style, void *text_prop_return) {
-  (void)display;
   (void)style;
   if (!list || count <= 0 || !list[0] || !text_prop_return)
     return 1;
@@ -2860,7 +3734,7 @@ int Xutf8TextListToTextProperty(Display *display, char **list, int count, XICCEn
     tp->value = strdup(list[0]);
     if (!tp->value)
       return 1;
-    tp->encoding = XA_STRING;
+    tp->encoding = display ? XInternAtom(display, "UTF8_STRING", False) : XA_STRING;
     tp->format = 8;
     tp->nitems = strlen(tp->value);
   }
@@ -2924,16 +3798,48 @@ void *XAllocSizeHints(void) {
 }
 
 int XSetWMProperties(Display *display, Window w, void *window_name, void *icon_name, char **argv, int argc, void *normal_hints, void *wm_hints, void *class_hints) {
-  (void)display;
-  (void)w;
-  (void)window_name;
-  (void)icon_name;
-  (void)argv;
-  (void)argc;
-  (void)normal_hints;
-  (void)wm_hints;
-  (void)class_hints;
-  return 1;
+  int i;
+  int ok;
+
+  if (!display)
+    return 0;
+
+  ok = 1;
+  if (window_name)
+    ok &= XSetWMName(display, w, window_name);
+  if (icon_name)
+    ok &= XSetWMIconName(display, w, icon_name);
+  if (normal_hints)
+    ok &= XSetWMNormalHints(display, w, (XSizeHints *)normal_hints);
+  if (wm_hints)
+    ok &= XSetWMHints(display, w, (XWMHints *)wm_hints);
+  if (class_hints)
+    ok &= XSetClassHint(display, w, (XClassHint *)class_hints);
+
+  if (argv && argc > 0) {
+    int len = 0;
+    char *buf;
+    Atom wm_command;
+    for (i = 0; i < argc; i++)
+      len += (int)strlen(argv[i]) + 1;
+    buf = (char *)malloc((size_t)len + 1);
+    if (buf) {
+      int off = 0;
+      for (i = 0; i < argc; i++) {
+        int n = (int)strlen(argv[i]);
+        memmove(buf + off, argv[i], (size_t)n);
+        off += n;
+        buf[off++] = '\0';
+      }
+      buf[off] = '\0';
+      wm_command = XInternAtom(display, "WM_COMMAND", False);
+      ok &= XChangeProperty(display, w, wm_command, XA_STRING, 8,
+                            PropModeReplace, (unsigned char *)buf, off) == 0;
+      free(buf);
+    }
+  }
+
+  return ok;
 }
 
 int XmbLookupString(XIC ic, XKeyEvent *event, char *buffer, int nbytes, KeySym *keysym, void *status) {
