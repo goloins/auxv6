@@ -250,6 +250,17 @@ x11_parse_event_line(Display *display, const char *line, XEvent *event)
            &event->xexpose.width, &event->xexpose.height);
     return 0;
   }
+  if (strncmp(line + 6, "ClientMessage", 13) == 0) {
+    unsigned int mtype = 0;
+    unsigned int d0 = 0;
+    event->type = ClientMessage;
+    sscanf(line, "EVENT ClientMessage wid=%u type=%u data0=%u",
+           &event->xclient.window, &mtype, &d0);
+    event->xclient.message_type = (Atom)mtype;
+    event->xclient.format = 32;
+    event->xclient.data.l[0] = (long)d0;
+    return 0;
+  }
   return -1;
 }
 
@@ -434,8 +445,6 @@ XOpenDisplay(char *display_name)
   Display *dpy;
   (void)display_name;
 
-  dprintf(2, "x11: XOpenDisplay enter\n");
-
   if (g_display)
     return g_display;
 
@@ -446,7 +455,6 @@ XOpenDisplay(char *display_name)
 
   dpy->fd = socket(AF_INET, SOCK_STREAM, 0);
   if (dpy->fd < 0) {
-    dprintf(2, "x11: socket failed\n");
     goto fail;
   }
 
@@ -455,24 +463,18 @@ XOpenDisplay(char *display_name)
   addr.sin_port = (ushort)X6_PORT;
   addr.sin_addr = INADDR_LOOPBACK;
   if (connect(dpy->fd, &addr, sizeof(addr)) < 0) {
-    dprintf(2, "x11: connect failed\n");
     goto fail;
   }
-  dprintf(2, "x11: connect ok\n");
 
   if (x11_read_line(dpy->fd, line, sizeof(line)) < 0) {
-    dprintf(2, "x11: read READY failed\n");
     goto fail;
   }
   if (x11_cmd(dpy, "HELLO x6/1\n", line, sizeof(line)) < 0) {
-    dprintf(2, "x11: HELLO failed\n");
     goto fail;
   }
   if (strncmp(line, "OK proto=", 9) != 0) {
-    dprintf(2, "x11: HELLO bad reply: %s\n", line);
     goto fail;
   }
-  dprintf(2, "x11: display handshake ok\n");
 
   dpy->screen = 0;
   dpy->root = 1;
@@ -485,7 +487,6 @@ XOpenDisplay(char *display_name)
   return dpy;
 
 fail:
-  dprintf(2, "x11: XOpenDisplay fail\n");
   if (dpy->fd >= 0)
     close(dpy->fd);
   free(dpy);
@@ -533,8 +534,9 @@ XCreateWindow(Display *display, Window parent, int x, int y,
 {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
   Window w;
-  (void)parent; (void)border_width; (void)depth; (void)class;
-  (void)visual; (void)valuemask; (void)attributes;
+  char attrcmd[X6_BUF_SIZE];
+  (void)parent; (void)depth; (void)class;
+  (void)visual;
 
   if (!display)
     return None;
@@ -544,6 +546,18 @@ XCreateWindow(Display *display, Window parent, int x, int y,
     return None;
   if (sscanf(line, "OK create wid=%lu", &w) != 1)
     return None;
+
+  if (border_width > 0) {
+    snprintf(attrcmd, sizeof(attrcmd), "SET_BORDER_WIDTH %u %u\n", (uint)w, border_width);
+    if (x11_cmd(display, attrcmd, line, sizeof(line)) < 0)
+      return None;
+  }
+
+  if (valuemask && attributes) {
+    if (XChangeWindowAttributes(display, w, valuemask, attributes) < 0)
+      return None;
+  }
+
   return w;
 }
 
@@ -620,34 +634,96 @@ XMoveResizeWindow(Display *display, Window w, int x, int y, unsigned int width, 
   return -1;
 }
 
-int XMoveWindow(Display *display, Window w, int x, int y) { return XMoveResizeWindow(display, w, x, y, 1, 1); }
+int XMoveWindow(Display *display, Window w, int x, int y) {
+  XWindowAttributes attrs;
+  if (!display)
+    return -1;
+  if (!XGetWindowAttributes(display, w, &attrs))
+    return -1;
+  return XMoveResizeWindow(display, w, x, y, (unsigned int)attrs.width, (unsigned int)attrs.height);
+}
 int XRaiseWindow(Display *display, Window w) { (void)display; (void)w; return 0; }
 int XLowerWindow(Display *display, Window w) { (void)display; (void)w; return 0; }
 
 int
 XConfigureWindow(Display *display, Window w, unsigned int value_mask, XWindowChanges *values)
 {
-  int x = (values && (value_mask & CWX))      ? values->x      : 0;
-  int y = (values && (value_mask & CWY))      ? values->y      : 0;
-  unsigned int ww = (values && (value_mask & CWWidth))  ? (unsigned int)values->width  : 0;
-  unsigned int hh = (values && (value_mask & CWHeight)) ? (unsigned int)values->height : 0;
-  /* If no geometry fields are set, nothing to configure */
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  int x = 0;
+  int y = 0;
+  unsigned int ww = 0;
+  unsigned int hh = 0;
+
+  if (!display)
+    return -1;
+
+  if (value_mask & CWBorderWidth) {
+    int bw = values ? values->border_width : 0;
+    if (bw < 0)
+      bw = 0;
+    snprintf(cmd, sizeof(cmd), "SET_BORDER_WIDTH %u %d\n", (uint)w, bw);
+    if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+      return -1;
+  }
+
   if (!(value_mask & (CWX | CWY | CWWidth | CWHeight)))
     return 0;
+
+  if (values && (value_mask & CWX))
+    x = values->x;
+  if (values && (value_mask & CWY))
+    y = values->y;
+  if (values && (value_mask & CWWidth))
+    ww = (unsigned int)values->width;
+  if (values && (value_mask & CWHeight))
+    hh = (unsigned int)values->height;
+
+  /* Preserve unspecified geometry fields using the current server-side attrs. */
+  if (!(value_mask & (CWX | CWY | CWWidth | CWHeight)) ||
+      !(value_mask & CWX) || !(value_mask & CWY) ||
+      !(value_mask & CWWidth) || !(value_mask & CWHeight)) {
+    XWindowAttributes attrs;
+    if (XGetWindowAttributes(display, w, &attrs)) {
+      if (!(value_mask & CWX)) x = attrs.x;
+      if (!(value_mask & CWY)) y = attrs.y;
+      if (!(value_mask & CWWidth)) ww = (unsigned int)attrs.width;
+      if (!(value_mask & CWHeight)) hh = (unsigned int)attrs.height;
+    }
+  }
   return XMoveResizeWindow(display, w, x, y, ww, hh);
 }
 
 int
 XGetWindowAttributes(Display *display, Window w, XWindowAttributes *attrs)
 {
-  (void)w;
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  int x, y, ww, hh, bw, depth, mapped, override;
+  long evmask;
+
+  if (!display)
+    return 0;
   if (!attrs)
     return 0;
+
+  snprintf(cmd, sizeof(cmd), "GET_WINDOW_ATTR %u\n", (uint)w);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return 0;
+
+  if (sscanf(line,
+             "OK attr x=%d y=%d w=%d h=%d bw=%d depth=%d mapped=%d override=%d events=%ld",
+             &x, &y, &ww, &hh, &bw, &depth, &mapped, &override, &evmask) != 9)
+    return 0;
+
   memset(attrs, 0, sizeof(*attrs));
-  attrs->width = (display && display->width > 0) ? display->width : 1024;
-  attrs->height = (display && display->height > 0) ? display->height : 768;
-  attrs->depth = 32;
-  attrs->map_state = IsViewable;
+  attrs->x = x;
+  attrs->y = y;
+  attrs->width = ww;
+  attrs->height = hh;
+  attrs->border_width = bw;
+  attrs->depth = depth;
+  attrs->override_redirect = override ? True : False;
+  attrs->map_state = mapped ? IsViewable : IsUnmapped;
+  attrs->your_event_mask = evmask;
   return 1;
 }
 
@@ -837,14 +913,47 @@ XGetWindowProperty(Display *display, Window w, Atom property,
   return Success;
 }
 
-int XDeleteProperty(Display *display, Window w, Atom property) { (void)display; (void)w; (void)property; return 0; }
+int XDeleteProperty(Display *display, Window w, Atom property) {
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  const char *name = atom_to_name(property);
+  if (!display)
+    return -1;
+  snprintf(cmd, sizeof(cmd), "DELETE_PROPERTY %u %s\n", (uint)w, name);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return -1;
+  return 0;
+}
 
 Status XSendEvent(Display *display, Window w, Bool propagate, long event_mask, XEvent *event_send) {
-  (void)display;
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
   (void)w;
   (void)propagate;
   (void)event_mask;
-  (void)event_send;
+  if (!display || !event_send)
+    return 0;
+
+  if (event_send->type == ConfigureNotify) {
+    snprintf(cmd, sizeof(cmd), "QUEUE_CONFIGURE_NOTIFY %u %d %d %d %d\n",
+             (uint)event_send->xconfigure.window,
+             event_send->xconfigure.x,
+             event_send->xconfigure.y,
+             event_send->xconfigure.width,
+             event_send->xconfigure.height);
+    if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+      return 0;
+    return Success;
+  }
+
+  if (event_send->type == ClientMessage) {
+    snprintf(cmd, sizeof(cmd), "QUEUE_CLIENT_MESSAGE %u %u %u\n",
+             (uint)event_send->xclient.window,
+             (uint)event_send->xclient.message_type,
+             (uint)event_send->xclient.data.l[0]);
+    if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+      return 0;
+    return Success;
+  }
+
   return Success;
 }
 
@@ -861,8 +970,15 @@ XSetInputFocus(Display *display, Window focus, int revert_to, Time time)
 }
 
 int XGetInputFocus(Display *display, Window *focus_return, int *revert_to_return) {
-  (void)display;
-  if (focus_return) *focus_return = None;
+  char line[X6_BUF_SIZE];
+  unsigned int wid = 0;
+  if (!display)
+    return -1;
+  if (x11_cmd(display, "GET_FOCUS\n", line, sizeof(line)) < 0)
+    return -1;
+  if (sscanf(line, "OK focus %u", &wid) != 1)
+    return -1;
+  if (focus_return) *focus_return = (Window)wid;
   if (revert_to_return) *revert_to_return = RevertToNone;
   return 0;
 }
@@ -903,10 +1019,23 @@ int XWarpPointer(Display *display, Window src_w, Window dest_w, int src_x, int s
 }
 
 int XGrabKey(Display *display, int keycode, unsigned int modifiers, Window grab_window, Bool owner_events, int pointer_mode, int keyboard_mode) {
-  (void)display; (void)keycode; (void)modifiers; (void)grab_window; (void)owner_events; (void)pointer_mode; (void)keyboard_mode; return 0;
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  (void)owner_events; (void)pointer_mode; (void)keyboard_mode;
+  if (!display)
+    return -1;
+  snprintf(cmd, sizeof(cmd), "GRAB_KEY %u %u %u\n", (uint)keycode, (uint)modifiers, (uint)grab_window);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return -1;
+  return 0;
 }
 int XUngrabKey(Display *display, int keycode, unsigned int modifiers, Window grab_window) {
-  (void)display; (void)keycode; (void)modifiers; (void)grab_window; return 0;
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  if (!display)
+    return -1;
+  snprintf(cmd, sizeof(cmd), "UNGRAB_KEY %u %u %u\n", (uint)keycode, (uint)modifiers, (uint)grab_window);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return -1;
+  return 0;
 }
 int XGrabButton(Display *display, unsigned int button, unsigned int modifiers, Window grab_window, Bool owner_events, unsigned int event_mask, int pointer_mode, int keyboard_mode, Window confine_to, Cursor cursor) {
   (void)display; (void)button; (void)modifiers; (void)grab_window; (void)owner_events; (void)event_mask; (void)pointer_mode; (void)keyboard_mode; (void)confine_to; (void)cursor; return 0;
@@ -916,8 +1045,46 @@ int XUngrabButton(Display *display, unsigned int button, unsigned int modifiers,
 }
 int XAllowEvents(Display *display, int event_mode, Time time) { (void)display; (void)event_mode; (void)time; return 0; }
 
-int XSetWindowBorder(Display *display, Window w, unsigned long border_pixel) { (void)display; (void)w; (void)border_pixel; return 0; }
-int XChangeWindowAttributes(Display *display, Window w, unsigned long valuemask, XSetWindowAttributes *attributes) { (void)display; (void)w; (void)valuemask; (void)attributes; return 0; }
+int XSetWindowBorder(Display *display, Window w, unsigned long border_pixel) {
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  if (!display)
+    return -1;
+  snprintf(cmd, sizeof(cmd), "SET_BORDER_COLOR %u %u\n", (uint)w, (uint)(border_pixel & 0x00ffffffUL));
+  return x11_cmd(display, cmd, line, sizeof(line)) < 0 ? -1 : 0;
+}
+int XChangeWindowAttributes(Display *display, Window w, unsigned long valuemask, XSetWindowAttributes *attributes) {
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+
+  if (!display)
+    return -1;
+
+  if ((valuemask & CWEventMask) && attributes) {
+    snprintf(cmd, sizeof(cmd), "SELECT_EVENTS %u %ld\n", (uint)w, attributes->event_mask);
+    if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+      return -1;
+  }
+
+  if ((valuemask & CWOverrideRedirect) && attributes) {
+    snprintf(cmd, sizeof(cmd), "SET_OVERRIDE_REDIRECT %u %d\n", (uint)w,
+             attributes->override_redirect ? 1 : 0);
+    if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+      return -1;
+  }
+
+  if ((valuemask & CWCursor) && attributes) {
+    if (attributes->cursor == None) {
+      snprintf(cmd, sizeof(cmd), "UNSET_CURSOR %u\n", (uint)w);
+      if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+        return -1;
+    } else {
+      snprintf(cmd, sizeof(cmd), "SET_CURSOR %u %u\n", (uint)w, (uint)attributes->cursor);
+      if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+        return -1;
+    }
+  }
+
+  return 0;
+}
 int XDefineCursor(Display *display, Window w, Cursor cursor) {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
   if (!display)
@@ -1030,7 +1197,31 @@ int XCopyArea(Display *display, Drawable src, Drawable dest, GC gc, int src_x, i
   (void)display; (void)src; (void)dest; (void)gc; (void)src_x; (void)src_y; (void)width; (void)height; (void)dest_x; (void)dest_y; return 0;
 }
 
-int XGetTransientForHint(Display *display, Window w, Window *prop_window_return) { (void)display; (void)w; if (prop_window_return) *prop_window_return = None; return 0; }
+int XGetTransientForHint(Display *display, Window w, Window *prop_window_return) {
+  unsigned char *prop = 0;
+  unsigned long nitems = 0;
+  Atom actual = 0;
+  int fmt = 0;
+  unsigned int pw = 0;
+
+  if (prop_window_return)
+    *prop_window_return = None;
+  if (!display)
+    return 0;
+  if (XGetWindowProperty(display, w, XA_WM_TRANSIENT_FOR, 0, 64, False,
+                         XA_STRING, &actual, &fmt, &nitems, 0, &prop) != Success)
+    return 0;
+  if (!prop)
+    return 0;
+  if (sscanf((char *)prop, "%u", &pw) == 1) {
+    if (prop_window_return)
+      *prop_window_return = (Window)pw;
+    XFree(prop);
+    return 1;
+  }
+  XFree(prop);
+  return 0;
+}
 int XQueryTree(Display *display, Window w, Window *root_return, Window *parent_return, Window **children_return, unsigned int *nchildren_return) {
   (void)display;
   if (root_return) *root_return = 1;
@@ -1127,6 +1318,43 @@ x11_keycode_to_keysym(KeyCode keycode)
   }
 }
 
+int XLookupString(XKeyEvent *event_struct, char *buffer_return, int bytes_buffer,
+                  KeySym *keysym_return, void *status_in_out) {
+  KeySym ks;
+  char ch;
+  (void)status_in_out;
+
+  if (!event_struct)
+    return 0;
+
+  ks = x11_keycode_to_keysym((KeyCode)event_struct->keycode);
+  if (keysym_return)
+    *keysym_return = ks;
+
+  if (!buffer_return || bytes_buffer <= 0)
+    return 0;
+
+  ch = 0;
+  if (ks == XK_Return)
+    ch = '\r';
+  else if (ks == XK_BackSpace)
+    ch = '\b';
+  else if (ks == XK_Tab)
+    ch = '\t';
+  else if (ks == XK_Escape)
+    ch = '\033';
+  else if (ks >= 32 && ks < 127)
+    ch = (char)ks;
+  else
+    return 0;
+
+  if ((event_struct->state & ShiftMask) && ch >= 'a' && ch <= 'z')
+    ch = (char)(ch - 'a' + 'A');
+
+  buffer_return[0] = ch;
+  return 1;
+}
+
 KeyCode XKeysymToKeycode(Display *display, KeySym keysym) {
   (void)display;
   switch ((unsigned long)keysym) {
@@ -1179,16 +1407,63 @@ int XRefreshKeyboardMapping(XMappingEvent *event_map) { (void)event_map; return 
 
 int XSupportsLocale(void) { return 1; }
 
-int XSetWMNormalHints(Display *display, Window w, XSizeHints *hints) { (void)display; (void)w; (void)hints; return 0; }
-int XSetTransientForHint(Display *display, Window w, Window prop_window) { (void)display; (void)w; (void)prop_window; return 0; }
+int XSetWMNormalHints(Display *display, Window w, XSizeHints *hints) {
+  char buf[256];
+  int n;
+  if (!display || !hints)
+    return 0;
+  n = snprintf(buf, sizeof(buf),
+               "flags=%d min=%dx%d max=%dx%d base=%dx%d inc=%dx%d",
+               hints->flags,
+               hints->min_width, hints->min_height,
+               hints->max_width, hints->max_height,
+               hints->base_width, hints->base_height,
+               hints->width_inc, hints->height_inc);
+  if (n < 0)
+    return 0;
+  return XChangeProperty(display, w, XA_WM_NORMAL_HINTS, XA_STRING, 8,
+                         PropModeReplace, (unsigned char *)buf, (int)strlen(buf));
+}
+int XSetTransientForHint(Display *display, Window w, Window prop_window) {
+  char buf[64];
+  int n;
+  if (!display)
+    return 0;
+  n = snprintf(buf, sizeof(buf), "%u", (uint)prop_window);
+  if (n < 0)
+    return 0;
+  return XChangeProperty(display, w, XA_WM_TRANSIENT_FOR, XA_STRING, 8,
+                         PropModeReplace, (unsigned char *)buf, (int)strlen(buf));
+}
 int XStoreName(Display *display, Window w, const char *name) {
   return XChangeProperty(display, w, XA_WM_NAME, XA_STRING, 8, PropModeReplace, (unsigned char *)name, name ? (int)strlen(name) : 0);
 }
 int XGetClassHint(Display *display, Window w, XClassHint *class_hint_return) {
-  (void)display; (void)w;
+  unsigned char *prop = 0;
+  unsigned long nitems = 0;
+  Atom actual = 0;
+  int fmt = 0;
+  char *sep;
   if (!class_hint_return) return 0;
   class_hint_return->res_name = 0;
   class_hint_return->res_class = 0;
+  if (!display)
+    return 1;
+  if (XGetWindowProperty(display, w, XInternAtom(display, "WM_CLASS", False),
+                         0, 256, False, XA_STRING, &actual, &fmt, &nitems, 0, &prop) != Success)
+    return 1;
+  if (!prop)
+    return 1;
+  sep = strchr((char *)prop, ',');
+  if (sep) {
+    *sep = '\0';
+    class_hint_return->res_name = strdup((char *)prop);
+    class_hint_return->res_class = strdup(sep + 1);
+  } else {
+    class_hint_return->res_name = strdup((char *)prop);
+    class_hint_return->res_class = 0;
+  }
+  XFree(prop);
   return 1;
 }
 int XGetTextProperty(Display *display, Window w, XTextProperty *text_prop_return, Atom property) {
@@ -1224,23 +1499,138 @@ void XFreeStringList(char **list) {
   free(list);
 }
 int XGetWMProtocols(Display *display, Window w, Atom **protocols_return, int *count_return) {
-  (void)display; (void)w;
-  if (protocols_return) *protocols_return = 0;
-  if (count_return) *count_return = 0;
-  return 0;
+  unsigned char *prop = 0;
+  unsigned long nitems = 0;
+  Atom actual = 0;
+  int fmt = 0;
+  int count = 0;
+  char *tok;
+  char *tmp;
+
+  if (protocols_return)
+    *protocols_return = 0;
+  if (count_return)
+    *count_return = 0;
+  if (!display || !protocols_return || !count_return)
+    return 0;
+
+  if (XGetWindowProperty(display, w, XInternAtom(display, "WM_PROTOCOLS", False),
+                         0, 256, False, XA_STRING, &actual, &fmt, &nitems, 0, &prop) != Success)
+    return 0;
+  if (!prop)
+    return 0;
+
+  tmp = strdup((char *)prop);
+  XFree(prop);
+  if (!tmp)
+    return 0;
+
+  for (tok = strtok(tmp, ","); tok; tok = strtok(0, ","))
+    count++;
+  free(tmp);
+  if (count <= 0)
+    return 0;
+
+  *protocols_return = (Atom *)malloc((size_t)count * sizeof(Atom));
+  if (!*protocols_return)
+    return 0;
+
+  if (XGetWindowProperty(display, w, XInternAtom(display, "WM_PROTOCOLS", False),
+                         0, 256, False, XA_STRING, &actual, &fmt, &nitems, 0, &prop) != Success) {
+    free(*protocols_return);
+    *protocols_return = 0;
+    return 0;
+  }
+  if (!prop) {
+    free(*protocols_return);
+    *protocols_return = 0;
+    return 0;
+  }
+
+  tmp = strdup((char *)prop);
+  XFree(prop);
+  if (!tmp) {
+    free(*protocols_return);
+    *protocols_return = 0;
+    return 0;
+  }
+
+  count = 0;
+  for (tok = strtok(tmp, ","); tok; tok = strtok(0, ",")) {
+    while (*tok == ' ' || *tok == '\t') tok++;
+    (*protocols_return)[count++] = XInternAtom(display, tok, False);
+  }
+  free(tmp);
+
+  *count_return = count;
+  return count > 0;
 }
 XWMHints *XGetWMHints(Display *display, Window w) {
   XWMHints *h = malloc(sizeof(*h));
-  (void)display; (void)w;
+  unsigned char *prop = 0;
+  unsigned long nitems = 0;
+  Atom actual = 0;
+  int fmt = 0;
   if (!h) return 0;
   memset(h, 0, sizeof(*h));
+  h->input = 1;
+  if (!display)
+    return h;
+  if (XGetWindowProperty(display, w, XA_WM_HINTS, 0, 128, False, XA_STRING,
+                         &actual, &fmt, &nitems, 0, &prop) == Success && prop) {
+    long flags = 0;
+    int input = 1;
+    int istate = 0;
+    if (sscanf((char *)prop, "flags=%ld input=%d initial=%d", &flags, &input, &istate) == 3) {
+      h->flags = flags;
+      h->input = input;
+      h->initial_state = istate;
+    }
+    XFree(prop);
+  }
   return h;
 }
-int XSetWMHints(Display *display, Window w, XWMHints *wmhints) { (void)display; (void)w; (void)wmhints; return 0; }
+int XSetWMHints(Display *display, Window w, XWMHints *wmhints) {
+  char buf[128];
+  if (!display || !wmhints)
+    return 0;
+  snprintf(buf, sizeof(buf), "flags=%ld input=%d initial=%d",
+           wmhints->flags, wmhints->input, wmhints->initial_state);
+  return XChangeProperty(display, w, XA_WM_HINTS, XA_STRING, 8,
+                         PropModeReplace, (unsigned char *)buf, (int)strlen(buf));
+}
 int XGetWMNormalHints(Display *display, Window w, XSizeHints *hints_return, long *supplied_return) {
-  (void)display; (void)w;
+  unsigned char *prop = 0;
+  unsigned long nitems = 0;
+  Atom actual = 0;
+  int fmt = 0;
   if (hints_return) memset(hints_return, 0, sizeof(*hints_return));
+  if (!display)
+    return 1;
+  if (hints_return &&
+      XGetWindowProperty(display, w, XA_WM_NORMAL_HINTS, 0, 256, False, XA_STRING,
+                         &actual, &fmt, &nitems, 0, &prop) == Success && prop) {
+    sscanf((char *)prop,
+           "flags=%d min=%dx%d max=%dx%d base=%dx%d inc=%dx%d",
+           &hints_return->flags,
+           &hints_return->min_width, &hints_return->min_height,
+           &hints_return->max_width, &hints_return->max_height,
+           &hints_return->base_width, &hints_return->base_height,
+           &hints_return->width_inc, &hints_return->height_inc);
+    XFree(prop);
+  }
   if (supplied_return) *supplied_return = 0;
   return 1;
 }
-int XSetClassHint(Display *display, Window w, XClassHint *class_hints) { (void)display; (void)w; (void)class_hints; return 0; }
+int XSetClassHint(Display *display, Window w, XClassHint *class_hints) {
+  char buf[256];
+  const char *name;
+  const char *klass;
+  if (!display || !class_hints)
+    return 0;
+  name = class_hints->res_name ? class_hints->res_name : "";
+  klass = class_hints->res_class ? class_hints->res_class : "";
+  snprintf(buf, sizeof(buf), "%s,%s", name, klass);
+  return XChangeProperty(display, w, XInternAtom(display, "WM_CLASS", False), XA_STRING, 8,
+                         PropModeReplace, (unsigned char *)buf, (int)strlen(buf));
+}

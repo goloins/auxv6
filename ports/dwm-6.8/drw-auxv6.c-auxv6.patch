@@ -1,0 +1,199 @@
+diff --git a/ports/dwm-6.8/drw-auxv6.c b/ports/dwm-6.8/drw-auxv6.c
+new file mode 100644
+index 0000000..7501dc8
+--- /dev/null
++++ b/ports/dwm-6.8/drw-auxv6.c
+@@ -0,0 +1,193 @@
++/*
++ * drw-auxv6.c - minimal drawing backend for auxv6/x6
++ * Keeps dwm logic intact while x6 renderer matures.
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <X11/Xlib.h>
++
++#include "drw.h"
++#include "util.h"
++
++Drw *
++drw_create(Display *dpy, int screen, Window root, unsigned int w, unsigned int h)
++{
++	Drw *drw = ecalloc(1, sizeof(Drw));
++	drw->dpy = dpy;
++	drw->screen = screen;
++	drw->root = root;
++	drw->w = w;
++	drw->h = h;
++	drw->drawable = root;
++	drw->gc = 0;
++	return drw;
++}
++
++void
++drw_resize(Drw *drw, unsigned int w, unsigned int h)
++{
++	if (!drw)
++		return;
++	drw->w = w;
++	drw->h = h;
++}
++
++void
++drw_free(Drw *drw)
++{
++	if (!drw)
++		return;
++	drw_fontset_free(drw->fonts);
++	free(drw);
++}
++
++Fnt *
++drw_fontset_create(Drw *drw, const char *fonts[], size_t fontcount)
++{
++	Fnt *font = ecalloc(1, sizeof(Fnt));
++	font->dpy = drw ? drw->dpy : NULL;
++	font->h = 14;
++	font->next = NULL;
++	(void)fonts;
++	(void)fontcount;
++	return font;
++}
++
++void
++drw_fontset_free(Fnt *set)
++{
++	while (set) {
++		Fnt *next = set->next;
++		free(set);
++		set = next;
++	}
++}
++
++unsigned int
++drw_fontset_getwidth(Drw *drw, const char *text)
++{
++	(void)drw;
++	if (!text)
++		return 0;
++	return (unsigned int)strlen(text) * 8U;
++}
++
++unsigned int
++drw_fontset_getwidth_clamp(Drw *drw, const char *text, unsigned int n)
++{
++	unsigned int w = drw_fontset_getwidth(drw, text);
++	if (w > n)
++		return n;
++	return w;
++}
++
++void
++drw_font_getexts(Fnt *font, const char *text, unsigned int len, unsigned int *w, unsigned int *h)
++{
++	(void)font;
++	if (w)
++		*w = len * 8U;
++	if (h)
++		*h = 14U;
++	(void)text;
++}
++
++void
++drw_clr_create(Drw *drw, Clr *dest, const char *clrname)
++{
++	(void)drw;
++	(void)clrname;
++	if (dest)
++		dest->pixel = 0;
++}
++
++void
++drw_clr_free(Drw *drw, Clr *c)
++{
++	(void)drw;
++	(void)c;
++}
++
++Clr *
++drw_scm_create(Drw *drw, const char *clrnames[], size_t clrcount)
++{
++	Clr *scm = ecalloc(clrcount, sizeof(Clr));
++	size_t i;
++	for (i = 0; i < clrcount; i++)
++		drw_clr_create(drw, &scm[i], clrnames ? clrnames[i] : NULL);
++	return scm;
++}
++
++void
++drw_scm_free(Drw *drw, Clr *scm, size_t clrcount)
++{
++	(void)drw;
++	(void)clrcount;
++	free(scm);
++}
++
++Cur *
++drw_cur_create(Drw *drw, int shape)
++{
++	Cur *cur = ecalloc(1, sizeof(Cur));
++	cur->cursor = XCreateFontCursor(drw->dpy, shape);
++	return cur;
++}
++
++void
++drw_cur_free(Drw *drw, Cur *cursor)
++{
++	if (!cursor)
++		return;
++	XFreeCursor(drw->dpy, cursor->cursor);
++	free(cursor);
++}
++
++void
++drw_setfontset(Drw *drw, Fnt *set)
++{
++	if (drw)
++		drw->fonts = set;
++}
++
++void
++drw_setscheme(Drw *drw, Clr *scm)
++{
++	if (drw)
++		drw->scheme = scm;
++}
++
++void
++drw_rect(Drw *drw, int x, int y, unsigned int w, unsigned int h, int filled, int invert)
++{
++	(void)drw;
++	(void)x;
++	(void)y;
++	(void)w;
++	(void)h;
++	(void)filled;
++	(void)invert;
++}
++
++int
++drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lpad, const char *text, int invert)
++{
++	(void)y;
++	(void)h;
++	(void)invert;
++	(void)drw;
++	return x + (int)lpad + (int)drw_fontset_getwidth(NULL, text ? text : "") + (int)w;
++}
++
++void
++drw_map(Drw *drw, Window win, int x, int y, unsigned int w, unsigned int h)
++{
++	(void)drw;
++	(void)x;
++	(void)y;
++	(void)w;
++	(void)h;
++	XMapWindow(drw->dpy, win);
++}

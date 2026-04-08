@@ -497,6 +497,8 @@ int XSelectInput(Display *display, Window w, long event_mask);
 int XNextEvent(Display *display, XEvent *event);
 int XMaskEvent(Display *display, long event_mask, XEvent *event);
 Bool XCheckMaskEvent(Display *display, long event_mask, XEvent *event);
+int XLookupString(XKeyEvent *event_struct, char *buffer_return, int bytes_buffer,
+                  KeySym *keysym_return, void *status_in_out);
 int XPending(Display *display);
 
 Atom XInternAtom(Display *display, char *atom_name, Bool only_if_exists);

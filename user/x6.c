@@ -40,6 +40,8 @@
 #define X6_MAX_WINDOWS 128
 #define X6_MAX_EVENTS_PER_CLIENT 64
 #define X6_MAX_CLIENTS 16
+#define X6_MAX_KEY_GRABS 256
+#define X6_ANY_MODIFIER (1U << 15)
 
 // Event types
 #define X6_EVENT_MAP_REQUEST 1
@@ -53,6 +55,7 @@
 #define X6_EVENT_MOTION_NOTIFY 9
 #define X6_EVENT_CONFIGURE_NOTIFY 10
 #define X6_EVENT_EXPOSE 11
+#define X6_EVENT_CLIENT_MESSAGE 12
 
 struct x6_event {
   int type;
@@ -61,6 +64,15 @@ struct x6_event {
   int keycode;
   int button;
   uint state;
+  uint data0;
+};
+
+struct x6_key_grab {
+  int in_use;
+  int owner_fd;
+  uint wid;
+  uint keycode;
+  uint modifiers;
 };
 
 struct x6_event_queue {
@@ -88,6 +100,9 @@ struct x6_window {
   int w;
   int h;
   int mapped;
+  int border_width;
+  uint border_pixel;
+  int override_redirect;
   int cursor_set;
   uint cursor;
   long event_mask;  /* X11 event mask registered via SELECT_EVENTS / XSelectInput */
@@ -109,6 +124,7 @@ static volatile sig_atomic_t keep_running = 1;
 static struct x6_window wins[X6_MAX_WINDOWS];
 static struct x6_window *wins_by_id[256];  // Hash table for O(1) window lookup by ID (id % 256)
 static struct x6_client clients[X6_MAX_CLIENTS];
+static struct x6_key_grab key_grabs[X6_MAX_KEY_GRABS];
 static uint x6_next_wid = 2;  // Server-assigned window IDs; 0=none, 1=root
 
 static struct x6_event_queue *current_event_queue = 0;
@@ -125,9 +141,6 @@ static uint keyboard_grab_owner = 0; // Who holds exclusive keyboard grab (0 = n
 static int wm_has_kb_grab = 0;      // Does WM hold keyboard grab?
 static uint canvas_pixels[X6_CANVAS_ROWS][X6_CANVAS_COLS];
 static int canvas_ready;
-static uint x6_conn_seq;
-static uint x6_draw_rect_count;
-static uint x6_kbd_evt_debug_count;
 static int x6_backend_pref = X6_BACKEND_AUTO;
 static int x6_backend = X6_BACKEND_ANSI;
 static int x6_backend_claimed = 0;
@@ -172,6 +185,8 @@ static struct x6_window *x6_pick_window_at(int px, int py);
 static struct x6_window *find_window(uint id);
 static struct x6_client *x6_find_client_by_fd(int fd);
 static struct x6_event_queue *x6_queue_for_window(uint wid);
+static int x6_find_key_grab_target(uint keycode, uint state, uint *target_wid);
+static void x6_clear_key_grabs_for_fd(int owner_fd);
 static void x6_disconnect_client(struct x6_client *client);
 static void x6_flush_client_events(struct x6_client *client);
 
@@ -438,6 +453,40 @@ x6_queue_for_window(uint wid)
   if(client == 0)
     return 0;
   return &client->queue;
+}
+
+static int
+x6_find_key_grab_target(uint keycode, uint state, uint *target_wid)
+{
+  uint mods;
+  int i;
+
+  mods = state & 0xffU;
+  for(i = 0; i < X6_MAX_KEY_GRABS; i++) {
+    struct x6_key_grab *g;
+    g = &key_grabs[i];
+    if(!g->in_use)
+      continue;
+    if(g->keycode != 0 && g->keycode != keycode)
+      continue;
+    if(g->modifiers != X6_ANY_MODIFIER && g->modifiers != mods)
+      continue;
+    if(target_wid)
+      *target_wid = g->wid;
+    return 1;
+  }
+  return 0;
+}
+
+static void
+x6_clear_key_grabs_for_fd(int owner_fd)
+{
+  int i;
+
+  for(i = 0; i < X6_MAX_KEY_GRABS; i++) {
+    if(key_grabs[i].in_use && key_grabs[i].owner_fd == owner_fd)
+      memset(&key_grabs[i], 0, sizeof(key_grabs[i]));
+  }
 }
 
 static struct x6_window *
@@ -889,14 +938,22 @@ x6_enqueue_keypress(uint keycode, uint state)
 {
   struct x6_event evt;
   struct x6_event_queue *target_q;
+  struct x6_window *hit;
   uint target;
 
   if(wm_has_kb_grab && keyboard_grab_owner != 0)
     target = keyboard_grab_owner;
-  else if(focus_wid != 0)
+  else if(x6_find_key_grab_target(keycode, state, &target))
+    ;
+  else if(focus_wid != 0 && focus_wid != (uint)wm_redirect_root)
     target = focus_wid;
-  else
-    target = wm_redirect_root;
+  else {
+    hit = x6_pick_window_at(pointer_x, pointer_y);
+    if(hit && hit->mapped)
+      target = hit->id;
+    else
+      target = wm_redirect_root;
+  }
 
   target_q = x6_queue_for_window(target);
   if(target_q == 0)
@@ -910,11 +967,6 @@ x6_enqueue_keypress(uint keycode, uint state)
   evt.y = pointer_y;
   evt.w = evt.h = 0;
   evt.button = 0;
-  if(x6_kbd_evt_debug_count < 128) {
-    dprintf(1, "x6: key evt=%u code=%u state=0x%x target=%u focus=%u wmgrab=%d\n",
-            x6_kbd_evt_debug_count, keycode, state, target, focus_wid, wm_has_kb_grab);
-    x6_kbd_evt_debug_count++;
-  }
   x6_event_queue_enqueue(target_q, &evt);
 }
 
@@ -959,7 +1011,7 @@ x6_move_pointer(int dx, int dy)
   x6_enqueue_pointer_event(X6_EVENT_MOTION_NOTIFY, 0);
 }
 
-static void
+static void __attribute__((unused))
 x6_format_modifiers(uint state, char *buf, int buflen)
 {
   int off;
@@ -1022,9 +1074,6 @@ x6_keyboard_setup(void)
     flags = fcntl(x6_kbd_fd, F_GETFL, 0);
     if(flags >= 0)
       fcntl(x6_kbd_fd, F_SETFL, flags | O_NONBLOCK);
-    dprintf(1, "x6: keyboard input active fd=%d\n", x6_kbd_fd);
-  } else {
-    dprintf(2, "x6: failed to open /dev/kbd0 errno=%d\n", errno);
   }
 }
 
@@ -1032,7 +1081,6 @@ static void
 x6_pump_keyboard(void)
 {
   struct aux_kbd_event evbuf[16];
-  char mods[64];
   int n;
   int i;
 
@@ -1041,26 +1089,16 @@ x6_pump_keyboard(void)
 
   n = read(x6_kbd_fd, evbuf, sizeof(evbuf));
   if(n < 0) {
-    if(errno != EAGAIN && errno != EWOULDBLOCK)
-      dprintf(2, "x6: /dev/kbd0 read failed errno=%d\n", errno);
     return;
   }
   if(n == 0)
     return;
-  if(n < (int)sizeof(struct aux_kbd_event)) {
-    dprintf(2, "x6: short /dev/kbd0 read n=%d\n", n);
+  if(n < (int)sizeof(struct aux_kbd_event))
     return;
-  }
   n /= (int)sizeof(struct aux_kbd_event);
   for(i = 0; i < n; i++) {
     if(evbuf[i].value == AUX_KBD_VALUE_PRESS ||
        evbuf[i].value == AUX_KBD_VALUE_REPEAT) {
-      x6_format_modifiers((uint)evbuf[i].state, mods, sizeof(mods));
-      dprintf(1, "x6: keypress code=%u state=0x%x mods=%s value=%u\n",
-              (uint)evbuf[i].keycode,
-              (uint)evbuf[i].state,
-              mods,
-              (uint)evbuf[i].value);
       x6_enqueue_keypress((uint)evbuf[i].keycode, (uint)evbuf[i].state);
     }
   }
@@ -1428,8 +1466,12 @@ alloc_window(uint id)
       wins[i].w = 1;
       wins[i].h = 1;
       wins[i].mapped = 0;
+      wins[i].border_width = 0;
+      wins[i].border_pixel = 0;
+      wins[i].override_redirect = 0;
       wins[i].cursor_set = 0;
       wins[i].cursor = 0;
+      wins[i].event_mask = 0;
       wins[i].prop_count = 0;  // Initialize properties (Phase 2.1d)
       // Hash table insert for O(1) lookup
       idx = (int)(id % 256);
@@ -1526,9 +1568,7 @@ handle_one_command(int cfd, char *cmd)
     snprintf(out, sizeof(out),
              "OK proto=%d transport=tcp-loopback screen=0 root=1 visual=truecolor depth=32 width=%d height=%d\n",
              X6_PROTO_VERSION, sw, sh);
-    dprintf(1, "x6: handling HELLO, replying proto\n");
     x6_send_line(cfd, out);
-    dprintf(1, "x6: HELLO reply send attempted\n");
     return;
   }
 
@@ -1673,11 +1713,6 @@ handle_one_command(int cfd, char *cmd)
       oy = win->y;
     }
     x6_canvas_fill_pixels(ox + x, oy + y, w, h, color);
-    x6_draw_rect_count++;
-    if(x6_draw_rect_count <= 30) {
-      dprintf(1, "x6: draw#%u wid=%u abs=%d,%d wh=%d,%d\n",
-              x6_draw_rect_count, id, ox + x, oy + y, w, h);
-    }
     x6_send_line(cfd, "OK draw\n");
     return;
   }
@@ -1744,7 +1779,6 @@ handle_one_command(int cfd, char *cmd)
     }
     if(w < 1) w = 1;
     if(h < 1) h = 1;
-    dprintf(1, "x6: wm_cfg wid=%u x=%d y=%d w=%d h=%d mapped=%d\n", id, x, y, w, h, win->mapped);
     win->x = x;
     win->y = y;
     win->w = w;
@@ -1822,6 +1856,69 @@ handle_one_command(int cfd, char *cmd)
       return;
     }
     x6_send_line(cfd, "OK queued\n");
+    return;
+  }
+
+  if(sscanf(cmd, "QUEUE_CONFIGURE_NOTIFY %u %d %d %d %d", &id, &x, &y, &w, &h) == 5) {
+    struct x6_client *owner;
+    struct x6_event evt;
+
+    win = find_window(id);
+    if(win == 0) {
+      x6_send_line(cfd, "ERR not-found\n");
+      return;
+    }
+    owner = x6_find_client_by_fd(win->owner_fd);
+    if(owner == 0 || !owner->in_use || !owner->hello_done) {
+      x6_send_line(cfd, "ERR no-owner\n");
+      return;
+    }
+
+    evt.type = X6_EVENT_CONFIGURE_NOTIFY;
+    evt.wid = id;
+    evt.x = x;
+    evt.y = y;
+    evt.w = w;
+    evt.h = h;
+    evt.keycode = 0;
+    evt.button = 0;
+    evt.state = 0;
+    evt.data0 = 0;
+    if(x6_event_queue_enqueue(&owner->queue, &evt) < 0) {
+      x6_send_line(cfd, "ERR queue-full\n");
+      return;
+    }
+    x6_send_line(cfd, "OK cfg_queued\n");
+    return;
+  }
+
+  if(sscanf(cmd, "QUEUE_CLIENT_MESSAGE %u %u %u", &id, &color, &uw) == 3) {
+    struct x6_client *owner;
+    struct x6_event evt;
+
+    win = find_window(id);
+    if(win == 0) {
+      x6_send_line(cfd, "ERR not-found\n");
+      return;
+    }
+    owner = x6_find_client_by_fd(win->owner_fd);
+    if(owner == 0 || !owner->in_use || !owner->hello_done) {
+      x6_send_line(cfd, "ERR no-owner\n");
+      return;
+    }
+
+    evt.type = X6_EVENT_CLIENT_MESSAGE;
+    evt.wid = id;
+    evt.x = evt.y = evt.w = evt.h = 0;
+    evt.keycode = (int)color;
+    evt.button = 0;
+    evt.state = 0;
+    evt.data0 = uw;
+    if(x6_event_queue_enqueue(&owner->queue, &evt) < 0) {
+      x6_send_line(cfd, "ERR queue-full\n");
+      return;
+    }
+    x6_send_line(cfd, "OK clientmsg_queued\n");
     return;
   }
 
@@ -1919,8 +2016,11 @@ handle_one_command(int cfd, char *cmd)
     struct x6_event_queue *target_q;
     uint old_focus = focus_wid;
 
-    // Allow both WM and clients to set focus
-    focus_wid = id;
+    // PointerRoot/root focus means "no explicit client focus".
+    if(id == (uint)wm_redirect_root)
+      focus_wid = 0;
+    else
+      focus_wid = id;
 
     if(old_focus != 0 && old_focus != focus_wid) {
       target_q = x6_queue_for_window(old_focus);
@@ -1941,6 +2041,13 @@ handle_one_command(int cfd, char *cmd)
     }
 
     x6_send_line(cfd, "OK focused\n");
+    return;
+  }
+
+  if(strncmp(cmd, "GET_FOCUS", 9) == 0) {
+    char out[64];
+    snprintf(out, sizeof(out), "OK focus %u\n", focus_wid);
+    x6_send_line(cfd, out);
     return;
   }
 
@@ -2051,6 +2158,69 @@ handle_one_command(int cfd, char *cmd)
     x6_send_line(cfd, "OK ungrab_done\n");
     return;
   }
+
+  if(sscanf(cmd, "GRAB_KEY %u %u %u", &id, &color, &uw) == 3) {
+    int slot;
+    uint keycode;
+    uint modifiers;
+    uint grab_wid;
+
+    keycode = id;
+    modifiers = color;
+    grab_wid = uw;
+
+    slot = -1;
+    for(i = 0; i < X6_MAX_KEY_GRABS; i++) {
+      if(key_grabs[i].in_use &&
+         key_grabs[i].owner_fd == cfd &&
+         key_grabs[i].wid == grab_wid &&
+         key_grabs[i].keycode == keycode &&
+         key_grabs[i].modifiers == modifiers) {
+        x6_send_line(cfd, "OK key_grabbed\n");
+        return;
+      }
+      if(slot < 0 && !key_grabs[i].in_use)
+        slot = i;
+    }
+
+    if(slot < 0) {
+      x6_send_line(cfd, "ERR no-grab-slots\n");
+      return;
+    }
+
+    key_grabs[slot].in_use = 1;
+    key_grabs[slot].owner_fd = cfd;
+    key_grabs[slot].wid = grab_wid;
+    key_grabs[slot].keycode = keycode;
+    key_grabs[slot].modifiers = modifiers;
+    x6_send_line(cfd, "OK key_grabbed\n");
+    return;
+  }
+
+  if(sscanf(cmd, "UNGRAB_KEY %u %u %u", &id, &color, &uw) == 3) {
+    uint keycode;
+    uint modifiers;
+    uint grab_wid;
+
+    keycode = id;
+    modifiers = color;
+    grab_wid = uw;
+
+    for(i = 0; i < X6_MAX_KEY_GRABS; i++) {
+      if(!key_grabs[i].in_use)
+        continue;
+      if(key_grabs[i].owner_fd != cfd)
+        continue;
+      if((keycode == 0 || key_grabs[i].keycode == keycode) &&
+         (modifiers == X6_ANY_MODIFIER || key_grabs[i].modifiers == modifiers) &&
+         key_grabs[i].wid == grab_wid)
+        memset(&key_grabs[i], 0, sizeof(key_grabs[i]));
+    }
+
+    x6_send_line(cfd, "OK key_ungrabbed\n");
+    return;
+  }
+
   if(strncmp(cmd, "GET_PROPERTY", 12) == 0) {
     uint wid;
     char atom[128];
@@ -2086,14 +2256,22 @@ handle_one_command(int cfd, char *cmd)
     uint wid;
     char atom[128];
     char value[512];
+    int n;
+    char *p;
     struct x6_window *win;
     struct x6_property *prop;
 
-    // Parse: SET_PROPERTY <wid> <atom> <value>
-    if(sscanf(cmd, "SET_PROPERTY %u %127s %511s", &wid, atom, value) != 3) {
+    // Parse: SET_PROPERTY <wid> <atom> <value...>
+    if(sscanf(cmd, "SET_PROPERTY %u %127s%n", &wid, atom, &n) != 2) {
       x6_send_line(cfd, "ERR bad-syntax\n");
       return;
     }
+
+    p = cmd + n;
+    while(*p == ' ')
+      p++;
+    strncpy(value, p, sizeof(value) - 1);
+    value[sizeof(value) - 1] = '\0';
 
     win = find_window(wid);
     if(!win) {
@@ -2122,6 +2300,126 @@ handle_one_command(int cfd, char *cmd)
     }
 
     x6_send_line(cfd, "OK property_set\n");
+    return;
+  }
+
+  if(strncmp(cmd, "DELETE_PROPERTY", 15) == 0) {
+    uint wid;
+    char atom[128];
+    int pi;
+
+    if(sscanf(cmd, "DELETE_PROPERTY %u %127s", &wid, atom) != 2) {
+      x6_send_line(cfd, "ERR bad-syntax\n");
+      return;
+    }
+
+    win = find_window(wid);
+    if(!win) {
+      x6_send_line(cfd, "ERR no-such-window\n");
+      return;
+    }
+
+    for(pi = 0; pi < win->prop_count; pi++) {
+      if(strcmp(win->props[pi].name, atom) != 0)
+        continue;
+      for(; pi + 1 < win->prop_count; pi++)
+        win->props[pi] = win->props[pi + 1];
+      win->prop_count--;
+      x6_send_line(cfd, "OK property_deleted\n");
+      return;
+    }
+
+    x6_send_line(cfd, "OK property_deleted\n");
+    return;
+  }
+  if(strncmp(cmd, "GET_WINDOW_ATTR", 15) == 0) {
+    uint wid;
+    struct x6_window *win;
+    char out[256];
+
+    if(sscanf(cmd, "GET_WINDOW_ATTR %u", &wid) != 1) {
+      x6_send_line(cfd, "ERR bad-syntax\n");
+      return;
+    }
+
+    if(wid == (uint)wm_redirect_root) {
+      int sw, sh;
+      x6_screen_size(&sw, &sh);
+      snprintf(out, sizeof(out),
+               "OK attr x=0 y=0 w=%d h=%d bw=0 depth=32 mapped=1 override=0 events=0\n",
+               sw, sh);
+      x6_send_line(cfd, out);
+      return;
+    }
+
+    win = find_window(wid);
+    if(!win) {
+      x6_send_line(cfd, "ERR no-such-window\n");
+      return;
+    }
+
+    snprintf(out, sizeof(out),
+             "OK attr x=%d y=%d w=%d h=%d bw=%d depth=32 mapped=%d override=%d events=%ld\n",
+             win->x, win->y, win->w, win->h,
+             win->border_width, win->mapped ? 1 : 0,
+             win->override_redirect ? 1 : 0, win->event_mask);
+    x6_send_line(cfd, out);
+    return;
+  }
+  if(strncmp(cmd, "SET_BORDER_WIDTH", 16) == 0) {
+    uint wid;
+    int bw;
+    struct x6_window *win;
+
+    if(sscanf(cmd, "SET_BORDER_WIDTH %u %d", &wid, &bw) != 2) {
+      x6_send_line(cfd, "ERR bad-syntax\n");
+      return;
+    }
+    win = find_window(wid);
+    if(!win) {
+      x6_send_line(cfd, "ERR no-such-window\n");
+      return;
+    }
+    if(bw < 0)
+      bw = 0;
+    win->border_width = bw;
+    x6_send_line(cfd, "OK border_width_set\n");
+    return;
+  }
+  if(strncmp(cmd, "SET_BORDER_COLOR", 16) == 0) {
+    uint wid;
+    uint color;
+    struct x6_window *win;
+
+    if(sscanf(cmd, "SET_BORDER_COLOR %u %u", &wid, &color) != 2) {
+      x6_send_line(cfd, "ERR bad-syntax\n");
+      return;
+    }
+    win = find_window(wid);
+    if(!win) {
+      x6_send_line(cfd, "ERR no-such-window\n");
+      return;
+    }
+    win->border_pixel = color;
+    x6_send_line(cfd, "OK border_color_set\n");
+    return;
+  }
+  if(strncmp(cmd, "SET_OVERRIDE_REDIRECT", 21) == 0) {
+    uint wid;
+    int flag;
+    struct x6_window *win;
+
+    if(sscanf(cmd, "SET_OVERRIDE_REDIRECT %u %d", &wid, &flag) != 2) {
+      x6_send_line(cfd, "ERR bad-syntax\n");
+      return;
+    }
+    win = find_window(wid);
+    if(!win) {
+      x6_send_line(cfd, "ERR no-such-window\n");
+      return;
+    }
+    win->override_redirect = flag ? 1 : 0;
+    x6_send_line(cfd, "OK override_set\n");
     return;
   }
   if(strncmp(cmd, "SELECT_EVENTS", 13) == 0) {
@@ -2168,6 +2466,10 @@ x6_flush_client_events(struct x6_client *client)
       snprintf(eventbuf, sizeof(eventbuf),
                "EVENT Expose wid=%u x=%d y=%d w=%d h=%d\n",
                evt.wid, evt.x, evt.y, evt.w, evt.h);
+    } else if(evt.type == X6_EVENT_CLIENT_MESSAGE) {
+      snprintf(eventbuf, sizeof(eventbuf),
+               "EVENT ClientMessage wid=%u type=%u data0=%u\n",
+               evt.wid, (uint)evt.keycode, evt.data0);
     } else if(evt.type == X6_EVENT_CONFIGURE_REQUEST) {
       snprintf(eventbuf, sizeof(eventbuf),
                "EVENT ConfigureRequest wid=%u geom=%d,%d %dx%d\n",
@@ -2210,6 +2512,8 @@ x6_disconnect_client(struct x6_client *client)
     wm_has_kb_grab = 0;
     keyboard_grab_owner = 0;
   }
+
+  x6_clear_key_grabs_for_fd(client->fd);
 
   close(client->fd);
   memset(client, 0, sizeof(*client));
@@ -2389,8 +2693,6 @@ main(int argc, char **argv)
             clients[i].fd = cfd;
             x6_event_queue_init(&clients[i].queue);
             x6_send_line(cfd, "X6/1 READY\n");
-            x6_conn_seq++;
-            dprintf(1, "x6: client#%u connected fd=%d\n", x6_conn_seq, cfd);
             cfd = -1;
             break;
           }
@@ -2425,10 +2727,8 @@ main(int argc, char **argv)
       while(client->in_use && x6_client_next_line(client->rxbuf, &client->rxlen, line, sizeof(line)) > 0) {
         if(line[0] == 0)
           continue;
-        if(!client->logged_first_cmd) {
-          dprintf(1, "x6: first-cmd fd=%d: %s\n", client->fd, line);
+        if(!client->logged_first_cmd)
           client->logged_first_cmd = 1;
-        }
         if(strncmp(line, "HELLO x6/1", 10) == 0)
           client->hello_done = 1;
         current_event_queue = &client->queue;

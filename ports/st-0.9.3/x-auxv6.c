@@ -110,9 +110,16 @@ static uint32_t
 aux_color_of(uint32_t c, int isfg)
 {
 	uint idx;
+	uint cidx;
 
 	if (IS_TRUECOL(c))
 		return c & 0x00ffffff;
+
+	/* st uses 256..259 for special/default colors; do not truncate to 8 bits. */
+	cidx = c;
+	if (cidx < LEN(aux_palette) && aux_palette[cidx] != 0)
+		return aux_palette[cidx];
+
 	idx = c & 0xff;
 	if (idx < LEN(aux_palette) && aux_palette[idx] != 0)
 		return aux_palette[idx];
@@ -378,26 +385,13 @@ aux_cresize(int w, int h)
 static void
 aux_kpress(XEvent *ev)
 {
-	char c;
-	unsigned int kc;
+	char buf[8];
+	KeySym ksym;
+	int n;
 
-	kc = ev->xkey.keycode;
-	if (kc == 0)
-		return;
-
-	/* AUXV6_ST_HACK: temporary keycode mapping until proper XLookupString/XIM. */
-	if (kc == 13)
-		c = '\r';
-	else if (kc == 8)
-		c = '\b';
-	else if (kc == 9)
-		c = '\t';
-	else if (kc >= 32 && kc < 127)
-		c = (char)kc;
-	else
-		return;
-
-	ttywrite(&c, 1, 1);
+	n = XLookupString(&ev->xkey, buf, sizeof(buf), &ksym, NULL);
+	if (n > 0)
+		ttywrite(buf, (size_t)n, 1);
 }
 
 static void
@@ -410,25 +404,20 @@ aux_xinit(int cols, int rows)
 	auxw.ch = MAX((int)(16 * chscale), 1);
 	w = 2 * borderpx + cols * auxw.cw;
 	h = 2 * borderpx + rows * auxw.ch;
-	fprintf(stderr, "st: aux_xinit cols=%d rows=%d win=%dx%d\n", cols, rows, w, h);
 
 	auxw.dpy = XOpenDisplay(NULL);
 	if (!auxw.dpy)
 		die("cannot open display\n");
-	fprintf(stderr, "st: XOpenDisplay ok\n");
 	auxw.scr = DefaultScreen(auxw.dpy);
 	auxw.win = XCreateSimpleWindow(auxw.dpy, RootWindow(auxw.dpy, auxw.scr),
 			0, 0, (unsigned int)w, (unsigned int)h, 0, 0, 0);
-	fprintf(stderr, "st: XCreateSimpleWindow win=%lu\n", (unsigned long)auxw.win);
 	auxw.gc = XCreateGC(auxw.dpy, auxw.win, 0, NULL);
 	auxw.event_mask = KeyPressMask | ExposureMask | StructureNotifyMask | FocusChangeMask;
 	XSelectInput(auxw.dpy, auxw.win, auxw.event_mask);
 	auxw.wmdelete = XInternAtom(auxw.dpy, "WM_DELETE_WINDOW", False);
 	XMapWindow(auxw.dpy, auxw.win);
-	fprintf(stderr, "st: XMapWindow win=%lu\n", (unsigned long)auxw.win);
 	/* Request keyboard focus so x6 routes KeyPress events to our window. */
 	XSetInputFocus(auxw.dpy, auxw.win, RevertToPointerRoot, CurrentTime);
-	fprintf(stderr, "st: XSetInputFocus win=%lu\n", (unsigned long)auxw.win);
 	xloadcols();
 	xsettitle(opt_title);
 	aux_cresize(w, h);
@@ -444,7 +433,6 @@ aux_run(void)
 	int maxfd;
 
 	ttyfd = ttynew(opt_line, shell, opt_io, opt_cmd);
-	fprintf(stderr, "st: ttynew fd=%d\n", ttyfd);
 	xfd = ConnectionNumber(auxw.dpy);
 	maxfd = (ttyfd > xfd) ? ttyfd : xfd;
 	draw();
