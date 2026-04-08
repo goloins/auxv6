@@ -6,15 +6,16 @@ include config.mk
 SRC = drw.c dwm.c util.c
 OBJ = ${SRC:.c=.o}
 
-all: dwm
+all: config-check dwm
 
 .c.o:
 	${CC} -c ${CFLAGS} $<
 
 ${OBJ}: config.h config.mk
 
-config.h:
-	cp config.def.h $@
+config-check:
+	@test -f config.h || \
+		(echo "ERROR: config.h is missing. Create/manage it manually; build will not modify it." >&2; exit 1)
 
 dwm: ${OBJ}
 	${CC} -o $@ ${OBJ} ${LDFLAGS}
@@ -42,4 +43,4 @@ uninstall:
 	rm -f ${DESTDIR}${PREFIX}/bin/dwm\
 		${DESTDIR}${MANPREFIX}/man1/dwm.1
 
-.PHONY: all clean dist install uninstall
+.PHONY: all clean dist install uninstall config-check

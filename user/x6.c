@@ -3019,6 +3019,11 @@ handle_one_command(int cfd, char *cmd)
       return;
     }
     if(wm_has_redirect) {
+      if(cfd == wm_client_fd) {
+        /* Idempotent re-claim from current WM client. */
+        x6_send_line(cfd, "OK redirect_granted\n");
+        return;
+      }
       x6_send_line(cfd, "ERR redirect-in-use\n");
       return;
     }

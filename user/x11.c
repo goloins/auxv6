@@ -125,6 +125,7 @@ x11_stamp_synthetic_event(XEvent *ev)
 static void
 x11dbg(const char *fmt, ...)
 {
+  char msg[280];
   char line[320];
   int n;
   int fd;
@@ -135,8 +136,11 @@ x11dbg(const char *fmt, ...)
   g_x11_dbg_count++;
 
   va_start(ap, fmt);
-  n = vsnprintf(line, sizeof(line), fmt, ap);
+  n = vsnprintf(msg, sizeof(msg), fmt, ap);
   va_end(ap);
+  if (n < 0)
+    return;
+  n = snprintf(line, sizeof(line), "pid=%d %s", getpid(), msg);
   if (n < 0)
     return;
   if ((size_t)n >= sizeof(line))
@@ -156,14 +160,18 @@ x11dbg(const char *fmt, ...)
 static void
 x11crit(const char *fmt, ...)
 {
+  char msg[280];
   char line[320];
   int n;
   int fd;
   va_list ap;
 
   va_start(ap, fmt);
-  n = vsnprintf(line, sizeof(line), fmt, ap);
+  n = vsnprintf(msg, sizeof(msg), fmt, ap);
   va_end(ap);
+  if (n < 0)
+    return;
+  n = snprintf(line, sizeof(line), "pid=%d %s", getpid(), msg);
   if (n < 0)
     return;
   if ((size_t)n >= sizeof(line))
@@ -3062,17 +3070,46 @@ Status XSendEvent(Display *display, Window w, Bool propagate, long event_mask, X
     return 0;
 
   if (event_send->type == ConfigureNotify) {
+    int ret;
+
+    x11dbg("x11:sendevent cfg wid=%u xy=%d,%d wh=%dx%d begin",
+           (uint)event_send->xconfigure.window,
+           event_send->xconfigure.x,
+           event_send->xconfigure.y,
+           event_send->xconfigure.width,
+           event_send->xconfigure.height);
+
+    if (g_is_wm) {
+      /* WM-originated ConfigureNotify should reflect actual WM geometry.
+       * Route via WM_CONFIGURE so server-side state and client notify stay
+       * coherent, matching normal X11 WM flow expectations. */
+      snprintf(cmd, sizeof(cmd), "WM_CONFIGURE %u %d %d %d %d\n",
+               (uint)event_send->xconfigure.window,
+               event_send->xconfigure.x,
+               event_send->xconfigure.y,
+               event_send->xconfigure.width,
+               event_send->xconfigure.height);
+      ret = x11_cmd(display, cmd, line, sizeof(line));
+      if (ret < 0)
+        return 0;
+      if (strncmp(line, "OK configured", 13) == 0 ||
+          strncmp(line, "OK configure", 12) == 0)
+        return 1;
+      return 0;
+    }
+
     snprintf(cmd, sizeof(cmd), "QUEUE_CONFIGURE_NOTIFY %u %d %d %d %d\n",
              (uint)event_send->xconfigure.window,
              event_send->xconfigure.x,
              event_send->xconfigure.y,
              event_send->xconfigure.width,
              event_send->xconfigure.height);
-    /* ConfigureNotify is frequently emitted from WM map/manage paths.
-     * Avoid a synchronous round-trip here so queued async events cannot
-     * wedge or re-enter command/response handling in legacy clients. */
-    if (x11_send(display->fd, cmd) < 0)
+    if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
       return 0;
+    if (strncmp(line, "OK cfg_queued", 13) == 0 ||
+        strncmp(line, "OK queued", 9) == 0)
+      return 1;
+    x11dbg("x11:sendevent cfg wid=%u unexpected-resp='%s'", (uint)event_send->xconfigure.window, line);
     return 1;
   }
 

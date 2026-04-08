@@ -101,16 +101,17 @@ RUNTIME_OBJS := \
   $(ROOT)/user/printf.o \
   $(ROOT)/user/resolve.o
 
-.PHONY: all clean toolchain-check
+.PHONY: all clean toolchain-check config-check
 
-all: toolchain-check $(DWM_DIR)/config.h $(OUT)
+all: toolchain-check config-check $(OUT)
 
 toolchain-check:
 	@$(CC) -m32 -dM -E -x c /dev/null | grep -q '__i386__' || \
 		(echo "ERROR: $(CC) is not producing i386 output with -m32" >&2; exit 1)
 
-$(DWM_DIR)/config.h:
-	cp $(DWM_DIR)/config.def.h $@
+config-check:
+	@test -f $(DWM_DIR)/config.h || \
+		(echo "ERROR: $(DWM_DIR)/config.h is missing. Create/manage it manually; build will not modify it." >&2; exit 1)
 
 $(DWM_DIR)/%.o: $(DWM_DIR)/%.c $(DWM_DIR)/config.h
 	$(CC) -c $(CFLAGS) -o $@ $<
@@ -123,4 +124,4 @@ $(OUT): $(OBJ) $(RUNTIME_OBJS)
 	$(OBJDUMP) -S $@ > $(DWM_DIR)/dwm-auxv6.asm || true
 
 clean:
-	rm -f $(OBJ) $(OUT) $(DWM_DIR)/config.h $(SRC:.c=.d)
+	rm -f $(OBJ) $(OUT) $(SRC:.c=.d)
