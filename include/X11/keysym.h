@@ -1,8 +1,11 @@
 #ifndef _X11_KEYSYM_H_
 #define _X11_KEYSYM_H_
 
+#define XK_BackSpace 0xff08
 #define XK_Tab 0xff09
 #define XK_Return 0xff0d
+#define XK_Escape 0xff1b
+#define XK_Delete 0xffff
 #define XK_space 0x0020
 #define XK_comma 0x002c
 #define XK_period 0x002e

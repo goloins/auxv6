@@ -7,9 +7,11 @@
 #include "poll.h"
 #include "X11/Xlib.h"
 #include "X11/Xutil.h"
+#include "X11/keysym.h"
 
 #define X6_PORT 6006
 #define X6_BUF_SIZE 1024
+#define X11_RXBUF_SIZE 4096
 #define X11_MAX_ATOMS 256
 #define X11_MAX_GCS 128
 
@@ -28,6 +30,9 @@ static int g_is_wm;
 static XEvent g_pending_event;
 static int g_has_pending_event;
 static unsigned long g_next_gc = 1;
+static char g_rxbuf[X11_RXBUF_SIZE];
+static int g_rxlen;
+static int g_pending_draw_replies;
 
 struct x11_gc_state {
   int in_use;
@@ -64,6 +69,46 @@ x11_alloc_gc(void)
 }
 
 static int x11_read_line(int fd, char *line, int maxlen);
+static int x11_parse_event_line(Display *display, const char *line, XEvent *event);
+
+static int
+x11_handle_unsolicited_line(Display *display, const char *line)
+{
+  if (!display || !line)
+    return 0;
+
+  if (strncmp(line, "EVENT ", 6) == 0) {
+    if (!g_has_pending_event && x11_parse_event_line(display, line, &g_pending_event) == 0)
+      g_has_pending_event = 1;
+    return 1;
+  }
+
+  if ((strncmp(line, "OK draw", 7) == 0 || strncmp(line, "OK text", 7) == 0) &&
+      g_pending_draw_replies > 0) {
+    g_pending_draw_replies--;
+    return 1;
+  }
+
+  return 0;
+}
+
+static int
+x11_drain_draw_replies(Display *display)
+{
+  char line[X6_BUF_SIZE];
+
+  if (!display)
+    return -1;
+
+  while (g_pending_draw_replies > 0) {
+    if (x11_read_line(display->fd, line, sizeof(line)) < 0)
+      return -1;
+    if (!x11_handle_unsolicited_line(display, line))
+      return -1;
+  }
+
+  return 0;
+}
 
 static int
 x11_sanitize_rect(Display *display, int *x, int *y, unsigned int *w, unsigned int *h)
@@ -232,6 +277,14 @@ x11_read_event(Display *display, XEvent *event)
   while (1) {
     if (x11_read_line(display->fd, line, sizeof(line)) < 0)
       return -1;
+    if (x11_handle_unsolicited_line(display, line)) {
+      if (g_has_pending_event) {
+        *event = g_pending_event;
+        g_has_pending_event = 0;
+        return 0;
+      }
+      continue;
+    }
     if (x11_parse_event_line(display, line, event) == 0)
       return 0;
   }
@@ -240,20 +293,42 @@ x11_read_event(Display *display, XEvent *event)
 static int
 x11_read_line(int fd, char *line, int maxlen)
 {
-  int pos = 0;
-  while (pos < maxlen - 1) {
-    char ch;
-    int n = recv(fd, &ch, 1);
-    if (n <= 0)
-      return -1;
-    if (ch == '\n') {
-      line[pos] = '\0';
-      return pos;
+  int i;
+
+  if (!line || maxlen <= 1)
+    return -1;
+
+  while (1) {
+    for (i = 0; i < g_rxlen; i++) {
+      if (g_rxbuf[i] == '\n' || g_rxbuf[i] == '\r') {
+        int copy_len;
+        int consume;
+
+        copy_len = i;
+        if (copy_len > maxlen - 1)
+          copy_len = maxlen - 1;
+        memmove(line, g_rxbuf, (size_t)copy_len);
+        line[copy_len] = '\0';
+
+        consume = i + 1;
+        while (consume < g_rxlen && (g_rxbuf[consume] == '\n' || g_rxbuf[consume] == '\r'))
+          consume++;
+        memmove(g_rxbuf, g_rxbuf + consume, (size_t)(g_rxlen - consume));
+        g_rxlen -= consume;
+        return copy_len;
+      }
     }
-    line[pos++] = ch;
+
+    if (g_rxlen >= (int)sizeof(g_rxbuf))
+      return -1;
+
+    {
+      int n = recv(fd, g_rxbuf + g_rxlen, sizeof(g_rxbuf) - (size_t)g_rxlen);
+      if (n <= 0)
+        return -1;
+      g_rxlen += n;
+    }
   }
-  line[pos] = '\0';
-  return pos;
 }
 
 static int
@@ -270,6 +345,8 @@ x11_cmd(Display *dpy, const char *cmd, char *resp, int maxlen)
   char line[X6_BUF_SIZE];
   if (!dpy || dpy->fd < 0)
     return -1;
+  if (x11_drain_draw_replies(dpy) < 0)
+    return -1;
   if (x11_send(dpy->fd, cmd) < 0)
     return -1;
   if (!resp)
@@ -279,11 +356,8 @@ x11_cmd(Display *dpy, const char *cmd, char *resp, int maxlen)
     if (x11_read_line(dpy->fd, line, sizeof(line)) < 0)
       return -1;
 
-    if (strncmp(line, "EVENT ", 6) == 0) {
-      if (!g_has_pending_event && x11_parse_event_line(dpy, line, &g_pending_event) == 0)
-        g_has_pending_event = 1;
+    if (x11_handle_unsolicited_line(dpy, line))
       continue;
-    }
 
     strncpy(resp, line, maxlen - 1);
     resp[maxlen - 1] = '\0';
@@ -389,6 +463,8 @@ XOpenDisplay(char *display_name)
   dpy->width = x11_parse_hello_dim(line, "width=", 1024);
   dpy->height = x11_parse_hello_dim(line, "height=", 768);
   dpy->depth = 32;
+  g_rxlen = 0;
+  g_pending_draw_replies = 0;
   g_display = dpy;
   return dpy;
 
@@ -411,6 +487,8 @@ XCloseDisplay(Display *display)
   }
   if (g_display == display)
     g_display = 0;
+  g_rxlen = 0;
+  g_pending_draw_replies = 0;
   free(display);
   return 0;
 }
@@ -574,6 +652,11 @@ XSelectInput(Display *display, Window w, long event_mask)
     else
       return -1;
   }
+
+  // Register the event mask for this window so the server routes events here.
+  snprintf(cmd, sizeof(cmd), "SELECT_EVENTS %u %ld\n", (uint)w, event_mask);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return -1;
 
   return 0;
 }
@@ -870,7 +953,7 @@ int XSetLineAttributes(Display *display, GC gc, unsigned int line_width, int lin
   (void)display; (void)gc; (void)line_width; (void)line_style; (void)cap_style; (void)join_style; return 0;
 }
 int XFillRectangle(Display *display, Drawable d, GC gc, int x, int y, unsigned int width, unsigned int height) {
-  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  char cmd[X6_BUF_SIZE];
   struct x11_gc_state *gs;
   unsigned int color;
   if (!display)
@@ -880,9 +963,10 @@ int XFillRectangle(Display *display, Drawable d, GC gc, int x, int y, unsigned i
   gs = x11_find_gc(gc);
   color = (unsigned int)(gs ? (gs->fg & 0x00ffffffUL) : 0x00ffffffU);
   snprintf(cmd, sizeof(cmd), "DRAW_RECT %u %d %d %u %u %u\n", (uint)d, x, y, width, height, color);
-  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+  if (x11_send(display->fd, cmd) < 0)
     return -1;
-  return strncmp(line, "OK draw", 7) == 0 ? 0 : -1;
+  g_pending_draw_replies++;
+  return 0;
 }
 int XDrawRectangle(Display *display, Drawable d, GC gc, int x, int y, unsigned int width, unsigned int height) {
   if (width == 0 || height == 0)
@@ -898,7 +982,7 @@ int XDrawRectangle(Display *display, Drawable d, GC gc, int x, int y, unsigned i
   return 0;
 }
 int XDrawString(Display *display, Drawable d, GC gc, int x, int y, const char *string, int length) {
-  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  char cmd[X6_BUF_SIZE];
   struct x11_gc_state *gs;
   unsigned int color;
   int n;
@@ -918,9 +1002,10 @@ int XDrawString(Display *display, Drawable d, GC gc, int x, int y, const char *s
   gs = x11_find_gc(gc);
   color = (unsigned int)(gs ? (gs->fg & 0x00ffffffUL) : 0x00ffffffU);
   snprintf(cmd, sizeof(cmd), "DRAW_TEXT %u %d %d %u %d %.*s\n", (uint)d, x, y, color, n, n, string);
-  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+  if (x11_send(display->fd, cmd) < 0)
     return -1;
-  return strncmp(line, "OK text", 7) == 0 ? 0 : -1;
+  g_pending_draw_replies++;
+  return 0;
 }
 int XCopyArea(Display *display, Drawable src, Drawable dest, GC gc, int src_x, int src_y, unsigned int width, unsigned int height, int dest_x, int dest_y) {
   (void)display; (void)src; (void)dest; (void)gc; (void)src_x; (void)src_y; (void)width; (void)height; (void)dest_x; (void)dest_y; return 0;
@@ -996,8 +1081,25 @@ int XKillClient(Display *display, XID resource) { (void)display; (void)resource;
 
 void XFree(void *data) { if (data) free(data); }
 
+/* Map x6 console keycode (= ASCII byte) to the proper X11 keysym.
+ * Printable ASCII 32-126: keysym == codepoint (identical in X11).
+ * Control characters must be translated to their 0xff00 keysym equivalents
+ * so that dwm's XK_* comparisons work correctly. */
+static KeySym
+x11_keycode_to_keysym(KeyCode keycode)
+{
+  switch ((unsigned int)keycode) {
+    case 8:   return XK_BackSpace;
+    case 9:   return XK_Tab;
+    case 13:  return XK_Return;
+    case 27:  return XK_Escape;
+    case 127: return XK_Delete;
+    default:  return (KeySym)keycode;
+  }
+}
+
 KeyCode XKeysymToKeycode(Display *display, KeySym keysym) { (void)display; return (KeyCode)(keysym & 0xff); }
-KeySym XKeycodeToKeysym(Display *display, KeyCode keycode, int index) { (void)display; (void)index; return (KeySym)keycode; }
+KeySym XKeycodeToKeysym(Display *display, KeyCode keycode, int index) { (void)display; (void)index; return x11_keycode_to_keysym(keycode); }
 void XDisplayKeycodes(Display *display, int *min_keycodes_return, int *max_keycodes_return) {
   (void)display;
   if (min_keycodes_return) *min_keycodes_return = 8;
@@ -1011,7 +1113,7 @@ KeySym *XGetKeyboardMapping(Display *display, KeyCode first_keycode, int keycode
   map = malloc(sizeof(KeySym) * keycode_count);
   if (!map) return 0;
   for (i = 0; i < keycode_count; i++)
-    map[i] = (KeySym)(first_keycode + i);
+    map[i] = x11_keycode_to_keysym((KeyCode)(first_keycode + i));
   return map;
 }
 XModifierKeymap *XGetModifierMapping(Display *display) {

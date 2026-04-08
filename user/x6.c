@@ -6,10 +6,12 @@
 #include "graphics/drm_ioctls.h"
 #include "graphics/input_events.h"
 #include "graphics/user_font.h"
+#include "errno.h"
 #include "signal.h"
 #include "socket.h"
 #include "stdio.h"
 #include "poll.h"
+#include "termios.h"
 #include <string.h>
 
 #define XK_BackSpace 0xff08
@@ -26,6 +28,7 @@
 
 #define X6_DEFAULT_PORT 6006
 #define X6_BACKLOG 16
+#define X6_CLIENT_RXBUF 4096
 #define X6_PROTO_VERSION 1
 #define X6_PROC_PATH "/proc/server7"
 #define X6_FBIOGET_VSCREENINFO 0x4600
@@ -84,6 +87,7 @@ struct x6_window {
   int mapped;
   int cursor_set;
   uint cursor;
+  long event_mask;  /* X11 event mask registered via SELECT_EVENTS / XSelectInput */
   struct x6_property props[X6_MAX_PROPERTIES_PER_WINDOW];
   int prop_count;
 };
@@ -122,6 +126,8 @@ static int x6_backend = X6_BACKEND_ANSI;
 static int x6_backend_claimed = 0;
 static int x6_console_nonblock_ready = 0;
 static int x6_console_input_enabled = 0;
+static int x6_console_termios_saved = 0;
+static struct termios x6_console_termios_orig;
 static int x6_mouse_fd = -1;
 static int pointer_x;
 static int pointer_y;
@@ -501,6 +507,7 @@ x6_canvas_fill_pixels(int x, int y, int w, int h, uint pixel)
 
   if(x6_backend == X6_BACKEND_FB && x6_fb.fd >= 0) {
     int i;
+    int rh;
     int rw;
     uint p;
     int need_cursor_refresh;
@@ -525,11 +532,107 @@ x6_canvas_fill_pixels(int x, int y, int w, int h, uint pixel)
     }
 
     rw = x1 - x0;
+    rh = y1 - y0;
+
+    /* Fast path: full-width contiguous fills can be written in one bulk write. */
+    if(x0 == 0 && rw == x6_fb.width && x6_fb.stride == x6_fb.width * 4 && rh > 1) {
+      int total;
+      int wrote_ok;
+      size_t start;
+      uint64_t off;
+
+      total = rw * rh;
+      if(total > x6_fb.rowcap) {
+        uint *nbuf;
+        nbuf = (uint *)malloc((size_t)total * sizeof(uint));
+        if(!nbuf) {
+          if(need_cursor_refresh)
+            x6_cursor_show();
+          return;
+        }
+        if(x6_fb.rowbuf)
+          free(x6_fb.rowbuf);
+        x6_fb.rowbuf = nbuf;
+        x6_fb.rowcap = total;
+      }
+
+      p = pixel & 0x00ffffffU;
+      for(i = 0; i < total; i++)
+        x6_fb.rowbuf[i] = p;
+
+      wrote_ok = 0;
+      off = (uint64_t)y0 * (uint64_t)x6_fb.stride;
+      if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) >= 0 &&
+         write(x6_fb.fd, x6_fb.rowbuf, total * (int)sizeof(uint)) == total * (int)sizeof(uint))
+        wrote_ok = 1;
+
+      if(wrote_ok && x6_fb_shadow) {
+        start = (size_t)y0 * (size_t)x6_fb_shadow_w;
+        for(i = 0; i < total; i++)
+          x6_fb_shadow[start + (size_t)i] = p;
+      }
+
+      if(need_cursor_refresh)
+        x6_cursor_show();
+      return;
+    }
+
+    /*
+     * Partial-rect coalescing path: when rows are tightly packed and we have
+     * shadow contents, compose full scanlines and stream writes sequentially.
+     * This avoids per-row seek+write for tall non-full-width rectangles.
+     */
+    if(x6_fb_shadow && x6_fb.stride == x6_fb.width * 4 && rh > 1 && rw < x6_fb.width) {
+      uint64_t off;
+
+      if(x6_fb.width > x6_fb.rowcap) {
+        uint *nbuf;
+        nbuf = (uint *)malloc((size_t)x6_fb.width * sizeof(uint));
+        if(!nbuf) {
+          if(need_cursor_refresh)
+            x6_cursor_show();
+          return;
+        }
+        if(x6_fb.rowbuf)
+          free(x6_fb.rowbuf);
+        x6_fb.rowbuf = nbuf;
+        x6_fb.rowcap = x6_fb.width;
+      }
+
+      p = pixel & 0x00ffffffU;
+      off = (uint64_t)y0 * (uint64_t)x6_fb.stride;
+      if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) >= 0) {
+        for(i = y0; i < y1; i++) {
+          int j;
+          size_t row_base;
+
+          row_base = (size_t)i * (size_t)x6_fb_shadow_w;
+          memmove(x6_fb.rowbuf,
+                  x6_fb_shadow + row_base,
+                  (size_t)x6_fb.width * sizeof(uint));
+          for(j = 0; j < rw; j++)
+            x6_fb.rowbuf[x0 + j] = p;
+
+          if(write(x6_fb.fd,
+                   x6_fb.rowbuf,
+                   x6_fb.width * (int)sizeof(uint)) < 0)
+            break;
+
+          for(j = 0; j < rw; j++)
+            x6_fb_shadow[row_base + (size_t)x0 + (size_t)j] = p;
+        }
+        if(need_cursor_refresh)
+          x6_cursor_show();
+        return;
+      }
+    }
+
     if(rw > x6_fb.rowcap) {
       uint *nbuf;
       nbuf = (uint *)malloc((size_t)rw * sizeof(uint));
       if(!nbuf) {
-        x6_cursor_show();
+        if(need_cursor_refresh)
+          x6_cursor_show();
         return;
       }
       if(x6_fb.rowbuf)
@@ -668,8 +771,9 @@ x6_draw_text_pixels(int x, int baseline_y, uint color, const char *text, int len
           x6_fb.rowcap = row_width;
         }
         
-        // Prefill row buffer with existing framebuffer contents from shadow buffer
-        // (don't try to read from /dev/fb0; use shadow as source of truth)
+        // Prefill from the shadow framebuffer. Do not read back from /dev/fb0
+        // here: the device is not a reliable read source, and text compositing
+        // must treat the maintained shadow buffer as the source of truth.
         if(x6_fb_shadow) {
           int j;
           size_t base = (size_t)py * (size_t)x6_fb_shadow_w + (size_t)row_min_x;
@@ -899,15 +1003,37 @@ static void
 x6_console_input_setup(void)
 {
   int flags;
+  struct termios t;
 
   if(x6_console_nonblock_ready)
     return;
+
+  if(tcgetattr(0, &x6_console_termios_orig) == 0) {
+    t = x6_console_termios_orig;
+    t.c_iflag &= ~(BRKINT | ICRNL | INLCR | IGNCR | ISTRIP | IXON);
+    t.c_oflag &= ~(OPOST);
+    t.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+    t.c_cflag |= CS8;
+    t.c_cc[VMIN] = 0;
+    t.c_cc[VTIME] = 0;
+    if(tcsetattr(0, TCSANOW, &t) == 0)
+      x6_console_termios_saved = 1;
+  }
 
   flags = fcntl(0, F_GETFL, 0);
   if(flags >= 0 && fcntl(0, F_SETFL, flags | O_NONBLOCK) >= 0)
     x6_console_input_enabled = 1;
 
   x6_console_nonblock_ready = 1;
+}
+
+static void
+x6_console_input_teardown(void)
+{
+  if(x6_console_termios_saved) {
+    tcsetattr(0, TCSANOW, &x6_console_termios_orig);
+    x6_console_termios_saved = 0;
+  }
 }
 
 static int
@@ -1181,28 +1307,61 @@ x6_send_line(int cfd, const char *s)
 }
 
 static int
-x6_recv_line(int cfd, char *buf, int buflen)
+x6_client_fill_rxbuf(int cfd, char *buf, int *buflen, int bufcap)
 {
-  int pos;
-
-  if(cfd < 0 || buf == 0 || buflen <= 1)
+  if(cfd < 0 || buf == 0 || buflen == 0 || bufcap <= 0)
     return -1;
 
-  pos = 0;
-  while(pos < buflen - 1) {
-    char ch;
+  while(*buflen < bufcap) {
+    int space;
     int n;
-    n = recv(cfd, &ch, 1);
-    if(n <= 0)
-      return -1;
-    if(ch == '\n' || ch == '\r') {
-      buf[pos] = 0;
-      return 0;
+
+    space = bufcap - *buflen;
+    n = recv(cfd, buf + *buflen, (size_t)space);
+    if(n > 0) {
+      *buflen += n;
+      if(n < space)
+        break;
+      continue;
     }
-    buf[pos++] = ch;
+    if(n == 0)
+      return -1;
+    if(errno == EAGAIN || errno == EWOULDBLOCK)
+      break;
+    return -1;
   }
 
-  buf[pos] = 0;
+  return 0;
+}
+
+static int
+x6_client_next_line(char *buf, int *buflen, char *line, int linecap)
+{
+  int i;
+
+  if(buf == 0 || buflen == 0 || line == 0 || linecap <= 1)
+    return -1;
+
+  for(i = 0; i < *buflen; i++) {
+    if(buf[i] == '\n' || buf[i] == '\r') {
+      int copy_len;
+      int consume;
+
+      copy_len = i;
+      if(copy_len >= linecap)
+        copy_len = linecap - 1;
+      memmove(line, buf, (size_t)copy_len);
+      line[copy_len] = 0;
+
+      consume = i + 1;
+      while(consume < *buflen && (buf[consume] == '\n' || buf[consume] == '\r'))
+        consume++;
+      memmove(buf, buf + consume, (size_t)(*buflen - consume));
+      *buflen -= consume;
+      return 1;
+    }
+  }
+
   return 0;
 }
 
@@ -1893,6 +2052,25 @@ handle_one_command(int cfd, char *cmd)
     x6_send_line(cfd, "OK property_set\n");
     return;
   }
+  if(strncmp(cmd, "SELECT_EVENTS", 13) == 0) {
+    uint wid;
+    long mask;
+    struct x6_window *win;
+    if(sscanf(cmd, "SELECT_EVENTS %u %ld", &wid, &mask) != 2) {
+      x6_send_line(cfd, "ERR bad-syntax\n");
+      return;
+    }
+    win = find_window(wid);
+    if(!win) {
+      /* Allow root window subscription even if not in wins[] table. */
+      x6_send_line(cfd, "OK events_set\n");
+      return;
+    }
+    win->event_mask = mask;
+    x6_send_line(cfd, "OK events_set\n");
+    return;
+  }
+
   x6_send_line(cfd, "ERR unknown\n");
 }
 
@@ -1900,12 +2078,23 @@ static void
 handle_client(int cfd)
 {
   char line[192];
+  char rxbuf[X6_CLIENT_RXBUF];
   char eventbuf[256];
   struct x6_event_queue q;
   struct x6_event evt;
+  int flags;
   int logged_first_cmd;
+  int rxlen;
+  int should_detach;
 
+  line[0] = 0;
   logged_first_cmd = 0;
+  rxlen = 0;
+  should_detach = 0;
+
+  flags = fcntl(cfd, F_GETFL, 0);
+  if(flags >= 0)
+    fcntl(cfd, F_SETFL, flags | O_NONBLOCK);
 
   x6_event_queue_init(&q);
   current_event_queue = &q;
@@ -1979,20 +2168,26 @@ handle_client(int cfd)
     if(mouse_poll_index >= 0 && (pfds[mouse_poll_index].revents & POLLIN))
       x6_pump_mouse();
 
-    if((pfds[0].revents & POLLIN) == 0)
+    if((pfds[0].revents & (POLLIN | POLLHUP | POLLERR)) == 0)
       continue;
 
-    if(x6_recv_line(cfd, line, sizeof(line)) < 0)
+    if(x6_client_fill_rxbuf(cfd, rxbuf, &rxlen, sizeof(rxbuf)) < 0)
       break;
 
-    if(line[0] == 0)
-      continue;
-    if(!logged_first_cmd) {
-      dprintf(1, "x6: first-cmd: %s\n", line);
-      logged_first_cmd = 1;
+    while(x6_client_next_line(rxbuf, &rxlen, line, sizeof(line)) > 0) {
+      if(line[0] == 0)
+        continue;
+      if(!logged_first_cmd) {
+        dprintf(1, "x6: first-cmd: %s\n", line);
+        logged_first_cmd = 1;
+      }
+      handle_one_command(cfd, line);
+      if(strncmp(line, "QUIT", 4) == 0 || strncmp(line, "DETACH", 6) == 0) {
+        should_detach = 1;
+        break;
+      }
     }
-    handle_one_command(cfd, line);
-    if(strncmp(line, "QUIT", 4) == 0 || strncmp(line, "DETACH", 6) == 0)
+    if(should_detach)
       break;
   }
 
@@ -2005,6 +2200,7 @@ handle_client(int cfd)
   }
 
   x6_cursor_hide();
+  x6_console_input_teardown();
   current_event_queue = 0;
 }
 

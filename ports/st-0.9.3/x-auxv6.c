@@ -422,6 +422,8 @@ aux_xinit(int cols, int rows)
 	XSelectInput(auxw.dpy, auxw.win, auxw.event_mask);
 	auxw.wmdelete = XInternAtom(auxw.dpy, "WM_DELETE_WINDOW", False);
 	XMapWindow(auxw.dpy, auxw.win);
+	/* Request keyboard focus so x6 routes KeyPress events to our window. */
+	XSetInputFocus(auxw.dpy, auxw.win, RevertToPointerRoot, CurrentTime);
 	xloadcols();
 	xsettitle(opt_title);
 	aux_cresize(w, h);
