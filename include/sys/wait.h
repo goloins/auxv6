@@ -9,4 +9,9 @@
 
 #include "../wait.h"
 
+#include "types.h"
+
+int wait(int *status);
+int waitpid(int pid, int *status, int options);
+
 #endif /* _SYS_WAIT_NATIVE_H */

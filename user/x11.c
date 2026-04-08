@@ -24,6 +24,19 @@
 #define DoGreen 2
 #define DoBlue 4
 
+#ifndef XValue
+#define XValue 0x0001
+#endif
+#ifndef YValue
+#define YValue 0x0002
+#endif
+#ifndef WidthValue
+#define WidthValue 0x0004
+#endif
+#ifndef HeightValue
+#define HeightValue 0x0008
+#endif
+
 typedef struct {
   Atom atom;
   char name[64];
@@ -41,6 +54,17 @@ static unsigned long g_next_gc = 1;
 static char g_rxbuf[X11_RXBUF_SIZE];
 static int g_rxlen;
 static int g_pending_draw_replies;
+static GC g_xft_gc;
+
+struct x11_fc_pattern {
+  char name[128];
+  double pixel_size;
+  int has_pixel_size;
+  int slant;
+  int has_slant;
+  int weight;
+  int has_weight;
+};
 
 struct x11_gc_state {
   int in_use;
@@ -94,6 +118,162 @@ static unsigned long g_next_font = 1;
 static struct x11_gc_state g_gcs[X11_MAX_GCS];
 static struct x11_pixmap_state g_pixmaps[X11_MAX_PIXMAPS];
 static unsigned long g_next_pixmap = 2;  // Start after window IDs
+
+static int
+x11_tolower_ascii(int c)
+{
+  if (c >= 'A' && c <= 'Z')
+    return c - 'A' + 'a';
+  return c;
+}
+
+static int
+x11_strieq(const char *a, const char *b)
+{
+  int ca;
+  int cb;
+
+  if (!a || !b)
+    return 0;
+  while (*a && *b) {
+    ca = x11_tolower_ascii((unsigned char)*a);
+    cb = x11_tolower_ascii((unsigned char)*b);
+    if (ca != cb)
+      return 0;
+    a++;
+    b++;
+  }
+  return *a == '\0' && *b == '\0';
+}
+
+static void
+x11_set_xcolor(XColor *c, unsigned short r, unsigned short g, unsigned short b)
+{
+  if (!c)
+    return;
+  c->red = r;
+  c->green = g;
+  c->blue = b;
+  c->pixel = ((unsigned long)(r >> 8) << 16) |
+             ((unsigned long)(g >> 8) << 8) |
+             (unsigned long)(b >> 8);
+  c->flags = DoRed | DoGreen | DoBlue;
+}
+
+static int
+x11_named_color_level(int level)
+{
+  switch (level) {
+  case 1: return 0xffff;
+  case 2: return 0xeeee;
+  case 3: return 0xcdcd;
+  case 4: return 0x8b8b;
+  default:
+    return -1;
+  }
+}
+
+static int
+x11_parse_named_color(const char *spec, XColor *c)
+{
+  char base[32];
+  int bi;
+  int i;
+  int level;
+  int gray;
+  unsigned short v;
+  int rv;
+
+  if (!spec || !c)
+    return 0;
+
+  bi = 0;
+  i = 0;
+  while (spec[i] && bi < (int)sizeof(base) - 1) {
+    if (spec[i] >= '0' && spec[i] <= '9')
+      break;
+    base[bi++] = (char)x11_tolower_ascii((unsigned char)spec[i]);
+    i++;
+  }
+  base[bi] = '\0';
+
+  level = 0;
+  if (spec[i] >= '0' && spec[i] <= '9')
+    level = atoi(spec + i);
+
+  if (x11_strieq(base, "black")) {
+    x11_set_xcolor(c, 0, 0, 0);
+    return 1;
+  }
+  if (x11_strieq(base, "white")) {
+    x11_set_xcolor(c, 0xffff, 0xffff, 0xffff);
+    return 1;
+  }
+
+  if (x11_strieq(base, "gray") || x11_strieq(base, "grey")) {
+    gray = level;
+    if (gray < 0)
+      gray = 0;
+    if (gray > 100)
+      gray = 100;
+    v = (unsigned short)((gray * 65535) / 100);
+    x11_set_xcolor(c, v, v, v);
+    return 1;
+  }
+
+  rv = (level > 0) ? x11_named_color_level(level) : 0xffff;
+  if (rv < 0)
+    return 0;
+
+  if (x11_strieq(base, "red")) {
+    x11_set_xcolor(c, (unsigned short)rv, 0, 0);
+    return 1;
+  }
+  if (x11_strieq(base, "green")) {
+    x11_set_xcolor(c, 0, (unsigned short)rv, 0);
+    return 1;
+  }
+  if (x11_strieq(base, "blue")) {
+    x11_set_xcolor(c, 0, 0, (unsigned short)rv);
+    return 1;
+  }
+  if (x11_strieq(base, "yellow")) {
+    x11_set_xcolor(c, (unsigned short)rv, (unsigned short)rv, 0);
+    return 1;
+  }
+  if (x11_strieq(base, "magenta")) {
+    x11_set_xcolor(c, (unsigned short)rv, 0, (unsigned short)rv);
+    return 1;
+  }
+  if (x11_strieq(base, "cyan")) {
+    x11_set_xcolor(c, 0, (unsigned short)rv, (unsigned short)rv);
+    return 1;
+  }
+
+  return 0;
+}
+
+static GC
+x11_xft_gc(Display *display, Drawable d)
+{
+  if (!display)
+    return 0;
+  if (g_xft_gc)
+    return g_xft_gc;
+  g_xft_gc = XCreateGC(display, d, 0, 0);
+  return g_xft_gc;
+}
+
+static struct x11_fc_pattern *
+x11_fc_pattern_new(void)
+{
+  struct x11_fc_pattern *p;
+  p = (struct x11_fc_pattern *)malloc(sizeof(*p));
+  if (!p)
+    return 0;
+  memset(p, 0, sizeof(*p));
+  return p;
+}
 
 static struct x11_gc_state *
 x11_find_gc(GC gc)
@@ -208,6 +388,44 @@ x11_parse_font_metrics(const char *name, int *width, int *height, int *ascent, i
   *ascent = 12;
   *descent = 4;
   return 0;
+}
+
+static void
+x11_fill_xft_font_metrics(XftFont *f, const char *name, double pixel_size)
+{
+  int width;
+  int height;
+  int ascent;
+  int descent;
+
+  if (!f)
+    return;
+
+  width = 8;
+  height = 16;
+  ascent = 12;
+  descent = 4;
+
+  if (name)
+    x11_parse_font_metrics(name, &width, &height, &ascent, &descent);
+
+  if (pixel_size > 0.0) {
+    height = (int)(pixel_size + 0.5);
+    if (height < 6)
+      height = 6;
+    width = (height + 1) / 2;
+    if (width < 4)
+      width = 4;
+    ascent = (height * 3) / 4;
+    descent = height - ascent;
+    if (descent < 1)
+      descent = 1;
+  }
+
+  f->ascent = ascent;
+  f->descent = descent;
+  f->height = height;
+  f->max_advance_width = width;
 }
 
 static struct x11_font_state *
@@ -671,6 +889,7 @@ XCloseDisplay(Display *display)
   }
   if (g_display == display)
     g_display = 0;
+  g_xft_gc = 0;
   g_rxlen = 0;
   g_pending_draw_replies = 0;
   free(display);
@@ -1301,6 +1520,7 @@ Pixmap XCreatePixmap(Display *display, Drawable d, unsigned int width, unsigned 
   struct x11_pixmap_state *pm;
   char cmd[256];
   char response[128];
+  unsigned int pmid;
   
   if (!display || width == 0 || height == 0)
     return 0;
@@ -1313,14 +1533,9 @@ Pixmap XCreatePixmap(Display *display, Drawable d, unsigned int width, unsigned 
   /* Send CREATE_PIXMAP command to x6 server */
   snprintf(cmd, sizeof(cmd), "CREATE_PIXMAP %u %u %u %u\n", depth, width, height, depth);
   
-  /* For now, we don't synchronously wait for the response
-   * The pixmap ID we return is our server-generated ID
-   * In a full implementation, we'd match against x6's ID
-   */
   if (x11_cmd(display, cmd, response, sizeof(response)) == 0) {
-    /* Parse "OK create_pixmap pmid=XXXX" response if needed */
-    /* For now, just return our allocated pixmap ID */
-    (void)response;  /* Suppress unused warning */
+    if (sscanf(response, "OK create_pixmap pmid=%u", &pmid) == 1)
+      pm->id = (Pixmap)pmid;
   }
   
   return pm->id;
@@ -1379,7 +1594,13 @@ int XSetLineAttributes(Display *display, GC gc, unsigned int line_width, int lin
 }
 
 int XParseColor(Display *display, Colormap colormap, const char *spec, XColor *exact_def_return) {
-  int r, g, b;
+  int r;
+  int g;
+  int b;
+  int v;
+  unsigned short rs;
+  unsigned short gs;
+  unsigned short bs;
   
   (void)display;
   (void)colormap;
@@ -1387,32 +1608,48 @@ int XParseColor(Display *display, Colormap colormap, const char *spec, XColor *e
   if (!spec || !exact_def_return)
     return 0;
   
-  /* Parse hex color "#RRGGBB" */
-  if (spec[0] == '#' && strlen(spec) == 7) {
-    if (sscanf(spec, "#%02x%02x%02x", &r, &g, &b) == 3) {
-      exact_def_return->red = (unsigned short)(r << 8);
-      exact_def_return->green = (unsigned short)(g << 8);
-      exact_def_return->blue = (unsigned short)(b << 8);
-      exact_def_return->pixel = ((r & 0xff) << 16) | ((g & 0xff) << 8) | (b & 0xff);
-      exact_def_return->flags = DoRed | DoGreen | DoBlue;
+  if (spec[0] == '#') {
+    if (strlen(spec) == 7 && sscanf(spec, "#%02x%02x%02x", &r, &g, &b) == 3) {
+      x11_set_xcolor(exact_def_return, (unsigned short)((r << 8) | r),
+                     (unsigned short)((g << 8) | g),
+                     (unsigned short)((b << 8) | b));
+      return 1;
+    }
+    if (strlen(spec) == 4 && sscanf(spec, "#%1x%1x%1x", &r, &g, &b) == 3) {
+      x11_set_xcolor(exact_def_return,
+                     (unsigned short)(r * 0x1111),
+                     (unsigned short)(g * 0x1111),
+                     (unsigned short)(b * 0x1111));
+      return 1;
+    }
+    if (strlen(spec) == 13 && sscanf(spec, "#%4x%4x%4x", &r, &g, &b) == 3) {
+      x11_set_xcolor(exact_def_return, (unsigned short)r,
+                     (unsigned short)g, (unsigned short)b);
       return 1;
     }
   }
-  
-  /* Parse common color names */
-  if (!strcmp(spec, "black")) {
-    exact_def_return->red = 0;
-    exact_def_return->green = 0;
-    exact_def_return->blue = 0;
-    exact_def_return->pixel = 0;
-    exact_def_return->flags = DoRed | DoGreen | DoBlue;
+
+  if (x11_parse_named_color(spec, exact_def_return))
     return 1;
-  } else if (!strcmp(spec, "white")) {
-    exact_def_return->red = 0xffff;
-    exact_def_return->green = 0xffff;
-    exact_def_return->blue = 0xffff;
-    exact_def_return->pixel = 0xffffff;
-    exact_def_return->flags = DoRed | DoGreen | DoBlue;
+
+  if ((sscanf(spec, "%d %d %d", &r, &g, &b) == 3) ||
+      (sscanf(spec, "%d,%d,%d", &r, &g, &b) == 3)) {
+    if (r < 0) r = 0;
+    if (r > 255) r = 255;
+    if (g < 0) g = 0;
+    if (g > 255) g = 255;
+    if (b < 0) b = 0;
+    if (b > 255) b = 255;
+    x11_set_xcolor(exact_def_return, (unsigned short)((r << 8) | r),
+                   (unsigned short)((g << 8) | g),
+                   (unsigned short)((b << 8) | b));
+    return 1;
+  }
+
+  v = atoi(spec);
+  if (v >= 0 && v <= 100 && strchr(spec, ' ') == 0 && strchr(spec, ',') == 0) {
+    rs = gs = bs = (unsigned short)((v * 65535) / 100);
+    x11_set_xcolor(exact_def_return, rs, gs, bs);
     return 1;
   }
   
@@ -1655,7 +1892,7 @@ int XCopyArea(Display *display, Drawable src, Drawable dest, GC gc, int src_x, i
            src, dest, src_x, src_y, width, height, dest_x, dest_y);
   
   ret = x11_cmd(display, cmd, response, sizeof(response));
-  return ret;
+  return ret < 0 ? -1 : 0;
 }
 
 int XGetTransientForHint(Display *display, Window w, Window *prop_window_return) {
@@ -2119,13 +2356,14 @@ void XftDrawDestroy(XftDraw *draw) {
 }
 
 void XftDrawRect(XftDraw *draw, XftColor *color, int x, int y, unsigned int width, unsigned int height) {
-  (void)draw;
-  (void)color;
-  (void)x;
-  (void)y;
-  (void)width;
-  (void)height;
-  /* Stub: rect drawing not needed for st */
+  GC gc;
+  if (!draw || !draw->display || width == 0 || height == 0)
+    return;
+  gc = x11_xft_gc(draw->display, draw->drawable);
+  if (!gc)
+    return;
+  XSetForeground(draw->display, gc, color ? color->pixel : 0x00ffffffUL);
+  XFillRectangle(draw->display, draw->drawable, gc, x, y, width, height);
 }
 
 void XftDrawSetClipRectangles(XftDraw *draw, int xOrigin, int yOrigin, XRectangle *rects, int nrects) {
@@ -2144,34 +2382,57 @@ void XftDrawSetClip(XftDraw *draw, void *clip) {
 }
 
 void XftDrawGlyphFontSpec(XftDraw *draw, XftColor *color, XftGlyphFontSpec *glyphs, int nglyphs) {
-  (void)draw;
-  (void)color;
-  (void)glyphs;
-  (void)nglyphs;
-  /* Stub: glyph-spec rendering not needed for basic st */
+  GC gc;
+  int i;
+
+  if (!draw || !draw->display || !glyphs || nglyphs <= 0)
+    return;
+
+  gc = x11_xft_gc(draw->display, draw->drawable);
+  if (!gc)
+    return;
+  XSetForeground(draw->display, gc, color ? color->pixel : 0x00ffffffUL);
+
+  for (i = 0; i < nglyphs; i++) {
+    char ch;
+    unsigned int g = glyphs[i].glyph;
+    if (g >= 32 && g < 127)
+      ch = (char)g;
+    else
+      ch = '?';
+    XDrawString(draw->display, draw->drawable, gc,
+                glyphs[i].x, glyphs[i].y, &ch, 1);
+  }
 }
 
-int XftColorAllocValue(Display *display, Visual *visual, Colormap colormap, XColor *color, XftColor *result) {
+int XftColorAllocValue(Display *display, Visual *visual, Colormap colormap, XRenderColor *color, XftColor *result) {
   if (!color || !result)
     return 0;
   (void)display;
   (void)visual;
   (void)colormap;
-  result->pixel = color->pixel;
+  result->pixel = ((unsigned long)(color->red >> 8) << 16) |
+                  ((unsigned long)(color->green >> 8) << 8) |
+                  (unsigned long)(color->blue >> 8);
   result->color.red = color->red;
   result->color.green = color->green;
   result->color.blue = color->blue;
-  result->color.alpha = 65535; /* fully opaque */
+  result->color.alpha = color->alpha;
   return 1;
 }
 
 int XftColorAllocName(Display *display, Visual *visual, Colormap colormap, const char *name, XftColor *result) {
   XColor xc;
+  XRenderColor rc;
   if (!XParseColor(display, colormap, name, &xc))
     return 0;
   if (!XAllocColor(display, colormap, &xc))
     return 0;
-  return XftColorAllocValue(display, visual, colormap, &xc, result);
+  rc.red = xc.red;
+  rc.green = xc.green;
+  rc.blue = xc.blue;
+  rc.alpha = 65535;
+  return XftColorAllocValue(display, visual, colormap, &rc, result);
 }
 
 void XftColorFree(Display *display, Visual *visual, Colormap colormap, XftColor *color) {
@@ -2184,17 +2445,17 @@ void XftColorFree(Display *display, Visual *visual, Colormap colormap, XftColor 
 
 XftFont *XftFontOpenPattern(Display *display, XftPattern *pattern) {
   XftFont *f;
+  struct x11_fc_pattern *fp;
   (void)display;
-  (void)pattern;
   
   f = (XftFont *)malloc(sizeof(*f));
   if (f) {
+    fp = (struct x11_fc_pattern *)pattern;
     f->pattern = pattern;
     f->charset = 0;
-    f->ascent = 12;
-    f->descent = 4;
-    f->height = 16;
-    f->max_advance_width = 8;
+    x11_fill_xft_font_metrics(f,
+                              fp ? fp->name : 0,
+                              (fp && fp->has_pixel_size) ? fp->pixel_size : 0.0);
   }
   return f;
 }
@@ -2207,22 +2468,19 @@ void XftFontClose(Display *display, XftFont *font) {
 XftFont *XftFontOpenName(Display *display, int screen, const char *xlfd) {
   XftFont *f;
   (void)screen;
-  (void)xlfd;
+  (void)display;
   
   f = (XftFont *)malloc(sizeof(*f));
   if (f) {
     f->pattern = 0;
     f->charset = 0;
-    f->ascent = 12;
-    f->descent = 4;
-    f->height = 16;
-    f->max_advance_width = 8;
+    x11_fill_xft_font_metrics(f, xlfd, 0.0);
   }
   return f;
 }
 
 XftPattern *XftPatternCreate(void) {
-  return (XftPattern *)malloc(1);
+  return (XftPattern *)x11_fc_pattern_new();
 }
 
 void XftPatternDestroy(XftPattern *p) {
@@ -2232,15 +2490,23 @@ void XftPatternDestroy(XftPattern *p) {
 void XftDefaultSubstitute(Display *display, int screen, XftPattern *pattern) {
   (void)display;
   (void)screen;
-  (void)pattern;
-  /* Stub - no substitution needed */
+  FcDefaultSubstitute((FcPattern *)pattern);
 }
 
 XftResult XftPatternGetInteger(XftPattern *p, const char *object, int id, int *i) {
-  (void)p;
-  (void)object;
+  struct x11_fc_pattern *fp;
   (void)id;
-  (void)i;
+  fp = (struct x11_fc_pattern *)p;
+  if (!fp || !object || !i)
+    return XftResultNoMatch;
+  if (!strcmp(object, FC_SLANT) && fp->has_slant) {
+    *i = fp->slant;
+    return XftResultMatch;
+  }
+  if (!strcmp(object, FC_WEIGHT) && fp->has_weight) {
+    *i = fp->weight;
+    return XftResultMatch;
+  }
   return XftResultNoMatch;
 }
 
@@ -2251,7 +2517,8 @@ int XftCharExists(Display *display, XftFont *font, FcChar32 ucs4) {
   return 1;  /* Assume all chars exist */
 }
 
-unsigned int XftCharIndex(XftFont *font, FcChar32 ucs4) {
+unsigned int XftCharIndex(Display *display, XftFont *font, FcChar32 ucs4) {
+  (void)display;
   (void)font;
   return (unsigned int)ucs4;  /* Simplified: treat codepoint as index */
 }
@@ -2259,35 +2526,42 @@ unsigned int XftCharIndex(XftFont *font, FcChar32 ucs4) {
 XftPattern *XftFontMatch(Display *display, int screen, XftPattern *pattern, XftResult *result) {
   (void)display;
   (void)screen;
-  (void)pattern;
   if (result)
     *result = XftResultMatch;
-  return (XftPattern *)malloc(1);
+  return (XftPattern *)FcPatternDuplicate((FcPattern *)pattern);
 }
 
 void XftDrawStringUtf8(XftDraw *draw, XftColor *color, XftFont *font, int x, int y, const XftChar8 *string, int len) {
-  (void)draw;
-  (void)color;
+  GC gc;
   (void)font;
-  (void)x;
-  (void)y;
-  (void)string;
-  (void)len;
-  /* Stub: text rendering to be implemented when pixmap text support is added */
+  if (!draw || !draw->display || !string || len <= 0)
+    return;
+  gc = x11_xft_gc(draw->display, draw->drawable);
+  if (!gc)
+    return;
+  XSetForeground(draw->display, gc, color ? color->pixel : 0x00ffffffUL);
+  XDrawString(draw->display, draw->drawable, gc, x, y, (const char *)string, len);
 }
 
-void XftTextExtentsUtf8(Display *display, XftFont *font, const XftChar8 *string, int len, XGlyphInfo *extents) {
+void XftTextExtentsUtf8(Display *display, XftFont *font, const FcChar8 *string, int len, XGlyphInfo *extents) {
   (void)display;
-  (void)font;
   (void)string;
   
   if (extents) {
-    /* Stub: return reasonable defaults (8x16 font metrics) */
-    extents->width = len * 8;
-    extents->height = 16;
+    int cw = font ? font->max_advance_width : 8;
+    int ch = font ? font->height : 16;
+    int asc = font ? font->ascent : 12;
+    if (cw <= 0)
+      cw = 8;
+    if (ch <= 0)
+      ch = 16;
+    if (asc <= 0)
+      asc = (ch * 3) / 4;
+    extents->width = len * cw;
+    extents->height = ch;
     extents->x = 0;
-    extents->y = -12;
-    extents->xOff = len * 8;
+    extents->y = -asc;
+    extents->xOff = len * cw;
     extents->yOff = 0;
   }
 }
@@ -2307,9 +2581,15 @@ FcBool FcCharSetAddChar(FcCharSet *fcs, FcChar32 ucs4) {
 }
 
 FcPattern *FcNameParse(const FcChar8 *name) {
-  FcPattern *p = (FcPattern *)malloc(1);
-  (void)name;
-  return p;
+  struct x11_fc_pattern *p;
+  p = x11_fc_pattern_new();
+  if (!p)
+    return 0;
+  if (name) {
+    strncpy(p->name, (const char *)name, sizeof(p->name) - 1);
+    p->name[sizeof(p->name) - 1] = '\0';
+  }
+  return (FcPattern *)p;
 }
 
 void FcPatternDestroy(FcPattern *p) {
@@ -2321,9 +2601,15 @@ void FcFontSetDestroy(FcFontSet *ffs) {
 }
 
 FcPattern *FcPatternDuplicate(FcPattern *p) {
-  FcPattern *dup = (FcPattern *)malloc(1);
-  (void)p;
-  return dup;
+  struct x11_fc_pattern *src;
+  struct x11_fc_pattern *dup;
+  src = (struct x11_fc_pattern *)p;
+  dup = x11_fc_pattern_new();
+  if (!dup)
+    return 0;
+  if (src)
+    *dup = *src;
+  return (FcPattern *)dup;
 }
 
 FcBool FcPatternAddCharSet(FcPattern *p, const char *object, FcCharSet *charset) {
@@ -2348,25 +2634,29 @@ FcBool FcConfigSubstitute(void *config, FcPattern *p, FcMatchKind kind) {
 }
 
 void FcDefaultSubstitute(FcPattern *pattern) {
-  (void)pattern;
-  /* Stub */
+  struct x11_fc_pattern *p;
+  p = (struct x11_fc_pattern *)pattern;
+  if (!p)
+    return;
+  if (!p->has_pixel_size) {
+    p->pixel_size = 12.0;
+    p->has_pixel_size = 1;
+  }
 }
 
 FcPattern *FcFontSetMatch(void *config, FcFontSet **sets, int nsets, FcPattern *p, FcResult *result) {
   (void)config;
   (void)sets;
   (void)nsets;
-  (void)p;
   if (result)
     *result = FcResultMatch;
-  return (FcPattern *)malloc(1);
+  return FcPatternDuplicate(p);
 }
 
-FcFontSet *FcFontSort(void *config, FcPattern **patterns, int npatterns, FcBool trim, FcCharSet **csp, FcResult *result) {
+FcFontSet *FcFontSort(void *config, FcPattern *pattern, FcBool trim, FcCharSet **csp, FcResult *result) {
   FcFontSet *fs = (FcFontSet *)malloc(sizeof(*fs));
   (void)config;
-  (void)patterns;
-  (void)npatterns;
+  (void)pattern;
   (void)trim;
   (void)csp;
   if (result)
@@ -2376,46 +2666,70 @@ FcFontSet *FcFontSort(void *config, FcPattern **patterns, int npatterns, FcBool 
 
 FcPattern *FcFontMatch(void *config, FcPattern *p, FcResult *result) {
   (void)config;
-  (void)p;
   if (result)
     *result = FcResultMatch;
-  return (FcPattern *)malloc(1);
+  return FcPatternDuplicate(p);
 }
 
 FcBool FcPatternDel(FcPattern *p, const char *object) {
-  (void)p;
-  (void)object;
+  struct x11_fc_pattern *fp;
+  fp = (struct x11_fc_pattern *)p;
+  if (!fp || !object)
+    return 0;
+  if (!strcmp(object, FC_PIXEL_SIZE) || !strcmp(object, FC_SIZE))
+    fp->has_pixel_size = 0;
+  if (!strcmp(object, FC_SLANT))
+    fp->has_slant = 0;
+  if (!strcmp(object, FC_WEIGHT))
+    fp->has_weight = 0;
   return 1;
 }
 
 FcBool FcPatternAddDouble(FcPattern *p, const char *object, double d) {
-  (void)p;
-  (void)object;
-  (void)d;
+  struct x11_fc_pattern *fp;
+  fp = (struct x11_fc_pattern *)p;
+  if (!fp || !object)
+    return 0;
+  if (!strcmp(object, FC_PIXEL_SIZE) || !strcmp(object, FC_SIZE)) {
+    fp->pixel_size = d;
+    fp->has_pixel_size = 1;
+  }
   return 1;
 }
 
 FcBool FcPatternAddInteger(FcPattern *p, const char *object, int i) {
-  (void)p;
-  (void)object;
-  (void)i;
+  struct x11_fc_pattern *fp;
+  fp = (struct x11_fc_pattern *)p;
+  if (!fp || !object)
+    return 0;
+  if (!strcmp(object, FC_SLANT)) {
+    fp->slant = i;
+    fp->has_slant = 1;
+  } else if (!strcmp(object, FC_WEIGHT)) {
+    fp->weight = i;
+    fp->has_weight = 1;
+  }
   return 1;
 }
 
 FcResult FcPatternGetDouble(FcPattern *p, const char *object, int id, double *d) {
-  (void)p;
-  (void)object;
+  struct x11_fc_pattern *fp;
   (void)id;
-  if (d)
-    *d = 12.0;  /* Default font size */
-  return FcResultMatch;
+  fp = (struct x11_fc_pattern *)p;
+  if (!fp || !object || !d)
+    return FcResultNoMatch;
+  if ((!strcmp(object, FC_PIXEL_SIZE) || !strcmp(object, FC_SIZE)) && fp->has_pixel_size) {
+    *d = fp->pixel_size;
+    return FcResultMatch;
+  }
+  return FcResultNoMatch;
 }
 
 XftPattern *XftXlfdParse(const char *xlfd, int expand, FcBool ignore_scalable) {
-  XftPattern *p = (XftPattern *)malloc(1);
-  (void)xlfd;
+  XftPattern *p;
   (void)expand;
   (void)ignore_scalable;
+  p = (XftPattern *)FcNameParse((const FcChar8 *)xlfd);
   return p;
 }
 
@@ -2435,7 +2749,7 @@ int XReparentWindow(Display *display, Window w, Window parent, int x, int y) {
   return 0;
 }
 
-int XRegisterIMInstantiateCallback(Display *display, void *rdb, char *res_name, char *res_class, void (*callback)(Display *, void *, void *), void *client_data) {
+int XRegisterIMInstantiateCallback(Display *display, void *rdb, char *res_name, char *res_class, void (*callback)(Display *, XPointer, XPointer), void *client_data) {
   (void)display;
   (void)rdb;
   (void)res_name;
@@ -2466,11 +2780,30 @@ Bool XFilterEvent(XEvent *event, Window w) {
 }
 
 int XParseGeometry(const char *parsestring, int *x_return, int *y_return, unsigned int *width_return, unsigned int *height_return) {
-  (void)parsestring;
-  (void)x_return;
-  (void)y_return;
-  (void)width_return;
-  (void)height_return;
+  int x;
+  int y;
+  int w;
+  int h;
+
+  if (!parsestring)
+    return 0;
+
+  x = 0;
+  y = 0;
+  w = 0;
+  h = 0;
+  if (sscanf(parsestring, "%dx%d+%d+%d", &w, &h, &x, &y) == 4) {
+    if (x_return) *x_return = x;
+    if (y_return) *y_return = y;
+    if (width_return) *width_return = (unsigned int)w;
+    if (height_return) *height_return = (unsigned int)h;
+    return XValue | YValue | WidthValue | HeightValue;
+  }
+  if (sscanf(parsestring, "%dx%d", &w, &h) == 2) {
+    if (width_return) *width_return = (unsigned int)w;
+    if (height_return) *height_return = (unsigned int)h;
+    return WidthValue | HeightValue;
+  }
   return 0;
 }
 
@@ -2492,27 +2825,46 @@ int pselect(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
 
 /* Additional X11 functions for st */
 int XSetWMName(Display *display, Window w, void *text_prop) {
-  (void)display;
-  (void)w;
-  (void)text_prop;
-  return 1;
+  XTextProperty *tp;
+  tp = (XTextProperty *)text_prop;
+  if (!tp)
+    return 0;
+  return XChangeProperty(display, w, XA_WM_NAME,
+                         tp->encoding ? tp->encoding : XA_STRING,
+                         tp->format ? tp->format : 8,
+                         PropModeReplace,
+                         (unsigned char *)tp->value,
+                         (int)tp->nitems) == 0;
 }
 
 int XSetTextProperty(Display *display, Window w, void *text_prop, Atom property) {
-  (void)display;
-  (void)w;
-  (void)text_prop;
-  (void)property;
-  return 1;
+  XTextProperty *tp;
+  tp = (XTextProperty *)text_prop;
+  if (!tp)
+    return 0;
+  return XChangeProperty(display, w, property,
+                         tp->encoding ? tp->encoding : XA_STRING,
+                         tp->format ? tp->format : 8,
+                         PropModeReplace,
+                         (unsigned char *)tp->value,
+                         (int)tp->nitems) == 0;
 }
 
 int Xutf8TextListToTextProperty(Display *display, char **list, int count, XICCEncodingStyle style, void *text_prop_return) {
   (void)display;
-  (void)list;
-  (void)count;
   (void)style;
-  (void)text_prop_return;
-  return 0; /* Success */
+  if (!list || count <= 0 || !list[0] || !text_prop_return)
+    return 1;
+  {
+    XTextProperty *tp = (XTextProperty *)text_prop_return;
+    tp->value = strdup(list[0]);
+    if (!tp->value)
+      return 1;
+    tp->encoding = XA_STRING;
+    tp->format = 8;
+    tp->nitems = strlen(tp->value);
+  }
+  return 0;
 }
 
 int XSetICValues(XIC ic, ...) {
@@ -2521,23 +2873,25 @@ int XSetICValues(XIC ic, ...) {
 }
 
 int XSetWMIconName(Display *display, Window w, void *text_prop) {
-  (void)display;
-  (void)w;
-  (void)text_prop;
-  return 1;
+  return XSetTextProperty(display, w, text_prop,
+                          XInternAtom(display, "WM_ICON_NAME", False));
 }
 
 char *XSetLocaleModifiers(const char *modifier_list) {
-  (void)modifier_list;
-  return "";
+  static char mods[64];
+  if (!modifier_list)
+    return "";
+  strncpy(mods, modifier_list, sizeof(mods) - 1);
+  mods[sizeof(mods) - 1] = '\0';
+  return mods;
 }
 
 XIC XCreateIC(XIM im, ...) {
   (void)im;
-  return NULL;
+  return (XIC)malloc(1);
 }
 
-int XUnregisterIMInstantiateCallback(Display *display, void *rdb, char *res_name, char *res_class, void (*callback)(Display *, void *, void *), void *client_data) {
+int XUnregisterIMInstantiateCallback(Display *display, void *rdb, char *res_name, char *res_class, void (*callback)(Display *, XPointer, XPointer), void *client_data) {
   (void)display;
   (void)rdb;
   (void)res_name;
@@ -2552,7 +2906,7 @@ XIM XOpenIM(Display *display, void *rdb, char *res_name, char *res_class) {
   (void)rdb;
   (void)res_name;
   (void)res_class;
-  return NULL;
+  return (XIM)malloc(1);
 }
 
 int XSetIMValues(XIM im, ...) {
@@ -2562,7 +2916,7 @@ int XSetIMValues(XIM im, ...) {
 
 void *XVaCreateNestedList(int dummy, ...) {
   (void)dummy;
-  return NULL;
+  return malloc(1);
 }
 
 void *XAllocSizeHints(void) {
@@ -2584,12 +2938,7 @@ int XSetWMProperties(Display *display, Window w, void *window_name, void *icon_n
 
 int XmbLookupString(XIC ic, XKeyEvent *event, char *buffer, int nbytes, KeySym *keysym, void *status) {
   (void)ic;
-  (void)event;
-  (void)buffer;
-  (void)nbytes;
-  (void)keysym;
-  (void)status;
-  return 0;
+  return XLookupString(event, buffer, nbytes, keysym, status);
 }
 
 int XSetICFocus(XIC ic) {

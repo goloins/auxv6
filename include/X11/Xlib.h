@@ -48,16 +48,17 @@ typedef struct {
 typedef struct _XIM *XIM;
 typedef struct _XIC *XIC;
 typedef void *XVaNestedList;
+typedef char *XPointer;
 
 /* Input Method callback structures */
 typedef struct {
   void *client_data;
-  void (*callback)(void);
+  void (*callback)(XIM, XPointer, XPointer);
 } XIMCallback;
 
 typedef struct {
   void *client_data;
-  void (*callback)(void);
+  int (*callback)(XIC, XPointer, XPointer);
 } XICCallback;
 
 typedef struct {
@@ -160,8 +161,6 @@ typedef struct {
 #define XK_KP_7 0xfff7
 #define XK_KP_8 0xfff8
 #define XK_KP_9 0xfff9
-
-typedef char *XPointer;
 
 /* Event type codes */
 #define KeyPress 2
@@ -908,7 +907,7 @@ int XSupportsLocale(void);
 
 int XDefaultDepth(Display *display, int screen);
 int XReparentWindow(Display *display, Window w, Window parent, int x, int y);
-int XRegisterIMInstantiateCallback(Display *display, void *rdb, char *res_name, char *res_class, void (*callback)(Display *, void *, void *), void *client_data);
+int XRegisterIMInstantiateCallback(Display *display, void *rdb, char *res_name, char *res_class, void (*callback)(Display *, XPointer, XPointer), void *client_data);
 int XSetWMProtocols(Display *display, Window w, Atom *protocols, int count);
 int XConnectionNumber(Display *display);
 Bool XFilterEvent(XEvent *event, Window w);
@@ -933,6 +932,13 @@ Colormap XDefaultColormap(Display *display, int screen);
 Window XRootWindow(Display *display, int screen);
 int XRecolorCursor(Display *display, Cursor cursor, XColor *foreground, XColor *background);
 XIC XCreateIC(XIM im, ...);
-int XUnregisterIMInstantiateCallback(Display *display, void *rdb, char *res_name, char *res_class, void (*callback)(Display *, void *, void *), void *client_data);
+int XUnregisterIMInstantiateCallback(Display *display, void *rdb, char *res_name, char *res_class, void (*callback)(Display *, XPointer, XPointer), void *client_data);
+int XParseColor(Display *display, Colormap colormap, const char *spec, XColor *exact_def_return);
+
+/*
+ * auxv6 compatibility: several upstream ports (e.g. dwm/st) expect Xft types
+ * like XftColor/XftFont to be visible when including core X11 headers.
+ */
+#include <X11/Xft/Xft.h>
 
 #endif

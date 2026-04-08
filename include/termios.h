@@ -130,4 +130,6 @@ struct winsize {
 #define PENDIN  0x00004000U  /* retype pending input on next read */
 #define IEXTEN  0x00008000U  /* enable implementation-defined input processing */
 
+int tcsendbreak(int fd, int duration);
+
 #endif /* XV6_TERMIOS_H */

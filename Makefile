@@ -228,6 +228,12 @@ toolchain-check:
 		echo "*** Error: $(CC) is not producing 32-bit i386 code for -m32." 1>&2; \
 		echo "*** Set TOOLPREFIX to an i386-*-elf toolchain or install host multilib support." 1>&2; \
 		echo "***" 1>&2; exit 1)
+	@$(OBJDUMP) -f "$(LIBGCC)" 2>/dev/null | grep -q 'file format elf32-i386' || \
+		(echo "***" 1>&2; \
+		echo "*** Error: selected LIBGCC is not an elf32-i386 archive/object set." 1>&2; \
+		echo "*** LIBGCC=$(LIBGCC)" 1>&2; \
+		echo "*** A host x86_64 archive may have been selected accidentally." 1>&2; \
+		echo "***" 1>&2; exit 1)
 	@nm "$(LIBGCC)" 2>/dev/null | grep -Eq '__divmoddi4|__udivdi3|__divdi3' || \
 		(echo "***" 1>&2; \
 		echo "*** Error: selected libgcc is missing i386 64-bit division helpers." 1>&2; \
@@ -293,6 +299,8 @@ entryother: kernel/boot/entryother.S
 
 aux.kern: toolchain-check $(OBJS) kernel/core/entry.o entryother config/kernel.ld
 	$(LD) $(LDFLAGS) -T config/kernel.ld -o aux.kern kernel/core/entry.o $(OBJS) -b binary entryother $(LIBGCC)
+	@$(OBJDUMP) -f aux.kern | grep -q 'file format elf32-i386' || \
+		(echo "ERROR: aux.kern is not elf32-i386." 1>&2; exit 1)
 	@set -e; \
 	line="$$($(TOOLPREFIX)size aux.kern | tail -n 1)"; \
 	set -- $$line; \
@@ -352,6 +360,8 @@ user/usertests.o: user/usertests.c
 
 user/%: user/%.o $(ULIB) | toolchain-check
 	$(LD) $(LDFLAGS) -N -e _start -Ttext 0 -o $@ $^ $(LIBGCC)
+	@$(OBJDUMP) -f $@ | grep -q 'file format elf32-i386' || \
+		(echo "ERROR: $@ is not elf32-i386." 1>&2; exit 1)
 	$(OBJDUMP) -S $@ > $(basename $@).asm
 	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(basename $@).sym
 
@@ -360,6 +370,8 @@ $(USER_STAGE_DIR):
 
 $(USER_STAGE_DIR)/%: user/%.o $(ULIB) | $(USER_STAGE_DIR) toolchain-check
 	$(LD) $(LDFLAGS) -N -e _start -Ttext 0 -o $@ $^ $(LIBGCC)
+	@$(OBJDUMP) -f $@ | grep -q 'file format elf32-i386' || \
+		(echo "ERROR: $@ is not elf32-i386." 1>&2; exit 1)
 
 _cat: user/cat
 	cp user/cat _cat

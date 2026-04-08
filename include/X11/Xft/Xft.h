@@ -111,7 +111,7 @@ typedef struct {
   short y;
 } XftGlyphFontSpec;
 
-typedef FcChar32 XftChar8;
+typedef FcChar8 XftChar8;
 
 /* Function declarations (implemented in auxv6 user/x11.c) */
 extern XftDraw *XftDrawCreate(Display *display, Drawable drawable, Visual *visual, Colormap colormap);
@@ -123,7 +123,7 @@ extern void XftDrawSetClip(XftDraw *draw, void *clip);
 extern void XftDrawStringUtf8(XftDraw *draw, XftColor *color, XftFont *font, int x, int y, const XftChar8 *string, int len);
 extern void XftDrawGlyphFontSpec(XftDraw *draw, XftColor *color, XftGlyphFontSpec *glyphs, int nglyphs);
 
-extern int XftColorAllocValue(Display *display, Visual *visual, Colormap colormap, XColor *color, XftColor *result);
+extern int XftColorAllocValue(Display *display, Visual *visual, Colormap colormap, XRenderColor *color, XftColor *result);
 extern int XftColorAllocName(Display *display, Visual *visual, Colormap colormap, const char *name, XftColor *result);
 extern void XftColorFree(Display *display, Visual *visual, Colormap colormap, XftColor *color);
 
@@ -131,9 +131,9 @@ extern XftFont *XftFontOpenName(Display *display, int screen, const char *xlfd);
 extern XftFont *XftFontOpenPattern(Display *display, XftPattern *pattern);
 extern void XftFontClose(Display *display, XftFont *font);
 
-extern void XftTextExtentsUtf8(Display *display, XftFont *font, const XftChar8 *string, int len, XGlyphInfo *extents);
+extern void XftTextExtentsUtf8(Display *display, XftFont *font, const FcChar8 *string, int len, XGlyphInfo *extents);
 extern int XftCharExists(Display *display, XftFont *font, FcChar32 ucs4);
-extern unsigned int XftCharIndex(XftFont *font, FcChar32 ucs4);
+extern unsigned int XftCharIndex(Display *display, XftFont *font, FcChar32 ucs4);
 
 extern XftPattern *XftPatternCreate(void);
 extern void XftPatternDestroy(XftPattern *p);
@@ -155,7 +155,7 @@ extern FcBool FcConfigSubstitute(void *config, FcPattern *p, FcMatchKind kind);
 extern void FcDefaultSubstitute(FcPattern *pattern);
 extern FcPattern *FcFontMatch(void *config, FcPattern *p, FcResult *result);
 extern FcPattern *FcFontSetMatch(void *config, FcFontSet **sets, int nsets, FcPattern *p, FcResult *result);
-extern FcFontSet *FcFontSort(void *config, FcPattern **patterns, int npatterns, FcBool trim, FcCharSet **csp, FcResult *result);
+extern FcFontSet *FcFontSort(void *config, FcPattern *pattern, FcBool trim, FcCharSet **csp, FcResult *result);
 extern FcBool FcPatternDel(FcPattern *p, const char *object);
 extern FcBool FcPatternAddDouble(FcPattern *p, const char *object, double d);
 extern FcBool FcPatternAddInteger(FcPattern *p, const char *object, int i);

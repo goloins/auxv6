@@ -75,4 +75,11 @@ static inline KeySym XkbKeycodeToKeysym(Display *display, KeyCode code, int grou
   return code;
 }
 
+static inline void XkbBell(Display *display, Window window, int percent, Atom name) {
+  (void)display;
+  (void)window;
+  (void)percent;
+  (void)name;
+}
+
 #endif

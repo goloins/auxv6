@@ -100,7 +100,7 @@ int fdatasync(int fd);
 void sync(void);
 int kill(pid_t pid, int sig);
 int exec(char*, char**);
-int open(const char*, int);
+int open(const char*, int, ...);
 int mknod(const char*, int, short, short);
 int unlink(const char*);
 int __auxv6_sys_rmdir(const char*);

@@ -63,3 +63,7 @@
 #define ND_DISK_UNITS 4
 #define ND_DISK_BASE (VD_PART_BASE + VD_DISK_UNITS * VD_PARTS_PER_DISK)
 #define ND_DISK_DEV(unit) (ND_DISK_BASE + (unit))
+
+int open(const char *path, int oflag, ...);
+int creat(const char *path, int mode);
+int fcntl(int fd, int cmd, ...);

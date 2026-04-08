@@ -33,7 +33,11 @@ typedef int ptrdiff_t;
 /* wchar_t - Wide character type */
 #ifndef _WCHAR_T_DEFINED
 #define _WCHAR_T_DEFINED
+#ifdef __WCHAR_TYPE__
+typedef __WCHAR_TYPE__ wchar_t;
+#else
 typedef int wchar_t;
+#endif
 #endif
 
 /* offsetof - Byte offset of member within struct */

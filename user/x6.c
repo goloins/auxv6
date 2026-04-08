@@ -925,6 +925,66 @@ ansi_fallback:
                         font->size, color);
 }
 
+static void
+x6_draw_text_pixmap(struct x6_pixmap *pm, int x, int baseline_y, uint color, const char *text, int len)
+{
+  const struct user_font *font;
+  int i;
+  int cx;
+
+  if(!pm || !pm->pixels || !text || len <= 0)
+    return;
+
+  font = user_font_builtin_montecarlo();
+  if(!font)
+    return;
+
+  cx = x;
+  for(i = 0; i < len; i++) {
+    const struct user_glyph *g;
+    int gx;
+    int gy;
+    int r;
+    uchar ch;
+
+    ch = (uchar)text[i];
+    g = user_font_get_glyph(font, (uint)ch);
+    if(!g) {
+      cx += font->size / 2;
+      continue;
+    }
+
+    gx = cx + g->bearing_x;
+    gy = baseline_y - g->bearing_y;
+
+    for(r = 0; r < g->height; r++) {
+      int c;
+      int py;
+      uchar rowbits;
+
+      py = gy + r;
+      if(py < 0 || py >= pm->height)
+        continue;
+
+      rowbits = g->bitmap ? g->bitmap[r] : 0;
+      if(rowbits == 0)
+        continue;
+
+      for(c = 0; c < g->width && c < 8; c++) {
+        int px;
+        if((rowbits & (1U << (7 - c))) == 0)
+          continue;
+        px = gx + c;
+        if(px < 0 || px >= pm->width)
+          continue;
+        pm->pixels[py * pm->width + px] = color & 0x00ffffffU;
+      }
+    }
+
+    cx += g->advance_x > 0 ? g->advance_x : g->width;
+  }
+}
+
 static int
 x6_parse_draw_text(char *cmd, uint *id, int *x, int *y, uint *color, int *len, char **text)
 {
@@ -1853,8 +1913,7 @@ handle_one_command(int cfd, char *cmd)
       /* Check if target is a pixmap */
       pm = find_pixmap((uint)id);
       if(pm) {
-        /* FIXME: Implement text rendering to pixmap pixel buffer */
-        /* For now, silently skip (don't display text in pixmap) */
+        x6_draw_text_pixmap(pm, x, y, color, text, tlen);
         x6_send_line(cfd, "OK text\n");
         return;
       }
