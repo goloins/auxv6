@@ -10,6 +10,8 @@
 
 Analysis of x6 reveals **5 major bottlenecks** causing unnecessary syscalls, redundant operations, and O(N) scans. Total potential latency reduction: **~95%** on graphics-heavy workloads (from ~20ms per frame to ~1-2ms).
 
+As of this revision, phases 1-4 have been implemented and validated in-seat. The largest remaining hotspot is now text-run composition efficiency (multi-glyph scanline batching), with rectangle and protocol overhead substantially reduced.
+
 ---
 
 ## Bottleneck #1: Per-Scanline Framebuffer Syscalls
@@ -299,9 +301,12 @@ Priority: **HIGH** (major latency win for cursor movement)
 
 **#1c Coalesce scanlines**  
 Priority: **MEDIUM** (quick backend improvement)  
-- [ ] Analyze scanline patterns in DRAW_RECT
-- [ ] Implement row coalescing logic
-- [ ] Measure syscall reduction
+- [x] Analyze scanline patterns in DRAW_RECT
+- [x] Implement coalesced scanline paths in framebuffer backend
+- [x] Add full-width contiguous bulk write fast path
+- [x] Add partial-rect sequential full-scanline composition path (shadow-buffer backed)
+- [x] Measure syscall reduction via seat-test/perceived latency
+- **Status:** COMPLETE - Compiled successfully, user-validated improvement
 
 ### Phase 3: Larger Changes (Est. 4+ hours)
 
@@ -317,9 +322,29 @@ Priority: **MEDIUM** (impacts text rendering significantly)
 
 **#1b Batch rect writing** (Deferred to Phase 4)
 Priority: **MEDIUM-HIGH** (if Phase 2 doesn't satisfy)
-- [ ] Implement rectangle write buffering
-- [ ] Add flush on timer or buffer full
-- [ ] Test visual correctness across varied rect patterns
+- [x] Implement high-impact rect write batching equivalents:
+  - full-width bulk-write path in `x6_canvas_fill_pixels()`
+  - partial-rect coalesced full-scanline streaming path
+- [ ] Add explicit timer-based deferred flush queue (optional future step)
+- [x] Test visual correctness across varied rect patterns
+- **Status:** MOSTLY COMPLETE (core performance objective met without deferred queue)
+
+### Phase 4: Protocol + Fill Throughput (Est. 2-4 hours)
+
+**Client protocol overhead reduction (x11.c)**
+Priority: **HIGH** (dwm/st draw burst responsiveness)
+- [x] Replace one-byte line reads with buffered receive parser
+- [x] Make `XFillRectangle` and `XDrawString` asynchronous (no per-call reply wait)
+- [x] Track and drain pending draw replies before synchronous protocol commands
+- [x] Preserve event delivery correctness with unsolicited-line handling
+- **Status:** COMPLETE - Compiled successfully (`_dwm`), user seat-test positive
+
+**Rect throughput improvement (x6.c)**
+Priority: **HIGH** (wallpaper + UI chrome draw latency)
+- [x] Full-width contiguous fast path (single bulk write)
+- [x] Partial-rect scanline coalescing path using shadow-backed composition
+- [x] Guard shadow updates on successful write completion
+- **Status:** COMPLETE - Compiled successfully (`_x6`), user seat-test positive
 
 ---
 
@@ -356,8 +381,9 @@ EOF
 | #2 Cursor conditional | 100+ syscalls/draw | 10 syscalls/draw | **90%** |
 | #4 Window lookup | O(128) scan | O(1) hash | **100x** |
 | #3 Cursor writes | 121 syscalls | 11 syscalls | **91%** |
-| #1c Scanline coalesce | TBD | TBD | ~**30-50%** |
-| #5 Text rendering | 7680 syscalls/line | 600 syscalls/line | **92%** |
+| #1c/#1b Rect fill paths | per-row seek+write | bulk/sequential coalesced paths | **substantial** (seat-test positive) |
+| X11 draw protocol path | sync per primitive | async draw submission + buffered reads | **substantial** (seat-test positive) |
+| #5 Text rendering | 7680 syscalls/line | row-batched glyph writes | **major** (phase 3 complete) |
 
 ---
 
@@ -388,9 +414,23 @@ EOF
 - Removes per-pixel write bottleneck in text rendering
 - **Expected 50-70x improvement for terminal scrolling**
 
+### Phase 4: COMPLETE ✓ (2 optimization groups)
+- X11 protocol batching and async draw submission in `user/x11.c`
+- Rect-fill throughput fast paths in `user/x6.c`:
+  - full-width contiguous bulk write
+  - partial-rect scanline coalescing with shadow composition
+- **User feedback:** "That definitely helped" and "Looking good"
+
 **Build status:** ✓ SUCCESS (0 errors, 1 linker warning - normal)
 
 ---
+
+
+## Current Priority From Here
+
+1. Text-run scanline composition in `x6_draw_text_pixels()` to batch across multiple glyphs per row.
+2. Optional deferred flush queue for non-critical rect bursts (if additional smoothness is needed).
+3. Hash-table collision handling for `wins_by_id` correctness hardening (performance-neutral, robustness gain).
 
 
 - ANSI backend not affected (already fast, text-mode rendering)
