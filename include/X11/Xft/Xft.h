@@ -10,12 +10,15 @@
 #include "X11/Xlib.h"
 #include "X11/Xutil.h"
 
+#ifndef _X11_XRENDER_COLOR_DEFINED_
+#define _X11_XRENDER_COLOR_DEFINED_
 typedef struct {
   unsigned short red;
   unsigned short green;
   unsigned short blue;
   unsigned short alpha;
 } XRenderColor;
+#endif
 
 typedef int FcChar32;
 typedef unsigned char FcChar8;

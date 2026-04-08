@@ -217,9 +217,9 @@ Exit criteria:
 
 ## Tracking Checklist
 
-- [ ] Tranche 0.1: Extension/session/resource header set added. (IN PROGRESS)
-- [ ] Tranche 0.2: Missing declarations added for tranche-1 symbols.
-- [ ] Tranche 1.1: XImage core implemented and tested.
+- [x] Tranche 0.1: Extension/session/resource header set added.
+- [x] Tranche 0.2: Missing declarations added for tranche-1 symbols.
+- [x] Tranche 1.1: XImage core implemented and build-validated.
 - [ ] Tranche 1.2: FontSet primitives implemented and tested.
 - [ ] Tranche 2.1: Render extension minimum path wired.
 - [ ] Tranche 2.2: Composite + Damage minimum path wired.
@@ -241,10 +241,56 @@ Exit criteria:
 Target:
 
 - Complete Tranche 0.1 by adding required header surface for extension/session/resource includes.
+- Start Tranche 0.2 by adding first declaration batch for missing Xlib symbols.
 
 Definition of done:
 
 - IceWM translation units no longer fail on missing include files listed in Hard Blockers section A.
+
+Delivered:
+
+- Added headers:
+	- include/X11/Xresource.h
+	- include/X11/xpm.h
+	- include/X11/extensions/Xinerama.h
+	- include/X11/extensions/Xcomposite.h
+	- include/X11/extensions/XShm.h
+	- include/X11/extensions/Xrender.h
+	- include/X11/extensions/Xdamage.h
+	- include/X11/extensions/shape.h
+	- include/X11/extensions/Xrandr.h
+	- include/X11/extensions/Xfixes.h
+	- include/X11/SM/SMlib.h
+	- include/X11/ICE/ICElib.h
+- Expanded include/X11/Xlib.h with tranche-0 declaration/types for:
+	- XImage pipeline declarations
+	- FontSet/font declarations
+	- Context API declarations
+	- Additional GC/event/window/property declarations used by IceWM
+- Added include/X11/extensions/XRes.h with XRes declaration surface used by IceWM.
+- Closed remaining real declaration deltas from the IceWM symbol diff.
+- Implemented Tranche 1.1 XImage primitives in user/x11.c:
+	- XCreateImage
+	- XInitImage
+	- XDestroyImage
+	- XGetPixel
+	- XPutPixel
+	- XSubImage
+	- XGetImage
+	- XPutImage
+- Added local client-side pixmap backing store in user/x11.c for pixmap image reads/writes.
+
+Validation evidence:
+
+- Build: make _dwm _st _x6 -> success (exit 0).
+- Header smoke compile (all new headers included in one TU) -> success (exit 0).
+- Forced rebuild: make -B _st -> success (exit 0).
+- Forced rebuild: make -B _dwm -> success (exit 0).
+- Declaration diff now only shows parser-noise tokens (XFV/XIV/XSV/XRectangle/XRenderColor), no real missing function declarations.
+
+Remaining in this iteration:
+
+- Move to Tranche 1.2 (FontSet runtime behavior and i18n text paths), then begin extension runtime slices in Tranche 2.
 
 ## Update Rules
 

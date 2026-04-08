@@ -44,6 +44,15 @@ typedef struct {
   char flags;
 } XColor;
 
+typedef struct _XExtData {
+  int number;
+  struct _XExtData *next;
+  int (*free_private)(struct _XExtData *extension);
+  void *private_data;
+} XExtData;
+
+struct _XDisplay;
+
 /* Additional types for st/dwm compatibility */
 typedef struct _XIM *XIM;
 typedef struct _XIC *XIC;
@@ -73,6 +82,89 @@ typedef struct {
   short x, y;
   unsigned short width, height;
 } XRectangle;
+
+typedef struct _XImage XImage;
+
+typedef struct {
+  short lbearing;
+  short rbearing;
+  short width;
+  short ascent;
+  short descent;
+  unsigned short attributes;
+} XCharStruct;
+
+typedef struct {
+  Atom name;
+  unsigned long card32;
+} XFontProp;
+
+typedef struct _XFontStruct {
+  XExtData *ext_data;
+  Font fid;
+  unsigned direction;
+  unsigned min_char_or_byte2;
+  unsigned max_char_or_byte2;
+  unsigned min_byte1;
+  unsigned max_byte1;
+  Bool all_chars_exist;
+  unsigned default_char;
+  int n_properties;
+  XFontProp *properties;
+  XCharStruct min_bounds;
+  XCharStruct max_bounds;
+  XCharStruct *per_char;
+  int ascent;
+  int descent;
+} XFontStruct;
+
+typedef struct {
+  int chars_matched;
+} XComposeStatus;
+
+typedef struct {
+  Visual *visual;
+  VisualID visualid;
+  int screen;
+  int depth;
+  int class;
+  unsigned long red_mask;
+  unsigned long green_mask;
+  unsigned long blue_mask;
+  int colormap_size;
+  int bits_per_rgb;
+} XVisualInfo;
+
+typedef XID XContext;
+typedef struct _XOC *XFontSet;
+typedef struct _XRegion *Region;
+
+struct _XImage {
+  int width;
+  int height;
+  int xoffset;
+  int format;
+  char *data;
+  int byte_order;
+  int bitmap_unit;
+  int bitmap_bit_order;
+  int bitmap_pad;
+  int depth;
+  int bytes_per_line;
+  int bits_per_pixel;
+  unsigned long red_mask;
+  unsigned long green_mask;
+  unsigned long blue_mask;
+  XPointer obdata;
+  struct {
+    XImage *(*create_image)(struct _XDisplay *, Visual *, unsigned int, int, int, char *, unsigned int, unsigned int, int, int);
+    int (*destroy_image)(XImage *);
+    unsigned long (*get_pixel)(XImage *, int, int);
+    int (*put_pixel)(XImage *, int, int, unsigned long);
+    XImage *(*sub_image)(XImage *, int, int, unsigned int, unsigned int);
+    int (*add_pixel)(XImage *, long);
+  } f;
+};
 
 /* XKeysym values */
 #define XK_BackSpace 0xff08
@@ -695,8 +787,31 @@ typedef struct {
 #define CWCursor (1L << 14)
 
 #define LineSolid 0
+#define LineOnOffDash 1
+#define LineDoubleDash 2
+#define FillSolid 0
+#define FillTiled 1
+#define FillStippled 2
+#define FillOpaqueStippled 3
+#define EvenOddRule 0
+#define WindingRule 1
+#define ArcChord 0
+#define ArcPieSlice 1
 #define CapButt 1
+#define CapRound 2
+#define CapProjecting 3
 #define JoinMiter 0
+#define JoinRound 1
+#define JoinBevel 2
+
+#define CoordModeOrigin 0
+#define CoordModePrevious 1
+
+#define AllPlanes (~0UL)
+#define XYPixmap 1
+#define ZPixmap 2
+#define LSBFirst 0
+#define MSBFirst 1
 
 #define PropModeReplace 0
 #define PropModePrepend 1
@@ -830,10 +945,14 @@ int XPeekEvent(Display *display, XEvent *event);
 int XPutBackEvent(Display *display, XEvent *event);
 int XMaskEvent(Display *display, long event_mask, XEvent *event);
 Bool XCheckMaskEvent(Display *display, long event_mask, XEvent *event);
+Bool XCheckIfEvent(Display *display, XEvent *event_return,
+                   Bool (*predicate)(Display *, XEvent *, XPointer),
+                   XPointer arg);
 Bool XCheckTypedEvent(Display *display, int event_type, XEvent *event_return);
 Bool XCheckTypedWindowEvent(Display *display, Window w, int event_type, XEvent *event_return);
 Bool XCheckWindowEvent(Display *display, Window w, long event_mask, XEvent *event_return);
 int XWindowEvent(Display *display, Window w, long event_mask, XEvent *event_return);
+int XEventsQueued(Display *display, int mode);
 int XLookupString(XKeyEvent *event_struct, char *buffer_return, int bytes_buffer,
                   KeySym *keysym_return, void *status_in_out);
 int XPending(Display *display);
@@ -856,6 +975,8 @@ Status XSendEvent(Display *display, Window w, Bool propagate, long event_mask, X
 
 int XSetInputFocus(Display *display, Window focus, int revert_to, Time time);
 int XGetInputFocus(Display *display, Window *focus_return, int *revert_to_return);
+int XChangeActivePointerGrab(Display *display, unsigned int event_mask,
+                             Cursor cursor, Time time);
 int XGrabKeyboard(Display *display, Window grab_window, Bool owner_events,
                   int pointer_mode, int keyboard_mode, Time time);
 int XUngrabKeyboard(Display *display, Time time);
@@ -881,35 +1002,93 @@ int XAllowEvents(Display *display, int event_mode, Time time);
 int XSetWindowBorder(Display *display, Window w, unsigned long border_pixel);
 int XChangeWindowAttributes(Display *display, Window w, unsigned long valuemask, XSetWindowAttributes *attributes);
 int XDefineCursor(Display *display, Window w, Cursor cursor);
+int XClearArea(Display *display, Window w, int x, int y,
+               unsigned int width, unsigned int height,
+               Bool exposures);
+int XClearWindow(Display *display, Window w);
 Cursor XCreateFontCursor(Display *display, unsigned int shape);
 int XFreeCursor(Display *display, Cursor cursor);
+Colormap XCreateColormap(Display *display, Window w, Visual *visual, int alloc);
+int XFreeColormap(Display *display, Colormap colormap);
 
 Pixmap XCreatePixmap(Display *display, Drawable d, unsigned int width, unsigned int height, unsigned int depth);
 int XFreePixmap(Display *display, Pixmap pixmap);
 GC XCreateGC(Display *display, Drawable d, unsigned long valuemask, void *values);
 int XFreeGC(Display *display, GC gc);
 int XSetForeground(Display *display, GC gc, unsigned long foreground);
+int XSetFont(Display *display, GC gc, Font font);
 int XSetLineAttributes(Display *display, GC gc, unsigned int line_width, int line_style, int cap_style, int join_style);
+Status XGetGCValues(Display *display, GC gc, unsigned long valuemask,
+                    XGCValues *values_return);
 int XFillRectangle(Display *display, Drawable d, GC gc, int x, int y, unsigned int width, unsigned int height);
 int XDrawRectangle(Display *display, Drawable d, GC gc, int x, int y, unsigned int width, unsigned int height);
 int XDrawString(Display *display, Drawable d, GC gc, int x, int y, const char *string, int length);
+int XDrawLine(Display *display, Drawable d, GC gc, int x1, int y1, int x2, int y2);
+int XDrawLines(Display *display, Drawable d, GC gc, XPoint *points, int npoints, int mode);
+int XDrawSegments(Display *display, Drawable d, GC gc, void *segments, int nsegments);
+int XDrawPoint(Display *display, Drawable d, GC gc, int x, int y);
+int XDrawArc(Display *display, Drawable d, GC gc, int x, int y, unsigned int width, unsigned int height, int angle1, int angle2);
+int XDrawRectangles(Display *display, Drawable d, GC gc, XRectangle *rectangles, int nrectangles);
+int XFillArc(Display *display, Drawable d, GC gc, int x, int y, unsigned int width, unsigned int height, int angle1, int angle2);
+int XFillArcs(Display *display, Drawable d, GC gc, void *arcs, int narcs);
+int XFillPolygon(Display *display, Drawable d, GC gc, XPoint *points, int npoints, int shape, int mode);
+int XFillRectangles(Display *display, Drawable d, GC gc, XRectangle *rectangles, int nrectangles);
+int XChangeGC(Display *display, GC gc, unsigned long valuemask, XGCValues *values);
+int XSetBackground(Display *display, GC gc, unsigned long background);
+int XSetFillStyle(Display *display, GC gc, int fill_style);
+int XSetFunction(Display *display, GC gc, int function);
+int XSetTile(Display *display, GC gc, Pixmap tile);
+int XSetTSOrigin(Display *display, GC gc, int ts_x_origin, int ts_y_origin);
+int XSetClipMask(Display *display, GC gc, Pixmap pixmap);
+int XSetClipRectangles(Display *display, GC gc, int clip_x_origin, int clip_y_origin, XRectangle *rectangles, int n, int ordering);
+int XSetDashes(Display *display, GC gc, int dash_offset, const char *dash_list, int n);
 int XCopyArea(Display *display, Drawable src, Drawable dest, GC gc,
               int src_x, int src_y, unsigned int width, unsigned int height,
               int dest_x, int dest_y);
+int XCopyPlane(Display *display, Drawable src, Drawable dest, GC gc,
+               int src_x, int src_y, unsigned int width, unsigned int height,
+               int dest_x, int dest_y, unsigned long plane);
+
+XImage *XCreateImage(Display *display, Visual *visual, unsigned int depth,
+                     int format, int offset, char *data,
+                     unsigned int width, unsigned int height,
+                     int bitmap_pad, int bytes_per_line);
+int XInitImage(XImage *image);
+int XDestroyImage(XImage *ximage);
+XImage *XGetImage(Display *display, Drawable d, int x, int y,
+                  unsigned int width, unsigned int height,
+                  unsigned long plane_mask, int format);
+int XPutImage(Display *display, Drawable d, GC gc, XImage *image,
+              int src_x, int src_y, int dest_x, int dest_y,
+              unsigned int width, unsigned int height);
+XImage *XSubImage(XImage *ximage, int x, int y, unsigned int subimage_width,
+                  unsigned int subimage_height);
+unsigned long XGetPixel(XImage *ximage, int x, int y);
+int XPutPixel(XImage *ximage, int x, int y, unsigned long pixel);
+
+Region XCreateRegion(void);
+int XUnionRectWithRegion(XRectangle *rectangle, Region src_region,
+                         Region dest_region);
 
 int XGetTransientForHint(Display *display, Window w, Window *prop_window_return);
 int XQueryTree(Display *display, Window w, Window *root_return, Window *parent_return,
                Window **children_return, unsigned int *nchildren_return);
+Atom *XListProperties(Display *display, Window w, int *num_prop_return);
 Bool XQueryPointer(Display *display, Window w, Window *root_return, Window *child_return,
                    int *root_x_return, int *root_y_return,
                    int *win_x_return, int *win_y_return,
                    unsigned int *mask_return);
 
 int (*XSetErrorHandler(int (*handler)(Display *, XErrorEvent *)))(Display *, XErrorEvent *);
+char *XDisplayName(const char *string);
+int XBell(Display *display, int percent);
+int (*XSynchronize(Display *display, Bool onoff))(Display *);
 void XSetCloseDownMode(Display *display, int close_mode);
 void XGrabServer(Display *display);
 void XUngrabServer(Display *display);
 int XKillClient(Display *display, XID resource);
+int XAddToSaveSet(Display *display, Window w);
+int XRemoveFromSaveSet(Display *display, Window w);
 
 void XFree(void *data);
 
@@ -920,6 +1099,86 @@ KeySym *XGetKeyboardMapping(Display *display, KeyCode first_keycode, int keycode
 XModifierKeymap *XGetModifierMapping(Display *display);
 int XFreeModifiermap(XModifierKeymap *modmap);
 int XRefreshKeyboardMapping(XMappingEvent *event_map);
+char *XKeysymToString(KeySym keysym);
+KeySym XStringToKeysym(const char *string);
+
+XFontStruct *XLoadQueryFont(Display *display, const char *name);
+XFontStruct *XQueryFont(Display *display, XID font_ID);
+int XFreeFont(Display *display, XFontStruct *font_struct);
+void XSetIconSizes(Display *display, Window w, void *size_list, int count);
+void *XAllocIconSize(void);
+void *XAllocWMHints(void);
+XFontSet XCreateFontSet(Display *display, const char *base_font_name_list,
+                        char ***missing_charset_list_return,
+                        int *missing_charset_count_return,
+                        char **def_string_return);
+int XFontsOfFontSet(XFontSet font_set, XFontStruct ***font_struct_list_return,
+                    char ***font_name_list_return);
+void XFreeFontSet(Display *display, XFontSet font_set);
+int XTextWidth(XFontStruct *font_struct, const char *string, int count);
+
+XVisualInfo *XGetVisualInfo(Display *display, long vinfo_mask,
+                            XVisualInfo *vinfo_template,
+                            int *nitems_return);
+int XGetGeometry(Display *display, Drawable d, Window *root_return,
+                 int *x_return, int *y_return,
+                 unsigned int *width_return, unsigned int *height_return,
+                 unsigned int *border_width_return,
+                 unsigned int *depth_return);
+int XResizeWindow(Display *display, Window w,
+                  unsigned int width, unsigned int height);
+int XRestackWindows(Display *display, Window windows[], int nwindows);
+int XTranslateCoordinates(Display *display, Window src_w, Window dest_w,
+                          int src_x, int src_y,
+                          int *dest_x_return, int *dest_y_return,
+                          Window *child_return);
+
+unsigned long XBlackPixel(Display *display, int screen_number);
+unsigned long XWhitePixel(Display *display, int screen_number);
+
+int XSetWindowBorderWidth(Display *display, Window w, unsigned int width);
+int XSetWindowBackground(Display *display, Window w, unsigned long background_pixel);
+int XSetWindowBackgroundPixmap(Display *display, Window w, Pixmap background_pixmap);
+int XUndefineCursor(Display *display, Window w);
+Cursor XCreatePixmapCursor(Display *display, Pixmap source, Pixmap mask,
+                           XColor *foreground_color, XColor *background_color,
+                           unsigned int x, unsigned int y);
+
+int XFetchName(Display *display, Window w, char **window_name_return);
+int XInternAtoms(Display *display, char **names, int count,
+                 Bool only_if_exists, Atom *atoms_return);
+int XGetErrorText(Display *display, int code, char *buffer_return, int length);
+int XGetErrorDatabaseText(Display *display, const char *name,
+                          const char *message, const char *default_string,
+                          char *buffer_return, int length);
+
+Status XGetWMClientMachine(Display *display, Window w, void *text_prop_return);
+int XSetWMClientMachine(Display *display, Window w, void *text_prop);
+Status XGetWMSizeHints(Display *display, Window w, void *hints_return,
+                       long *supplied_return, Atom property);
+
+XContext XUniqueContext(void);
+int XSaveContext(Display *display, XID rid, XContext context, const char *data);
+int XFindContext(Display *display, XID rid, XContext context, char **data_return);
+int XDeleteContext(Display *display, XID rid, XContext context);
+
+int XAllocColor(Display *display, Colormap colormap, XColor *screen_in_out);
+int XInstallColormap(Display *display, Colormap colormap);
+Colormap *XListInstalledColormaps(Display *display, Window w,
+                                  int *num_return);
+int XLookupColor(Display *display, Colormap colormap, const char *spec,
+                 XColor *exact_def_return, XColor *screen_def_return);
+int XQueryColor(Display *display, Colormap colormap, XColor *def_in_out);
+
+int XTextPropertyToStringList(void *text_prop, char ***list_return,
+                              int *count_return);
+
+int XReadBitmapFileData(const char *filename,
+                        unsigned int *width_return,
+                        unsigned int *height_return,
+                        unsigned char **data_return,
+                        int *x_hot_return,
+                        int *y_hot_return);
 
 int XSupportsLocale(void);
 
@@ -935,8 +1194,11 @@ int XSetTextProperty(Display *display, Window w, void *text_prop, Atom property)
 int Xutf8TextListToTextProperty(Display *display, char **list, int count, XICCEncodingStyle style, void *text_prop_return);
 int XSetWMIconName(Display *display, Window w, void *text_prop);
 int XSetICValues(XIC ic, ...);
+char *XGetICValues(XIC ic, ...);
 char *XSetLocaleModifiers(const char *modifier_list);
 XIM XOpenIM(Display *display, void *rdb, char *res_name, char *res_class);
+Status XCloseIM(XIM im);
+Status XDestroyIC(XIC ic);
 int XSetIMValues(XIM im, ...);
 void *XVaCreateNestedList(int dummy, ...);
 void *XAllocSizeHints(void);

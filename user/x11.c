@@ -175,6 +175,7 @@ struct x11_pixmap_state {
   unsigned int width;
   unsigned int height;
   unsigned int depth;
+  unsigned int *pixels;
 };
 
 struct x11_font_state {
@@ -186,17 +187,6 @@ struct x11_font_state {
   int height;
   int width;  /* For monospace fonts */
 };
-
-/* XFontStruct - minimal definition for auxv6 */
-typedef struct {
-  Font fid;
-  int ascent;
-  int descent;
-  struct {
-    int width;
-  } max_bounds;
-  void *per_char;  /* Not used in our impl but in X protocol */
-} XFontStruct;
 
 /* Color allocation cache */
 #define X11_MAX_COLORS 256
@@ -517,8 +507,21 @@ static struct x11_pixmap_state *
 x11_alloc_pixmap(unsigned int width, unsigned int height, unsigned int depth)
 {
   int i;
+  unsigned int *pixels;
+  size_t count;
   if (width == 0 || height == 0)
     return 0;
+
+  if (height != 0 && width > (0xffffffffU / height))
+    return 0;
+  count = (size_t)width * (size_t)height;
+  if (count > (size_t)(8 * 1024 * 1024))
+    return 0;
+  pixels = (unsigned int *)malloc(count * sizeof(unsigned int));
+  if (!pixels)
+    return 0;
+  memset(pixels, 0, count * sizeof(unsigned int));
+
   for (i = 0; i < X11_MAX_PIXMAPS; i++) {
     if (!g_pixmaps[i].in_use) {
       g_pixmaps[i].in_use = 1;
@@ -526,9 +529,11 @@ x11_alloc_pixmap(unsigned int width, unsigned int height, unsigned int depth)
       g_pixmaps[i].width = width;
       g_pixmaps[i].height = height;
       g_pixmaps[i].depth = depth;
+      g_pixmaps[i].pixels = pixels;
       return &g_pixmaps[i];
     }
   }
+  free(pixels);
   return 0;
 }
 
@@ -2537,6 +2542,9 @@ int XFreePixmap(Display *display, Pixmap pixmap) {
   }
   
   /* Mark as unused in client tracking */
+  if (pm->pixels)
+    free(pm->pixels);
+  pm->pixels = 0;
   pm->in_use = 0;
   
   return 0;
@@ -2570,6 +2578,271 @@ int XSetForeground(Display *display, GC gc, unsigned long foreground) {
 }
 int XSetLineAttributes(Display *display, GC gc, unsigned int line_width, int line_style, int cap_style, int join_style) {
   (void)display; (void)gc; (void)line_width; (void)line_style; (void)cap_style; (void)join_style; return 0;
+}
+
+static int
+x11_image_bytes_per_line(unsigned int width, int bits_per_pixel, int bitmap_pad)
+{
+  int bits;
+  int pad;
+  int line_bits;
+
+  if (bits_per_pixel <= 0)
+    return 0;
+  bits = (int)width * bits_per_pixel;
+  pad = bitmap_pad > 0 ? bitmap_pad : 32;
+  line_bits = ((bits + pad - 1) / pad) * pad;
+  return line_bits / 8;
+}
+
+XImage *XCreateImage(Display *display, Visual *visual, unsigned int depth,
+                     int format, int offset, char *data,
+                     unsigned int width, unsigned int height,
+                     int bitmap_pad, int bytes_per_line) {
+  XImage *img;
+  size_t sz;
+
+  (void)display;
+  (void)visual;
+
+  if (width == 0 || height == 0)
+    return 0;
+
+  img = (XImage *)malloc(sizeof(*img));
+  if (!img)
+    return 0;
+  memset(img, 0, sizeof(*img));
+
+  img->width = (int)width;
+  img->height = (int)height;
+  img->xoffset = offset;
+  img->format = format;
+  img->depth = (int)depth;
+  img->bitmap_pad = bitmap_pad > 0 ? bitmap_pad : 32;
+  img->bitmap_unit = 8;
+  img->byte_order = LSBFirst;
+  img->bitmap_bit_order = LSBFirst;
+  img->bits_per_pixel = (depth <= 1) ? 1 : ((depth <= 16) ? 16 : 32);
+  img->bytes_per_line = bytes_per_line > 0 ? bytes_per_line :
+                        x11_image_bytes_per_line(width, img->bits_per_pixel, img->bitmap_pad);
+  img->red_mask = 0x00ff0000UL;
+  img->green_mask = 0x0000ff00UL;
+  img->blue_mask = 0x000000ffUL;
+
+  if (img->bytes_per_line <= 0) {
+    free(img);
+    return 0;
+  }
+
+  if (data) {
+    img->data = data;
+    img->obdata = 0;
+    return img;
+  }
+
+  sz = (size_t)img->bytes_per_line * (size_t)height;
+  img->data = (char *)malloc(sz);
+  if (!img->data) {
+    free(img);
+    return 0;
+  }
+  memset(img->data, 0, sz);
+  img->obdata = (XPointer)1;
+  return img;
+}
+
+int XInitImage(XImage *image) {
+  if (!image || !image->data)
+    return 0;
+  return 1;
+}
+
+int XDestroyImage(XImage *ximage) {
+  if (!ximage)
+    return 0;
+  if (ximage->data && ximage->obdata)
+    free(ximage->data);
+  free(ximage);
+  return 1;
+}
+
+unsigned long XGetPixel(XImage *ximage, int x, int y) {
+  unsigned char *p;
+
+  if (!ximage || !ximage->data)
+    return 0;
+  if (x < 0 || y < 0 || x >= ximage->width || y >= ximage->height)
+    return 0;
+
+  p = (unsigned char *)ximage->data + (size_t)y * (size_t)ximage->bytes_per_line;
+  if (ximage->bits_per_pixel == 1) {
+    int byte_idx = x >> 3;
+    int bit_idx = x & 7;
+    return (p[byte_idx] >> bit_idx) & 1U;
+  }
+  if (ximage->bits_per_pixel <= 8)
+    return p[x];
+  if (ximage->bits_per_pixel <= 16) {
+    p += (size_t)x * 2U;
+    return (unsigned long)p[0] | ((unsigned long)p[1] << 8);
+  }
+  if (ximage->bits_per_pixel <= 24) {
+    p += (size_t)x * 3U;
+    return (unsigned long)p[0] | ((unsigned long)p[1] << 8) | ((unsigned long)p[2] << 16);
+  }
+  p += (size_t)x * 4U;
+  return (unsigned long)p[0] |
+         ((unsigned long)p[1] << 8) |
+         ((unsigned long)p[2] << 16) |
+         ((unsigned long)p[3] << 24);
+}
+
+int XPutPixel(XImage *ximage, int x, int y, unsigned long pixel) {
+  unsigned char *p;
+
+  if (!ximage || !ximage->data)
+    return 0;
+  if (x < 0 || y < 0 || x >= ximage->width || y >= ximage->height)
+    return 0;
+
+  p = (unsigned char *)ximage->data + (size_t)y * (size_t)ximage->bytes_per_line;
+  if (ximage->bits_per_pixel == 1) {
+    int byte_idx = x >> 3;
+    int bit_idx = x & 7;
+    unsigned char mask = (unsigned char)(1U << bit_idx);
+    if (pixel & 1U)
+      p[byte_idx] |= mask;
+    else
+      p[byte_idx] &= (unsigned char)~mask;
+    return 1;
+  }
+  if (ximage->bits_per_pixel <= 8) {
+    p[x] = (unsigned char)(pixel & 0xffU);
+    return 1;
+  }
+  if (ximage->bits_per_pixel <= 16) {
+    p += (size_t)x * 2U;
+    p[0] = (unsigned char)(pixel & 0xffU);
+    p[1] = (unsigned char)((pixel >> 8) & 0xffU);
+    return 1;
+  }
+  if (ximage->bits_per_pixel <= 24) {
+    p += (size_t)x * 3U;
+    p[0] = (unsigned char)(pixel & 0xffU);
+    p[1] = (unsigned char)((pixel >> 8) & 0xffU);
+    p[2] = (unsigned char)((pixel >> 16) & 0xffU);
+    return 1;
+  }
+  p += (size_t)x * 4U;
+  p[0] = (unsigned char)(pixel & 0xffU);
+  p[1] = (unsigned char)((pixel >> 8) & 0xffU);
+  p[2] = (unsigned char)((pixel >> 16) & 0xffU);
+  p[3] = (unsigned char)((pixel >> 24) & 0xffU);
+  return 1;
+}
+
+XImage *XSubImage(XImage *ximage, int x, int y, unsigned int subimage_width,
+                  unsigned int subimage_height) {
+  XImage *sub;
+  unsigned int i;
+  unsigned int j;
+
+  if (!ximage)
+    return 0;
+  if (x < 0 || y < 0)
+    return 0;
+  if ((unsigned int)x >= (unsigned int)ximage->width || (unsigned int)y >= (unsigned int)ximage->height)
+    return 0;
+
+  if ((unsigned int)x + subimage_width > (unsigned int)ximage->width)
+    subimage_width = (unsigned int)ximage->width - (unsigned int)x;
+  if ((unsigned int)y + subimage_height > (unsigned int)ximage->height)
+    subimage_height = (unsigned int)ximage->height - (unsigned int)y;
+  if (subimage_width == 0 || subimage_height == 0)
+    return 0;
+
+  sub = XCreateImage(0, 0, (unsigned int)ximage->depth, ximage->format,
+                     0, 0, subimage_width, subimage_height,
+                     ximage->bitmap_pad, 0);
+  if (!sub)
+    return 0;
+
+  for (j = 0; j < subimage_height; j++) {
+    for (i = 0; i < subimage_width; i++) {
+      unsigned long px = XGetPixel(ximage, x + (int)i, y + (int)j);
+      XPutPixel(sub, (int)i, (int)j, px);
+    }
+  }
+  return sub;
+}
+
+XImage *XGetImage(Display *display, Drawable d, int x, int y,
+                  unsigned int width, unsigned int height,
+                  unsigned long plane_mask, int format) {
+  XImage *img;
+  struct x11_pixmap_state *pm;
+  int i;
+  int j;
+
+  (void)plane_mask;
+  if (!display || width == 0 || height == 0)
+    return 0;
+
+  img = XCreateImage(display, 0, (unsigned int)display->depth, format,
+                     0, 0, width, height, 32, 0);
+  if (!img)
+    return 0;
+
+  pm = x11_find_pixmap((Pixmap)d);
+  if (!pm || !pm->pixels)
+    return img;
+
+  for (j = 0; j < (int)height; j++) {
+    for (i = 0; i < (int)width; i++) {
+      int sx = x + i;
+      int sy = y + j;
+      unsigned long px = 0;
+      if (sx >= 0 && sy >= 0 && (unsigned int)sx < pm->width && (unsigned int)sy < pm->height)
+        px = pm->pixels[(size_t)sy * (size_t)pm->width + (size_t)sx];
+      XPutPixel(img, i, j, px);
+    }
+  }
+  return img;
+}
+
+int XPutImage(Display *display, Drawable d, GC gc, XImage *image,
+              int src_x, int src_y, int dest_x, int dest_y,
+              unsigned int width, unsigned int height) {
+  struct x11_pixmap_state *pm;
+  int i;
+  int j;
+  (void)gc;
+
+  if (!display || !image || width == 0 || height == 0)
+    return 0;
+
+  pm = x11_find_pixmap((Pixmap)d);
+  if (pm && pm->pixels) {
+    for (j = 0; j < (int)height; j++) {
+      for (i = 0; i < (int)width; i++) {
+        int sx = src_x + i;
+        int sy = src_y + j;
+        int dx = dest_x + i;
+        int dy = dest_y + j;
+        unsigned long px;
+        if (sx < 0 || sy < 0 || sx >= image->width || sy >= image->height)
+          continue;
+        if (dx < 0 || dy < 0 || (unsigned int)dx >= pm->width || (unsigned int)dy >= pm->height)
+          continue;
+        px = XGetPixel(image, sx, sy);
+        pm->pixels[(size_t)dy * (size_t)pm->width + (size_t)dx] = (unsigned int)px;
+      }
+    }
+    return 0;
+  }
+
+  /* Window/root drawables: best-effort path not wired yet in x6 protocol. */
+  return 0;
 }
 
 int XParseColor(Display *display, Colormap colormap, const char *spec, XColor *exact_def_return) {
