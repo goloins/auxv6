@@ -51,7 +51,10 @@
 #define X6_STATE_BUTTON3 (1U << 10)
 #define X6_MASK_ENTER_WINDOW (1L << 4)
 #define X6_MASK_LEAVE_WINDOW (1L << 5)
+#define X6_MASK_EXPOSURE (1L << 15)
 #define X6_MASK_PROPERTY_CHANGE (1L << 22)
+#define X6_SHAPE_NOTIFY_MASK (1L << 0)
+#define X6_RANDR_NOTIFY_MASKS ((1L << 0) | (1L << 1) | (1L << 2) | (1L << 3))
 
 // Event types
 #define X6_EVENT_MAP_REQUEST 1
@@ -74,6 +77,9 @@
 #define X6_EVENT_SELECTION_REQUEST 18
 #define X6_EVENT_SELECTION_NOTIFY 19
 #define X6_EVENT_MAP_NOTIFY 20
+#define X6_EVENT_DAMAGE_NOTIFY 21
+#define X6_EVENT_SHAPE_NOTIFY 22
+#define X6_EVENT_RANDR_NOTIFY 23
 
 struct x6_event {
   int type;
@@ -149,6 +155,10 @@ struct x6_window {
   uint cursor;
   int z;
   long event_mask;  /* X11 event mask registered via SELECT_EVENTS / XSelectInput */
+  long shape_owner_mask;
+  long shape_wm_mask;
+  long randr_owner_mask;
+  long randr_wm_mask;
   struct x6_property props[X6_MAX_PROPERTIES_PER_WINDOW];
   int prop_count;
 };
@@ -237,6 +247,25 @@ x6dbg(const char *fmt, ...)
   }
 }
 
+static void
+x6trace_console(const char *fmt, ...)
+{
+  char line[320];
+  int n;
+  va_list ap;
+
+  va_start(ap, fmt);
+  n = vsnprintf(line, sizeof(line), fmt, ap);
+  va_end(ap);
+  if(n < 0)
+    return;
+  if((size_t)n >= sizeof(line))
+    n = (int)sizeof(line) - 1;
+  line[n++] = '\n';
+  line[n] = '\0';
+  write(1, line, (size_t)n);
+}
+
 // WM state (Phase 2.1b: SubstructureRedirect semantics)
 static int wm_has_redirect = 0;  // Does WM hold SubstructureRedirect on root?
 static int wm_redirect_root = 1; // Root window ID is always 1
@@ -304,6 +333,15 @@ static void x6_clear_button_grabs_for_fd(int owner_fd);
 static void x6_disconnect_client(struct x6_client *client);
 static void x6_flush_client_events(struct x6_client *client);
 static void x6_enqueue_property_notify(struct x6_window *win, const char *atom, int state);
+static void x6_event_queue_drop_extension_for_window(struct x6_event_queue *q, uint wid);
+static int x6_event_queue_merge_expose(struct x6_event_queue *q, struct x6_event *evt);
+static int x6_event_queue_merge_damage(struct x6_event_queue *q, struct x6_event *evt);
+static int x6_event_queue_upsert_randr(struct x6_event_queue *q, struct x6_event *evt);
+static void x6_enqueue_damage_notify(struct x6_window *win, int x, int y, int w, int h);
+static void x6_enqueue_shape_notify(struct x6_window *win, int kind, int shaped);
+static void x6_enqueue_randr_notify(uint wid, int width, int height);
+static int x6_window_shape_mask_for_fd(const struct x6_window *win, int fd);
+static int x6_window_randr_mask_for_fd(const struct x6_window *win, int fd);
 
 static void
 x6_raise_window(struct x6_window *w)
@@ -1421,6 +1459,177 @@ x6_enqueue_property_notify(struct x6_window *win, const char *atom, int state)
 }
 
 static void
+x6_enqueue_expose_notify(struct x6_window *win, int x, int y, int w, int h)
+{
+  struct x6_event evt;
+  struct x6_event_queue *q;
+  int x0;
+  int y0;
+  int x1;
+  int y1;
+
+  if(!win || w <= 0 || h <= 0)
+    return;
+  if((win->event_mask & X6_MASK_EXPOSURE) == 0)
+    return;
+
+  /* Clip expose region to the window's local bounds. */
+  x0 = x;
+  y0 = y;
+  x1 = x + w;
+  y1 = y + h;
+  if(x0 < 0)
+    x0 = 0;
+  if(y0 < 0)
+    y0 = 0;
+  if(x1 > win->w)
+    x1 = win->w;
+  if(y1 > win->h)
+    y1 = win->h;
+  if(x1 <= x0 || y1 <= y0)
+    return;
+
+  q = x6_queue_for_window(win->id);
+  if(!q)
+    return;
+
+  memset(&evt, 0, sizeof(evt));
+  evt.type = X6_EVENT_EXPOSE;
+  evt.wid = win->id;
+  evt.x = x0;
+  evt.y = y0;
+  evt.w = x1 - x0;
+  evt.h = y1 - y0;
+  if(x6_event_queue_merge_expose(q, &evt))
+    return;
+  x6_event_queue_enqueue(q, &evt);
+}
+
+static void
+x6_enqueue_damage_notify(struct x6_window *win, int x, int y, int w, int h)
+{
+  struct x6_event evt;
+  struct x6_event_queue *owner_q;
+  int x0;
+  int y0;
+  int x1;
+  int y1;
+
+  if(!win || w <= 0 || h <= 0)
+    return;
+
+  x0 = x;
+  y0 = y;
+  x1 = x + w;
+  y1 = y + h;
+  if(x0 < 0)
+    x0 = 0;
+  if(y0 < 0)
+    y0 = 0;
+  if(x1 > win->w)
+    x1 = win->w;
+  if(y1 > win->h)
+    y1 = win->h;
+  if(x1 <= x0 || y1 <= y0)
+    return;
+
+  memset(&evt, 0, sizeof(evt));
+  evt.type = X6_EVENT_DAMAGE_NOTIFY;
+  evt.wid = win->id;
+  evt.x = x0;
+  evt.y = y0;
+  evt.w = x1 - x0;
+  evt.h = y1 - y0;
+
+  owner_q = x6_queue_for_window(win->id);
+  if(owner_q && !x6_event_queue_merge_damage(owner_q, &evt))
+    x6_event_queue_enqueue(owner_q, &evt);
+}
+
+static void
+x6_enqueue_shape_notify(struct x6_window *win, int kind, int shaped)
+{
+  struct x6_event evt;
+  struct x6_event_queue *owner_q;
+
+  if(!win)
+    return;
+
+  memset(&evt, 0, sizeof(evt));
+  evt.type = X6_EVENT_SHAPE_NOTIFY;
+  evt.wid = win->id;
+  evt.x = 0;
+  evt.y = 0;
+  evt.w = win->w;
+  evt.h = win->h;
+  evt.detail = kind;
+  evt.state = shaped ? 1U : 0U;
+
+  owner_q = x6_queue_for_window(win->id);
+  if(owner_q && (x6_window_shape_mask_for_fd(win, win->owner_fd) & X6_SHAPE_NOTIFY_MASK))
+    x6_event_queue_enqueue(owner_q, &evt);
+
+  if(wm_event_queue && wm_event_queue != owner_q &&
+     (x6_window_shape_mask_for_fd(win, wm_client_fd) & X6_SHAPE_NOTIFY_MASK))
+    x6_event_queue_enqueue(wm_event_queue, &evt);
+}
+
+static void
+x6_enqueue_randr_notify(uint wid, int width, int height)
+{
+  struct x6_event evt;
+  struct x6_window *win;
+  struct x6_event_queue *owner_q;
+
+  if(width <= 0 || height <= 0)
+    return;
+
+  win = find_window(wid);
+  if(!win)
+    return;
+
+  memset(&evt, 0, sizeof(evt));
+  evt.type = X6_EVENT_RANDR_NOTIFY;
+  evt.wid = wid;
+  evt.w = width;
+  evt.h = height;
+
+  owner_q = x6_queue_for_window(wid);
+  if(owner_q && (x6_window_randr_mask_for_fd(win, win->owner_fd) & X6_RANDR_NOTIFY_MASKS) &&
+     !x6_event_queue_upsert_randr(owner_q, &evt))
+    x6_event_queue_enqueue(owner_q, &evt);
+
+  if(wm_event_queue && wm_event_queue != owner_q &&
+     (x6_window_randr_mask_for_fd(win, wm_client_fd) & X6_RANDR_NOTIFY_MASKS) &&
+     !x6_event_queue_upsert_randr(wm_event_queue, &evt))
+    x6_event_queue_enqueue(wm_event_queue, &evt);
+}
+
+static int
+x6_window_shape_mask_for_fd(const struct x6_window *win, int fd)
+{
+  if(!win || fd < 0)
+    return 0;
+  if(fd == win->owner_fd)
+    return (int)win->shape_owner_mask;
+  if(fd == wm_client_fd)
+    return (int)win->shape_wm_mask;
+  return 0;
+}
+
+static int
+x6_window_randr_mask_for_fd(const struct x6_window *win, int fd)
+{
+  if(!win || fd < 0)
+    return 0;
+  if(fd == win->owner_fd)
+    return (int)win->randr_owner_mask;
+  if(fd == wm_client_fd)
+    return (int)win->randr_wm_mask;
+  return 0;
+}
+
+static void
 x6_mouse_setup(void)
 {
   int flags;
@@ -1730,14 +1939,20 @@ x6_send_line(int cfd, const char *s)
 {
   int len;
   int off;
+  int is_event;
+  int wait_retries;
 
   if(cfd < 0 || s == 0)
     return;
 
+  is_event = (strncmp(s, "EVENT ", 6) == 0);
+  wait_retries = 0;
+
   if(strncmp(s, "OK draw", 7) == 0 || strncmp(s, "OK text", 7) == 0) {
     if((x6_draw_reply_tx_count++ % 256) == 0)
       x6dbg("x6:wire:tx(sampled) fd=%d '%s'", cfd, s);
-  } else if(strncmp(s, "OK copy_area", 12) == 0 ||
+  } else if((strncmp(s, "OK ", 3) == 0 && strncmp(s, "OK copy_area", 12) != 0) ||
+            strncmp(s, "OK copy_area", 12) == 0 ||
             strncmp(s, "EVENT ", 6) == 0 ||
             strncmp(s, "ERR ", 4) == 0) {
     x6dbg("x6:wire:tx fd=%d '%s'", cfd, s);
@@ -1758,15 +1973,25 @@ x6_send_line(int cfd, const char *s)
       struct pollfd pfd;
       int pr;
 
+      if(is_event)
+        break;
+
       pfd.fd = cfd;
       pfd.events = POLLOUT;
       pfd.revents = 0;
       pr = poll(&pfd, 1, 200);
       if(pr <= 0)
       {
-        dprintf(2, "x6: send poll timeout fd=%d off=%d len=%d errno=%d\n", cfd, off, len, errno);
-        break;
+        if(is_event)
+          break;
+        wait_retries++;
+        if(wait_retries > 100) {
+          dprintf(2, "x6: send poll timeout fd=%d off=%d len=%d errno=%d\n", cfd, off, len, errno);
+          break;
+        }
+        continue;
       }
+      wait_retries = 0;
       continue;
     }
 
@@ -1795,6 +2020,8 @@ x6_client_fill_rxbuf(int cfd, char *buf, int *buflen, int bufcap)
   }
   if(n == 0)
     return -1;
+  if(errno == EAGAIN || errno == EWOULDBLOCK)
+    return 0;
   return -1;
 }
 
@@ -1866,6 +2093,10 @@ alloc_window(uint id)
       wins[i].cursor = 0;
       wins[i].z = x6_next_z++;
       wins[i].event_mask = 0;
+      wins[i].shape_owner_mask = 0;
+      wins[i].shape_wm_mask = 0;
+      wins[i].randr_owner_mask = 0;
+      wins[i].randr_wm_mask = 0;
       wins[i].prop_count = 0;  // Initialize properties (Phase 2.1d)
       // Hash table insert for O(1) lookup
       idx = (int)(id % 256);
@@ -1985,6 +2216,189 @@ x6_event_queue_enqueue(struct x6_event_queue *q, struct x6_event *evt)
   return 0;
 }
 
+static void
+x6_event_queue_drop_extension_for_window(struct x6_event_queue *q, uint wid)
+{
+  int idx;
+  int out;
+  int guard;
+
+  if(!q)
+    return;
+  if(q->head == q->tail)
+    return;
+
+  idx = q->head;
+  out = q->head;
+  guard = 0;
+  while(idx != q->tail) {
+    struct x6_event ev = q->events[idx];
+    int drop;
+
+    drop = (ev.wid == wid &&
+            (ev.type == X6_EVENT_EXPOSE ||
+             ev.type == X6_EVENT_DAMAGE_NOTIFY ||
+             ev.type == X6_EVENT_SHAPE_NOTIFY ||
+             ev.type == X6_EVENT_RANDR_NOTIFY));
+
+    if(!drop) {
+      if(out != idx)
+        q->events[out] = ev;
+      out = (out + 1) % X6_MAX_EVENTS_PER_CLIENT;
+    }
+
+    idx = (idx + 1) % X6_MAX_EVENTS_PER_CLIENT;
+    if(++guard > X6_MAX_EVENTS_PER_CLIENT) {
+      x6trace_console("x6:queue guard hit drop_ext head=%d tail=%d wid=%u", q->head, q->tail, wid);
+      x6dbg("x6:queue guard hit drop_ext head=%d tail=%d wid=%u", q->head, q->tail, wid);
+      break;
+    }
+  }
+
+  q->tail = out;
+}
+
+static int
+x6_event_queue_merge_expose(struct x6_event_queue *q, struct x6_event *evt)
+{
+  int idx;
+  int expose_idx;
+  int transition_after_expose;
+  struct x6_event *cur;
+  int x0;
+  int y0;
+  int x1;
+  int y1;
+  int guard;
+
+  if(!q || !evt || evt->type != X6_EVENT_EXPOSE)
+    return 0;
+
+  idx = q->head;
+  expose_idx = -1;
+  transition_after_expose = 0;
+  guard = 0;
+  while(idx != q->tail) {
+    struct x6_event *ev = &q->events[idx];
+    if(ev->wid == evt->wid) {
+      if(ev->type == X6_EVENT_EXPOSE) {
+        expose_idx = idx;
+        transition_after_expose = 0;
+      } else if(ev->type == X6_EVENT_MAP_NOTIFY || ev->type == X6_EVENT_CONFIGURE_NOTIFY) {
+        if(expose_idx >= 0)
+          transition_after_expose = 1;
+      }
+    }
+    idx = (idx + 1) % X6_MAX_EVENTS_PER_CLIENT;
+    if(++guard > X6_MAX_EVENTS_PER_CLIENT) {
+      x6trace_console("x6:queue guard hit merge_expose head=%d tail=%d wid=%u", q->head, q->tail, evt->wid);
+      x6dbg("x6:queue guard hit merge_expose head=%d tail=%d wid=%u", q->head, q->tail, evt->wid);
+      break;
+    }
+  }
+
+  if(expose_idx < 0 || transition_after_expose)
+    return 0;
+
+  cur = &q->events[expose_idx];
+  x0 = cur->x < evt->x ? cur->x : evt->x;
+  y0 = cur->y < evt->y ? cur->y : evt->y;
+  x1 = (cur->x + cur->w) > (evt->x + evt->w) ? (cur->x + cur->w) : (evt->x + evt->w);
+  y1 = (cur->y + cur->h) > (evt->y + evt->h) ? (cur->y + cur->h) : (evt->y + evt->h);
+  cur->x = x0;
+  cur->y = y0;
+  cur->w = x1 - x0;
+  cur->h = y1 - y0;
+  return 1;
+}
+
+static int
+x6_event_queue_merge_damage(struct x6_event_queue *q, struct x6_event *evt)
+{
+  int idx;
+  int damage_idx;
+  int transition_after_damage;
+  struct x6_event *cur;
+  int x0;
+  int y0;
+  int x1;
+  int y1;
+  int guard;
+
+  if(!q || !evt || evt->type != X6_EVENT_DAMAGE_NOTIFY)
+    return 0;
+
+  idx = q->head;
+  damage_idx = -1;
+  transition_after_damage = 0;
+  guard = 0;
+  while(idx != q->tail) {
+    struct x6_event *ev = &q->events[idx];
+    if(ev->wid == evt->wid) {
+      if(ev->type == X6_EVENT_DAMAGE_NOTIFY) {
+        damage_idx = idx;
+        transition_after_damage = 0;
+      } else if(ev->type == X6_EVENT_MAP_NOTIFY || ev->type == X6_EVENT_CONFIGURE_NOTIFY) {
+        if(damage_idx >= 0)
+          transition_after_damage = 1;
+      }
+    }
+    idx = (idx + 1) % X6_MAX_EVENTS_PER_CLIENT;
+    if(++guard > X6_MAX_EVENTS_PER_CLIENT) {
+      x6trace_console("x6:queue guard hit merge_damage head=%d tail=%d wid=%u", q->head, q->tail, evt->wid);
+      x6dbg("x6:queue guard hit merge_damage head=%d tail=%d wid=%u", q->head, q->tail, evt->wid);
+      break;
+    }
+  }
+
+  if(damage_idx < 0 || transition_after_damage)
+    return 0;
+
+  cur = &q->events[damage_idx];
+  x0 = cur->x < evt->x ? cur->x : evt->x;
+  y0 = cur->y < evt->y ? cur->y : evt->y;
+  x1 = (cur->x + cur->w) > (evt->x + evt->w) ? (cur->x + cur->w) : (evt->x + evt->w);
+  y1 = (cur->y + cur->h) > (evt->y + evt->h) ? (cur->y + cur->h) : (evt->y + evt->h);
+  cur->x = x0;
+  cur->y = y0;
+  cur->w = x1 - x0;
+  cur->h = y1 - y0;
+  return 1;
+}
+
+static int
+x6_event_queue_upsert_randr(struct x6_event_queue *q, struct x6_event *evt)
+{
+  int idx;
+  int randr_idx;
+  int guard;
+
+  if(!q || !evt || evt->type != X6_EVENT_RANDR_NOTIFY)
+    return 0;
+
+  idx = q->head;
+  randr_idx = -1;
+  guard = 0;
+  while(idx != q->tail) {
+    struct x6_event *ev = &q->events[idx];
+    if(ev->type == X6_EVENT_RANDR_NOTIFY && ev->wid == evt->wid)
+      randr_idx = idx;
+    idx = (idx + 1) % X6_MAX_EVENTS_PER_CLIENT;
+    if(++guard > X6_MAX_EVENTS_PER_CLIENT) {
+      x6trace_console("x6:queue guard hit upsert_randr head=%d tail=%d wid=%u", q->head, q->tail, evt->wid);
+      x6dbg("x6:queue guard hit upsert_randr head=%d tail=%d wid=%u", q->head, q->tail, evt->wid);
+      break;
+    }
+  }
+
+  if(randr_idx < 0)
+    return 0;
+
+  q->events[randr_idx].w = evt->w;
+  q->events[randr_idx].h = evt->h;
+  return 1;
+}
+
 static int
 x6_event_queue_dequeue(struct x6_event_queue *q, struct x6_event *evt)
 {
@@ -2017,7 +2431,7 @@ handle_one_command(int cfd, char *cmd)
   uint color;
   uint uw, uh;
   int x, y, w, h;
-  struct x6_window *win;
+  struct x6_window *win = 0;
   int i;
   int listed;
 
@@ -2103,15 +2517,19 @@ handle_one_command(int cfd, char *cmd)
     // Otherwise, map directly
     win->mapped = 1;
     x6_raise_window(win);
+    x6_enqueue_randr_notify(win->id, win->w, win->h);
     x6dbg("x6:map direct wid=%u owner_fd=%d geom=%d,%d %dx%d", id, win->owner_fd, win->x, win->y, win->w, win->h);
     {
       struct x6_client *owner = x6_find_client_by_fd(win->owner_fd);
       if(owner && owner->in_use && owner->hello_done) {
         struct x6_event me;
+        x6_event_queue_drop_extension_for_window(&owner->queue, id);
         memset(&me, 0, sizeof(me));
         me.type = X6_EVENT_MAP_NOTIFY;
         me.wid = id;
         x6_event_queue_enqueue(&owner->queue, &me);
+        x6_enqueue_expose_notify(win, 0, 0, win->w, win->h);
+        x6_enqueue_shape_notify(win, 0, 1);
       }
     }
     x6_send_line(cfd, "OK map\n");
@@ -2130,18 +2548,31 @@ handle_one_command(int cfd, char *cmd)
     }
     win->mapped = 1;
     x6_raise_window(win);
+    x6trace_console("x6:wm_map step=after_raise wid=%u", id);
+    x6_enqueue_randr_notify(win->id, win->w, win->h);
+    x6trace_console("x6:wm_map step=after_randr wid=%u", id);
     x6dbg("x6:wm_map wid=%u owner_fd=%d geom=%d,%d %dx%d", id, win->owner_fd, win->x, win->y, win->w, win->h);
     {
       struct x6_client *owner = x6_find_client_by_fd(win->owner_fd);
       if(owner && owner->in_use && owner->hello_done) {
         struct x6_event me;
+        x6trace_console("x6:wm_map step=owner_pre_drop wid=%u head=%d tail=%d", id, owner->queue.head, owner->queue.tail);
+        x6_event_queue_drop_extension_for_window(&owner->queue, id);
+        x6trace_console("x6:wm_map step=owner_post_drop wid=%u head=%d tail=%d", id, owner->queue.head, owner->queue.tail);
         memset(&me, 0, sizeof(me));
         me.type = X6_EVENT_MAP_NOTIFY;
         me.wid = id;
         x6_event_queue_enqueue(&owner->queue, &me);
+        x6trace_console("x6:wm_map step=after_mapnotify wid=%u head=%d tail=%d", id, owner->queue.head, owner->queue.tail);
+        x6_enqueue_expose_notify(win, 0, 0, win->w, win->h);
+        x6trace_console("x6:wm_map step=after_expose wid=%u head=%d tail=%d", id, owner->queue.head, owner->queue.tail);
+        x6_enqueue_shape_notify(win, 0, 1);
+        x6trace_console("x6:wm_map step=after_shape wid=%u head=%d tail=%d", id, owner->queue.head, owner->queue.tail);
       }
     }
+    x6trace_console("x6:wm_map step=before_reply wid=%u", id);
     x6_send_line(cfd, "OK map\n");
+    x6trace_console("x6:wm_map step=after_reply wid=%u", id);
     return;
   }
 
@@ -2152,6 +2583,8 @@ handle_one_command(int cfd, char *cmd)
       return;
     }
     win->mapped = 0;
+    x6_enqueue_randr_notify(win->id, win->w, win->h);
+    x6_enqueue_shape_notify(win, 0, 0);
     x6_send_line(cfd, "OK unmap\n");
     return;
   }
@@ -2167,6 +2600,8 @@ handle_one_command(int cfd, char *cmd)
       return;
     }
     win->mapped = 0;
+    x6_enqueue_randr_notify(win->id, win->w, win->h);
+    x6_enqueue_shape_notify(win, 0, 0);
     x6_send_line(cfd, "OK unmap\n");
     return;
   }
@@ -2225,6 +2660,9 @@ handle_one_command(int cfd, char *cmd)
     win->y = y;
     win->w = w;
     win->h = h;
+    x6_enqueue_shape_notify(win, 0, win->mapped ? 1 : 0);
+    if(win->mapped)
+      x6_enqueue_randr_notify(win->id, win->w, win->h);
     x6_send_line(cfd, "OK configure\n");
     return;
   }
@@ -2309,6 +2747,10 @@ handle_one_command(int cfd, char *cmd)
         id, win->mapped, x, y, w, h, ox + x, oy + y, color);
     }
     x6_canvas_fill_pixels(ox + x, oy + y, w, h, color);
+    if(win) {
+      x6_enqueue_expose_notify(win, x, y, w, h);
+      x6_enqueue_damage_notify(win, x, y, w, h);
+    }
     x6_send_line(cfd, "OK draw\n");
     return;
   }
@@ -2356,6 +2798,10 @@ handle_one_command(int cfd, char *cmd)
 
       if(tlen > 0)
         x6_draw_text_pixels(ox + x, oy + y, color, text, tlen);
+      if(win && tlen > 0) {
+        x6_enqueue_expose_notify(win, x, y - X6_CELL_H, tlen * X6_CELL_W, X6_CELL_H);
+        x6_enqueue_damage_notify(win, x, y - X6_CELL_H, tlen * X6_CELL_W, X6_CELL_H);
+      }
       x6_send_line(cfd, "OK text\n");
       return;
     }
@@ -2525,6 +2971,9 @@ handle_one_command(int cfd, char *cmd)
       if(row1 >= row0)
         x6_canvas_flush_rows(row0, row1);
     }
+
+    x6_enqueue_expose_notify(dest_win, dest_x, dest_y, (int)width, (int)height);
+    x6_enqueue_damage_notify(dest_win, dest_x, dest_y, (int)width, (int)height);
     
     x6_send_line(cfd, "OK copy_area\n");
     return;
@@ -2567,15 +3016,21 @@ handle_one_command(int cfd, char *cmd)
     win->y = y;
     win->w = w;
     win->h = h;
+    if(win->mapped)
+      x6_enqueue_randr_notify(win->id, win->w, win->h);
     // Notify the window owner of its new geometry
     {
       struct x6_client *owner = x6_find_client_by_fd(win->owner_fd);
       if(owner && owner->in_use && owner->hello_done) {
         struct x6_event cn;
+        x6_event_queue_drop_extension_for_window(&owner->queue, id);
+        memset(&cn, 0, sizeof(cn));
         cn.type = X6_EVENT_CONFIGURE_NOTIFY;
         cn.wid = id;
         cn.x = x; cn.y = y; cn.w = w; cn.h = h;
         x6_event_queue_enqueue(&owner->queue, &cn);
+        x6_enqueue_expose_notify(win, 0, 0, win->w, win->h);
+        x6_enqueue_shape_notify(win, 0, win->mapped ? 1 : 0);
       }
     }
     x6_send_line(cfd, "OK configured\n");
@@ -2594,6 +3049,7 @@ handle_one_command(int cfd, char *cmd)
       return;
     }
     win->mapped = 1;
+    x6_enqueue_randr_notify(win->id, win->w, win->h);
     // Notify the window owner to redraw
     {
       struct x6_client *owner = x6_find_client_by_fd(win->owner_fd);
@@ -2621,6 +3077,7 @@ handle_one_command(int cfd, char *cmd)
       return;
     }
     win->mapped = 0;
+    x6_enqueue_randr_notify(win->id, win->w, win->h);
     x6_send_line(cfd, "OK unmapped\n");
     return;
   }
@@ -2658,6 +3115,8 @@ handle_one_command(int cfd, char *cmd)
       return;
     }
 
+    x6_event_queue_drop_extension_for_window(&owner->queue, id);
+    memset(&evt, 0, sizeof(evt));
     evt.type = X6_EVENT_CONFIGURE_NOTIFY;
     evt.wid = id;
     evt.x = x;
@@ -3472,6 +3931,50 @@ handle_one_command(int cfd, char *cmd)
     return;
   }
 
+  if(strncmp(cmd, "SHAPE_SELECT_INPUT", 18) == 0) {
+    uint wid;
+    long mask;
+    struct x6_window *win;
+
+    if(sscanf(cmd, "SHAPE_SELECT_INPUT %u %ld", &wid, &mask) != 2) {
+      x6_send_line(cfd, "ERR bad-syntax\n");
+      return;
+    }
+    win = find_window(wid);
+    if(!win) {
+      x6_send_line(cfd, "ERR no-such-window\n");
+      return;
+    }
+    if(cfd == win->owner_fd)
+      win->shape_owner_mask = mask;
+    else if(cfd == wm_client_fd)
+      win->shape_wm_mask = mask;
+    x6_send_line(cfd, "OK shape_events_set\n");
+    return;
+  }
+
+  if(strncmp(cmd, "RANDR_SELECT_INPUT", 18) == 0) {
+    uint wid;
+    long mask;
+    struct x6_window *win;
+
+    if(sscanf(cmd, "RANDR_SELECT_INPUT %u %ld", &wid, &mask) != 2) {
+      x6_send_line(cfd, "ERR bad-syntax\n");
+      return;
+    }
+    win = find_window(wid);
+    if(!win) {
+      x6_send_line(cfd, "ERR no-such-window\n");
+      return;
+    }
+    if(cfd == win->owner_fd)
+      win->randr_owner_mask = mask;
+    else if(cfd == wm_client_fd)
+      win->randr_wm_mask = mask;
+    x6_send_line(cfd, "OK randr_events_set\n");
+    return;
+  }
+
   x6dbg("x6:unknown-cmd fd=%d cmd='%s'", cfd, cmd ? cmd : "(null)");
   x6_send_line(cfd, "ERR unknown\n");
 }
@@ -3481,11 +3984,15 @@ x6_flush_client_events(struct x6_client *client)
 {
   char eventbuf[256];
   struct x6_event evt;
+  int sent;
 
   if(client == 0 || !client->in_use || !client->hello_done)
     return;
 
+  sent = 0;
   while(!x6_event_queue_empty(&client->queue)) {
+    if(sent >= 64)
+      break;
     if(x6_event_queue_dequeue(&client->queue, &evt) < 0)
       break;
     if(evt.type == X6_EVENT_MAP_REQUEST) {
@@ -3558,11 +4065,24 @@ x6_flush_client_events(struct x6_client *client)
                evt.time ? evt.time : ++x6_event_time);
     } else if(evt.type == X6_EVENT_MAP_NOTIFY) {
       snprintf(eventbuf, sizeof(eventbuf), "EVENT MapNotify wid=%u\n", evt.wid);
+    } else if(evt.type == X6_EVENT_DAMAGE_NOTIFY) {
+      snprintf(eventbuf, sizeof(eventbuf),
+               "EVENT DamageNotify wid=%u x=%d y=%d w=%d h=%d\n",
+               evt.wid, evt.x, evt.y, evt.w, evt.h);
+    } else if(evt.type == X6_EVENT_SHAPE_NOTIFY) {
+      snprintf(eventbuf, sizeof(eventbuf),
+               "EVENT ShapeNotify wid=%u kind=%d shaped=%u x=%d y=%d w=%d h=%d\n",
+               evt.wid, evt.detail, evt.state, evt.x, evt.y, evt.w, evt.h);
+    } else if(evt.type == X6_EVENT_RANDR_NOTIFY) {
+      snprintf(eventbuf, sizeof(eventbuf),
+               "EVENT RandRNotify wid=%u width=%d height=%d\n",
+               evt.wid, evt.w, evt.h);
     } else {
       continue;
     }
     x6dbg("x6:event->fd=%d '%s'", client->fd, eventbuf);
     x6_send_line(client->fd, eventbuf);
+    sent++;
   }
 }
 
@@ -3570,6 +4090,7 @@ static void
 x6_disconnect_client(struct x6_client *client)
 {
   int si;
+  int wi;
 
   if(client == 0 || !client->in_use)
     return;
@@ -3580,6 +4101,12 @@ x6_disconnect_client(struct x6_client *client)
     wm_has_redirect = 0;
     wm_has_kb_grab = 0;
     keyboard_grab_owner = 0;
+    for(wi = 0; wi < X6_MAX_WINDOWS; wi++) {
+      if(!wins[wi].in_use)
+        continue;
+      wins[wi].shape_wm_mask = 0;
+      wins[wi].randr_wm_mask = 0;
+    }
   }
 
   x6_clear_key_grabs_for_fd(client->fd);
@@ -3713,9 +4240,6 @@ main(int argc, char **argv)
     int mouse_poll_index;
     int kbd_poll_index;
 
-    for(i = 0; i < X6_MAX_CLIENTS; i++)
-      x6_flush_client_events(&clients[i]);
-
     nfds = 0;
     listen_index = nfds;
     pfds[nfds].fd = fd;
@@ -3767,6 +4291,10 @@ main(int argc, char **argv)
       int cfd;
       cfd = accept(fd);
       if(cfd >= 0) {
+        int flags;
+        flags = fcntl(cfd, F_GETFL, 0);
+        if(flags >= 0)
+          fcntl(cfd, F_SETFL, flags | O_NONBLOCK);
         for(i = 0; i < X6_MAX_CLIENTS; i++) {
           if(!clients[i].in_use) {
             memset(&clients[i], 0, sizeof(clients[i]));
@@ -3823,6 +4351,11 @@ main(int argc, char **argv)
       if(should_detach)
         x6_disconnect_client(client);
     }
+
+    /* Flush queued async events after ingesting commands so synchronous
+     * request/response traffic is not delayed by event backlog. */
+    for(i = 0; i < X6_MAX_CLIENTS; i++)
+      x6_flush_client_events(&clients[i]);
   }
 
   for(i = 0; i < X6_MAX_CLIENTS; i++)

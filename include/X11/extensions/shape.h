@@ -14,6 +14,7 @@
 #define ShapeInvert 4
 
 #define ShapeNotifyMask (1L << 0)
+#define ShapeNotify 0
 
 typedef struct {
   int type;

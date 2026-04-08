@@ -56,6 +56,26 @@ typedef struct {
 #define RROutputChangeNotifyMask (1L << 2)
 #define RROutputPropertyNotifyMask (1L << 3)
 
+#define RRScreenChangeNotify 0
+
+typedef struct {
+  int type;
+  unsigned long serial;
+  Bool send_event;
+  Display *display;
+  Window window;
+  Window root;
+  Time timestamp;
+  Time config_timestamp;
+  int size_index;
+  int subpixel_order;
+  int rotation;
+  int width;
+  int height;
+  int mwidth;
+  int mheight;
+} XRRScreenChangeNotifyEvent;
+
 Status XRRQueryExtension(Display *display, int *event_base_return,
                          int *error_base_return);
 Status XRRQueryVersion(Display *display, int *major_version_return,

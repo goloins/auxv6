@@ -10,7 +10,22 @@ typedef struct {
   Bool readOnly;
 } XShmSegmentInfo;
 
+#define ShmCompletion 0
+
+typedef struct {
+  int type;
+  unsigned long serial;
+  Bool send_event;
+  Display *display;
+  Drawable drawable;
+  int major_code;
+  int minor_code;
+  void *shmseg;
+  unsigned long offset;
+} XShmCompletionEvent;
+
 Bool XShmQueryExtension(Display *display);
+int XShmGetEventBase(Display *display);
 XImage *XShmCreateImage(Display *display, Visual *visual, unsigned int depth,
                         int format, char *data,
                         XShmSegmentInfo *shminfo,

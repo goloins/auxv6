@@ -10,6 +10,22 @@ typedef XID Damage;
 #define XDamageReportBoundingBox 2
 #define XDamageReportNonEmpty 3
 
+#define XDamageNotify 0
+
+typedef struct {
+    int type;
+    unsigned long serial;
+    Bool send_event;
+    Display *display;
+    Drawable drawable;
+    Damage damage;
+    Time timestamp;
+    int level;
+    Bool more;
+    XRectangle area;
+    XRectangle geometry;
+} XDamageNotifyEvent;
+
 Status XDamageQueryExtension(Display *display,
                              int *event_base_return,
                              int *error_base_return);

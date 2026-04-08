@@ -367,6 +367,27 @@ Delivered:
 	- XResQueryClientIds
 	- XResGetClientPid
 	- XResClientIdsDestroy
+- Started Tranche 2.F1 extension event/fidelity semantics pass:
+	- Extension query functions now return stable nonzero event/error bases for:
+		- Composite
+		- Damage
+		- RandR
+		- Shape
+		- XFixes
+		- Xinerama
+	- Shape operations now emit synthetic ShapeNotify events into the local event queue when selected via XShapeSelectInput.
+	- RandR select input now tracks per-window masks and emits an initial synthetic screen-change event when RRScreenChangeNotifyMask is selected.
+	- Damage objects now emit synthetic extension events when tracked drawables are mutated (XPutImage/XRender paths and damage create/subtract transitions).
+	- Extension event mask routing now includes ShapeNotify and RandR change masks in local event-mask resolution.
+	- XRRUpdateConfiguration now returns success only for RandR extension events.
+	- Synthetic extension events now carry consistent serial/send-event metadata.
+	- Synthetic ShapeNotify events now include monotonically increasing synthetic timestamps.
+- Started Tranche 2.F2 backend/protocol fidelity pass in x6:
+	- x6 now enqueues Expose notifications for window draw mutations driven by:
+		- DRAW_RECT (window targets)
+		- DRAW_TEXT (window targets)
+		- COPY_AREA destination window updates
+	- Expose delivery is gated by the window's registered ExposureMask in x6 event-mask state.
 
 Validation evidence:
 
@@ -396,6 +417,53 @@ Validation evidence:
 - Forced rebuild: make -B _st -> ST_EXIT:0 (post XShm API expansion pass).
 - Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post XShm API expansion pass).
 - Forced rebuild: make -B _x6 -> X6_EXIT:0 (post XShm API expansion pass).
+- Forced rebuild: make -B _st -> ST_EXIT:0 (post extension event/fidelity semantics pass).
+- Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post extension event/fidelity semantics pass).
+- Forced rebuild: make -B _x6 -> X6_EXIT:0 (post extension event/fidelity semantics pass).
+- Forced rebuild: make -B _st -> ST_EXIT:0 (post damage/randr event-fidelity pass).
+- Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post damage/randr event-fidelity pass).
+- Forced rebuild: make -B _x6 -> X6_EXIT:0 (post damage/randr event-fidelity pass).
+- Forced rebuild: make -B _st -> ST_EXIT:0 (post synthetic event metadata pass).
+- Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post synthetic event metadata pass).
+- Forced rebuild: make -B _x6 -> X6_EXIT:0 (post synthetic event metadata pass).
+- Forced rebuild: make -B _st -> ST_EXIT:0 (post typed extension-event payload pass).
+- Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post typed extension-event payload pass).
+- Forced rebuild: make -B _x6 -> X6_EXIT:0 (post typed extension-event payload pass).
+- Forced rebuild: make -B _st -> ST_EXIT:0 (post XShm extension-availability pass).
+- Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post XShm extension-availability pass).
+- Forced rebuild: make -B _x6 -> X6_EXIT:0 (post XShm extension-availability pass).
+- Forced rebuild: make -B _st -> ST_EXIT:0 (post XShm completion-event pass).
+- Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post XShm completion-event pass).
+- Forced rebuild: make -B _x6 -> X6_EXIT:0 (post XShm completion-event pass).
+- Forced rebuild: make -B _st -> ST_EXIT:0 (post x6 expose-region clipping pass).
+- Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post x6 expose-region clipping pass).
+- Forced rebuild: make -B _x6 -> X6_EXIT:0 (post x6 expose-region clipping pass).
+- Forced rebuild: make -B _st -> ST_EXIT:0 (post x6 expose coalescing/order pass).
+- Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post x6 expose coalescing/order pass).
+- Forced rebuild: make -B _x6 -> X6_EXIT:0 (post x6 expose coalescing/order pass).
+- Forced rebuild: make -B _st -> ST_EXIT:0 (post backend damage-notify path pass).
+- Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post backend damage-notify path pass).
+- Forced rebuild: make -B _x6 -> X6_EXIT:0 (post backend damage-notify path pass).
+- Forced rebuild: make -B _st -> ST_EXIT:0 (post backend shape-notify path pass).
+- Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post backend shape-notify path pass).
+- Forced rebuild: make -B _x6 -> X6_EXIT:0 (post backend shape-notify path pass).
+- Forced rebuild: make -B _st -> ST_EXIT:0 (post backend damage-region fidelity pass).
+- Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post backend damage-region fidelity pass).
+- Forced rebuild: make -B _x6 -> X6_EXIT:0 (post backend damage-region fidelity pass).
+- Forced rebuild: make -B _st -> ST_EXIT:0 (post backend randr-notify path pass).
+- Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post backend randr-notify path pass).
+- Forced rebuild: make -B _x6 -> X6_EXIT:0 (post backend randr-notify path pass).
+- Forced rebuild: make -B _st -> ST_EXIT:0 (post mixed-event ordering/de-dup pass).
+- Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post mixed-event ordering/de-dup pass).
+- Forced rebuild: make -B _x6 -> X6_EXIT:0 (post mixed-event ordering/de-dup pass).
+- Forced rebuild: make -B _st -> ST_EXIT:0 (post randr map/unmap coverage pass).
+- Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post randr map/unmap coverage pass).
+- Forced rebuild: make -B _x6 -> X6_EXIT:0 (post randr map/unmap coverage pass).
+- Forced rebuild: make -B _st -> ST_EXIT:0 (post unsolicited ShapeNotify regression fix pass).
+- Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post unsolicited ShapeNotify regression fix pass).
+- Forced rebuild: make -B _x6 -> X6_EXIT:0 (post unsolicited ShapeNotify regression fix pass).
+- Forced rebuild: make -B _x6 -> X6_EXIT:2 then fixed (`win` initialization in x6 command handler), re-run -> X6_EXIT:0.
+- Forced rebuild: make -B _dwm -> DWM_EXIT:0 (post x6 expose-fidelity pass).
 - Declaration diff now only shows parser-noise tokens (XFV/XIV/XSV/XRectangle/XRenderColor), no real missing function declarations.
 
 Remaining in this iteration:
@@ -422,6 +490,48 @@ Current Tranche 2.3 status:
 
 - Complete for minimum path: shim-side symbol/runtime floor implemented.
 - Pending: backend/event-path fidelity for full shape notify semantics.
+
+Current Tranche 2.F1 status:
+
+- In progress: extension query and event-base semantics are now stable; synthetic shape/randr/damage event delivery is wired.
+- Progress: Damage and RandR synthetic events now use base+opcode event typing and carry typed payload fields (damage id/drawable/area/geometry/timestamp/level and RandR screen-change root/geometry/timestamps).
+- Progress: XShm extension query now reports availability, aligning advertised capability with implemented XShmCreateImage/XShmPutImage/XShmGetImage wrapper behavior.
+- Progress: XShm completion semantics now include event base API (`XShmGetEventBase`) plus synthetic ShmCompletion emission on `XShmPutImage(..., send_event=True)` with tracked shm segment metadata.
+- Pending: align extension event delivery ordering and backend-coupled semantics with deeper real-world client expectations.
+
+Current Tranche 2.F2 status:
+
+- In progress: x6 now emits Expose events for core draw/copy mutation paths with event-mask gating.
+- Progress: x6 Expose event regions are now clipped to per-window local bounds before delivery, reducing overbroad/out-of-window invalidation reports.
+- Progress: x6 now coalesces pending Expose events per window into bounding unions when no newer MapNotify/ConfigureNotify transition intervenes.
+- Progress: on MapNotify/ConfigureNotify enqueue paths, stale pending Expose events for that window are cleared and a transition-ordered full-window Expose is queued afterward.
+- Progress: x6 now emits backend-originated `DamageNotify` events for window draw mutations (DRAW_RECT, DRAW_TEXT, COPY_AREA), and x11 maps those wire events into XDamage extension notifications.
+- Progress: x6 now emits backend-originated `ShapeNotify` events for map/unmap/configure/override transitions, and x11 maps those wire events into shape-state updates plus extension ShapeNotify delivery.
+- Progress: backend `DamageNotify` rectangle payloads are now preserved into XDamage event areas in x11 (with clipping/fallback handling), instead of always collapsing to full-drawable area.
+- Progress: x6 now emits backend-originated `RandRNotify` events on mapped geometry reconfiguration, and x11 maps those into subscription-aware RandR screen-change extension events.
+- Progress: mixed core/extension queue semantics now clear stale extension notifications before map/configure transitions, merge pending Damage rectangles, and upsert pending RandR notifications per window.
+- Progress: backend RandR notify coverage now includes map/unmap transitions in addition to configure-time updates.
+- Progress: fixed unsolicited `ShapeNotify` handling so x11 no longer logs/queues uninitialized type-0 events and no longer risks re-entrant command traffic while parsing backend extension events.
+- Pending: complete focused runtime validation pass and close out Tranche 2.F1/2.F2 status gates.
+
+Runtime closeout checklist for Tranche 2.F1/2.F2 (user-run in guest/QEMU console):
+
+- [ ] Start X stack and WM path (`x6`, `dwm`, and a client workload such as `st`) and confirm no startup extension errors in console/debug logs.
+- [ ] Exercise resize/configure churn on at least one mapped client window and confirm:
+	- [ ] ConfigureNotify arrives before post-transition redraw notifications.
+	- [ ] RandR screen-change updates are observed for mapped geometry transitions.
+- [ ] Exercise repeated draw operations on the same window and confirm:
+	- [ ] Expose and Damage notifications are coalesced/de-duplicated under burst updates.
+	- [ ] Damage areas reflect backend rectangle payloads (not always full drawable).
+- [ ] Exercise map/unmap transitions and confirm:
+	- [ ] Shape notifications reflect shaped/unshaped transition semantics.
+	- [ ] RandR notify path remains stable across map/unmap cycles.
+- [ ] Exercise clipboard/property activity and confirm no regressions in PropertyNotify / Selection events while extension event traffic is active.
+- [ ] Capture serial/debug evidence for one complete run and append summary outcomes here.
+
+Completion gate:
+
+- When all checklist items above are green with captured evidence, mark both `Tranche 2.F1` and `Tranche 2.F2` as complete in the Tracking Checklist.
 
 ## Update Rules
 

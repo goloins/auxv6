@@ -35,12 +35,30 @@
 #define X11_MAX_DAMAGE 256
 #define X11_MAX_COMPOSITE_REDIRECTS 128
 #define X11_MAX_SHAPE_WINDOWS 256
+#define X11_MAX_RANDR_SELECTS 128
+#define X11_MAX_SHM_IMAGES 256
 #define X11_MAX_SELECTIONS 16
 #define X11_MAX_EVENTS 128
 #define X11_X6_ANY_MODIFIER (1U << 15)
 #define DoRed 1
 #define DoGreen 2
 #define DoBlue 4
+
+#define X11_EXT_EVENT_BASE_COMPOSITE 80
+#define X11_EXT_EVENT_BASE_DAMAGE 90
+#define X11_EXT_EVENT_BASE_RANDR 100
+#define X11_EXT_EVENT_BASE_SHAPE 110
+#define X11_EXT_EVENT_BASE_XFIXES 120
+#define X11_EXT_EVENT_BASE_XINERAMA 130
+#define X11_EXT_EVENT_BASE_XSHM 140
+
+#define X11_EXT_ERROR_BASE_COMPOSITE 160
+#define X11_EXT_ERROR_BASE_DAMAGE 170
+#define X11_EXT_ERROR_BASE_RANDR 180
+#define X11_EXT_ERROR_BASE_SHAPE 190
+#define X11_EXT_ERROR_BASE_XFIXES 200
+#define X11_EXT_ERROR_BASE_XINERAMA 210
+#define X11_EXT_ERROR_BASE_XSHM 220
 
 #ifndef XValue
 #define XValue 0x0001
@@ -77,6 +95,8 @@ static int g_x11_dbg_count;
 static int g_x11_draw_tx_count;
 static int g_x11_draw_call_count;
 static int g_x11_draw_reply_seen;
+static unsigned long g_ext_event_serial = 1;
+static Time g_ext_event_time = 1;
 
 static int
 x11_is_chatty_draw_cmd(const char *cmd)
@@ -85,6 +105,21 @@ x11_is_chatty_draw_cmd(const char *cmd)
     return 0;
   return strncmp(cmd, "DRAW_TEXT ", 10) == 0 ||
          strncmp(cmd, "DRAW_RECT ", 10) == 0;
+}
+
+static Time
+x11_next_fake_time(void)
+{
+  return g_ext_event_time++;
+}
+
+static void
+x11_stamp_synthetic_event(XEvent *ev)
+{
+  if (!ev)
+    return;
+  ev->xany.serial = g_ext_event_serial++;
+  ev->xany.send_event = False;
 }
 
 static void
@@ -237,6 +272,18 @@ struct x11_shape_state {
   unsigned long event_mask;
 };
 
+struct x11_randr_select_state {
+  int in_use;
+  Window w;
+  int mask;
+};
+
+struct x11_shm_image_state {
+  int in_use;
+  XImage *image;
+  void *shmseg;
+};
+
 struct _XOC {
   Font font_id;
   char *font_name;
@@ -268,7 +315,10 @@ static struct x11_damage_state g_damages[X11_MAX_DAMAGE];
 static unsigned long g_next_damage = 1;
 static struct x11_composite_redirect_state g_composite_redirects[X11_MAX_COMPOSITE_REDIRECTS];
 static struct x11_shape_state g_shapes[X11_MAX_SHAPE_WINDOWS];
+static struct x11_randr_select_state g_randr_selects[X11_MAX_RANDR_SELECTS];
+static struct x11_shm_image_state g_shm_images[X11_MAX_SHM_IMAGES];
 static struct x11_pixmap_state *x11_find_pixmap(Pixmap pm);
+static int x11_event_push_back(const XEvent *ev);
 
 static int
 x11_tolower_ascii(int c)
@@ -699,6 +749,406 @@ x11_alloc_shape(Display *display, Window w)
   return 0;
 }
 
+static struct x11_shape_state *
+x11_alloc_shape_no_probe(Window w)
+{
+  int i;
+  struct x11_shape_state *s;
+
+  s = x11_find_shape(w);
+  if (s)
+    return s;
+
+  for (i = 0; i < X11_MAX_SHAPE_WINDOWS; i++) {
+    if (!g_shapes[i].in_use) {
+      memset(&g_shapes[i], 0, sizeof(g_shapes[i]));
+      g_shapes[i].in_use = 1;
+      g_shapes[i].w = w;
+      return &g_shapes[i];
+    }
+  }
+  return 0;
+}
+
+static struct x11_randr_select_state *
+x11_find_randr_select(Window w)
+{
+  int i;
+  for (i = 0; i < X11_MAX_RANDR_SELECTS; i++) {
+    if (g_randr_selects[i].in_use && g_randr_selects[i].w == w)
+      return &g_randr_selects[i];
+  }
+  return 0;
+}
+
+static struct x11_randr_select_state *
+x11_alloc_randr_select(Window w)
+{
+  int i;
+  struct x11_randr_select_state *s;
+
+  s = x11_find_randr_select(w);
+  if (s)
+    return s;
+  for (i = 0; i < X11_MAX_RANDR_SELECTS; i++) {
+    if (!g_randr_selects[i].in_use) {
+      g_randr_selects[i].in_use = 1;
+      g_randr_selects[i].w = w;
+      g_randr_selects[i].mask = 0;
+      return &g_randr_selects[i];
+    }
+  }
+  return 0;
+}
+
+static int
+x11_randr_screen_change_selected(Display *display, Window w)
+{
+  int i;
+
+  if (!display)
+    return 0;
+  for (i = 0; i < X11_MAX_RANDR_SELECTS; i++) {
+    if (!g_randr_selects[i].in_use)
+      continue;
+    if (!(g_randr_selects[i].mask & RRScreenChangeNotifyMask))
+      continue;
+    if (g_randr_selects[i].w == w || g_randr_selects[i].w == display->root)
+      return 1;
+  }
+  return 0;
+}
+
+static struct x11_shm_image_state *
+x11_find_shm_image(XImage *image)
+{
+  int i;
+
+  for (i = 0; i < X11_MAX_SHM_IMAGES; i++) {
+    if (g_shm_images[i].in_use && g_shm_images[i].image == image)
+      return &g_shm_images[i];
+  }
+  return 0;
+}
+
+static void
+x11_clear_shm_image(XImage *image)
+{
+  struct x11_shm_image_state *s;
+
+  s = x11_find_shm_image(image);
+  if (!s)
+    return;
+  memset(s, 0, sizeof(*s));
+}
+
+static int
+x11_track_shm_image(XImage *image, void *shmseg)
+{
+  int i;
+  struct x11_shm_image_state *s;
+
+  if (!image)
+    return -1;
+
+  s = x11_find_shm_image(image);
+  if (s) {
+    s->shmseg = shmseg;
+    return 0;
+  }
+
+  for (i = 0; i < X11_MAX_SHM_IMAGES; i++) {
+    if (!g_shm_images[i].in_use) {
+      g_shm_images[i].in_use = 1;
+      g_shm_images[i].image = image;
+      g_shm_images[i].shmseg = shmseg;
+      return 0;
+    }
+  }
+  return -1;
+}
+
+static void
+x11_emit_shape_notify(Display *display, struct x11_shape_state *s, int kind)
+{
+  XEvent ev;
+  XShapeEvent *sev;
+
+  if (!display || !s)
+    return;
+  if (!(s->event_mask & ShapeNotifyMask))
+    return;
+
+  memset(&ev, 0, sizeof(ev));
+  sev = (XShapeEvent *)&ev;
+  sev->type = X11_EXT_EVENT_BASE_SHAPE;
+  sev->display = display;
+  sev->window = s->w;
+  sev->kind = kind;
+  sev->time = x11_next_fake_time();
+  if (kind == ShapeBounding) {
+    sev->x = s->x_bounding;
+    sev->y = s->y_bounding;
+    sev->width = s->w_bounding;
+    sev->height = s->h_bounding;
+    sev->shaped = s->bounding_shaped;
+  } else {
+    sev->x = s->x_clip;
+    sev->y = s->y_clip;
+    sev->width = s->w_clip;
+    sev->height = s->h_clip;
+    sev->shaped = s->clip_shaped;
+  }
+  x11_stamp_synthetic_event(&ev);
+  x11_event_push_back(&ev);
+}
+
+static void
+x11_emit_randr_screen_change(Display *display, Window w)
+{
+  XEvent ev;
+  XRRScreenChangeNotifyEvent *rev;
+
+  if (!display)
+    return;
+  if (!x11_randr_screen_change_selected(display, w))
+    return;
+  memset(&ev, 0, sizeof(ev));
+  rev = (XRRScreenChangeNotifyEvent *)&ev;
+  rev->type = X11_EXT_EVENT_BASE_RANDR + RRScreenChangeNotify;
+  rev->display = display;
+  rev->window = w;
+  rev->root = display->root;
+  rev->timestamp = x11_next_fake_time();
+  rev->config_timestamp = rev->timestamp;
+  rev->rotation = 1;
+  rev->width = (display->width > 0) ? display->width : 1024;
+  rev->height = (display->height > 0) ? display->height : 768;
+  rev->mwidth = rev->width;
+  rev->mheight = rev->height;
+  x11_stamp_synthetic_event(&ev);
+  x11_event_push_back(&ev);
+}
+
+static int
+x11_build_randr_screen_change_event(Display *display, Window w, XEvent *event)
+{
+  XRRScreenChangeNotifyEvent *rev;
+
+  if (!display || !event)
+    return -1;
+  if (!x11_randr_screen_change_selected(display, w))
+    return -1;
+
+  memset(event, 0, sizeof(*event));
+  rev = (XRRScreenChangeNotifyEvent *)event;
+  rev->type = X11_EXT_EVENT_BASE_RANDR + RRScreenChangeNotify;
+  rev->display = display;
+  rev->window = w;
+  rev->root = display->root;
+  rev->timestamp = x11_next_fake_time();
+  rev->config_timestamp = rev->timestamp;
+  rev->rotation = 1;
+  rev->width = (display->width > 0) ? display->width : 1024;
+  rev->height = (display->height > 0) ? display->height : 768;
+  rev->mwidth = rev->width;
+  rev->mheight = rev->height;
+  x11_stamp_synthetic_event(event);
+  return 0;
+}
+
+static int
+x11_build_damage_event_for_drawable_region(Display *display, Drawable d,
+                                           int rx, int ry,
+                                           unsigned int rw, unsigned int rh,
+                                           int has_region,
+                                           XEvent *event)
+{
+  int i;
+  XDamageNotifyEvent *dev;
+  int ww;
+  int wh;
+  int x0;
+  int y0;
+  int x1;
+  int y1;
+
+  if (!display || !event)
+    return -1;
+
+  for (i = 0; i < X11_MAX_DAMAGE; i++) {
+    if (!g_damages[i].in_use)
+      continue;
+    if (g_damages[i].drawable != d)
+      continue;
+
+    ww = 0;
+    wh = 0;
+    if (x11_drawable_size(display, d, &ww, &wh) < 0) {
+      ww = 0;
+      wh = 0;
+    }
+
+    x0 = 0;
+    y0 = 0;
+    x1 = (ww > 0) ? ww : 0;
+    y1 = (wh > 0) ? wh : 0;
+
+    if (has_region) {
+      x0 = rx;
+      y0 = ry;
+      x1 = rx + (int)rw;
+      y1 = ry + (int)rh;
+      if (x0 < 0)
+        x0 = 0;
+      if (y0 < 0)
+        y0 = 0;
+      if (ww > 0 && x1 > ww)
+        x1 = ww;
+      if (wh > 0 && y1 > wh)
+        y1 = wh;
+      if (x1 <= x0 || y1 <= y0) {
+        x0 = 0;
+        y0 = 0;
+        x1 = (ww > 0) ? ww : 0;
+        y1 = (wh > 0) ? wh : 0;
+      }
+    }
+
+    memset(event, 0, sizeof(*event));
+    dev = (XDamageNotifyEvent *)event;
+    dev->type = X11_EXT_EVENT_BASE_DAMAGE + XDamageNotify;
+    dev->display = display;
+    dev->drawable = d;
+    dev->damage = g_damages[i].id;
+    dev->timestamp = x11_next_fake_time();
+    dev->level = g_damages[i].level;
+    dev->more = False;
+    dev->area.x = x0;
+    dev->area.y = y0;
+    dev->area.width = (unsigned short)((x1 > x0) ? (x1 - x0) : 0);
+    dev->area.height = (unsigned short)((y1 > y0) ? (y1 - y0) : 0);
+    dev->geometry.x = 0;
+    dev->geometry.y = 0;
+    dev->geometry.width = (unsigned short)((ww > 0) ? ww : 0);
+    dev->geometry.height = (unsigned short)((wh > 0) ? wh : 0);
+    x11_stamp_synthetic_event(event);
+    return 0;
+  }
+
+  return -1;
+}
+
+static void
+x11_notify_drawable_damage_region(Display *display, Drawable d,
+                                  int rx, int ry,
+                                  unsigned int rw, unsigned int rh,
+                                  int has_region)
+{
+  int i;
+  XEvent ev;
+  XDamageNotifyEvent *dev;
+  int ww;
+  int wh;
+  int x0;
+  int y0;
+  int x1;
+  int y1;
+
+  if (!display)
+    return;
+  for (i = 0; i < X11_MAX_DAMAGE; i++) {
+    if (!g_damages[i].in_use)
+      continue;
+    if (g_damages[i].drawable != d)
+      continue;
+    memset(&ev, 0, sizeof(ev));
+    dev = (XDamageNotifyEvent *)&ev;
+    dev->type = X11_EXT_EVENT_BASE_DAMAGE + XDamageNotify;
+    dev->display = display;
+    dev->drawable = d;
+    dev->damage = g_damages[i].id;
+    dev->timestamp = x11_next_fake_time();
+    dev->level = g_damages[i].level;
+    dev->more = False;
+    ww = 0;
+    wh = 0;
+    if (x11_drawable_size(display, d, &ww, &wh) < 0) {
+      ww = 0;
+      wh = 0;
+    }
+
+    x0 = 0;
+    y0 = 0;
+    x1 = (ww > 0) ? ww : 0;
+    y1 = (wh > 0) ? wh : 0;
+
+    if (has_region) {
+      x0 = rx;
+      y0 = ry;
+      x1 = rx + (int)rw;
+      y1 = ry + (int)rh;
+      if (x0 < 0)
+        x0 = 0;
+      if (y0 < 0)
+        y0 = 0;
+      if (ww > 0 && x1 > ww)
+        x1 = ww;
+      if (wh > 0 && y1 > wh)
+        y1 = wh;
+      if (x1 <= x0 || y1 <= y0) {
+        x0 = 0;
+        y0 = 0;
+        x1 = (ww > 0) ? ww : 0;
+        y1 = (wh > 0) ? wh : 0;
+      }
+    }
+
+    dev->area.x = x0;
+    dev->area.y = y0;
+    dev->area.width = (unsigned short)((x1 > x0) ? (x1 - x0) : 0);
+    dev->area.height = (unsigned short)((y1 > y0) ? (y1 - y0) : 0);
+    dev->geometry.x = 0;
+    dev->geometry.y = 0;
+    dev->geometry.width = (unsigned short)((ww > 0) ? ww : 0);
+    dev->geometry.height = (unsigned short)((wh > 0) ? wh : 0);
+    x11_stamp_synthetic_event(&ev);
+    x11_event_push_back(&ev);
+  }
+}
+
+static void
+x11_notify_drawable_damage(Display *display, Drawable d)
+{
+  x11_notify_drawable_damage_region(display, d, 0, 0, 0, 0, 0);
+}
+
+static void
+x11_emit_shm_completion(Display *display, Drawable d, XImage *image)
+{
+  XEvent ev;
+  XShmCompletionEvent *sev;
+  struct x11_shm_image_state *state;
+
+  if (!display)
+    return;
+
+  memset(&ev, 0, sizeof(ev));
+  sev = (XShmCompletionEvent *)&ev;
+  sev->type = X11_EXT_EVENT_BASE_XSHM + ShmCompletion;
+  sev->display = display;
+  sev->drawable = d;
+  sev->major_code = 0;
+  sev->minor_code = 0;
+  sev->offset = 0;
+
+  state = x11_find_shm_image(image);
+  sev->shmseg = state ? state->shmseg : 0;
+
+  x11_stamp_synthetic_event(&ev);
+  x11_event_push_back(&ev);
+}
+
 static struct x11_pixmap_state *
 x11_alloc_pixmap(unsigned int width, unsigned int height, unsigned int depth)
 {
@@ -1021,9 +1471,13 @@ x11_handle_unsolicited_line(Display *display, const char *line)
 
   if (strncmp(line, "EVENT ", 6) == 0) {
     XEvent ev;
-    if (x11_parse_event_line(display, line, &ev) == 0)
+    memset(&ev, 0, sizeof(ev));
+    if (x11_parse_event_line(display, line, &ev) == 0) {
       x11_event_push_back(&ev);
-    x11dbg("x11:event queued type=%d qlen=%d", ev.type, g_event_count);
+      x11dbg("x11:event queued type=%d qlen=%d", ev.type, g_event_count);
+    } else {
+      x11dbg("x11:event dropped raw='%s'", line);
+    }
     return 1;
   }
 
@@ -1270,6 +1724,122 @@ x11_parse_event_line(Display *display, const char *line, XEvent *event)
            &event->xexpose.width, &event->xexpose.height);
     return 0;
   }
+  if (strncmp(line + 6, "DamageNotify", 12) == 0) {
+    unsigned int wid;
+    int dx;
+    int dy;
+    int dw;
+    int dh;
+
+    wid = 0;
+    dx = 0;
+    dy = 0;
+    dw = 0;
+    dh = 0;
+    sscanf(line, "EVENT DamageNotify wid=%u x=%d y=%d w=%d h=%d",
+           &wid, &dx, &dy, &dw, &dh);
+    return x11_build_damage_event_for_drawable_region(
+        display,
+        (Drawable)wid,
+        dx,
+        dy,
+        (unsigned int)(dw > 0 ? dw : 0),
+        (unsigned int)(dh > 0 ? dh : 0),
+        1,
+        event);
+  }
+  if (strncmp(line + 6, "ShapeNotify", 11) == 0) {
+    unsigned int wid;
+    int kind;
+    unsigned int shaped;
+    int sx;
+    int sy;
+    int sw;
+    int sh;
+    struct x11_shape_state *s;
+    XShapeEvent *sev;
+
+    wid = 0;
+    kind = ShapeBounding;
+    shaped = 0;
+    sx = 0;
+    sy = 0;
+    sw = 0;
+    sh = 0;
+    sscanf(line, "EVENT ShapeNotify wid=%u kind=%d shaped=%u x=%d y=%d w=%d h=%d",
+           &wid, &kind, &shaped, &sx, &sy, &sw, &sh);
+
+    s = x11_alloc_shape_no_probe((Window)wid);
+    if (!s)
+      return -1;
+
+    if (kind == ShapeClip) {
+      s->clip_shaped = shaped ? 1 : 0;
+      s->x_clip = sx;
+      s->y_clip = sy;
+      s->w_clip = (unsigned int)(sw > 0 ? sw : 0);
+      s->h_clip = (unsigned int)(sh > 0 ? sh : 0);
+      if (!(s->event_mask & ShapeNotifyMask))
+        return -1;
+      memset(event, 0, sizeof(*event));
+      sev = (XShapeEvent *)event;
+      sev->type = X11_EXT_EVENT_BASE_SHAPE + ShapeNotify;
+      sev->display = display;
+      sev->window = s->w;
+      sev->kind = ShapeClip;
+      sev->x = s->x_clip;
+      sev->y = s->y_clip;
+      sev->width = s->w_clip;
+      sev->height = s->h_clip;
+      sev->time = x11_next_fake_time();
+      sev->shaped = s->clip_shaped;
+      x11_stamp_synthetic_event(event);
+      return 0;
+    } else {
+      s->bounding_shaped = shaped ? 1 : 0;
+      s->x_bounding = sx;
+      s->y_bounding = sy;
+      s->w_bounding = (unsigned int)(sw > 0 ? sw : 0);
+      s->h_bounding = (unsigned int)(sh > 0 ? sh : 0);
+      if (!(s->event_mask & ShapeNotifyMask))
+        return -1;
+      memset(event, 0, sizeof(*event));
+      sev = (XShapeEvent *)event;
+      sev->type = X11_EXT_EVENT_BASE_SHAPE + ShapeNotify;
+      sev->display = display;
+      sev->window = s->w;
+      sev->kind = ShapeBounding;
+      sev->x = s->x_bounding;
+      sev->y = s->y_bounding;
+      sev->width = s->w_bounding;
+      sev->height = s->h_bounding;
+      sev->time = x11_next_fake_time();
+      sev->shaped = s->bounding_shaped;
+      x11_stamp_synthetic_event(event);
+      return 0;
+    }
+  }
+  if (strncmp(line + 6, "RandRNotify", 11) == 0) {
+    unsigned int wid;
+    int rw;
+    int rh;
+
+    wid = 0;
+    rw = 0;
+    rh = 0;
+    sscanf(line, "EVENT RandRNotify wid=%u width=%d height=%d",
+           &wid, &rw, &rh);
+
+    if (rw > 0)
+      display->width = rw;
+    if (rh > 0)
+      display->height = rh;
+
+    return x11_build_randr_screen_change_event(
+        display,
+        wid ? (Window)wid : display->root,
+        event);
+  }
   if (strncmp(line + 6, "ClientMessage", 13) == 0) {
     unsigned int mtype = 0;
     unsigned int d0 = 0;
@@ -1369,6 +1939,11 @@ x11_event_mask_for_type(int type)
     return StructureNotifyMask;
   case PropertyNotify:
     return PropertyChangeMask;
+  case X11_EXT_EVENT_BASE_SHAPE + ShapeNotify:
+    return ShapeNotifyMask;
+  case X11_EXT_EVENT_BASE_RANDR + RRScreenChangeNotify:
+    return RRScreenChangeNotifyMask | RRCrtcChangeNotifyMask |
+           RROutputChangeNotifyMask | RROutputPropertyNotifyMask;
   default:
     return 0;
   }
@@ -2894,6 +3469,7 @@ int XInitImage(XImage *image) {
 int XDestroyImage(XImage *ximage) {
   if (!ximage)
     return 0;
+  x11_clear_shm_image(ximage);
   if (ximage->data && ximage->obdata)
     free(ximage->data);
   free(ximage);
@@ -3072,6 +3648,7 @@ int XPutImage(Display *display, Drawable d, GC gc, XImage *image,
         pm->pixels[(size_t)dy * (size_t)pm->width + (size_t)dx] = (unsigned int)px;
       }
     }
+    x11_notify_drawable_damage(display, d);
     return 0;
   }
 
@@ -4286,6 +4863,7 @@ void XRenderComposite(Display *display, int op,
   if (op == PictOpSrc || op == PictOpOver) {
     XCopyArea(display, srcp->drawable, dstp->drawable, gc,
               src_x, src_y, width, height, dst_x, dst_y);
+    x11_notify_drawable_damage(display, dstp->drawable);
   }
 }
 
@@ -4315,6 +4893,7 @@ void XRenderFillRectangle(Display *display, int op, Picture dst,
           (unsigned long)(color->blue >> 8);
   XSetForeground(display, gc, pixel);
   XFillRectangle(display, dstp->drawable, gc, x, y, width, height);
+  x11_notify_drawable_damage(display, dstp->drawable);
 }
 
 void XRenderSetPictureFilter(Display *display, Picture picture,
@@ -4339,9 +4918,9 @@ Status XCompositeQueryExtension(Display *display,
                                 int *error_base_return) {
   (void)display;
   if (event_base_return)
-    *event_base_return = 0;
+    *event_base_return = X11_EXT_EVENT_BASE_COMPOSITE;
   if (error_base_return)
-    *error_base_return = 0;
+    *error_base_return = X11_EXT_ERROR_BASE_COMPOSITE;
   return 1;
 }
 
@@ -4396,9 +4975,9 @@ Status XDamageQueryExtension(Display *display,
                              int *error_base_return) {
   (void)display;
   if (event_base_return)
-    *event_base_return = 0;
+    *event_base_return = X11_EXT_EVENT_BASE_DAMAGE;
   if (error_base_return)
-    *error_base_return = 0;
+    *error_base_return = X11_EXT_ERROR_BASE_DAMAGE;
   return 1;
 }
 
@@ -4416,10 +4995,10 @@ Status XDamageQueryVersion(Display *display,
 Damage XDamageCreate(Display *display, Drawable drawable, int level) {
   struct x11_damage_state *dmg;
 
-  (void)display;
   dmg = x11_alloc_damage(drawable, level);
   if (!dmg)
     return 0;
+  x11_notify_drawable_damage(display, drawable);
   return dmg->id;
 }
 
@@ -4443,15 +5022,16 @@ void XDamageSubtract(Display *display, Damage damage,
   dmg = x11_find_damage(damage);
   if (!dmg)
     return;
+  x11_notify_drawable_damage(display, dmg->drawable);
 }
 
 Status XRRQueryExtension(Display *display, int *event_base_return,
                          int *error_base_return) {
   (void)display;
   if (event_base_return)
-    *event_base_return = 0;
+    *event_base_return = X11_EXT_EVENT_BASE_RANDR;
   if (error_base_return)
-    *error_base_return = 0;
+    *error_base_return = X11_EXT_ERROR_BASE_RANDR;
   return 1;
 }
 
@@ -4595,14 +5175,28 @@ void XRRFreeCrtcInfo(XRRCrtcInfo *crtc_info) {
 
 void XRRSelectInput(Display *display, Window window,
                     int mask) {
-  (void)display;
-  (void)window;
-  (void)mask;
+  struct x11_randr_select_state *s;
+  char cmd[X6_BUF_SIZE];
+  char line[X6_BUF_SIZE];
+
+  s = x11_alloc_randr_select(window);
+  if (!s)
+    return;
+  s->mask = mask;
+
+  if (display) {
+    snprintf(cmd, sizeof(cmd), "RANDR_SELECT_INPUT %u %d\n", (uint)window, mask);
+    x11_cmd(display, cmd, line, sizeof(line));
+  }
+
+  if (display && (mask & RRScreenChangeNotifyMask))
+    x11_emit_randr_screen_change(display, window);
 }
 
 int XRRUpdateConfiguration(XEvent *event) {
-  (void)event;
-  return 1;
+  if (!event)
+    return 0;
+  return event->type == X11_EXT_EVENT_BASE_RANDR + RRScreenChangeNotify ? 1 : 0;
 }
 
 Status XShapeQueryExtension(Display *display,
@@ -4610,9 +5204,9 @@ Status XShapeQueryExtension(Display *display,
                             int *error_base_return) {
   (void)display;
   if (event_base_return)
-    *event_base_return = 0;
+    *event_base_return = X11_EXT_EVENT_BASE_SHAPE;
   if (error_base_return)
-    *error_base_return = 0;
+    *error_base_return = X11_EXT_ERROR_BASE_SHAPE;
   return 1;
 }
 
@@ -4640,10 +5234,12 @@ void XShapeCombineMask(Display *display, Window dest, int dest_kind,
     s->bounding_shaped = src ? 1 : 0;
     s->x_bounding = x_off;
     s->y_bounding = y_off;
+    x11_emit_shape_notify(display, s, ShapeBounding);
   } else if (dest_kind == ShapeClip) {
     s->clip_shaped = src ? 1 : 0;
     s->x_clip = x_off;
     s->y_clip = y_off;
+    x11_emit_shape_notify(display, s, ShapeClip);
   }
 }
 
@@ -4667,6 +5263,7 @@ void XShapeCombineShape(Display *display, Window dest, int dest_kind,
       s->w_bounding = ssrc->w_bounding;
       s->h_bounding = ssrc->h_bounding;
     }
+    x11_emit_shape_notify(display, s, ShapeBounding);
   } else if (dest_kind == ShapeClip) {
     s->clip_shaped = ssrc ? ssrc->clip_shaped : 1;
     s->x_clip = x_off;
@@ -4675,6 +5272,7 @@ void XShapeCombineShape(Display *display, Window dest, int dest_kind,
       s->w_clip = ssrc->w_clip;
       s->h_clip = ssrc->h_clip;
     }
+    x11_emit_shape_notify(display, s, ShapeClip);
   }
 }
 
@@ -4701,6 +5299,10 @@ void XShapeCombineRectangles(Display *display, Window dest, int dest_kind,
       s->bounding_shaped = 0;
     else if (dest_kind == ShapeClip)
       s->clip_shaped = 0;
+    if (dest_kind == ShapeBounding)
+      x11_emit_shape_notify(display, s, ShapeBounding);
+    else if (dest_kind == ShapeClip)
+      x11_emit_shape_notify(display, s, ShapeClip);
     return;
   }
 
@@ -4725,12 +5327,14 @@ void XShapeCombineRectangles(Display *display, Window dest, int dest_kind,
     s->y_bounding = miny;
     s->w_bounding = (unsigned int)((maxx > minx) ? (maxx - minx) : 0);
     s->h_bounding = (unsigned int)((maxy > miny) ? (maxy - miny) : 0);
+    x11_emit_shape_notify(display, s, ShapeBounding);
   } else if (dest_kind == ShapeClip) {
     s->clip_shaped = 1;
     s->x_clip = minx;
     s->y_clip = miny;
     s->w_clip = (unsigned int)((maxx > minx) ? (maxx - minx) : 0);
     s->h_clip = (unsigned int)((maxy > miny) ? (maxy - miny) : 0);
+    x11_emit_shape_notify(display, s, ShapeClip);
   }
 }
 
@@ -4774,11 +5378,18 @@ Status XShapeQueryExtents(Display *display, Window window,
 void XShapeSelectInput(Display *display, Window window,
                        unsigned long mask) {
   struct x11_shape_state *s;
+  char cmd[X6_BUF_SIZE];
+  char line[X6_BUF_SIZE];
 
   s = x11_alloc_shape(display, window);
   if (!s)
     return;
   s->event_mask = mask;
+
+  if (display) {
+    snprintf(cmd, sizeof(cmd), "SHAPE_SELECT_INPUT %u %lu\n", (uint)window, mask);
+    x11_cmd(display, cmd, line, sizeof(line));
+  }
 }
 
 Status XineramaQueryExtension(Display *display,
@@ -4786,9 +5397,9 @@ Status XineramaQueryExtension(Display *display,
                               int *error_base_return) {
   (void)display;
   if (event_base_return)
-    *event_base_return = 0;
+    *event_base_return = X11_EXT_EVENT_BASE_XINERAMA;
   if (error_base_return)
-    *error_base_return = 0;
+    *error_base_return = X11_EXT_ERROR_BASE_XINERAMA;
   return 1;
 }
 
@@ -4837,9 +5448,9 @@ Bool XFixesQueryExtension(Display *display, int *event_base_return,
                           int *error_base_return) {
   (void)display;
   if (event_base_return)
-    *event_base_return = 0;
+    *event_base_return = X11_EXT_EVENT_BASE_XFIXES;
   if (error_base_return)
-    *error_base_return = 0;
+    *error_base_return = X11_EXT_ERROR_BASE_XFIXES;
   return True;
 }
 
@@ -4855,7 +5466,12 @@ Status XFixesQueryVersion(Display *display, int *major_version_return,
 
 Bool XShmQueryExtension(Display *display) {
   (void)display;
-  return False;
+  return True;
+}
+
+int XShmGetEventBase(Display *display) {
+  (void)display;
+  return X11_EXT_EVENT_BASE_XSHM;
 }
 
 XImage *XShmCreateImage(Display *display, Visual *visual, unsigned int depth,
@@ -4863,12 +5479,16 @@ XImage *XShmCreateImage(Display *display, Visual *visual, unsigned int depth,
                         XShmSegmentInfo *shminfo,
                         unsigned int width, unsigned int height) {
   char *buf;
+  XImage *img;
 
   buf = data;
   if (!buf && shminfo)
     buf = shminfo->shmaddr;
-  return XCreateImage(display, visual, depth, format, 0, buf,
-                      width, height, 32, 0);
+  img = XCreateImage(display, visual, depth, format, 0, buf,
+                     width, height, 32, 0);
+  if (img)
+    x11_track_shm_image(img, shminfo ? shminfo->shmseg : 0);
+  return img;
 }
 
 Bool XShmAttach(Display *display, XShmSegmentInfo *shminfo) {
@@ -4888,10 +5508,14 @@ Bool XShmPutImage(Display *display, Drawable d, GC gc, XImage *image,
                   int src_x, int src_y, int dst_x, int dst_y,
                   unsigned int src_width, unsigned int src_height,
                   Bool send_event) {
-  (void)send_event;
-  return XPutImage(display, d, gc, image,
-                   src_x, src_y, dst_x, dst_y,
-                   src_width, src_height) == 0;
+  int rc;
+
+  rc = XPutImage(display, d, gc, image,
+                 src_x, src_y, dst_x, dst_y,
+                 src_width, src_height);
+  if (rc == 0 && send_event)
+    x11_emit_shm_completion(display, d, image);
+  return rc == 0;
 }
 
 Bool XShmGetImage(Display *display, Drawable d, XImage *image,
