@@ -182,3 +182,10 @@ ports/dwm-6.8/dwm
 ports/st-0.9.3.tar.gz
 ports/st-0.9.3/*
 !ports/st-0.9.3/Makefile.auxv6
+!ports/st-0.9.3/config.auxv6.h
+!ports/st-0.9.3/x-auxv6.c
+!ports/st-0.9.3/compat/
+ports/st-0.9.3/compat/*
+!ports/st-0.9.3/compat/wchar.h
+!ports/st-0.9.3/compat/wchar.c
+!ports/st-0.9.3/compat/stubs.c

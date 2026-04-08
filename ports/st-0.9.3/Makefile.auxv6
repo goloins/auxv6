@@ -44,15 +44,15 @@ LIBGCC := $(shell $(CC) -m32 -print-libgcc-file-name 2>/dev/null)
 X11INC ?= $(ROOT)/include
 X11LIB ?= $(ROOT)/user
 
-INCS := -I$(X11INC) -I$(ROOT)/include -I$(ROOT)/include/posix -I$(ROOT)/include/posix/sys
-CPPFLAGS := -DVERSION=\"$(VERSION)\" -D_XOPEN_SOURCE=600 -D_DEFAULT_SOURCE -DAUXV6
+INCS := -I$(ST_DIR)/compat -I$(X11INC) -I$(ROOT)/include -I$(ROOT)/include/posix -I$(ROOT)/include/posix/sys
+CPPFLAGS := -DVERSION=\"$(VERSION)\" -D_XOPEN_SOURCE=600 -D_DEFAULT_SOURCE -DAUXV6 -DAUXV6_ST_HACK_NOPTY
 CFLAGS := -fno-pic -static -fno-builtin -fno-strict-aliasing -O2 -Wall -MD -ggdb -m32 \
           -fno-omit-frame-pointer -nostdinc -fno-stack-protector -Wno-error \
           -std=c99 -pedantic -Wno-deprecated-declarations \
           $(INCS) $(CPPFLAGS)
 LDFLAGS := -N -e _start -Ttext 0 -m $(shell $(LD) -V 2>/dev/null | grep elf_i386 | head -1)
 
-SRC := $(ST_DIR)/st.c $(ST_DIR)/x.c
+SRC := $(ST_DIR)/st.c $(ST_DIR)/x-auxv6.c $(ST_DIR)/compat/wchar.c $(ST_DIR)/compat/stubs.c
 OBJ := $(SRC:.c=.o)
 
 RUNTIME_OBJS := \
@@ -101,7 +101,7 @@ toolchain-check:
 		(echo "ERROR: $(CC) is not producing i386 output with -m32" >&2; exit 1)
 
 $(ST_DIR)/config.h:
-	cp $(ST_DIR)/config.def.h $@
+	cp $(ST_DIR)/config.auxv6.h $@
 
 $(ST_DIR)/%.o: $(ST_DIR)/%.c $(ST_DIR)/config.h
 	$(CC) -c $(CFLAGS) -o $@ $<

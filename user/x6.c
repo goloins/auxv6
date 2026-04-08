@@ -96,6 +96,7 @@ struct x6_client {
 
 static volatile sig_atomic_t keep_running = 1;
 static struct x6_window wins[X6_MAX_WINDOWS];
+static struct x6_window *wins_by_id[256];  // Hash table for O(1) window lookup by ID (id % 256)
 
 // Per-client context (simplified for MVP: one connection at a time)
 static struct x6_event_queue *current_event_queue = 0;
@@ -194,6 +195,19 @@ x6_fb_write_pixel(int x, int y, uint pixel)
   if(x6_fb_shadow && x >= 0 && y >= 0 && x < x6_fb_shadow_w && y < x6_fb_shadow_h)
     x6_fb_shadow[(size_t)y * (size_t)x6_fb_shadow_w + (size_t)x] = p;
   return 0;
+}
+
+static int
+x6_cursor_overlaps_rect(int x, int y, int w, int h)
+{
+  if(!x6_cursor.drawn)
+    return 0;
+  // AABB rectangle intersection test
+  if(x + w <= x6_cursor.x || y + h <= x6_cursor.y)
+    return 0;
+  if(x6_cursor.x + x6_cursor.w <= x || x6_cursor.y + x6_cursor.h <= y)
+    return 0;
+  return 1;
 }
 
 static int
@@ -449,8 +463,12 @@ x6_canvas_fill_pixels(int x, int y, int w, int h, uint pixel)
     int i;
     int rw;
     uint p;
+    int need_cursor_refresh;
 
-    x6_cursor_hide();
+    // Only hide/show cursor if drawing overlaps cursor area
+    need_cursor_refresh = x6_cursor_overlaps_rect(x, y, w, h);
+    if(need_cursor_refresh)
+      x6_cursor_hide();
 
     x0 = x;
     y0 = y;
@@ -461,7 +479,8 @@ x6_canvas_fill_pixels(int x, int y, int w, int h, uint pixel)
     if(x1 > x6_fb.width) x1 = x6_fb.width;
     if(y1 > x6_fb.height) y1 = x6_fb.height;
     if(x1 <= x0 || y1 <= y0) {
-      x6_cursor_show();
+      if(need_cursor_refresh)
+        x6_cursor_show();
       return;
     }
 
@@ -498,7 +517,8 @@ x6_canvas_fill_pixels(int x, int y, int w, int h, uint pixel)
       for(j = 0; j < rw; j++)
         x6_fb_shadow[base + (size_t)j] = p;
     }
-    x6_cursor_show();
+    if(need_cursor_refresh)
+      x6_cursor_show();
     return;
   }
 
@@ -538,7 +558,13 @@ x6_draw_text_pixels(int x, int baseline_y, uint color, const char *text, int len
     return;
 
   if(x6_backend == X6_BACKEND_FB && x6_fb.fd >= 0) {
-    x6_cursor_hide();
+    int need_cursor_refresh;
+    // Estimate text bounding box for cursor overlap check
+    int text_w = user_font_text_width(font, text, len);
+    int text_h = font->size;
+    need_cursor_refresh = x6_cursor_overlaps_rect(x, baseline_y - text_h, text_w, text_h);
+    if(need_cursor_refresh)
+      x6_cursor_hide();
     cx = x;
     for(i = 0; i < len; i++) {
       const struct user_glyph *g;
@@ -574,7 +600,8 @@ x6_draw_text_pixels(int x, int baseline_y, uint color, const char *text, int len
 
       cx += g->advance_x > 0 ? g->advance_x : g->width;
     }
-    x6_cursor_show();
+    if(need_cursor_refresh)
+      x6_cursor_show();
     return;
   }
 
@@ -670,7 +697,7 @@ x6_move_pointer(int dx, int dy)
   x6_screen_size(&sw, &sh);
   pointer_x = x6_clamp_int(pointer_x + dx, 0, sw - 1);
   pointer_y = x6_clamp_int(pointer_y + dy, 0, sh - 1);
-  x6_cursor_show();
+  x6_cursor_show();  // Always refresh on pointer move
   x6_enqueue_pointer_event(X6_EVENT_MOTION_NOTIFY, 0);
 }
 
@@ -1066,12 +1093,14 @@ x6_recv_line(int cfd, char *buf, int buflen)
 static struct x6_window *
 find_window(uint id)
 {
-  int i;
+  struct x6_window *w;
+  int idx;
 
-  for(i = 0; i < X6_MAX_WINDOWS; i++) {
-    if(wins[i].in_use && wins[i].id == id)
-      return &wins[i];
-  }
+  // O(1) hash table lookup
+  idx = (int)(id % 256);
+  w = wins_by_id[idx];
+  if(w && w->in_use && w->id == id)
+    return w;
   return 0;
 }
 
@@ -1079,6 +1108,7 @@ static struct x6_window *
 alloc_window(uint id)
 {
   int i;
+  int idx;
 
   for(i = 0; i < X6_MAX_WINDOWS; i++) {
     if(!wins[i].in_use) {
@@ -1093,6 +1123,9 @@ alloc_window(uint id)
       wins[i].cursor_set = 0;
       wins[i].cursor = 0;
       wins[i].prop_count = 0;  // Initialize properties (Phase 2.1d)
+      // Hash table insert for O(1) lookup
+      idx = (int)(id % 256);
+      wins_by_id[idx] = &wins[i];
       return &wins[i];
     }
   }
@@ -1103,10 +1136,15 @@ static void
 destroy_window(uint id)
 {
   struct x6_window *w;
+  int idx;
 
   w = find_window(id);
   if(w == 0)
     return;
+  // Clear hash table entry
+  idx = (int)(id % 256);
+  if(wins_by_id[idx] == w)
+    wins_by_id[idx] = 0;
   memset(w, 0, sizeof(*w));
 }
 
@@ -1925,6 +1963,7 @@ main(int argc, char **argv)
   pointer_grab_window = 0;
   root_cursor = 1;
   memset(&x6_cursor, 0, sizeof(x6_cursor));
+  memset(wins_by_id, 0, sizeof(wins_by_id));  // Initialize window hash table
 
   fd = socket(AF_INET, SOCK_STREAM, 0);
   if(fd < 0) {
