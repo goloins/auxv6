@@ -266,6 +266,7 @@ stdbg(const char *fmt, ...)
 	int n;
 	va_list ap;
 	int fd;
+	int cfd;
 
 	va_start(ap, fmt);
 	n = vsnprintf(line, sizeof(line), fmt, ap);
@@ -280,7 +281,12 @@ stdbg(const char *fmt, ...)
 	line[n] = '\0';
 
 	/* Keep stderr breadcrumbs for immediate visibility. */
-	write(2, line, (size_t)n);
+	/* Mirror to console so logs are visible even when X session is wedged. */
+	cfd = open("/dev/console", O_WRONLY);
+	if (cfd >= 0) {
+		write(cfd, line, (size_t)n);
+		close(cfd);
+	}
 
 	fd = open("/tmp/st-debug.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
 	if (fd >= 0) {
@@ -1696,7 +1702,15 @@ xsettitle(char *p)
 int
 xstartdraw(void)
 {
-	return IS_SET(MODE_VISIBLE);
+	static int dbg_startdraw;
+	int vis;
+
+	vis = IS_SET(MODE_VISIBLE);
+	if (dbg_startdraw < 64) {
+		stdbg("st:xstartdraw call=%d visible=%d mode=0x%x", dbg_startdraw, vis, win.mode);
+		dbg_startdraw++;
+	}
+	return vis;
 }
 
 void
@@ -1705,6 +1719,12 @@ xdrawline(Line line, int x1, int y1, int x2)
 	int i, x, ox, numspecs;
 	Glyph base, new;
 	XftGlyphFontSpec *specs = xw.specbuf;
+	static int dbg_drawline;
+
+	if (dbg_drawline < 64) {
+		stdbg("st:xdrawline call=%d row=%d x1=%d x2=%d", dbg_drawline, y1, x1, x2);
+		dbg_drawline++;
+	}
 
 	numspecs = xmakeglyphfontspecs(specs, &line[x1], x2 - x1, x1, y1);
 	i = ox = 0;
@@ -1733,6 +1753,11 @@ xdrawline(Line line, int x1, int y1, int x2)
 void
 xfinishdraw(void)
 {
+	static int dbg_finishdraw;
+	if (dbg_finishdraw < 64) {
+		stdbg("st:xfinishdraw call=%d copy-area wh=%dx%d", dbg_finishdraw, win.w, win.h);
+		dbg_finishdraw++;
+	}
 	XCopyArea(xw.dpy, xw.buf, xw.win, dc.gc, 0, 0, win.w,
 			win.h, 0, 0);
 	XSetForeground(xw.dpy, dc.gc,

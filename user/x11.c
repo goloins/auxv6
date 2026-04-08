@@ -8,6 +8,8 @@
 #include "sys/select.h"
 #include "signal.h"
 #include "time.h"
+#include <stdarg.h>
+#include <fcntl.h>
 #include "X11/Xlib.h"
 #include "X11/Xutil.h"
 #include "X11/keysym.h"
@@ -58,6 +60,89 @@ static char g_rxbuf[X11_RXBUF_SIZE];
 static int g_rxlen;
 static int g_pending_draw_replies;
 static GC g_xft_gc;
+static int g_x11_dbg_count;
+static int g_x11_draw_tx_count;
+static int g_x11_draw_call_count;
+static int g_x11_draw_reply_seen;
+
+static int
+x11_is_chatty_draw_cmd(const char *cmd)
+{
+  if (!cmd)
+    return 0;
+  return strncmp(cmd, "DRAW_TEXT ", 10) == 0 ||
+         strncmp(cmd, "DRAW_RECT ", 10) == 0;
+}
+
+static void
+x11dbg(const char *fmt, ...)
+{
+  char line[320];
+  int n;
+  int fd;
+  int cfd;
+  va_list ap;
+
+  if (g_x11_dbg_count >= 5000)
+    return;
+  g_x11_dbg_count++;
+
+  va_start(ap, fmt);
+  n = vsnprintf(line, sizeof(line), fmt, ap);
+  va_end(ap);
+  if (n < 0)
+    return;
+  if ((size_t)n >= sizeof(line))
+    n = (int)sizeof(line) - 1;
+
+  line[n++] = '\n';
+  line[n] = '\0';
+  cfd = open("/dev/console", O_WRONLY);
+  if (cfd >= 0) {
+    write(cfd, line, (size_t)n);
+    close(cfd);
+  }
+
+  fd = open("/tmp/x11-debug.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+  if (fd >= 0) {
+    write(fd, line, (size_t)n);
+    close(fd);
+  }
+}
+
+/* Critical-path logger that bypasses x11dbg volume cap. */
+static void
+x11crit(const char *fmt, ...)
+{
+  char line[320];
+  int n;
+  int fd;
+  int cfd;
+  va_list ap;
+
+  va_start(ap, fmt);
+  n = vsnprintf(line, sizeof(line), fmt, ap);
+  va_end(ap);
+  if (n < 0)
+    return;
+  if ((size_t)n >= sizeof(line))
+    n = (int)sizeof(line) - 1;
+
+  line[n++] = '\n';
+  line[n] = '\0';
+
+  cfd = open("/dev/console", O_WRONLY);
+  if (cfd >= 0) {
+    write(cfd, line, (size_t)n);
+    close(cfd);
+  }
+
+  fd = open("/tmp/x11-debug.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+  if (fd >= 0) {
+    write(fd, line, (size_t)n);
+    close(fd);
+  }
+}
 
 struct x11_selection_state {
   int in_use;
@@ -583,6 +668,10 @@ x11_event_push_back(const XEvent *ev)
     g_event_count = X11_MAX_EVENTS - 1;
   }
   g_events[g_event_count++] = *ev;
+  if (ev->type == KeyPress || ev->type == KeyRelease) {
+    x11crit("x11:key-queue push type=%d keycode=%u state=%u qlen=%d",
+            ev->type, ev->xkey.keycode, ev->xkey.state, g_event_count);
+  }
   return 0;
 }
 
@@ -609,6 +698,10 @@ x11_event_pop_front(XEvent *ev)
   if (g_event_count > 1)
     memmove(&g_events[0], &g_events[1], (size_t)(g_event_count - 1) * sizeof(XEvent));
   g_event_count--;
+  if (ev->type == KeyPress || ev->type == KeyRelease) {
+    x11crit("x11:key-queue pop type=%d keycode=%u state=%u qlen=%d",
+            ev->type, ev->xkey.keycode, ev->xkey.state, g_event_count);
+  }
   return 0;
 }
 
@@ -691,12 +784,26 @@ x11_handle_unsolicited_line(Display *display, const char *line)
     XEvent ev;
     if (x11_parse_event_line(display, line, &ev) == 0)
       x11_event_push_back(&ev);
+    x11dbg("x11:event queued type=%d qlen=%d", ev.type, g_event_count);
     return 1;
   }
 
   if ((strncmp(line, "OK draw", 7) == 0 || strncmp(line, "OK text", 7) == 0) &&
       g_pending_draw_replies > 0) {
     g_pending_draw_replies--;
+    g_x11_draw_reply_seen++;
+    if ((g_x11_draw_reply_seen % 256) == 0 || g_pending_draw_replies == 0) {
+      x11dbg("x11:draw-reply seen=%d pending=%d", g_x11_draw_reply_seen, g_pending_draw_replies);
+    }
+    return 1;
+  }
+
+  /* Draw commands can also fail (e.g. ERR not-found / ERR unknown). Consume
+   * these while draining draw replies so pending accounting does not wedge. */
+  if (strncmp(line, "ERR ", 4) == 0 && g_pending_draw_replies > 0) {
+    g_pending_draw_replies--;
+    g_x11_draw_reply_seen++;
+    x11dbg("x11:draw-reply error='%s' pending=%d", line, g_pending_draw_replies);
     return 1;
   }
 
@@ -707,15 +814,21 @@ static int
 x11_drain_draw_replies(Display *display)
 {
   char line[X6_BUF_SIZE];
+  int before;
 
   if (!display)
     return -1;
 
+  before = g_pending_draw_replies;
   while (g_pending_draw_replies > 0) {
     if (x11_read_line(display->fd, line, sizeof(line)) < 0)
       return -1;
     if (!x11_handle_unsolicited_line(display, line))
       return -1;
+  }
+
+  if (before > 0) {
+    x11dbg("x11:drain-draw complete drained=%d", before);
   }
 
   return 0;
@@ -776,6 +889,8 @@ x11_parse_event_line(Display *display, const char *line, XEvent *event)
     return -1;
   if (strncmp(line, "EVENT ", 6) != 0)
     return -1;
+
+  x11dbg("x11:event-parse raw='%s'", line);
 
   memset(event, 0, sizeof(*event));
   if (strncmp(line + 6, "MapRequest", 10) == 0) {
@@ -1070,6 +1185,8 @@ x11_read_line(int fd, char *line, int maxlen)
           consume++;
         memmove(g_rxbuf, g_rxbuf + consume, (size_t)(g_rxlen - consume));
         g_rxlen -= consume;
+        if (strncmp(line, "OK text", 7) != 0 && strncmp(line, "OK draw", 7) != 0)
+          x11dbg("x11:wire:rx '%s' buffered=%d", line, g_rxlen);
         return copy_len;
       }
     }
@@ -1091,6 +1208,12 @@ x11_send(int fd, const char *cmd)
 {
   if (!cmd)
     return -1;
+  if (x11_is_chatty_draw_cmd(cmd)) {
+    if ((g_x11_draw_tx_count++ % 256) == 0)
+      x11dbg("x11:wire:tx(sampled) '%s'", cmd);
+  } else {
+    x11dbg("x11:wire:tx '%s'", cmd);
+  }
   return send(fd, cmd, strlen(cmd)) < 0 ? -1 : 0;
 }
 
@@ -1100,6 +1223,7 @@ x11_cmd(Display *dpy, const char *cmd, char *resp, int maxlen)
   char line[X6_BUF_SIZE];
   if (!dpy || dpy->fd < 0)
     return -1;
+  x11dbg("x11:cmd:begin '%s'", cmd ? cmd : "(null)");
   if (x11_drain_draw_replies(dpy) < 0)
     return -1;
   if (x11_send(dpy->fd, cmd) < 0)
@@ -1116,6 +1240,7 @@ x11_cmd(Display *dpy, const char *cmd, char *resp, int maxlen)
 
     strncpy(resp, line, maxlen - 1);
     resp[maxlen - 1] = '\0';
+    x11dbg("x11:cmd:resp '%s'", resp);
     return (int)strlen(resp);
   }
 }
@@ -1197,6 +1322,7 @@ XOpenDisplay(char *display_name)
   if (x11_read_line(dpy->fd, line, sizeof(line)) < 0) {
     goto fail;
   }
+  x11dbg("x11:open hello='%s'", line);
   if (x11_cmd(dpy, "HELLO x6/1\n", line, sizeof(line)) < 0) {
     goto fail;
   }
@@ -1211,6 +1337,8 @@ XOpenDisplay(char *display_name)
   dpy->depth = 32;
   g_rxlen = 0;
   g_pending_draw_replies = 0;
+  g_x11_dbg_count = 0;
+  x11dbg("x11:open ready fd=%d root=%lu size=%dx%d", dpy->fd, dpy->root, dpy->width, dpy->height);
   g_display = dpy;
   return dpy;
 
@@ -1322,6 +1450,7 @@ XMapWindow(Display *display, Window w)
 
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return -1;
+  x11dbg("x11:map wid=%u resp='%s'", (uint)w, line);
   if (strncmp(line, "OK map", 6) == 0 ||
       strncmp(line, "OK mapped", 9) == 0 ||
       strncmp(line, "PENDING map", 11) == 0)
@@ -1498,6 +1627,8 @@ XSelectInput(Display *display, Window w, long event_mask)
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return -1;
 
+  x11dbg("x11:select-input wid=%u mask=%ld resp='%s'", (uint)w, event_mask, line);
+
   return 0;
 }
 
@@ -1552,9 +1683,17 @@ x11_event_window(const XEvent *event)
 int
 XNextEvent(Display *display, XEvent *event)
 {
-  if (x11_event_pop_front(event) == 0)
+  if (x11_event_pop_front(event) == 0) {
+    if (event && (event->type == KeyPress || event->type == KeyRelease)) {
+      x11dbg("x11:next-event(pop) type=%d keycode=%u state=%u qlen=%d",
+             event->type, event->xkey.keycode, event->xkey.state, g_event_count);
+    }
     return 0;
-  return x11_read_event(display, event);
+  }
+  if (x11_read_event(display, event) < 0)
+    return -1;
+  x11dbg("x11:next-event type=%d window=%u", event->type, (uint)x11_event_window(event));
+  return 0;
 }
 
 int
@@ -2229,9 +2368,12 @@ int XGrabKey(Display *display, int keycode, unsigned int modifiers, Window grab_
   if (!display)
     return -1;
   x6_mods = x11_encode_modifiers(modifiers);
+  x11dbg("x11:grab-key req keycode=%d mods=0x%x x6mods=0x%x wid=%u",
+         keycode, modifiers, x6_mods, (uint)grab_window);
   snprintf(cmd, sizeof(cmd), "GRAB_KEY %u %u %u\n", (uint)keycode, (uint)x6_mods, (uint)grab_window);
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return -1;
+  x11dbg("x11:grab-key resp '%s'", line);
   return 0;
 }
 int XUngrabKey(Display *display, int keycode, unsigned int modifiers, Window grab_window) {
@@ -2360,11 +2502,20 @@ Pixmap XCreatePixmap(Display *display, Drawable d, unsigned int width, unsigned 
   
   /* Send CREATE_PIXMAP command to x6 server */
   snprintf(cmd, sizeof(cmd), "CREATE_PIXMAP %u %u %u %u\n", depth, width, height, depth);
-  
-  if (x11_cmd(display, cmd, response, sizeof(response)) == 0) {
-    if (sscanf(response, "OK create_pixmap pmid=%u", &pmid) == 1)
-      pm->id = (Pixmap)pmid;
+  if (x11_cmd(display, cmd, response, sizeof(response)) < 0) {
+    pm->in_use = 0;
+    x11dbg("x11:create-pixmap failed cmd transport w=%u h=%u d=%u", width, height, depth);
+    return 0;
   }
+
+  if (sscanf(response, "OK create_pixmap pmid=%u", &pmid) != 1 || pmid == 0) {
+    pm->in_use = 0;
+    x11dbg("x11:create-pixmap bad response '%s'", response);
+    return 0;
+  }
+
+  pm->id = (Pixmap)pmid;
+  x11dbg("x11:create-pixmap ok local->server id=%u size=%ux%u depth=%u", pmid, width, height, depth);
   
   return pm->id;
 }
@@ -2660,6 +2811,8 @@ int XFillRectangle(Display *display, Drawable d, GC gc, int x, int y, unsigned i
   if (x11_send(display->fd, cmd) < 0)
     return -1;
   g_pending_draw_replies++;
+  x11dbg("x11:draw-rect d=%u x=%d y=%d w=%u h=%u color=%u pending=%d",
+         (uint)d, x, y, width, height, color, g_pending_draw_replies);
   return 0;
 }
 int XDrawRectangle(Display *display, Drawable d, GC gc, int x, int y, unsigned int width, unsigned int height) {
@@ -2699,6 +2852,10 @@ int XDrawString(Display *display, Drawable d, GC gc, int x, int y, const char *s
   if (x11_send(display->fd, cmd) < 0)
     return -1;
   g_pending_draw_replies++;
+  if ((g_x11_draw_call_count++ % 256) == 0) {
+    x11dbg("x11:draw-text(sampled) d=%u x=%d y=%d len=%d color=%u pending=%d",
+           (uint)d, x, y, n, color, g_pending_draw_replies);
+  }
   return 0;
 }
 int XCopyArea(Display *display, Drawable src, Drawable dest, GC gc, int src_x, int src_y, unsigned int width, unsigned int height, int dest_x, int dest_y) {
@@ -2718,8 +2875,12 @@ int XCopyArea(Display *display, Drawable src, Drawable dest, GC gc, int src_x, i
    */
   snprintf(cmd, sizeof(cmd), "COPY_AREA %lu %lu %d %d %u %u %d %d\n",
            src, dest, src_x, src_y, width, height, dest_x, dest_y);
+  x11dbg("x11:copy-area src=%lu dst=%lu src_xy=%d,%d wh=%u,%u dst_xy=%d,%d",
+         src, dest, src_x, src_y, width, height, dest_x, dest_y);
   
+  response[0] = '\0';
   ret = x11_cmd(display, cmd, response, sizeof(response));
+  x11dbg("x11:copy-area resp ret=%d line='%s'", ret, response);
   return ret < 0 ? -1 : 0;
 }
 
@@ -2788,13 +2949,17 @@ XPending(Display *display)
   if (!display)
     return 0;
   if (g_event_count > 0)
+  {
+    x11dbg("x11:pending immediate queued=%d", g_event_count);
     return 1;
+  }
 
   /* Check if we already have bytes buffered from a previous recv */
   if (g_rxlen > 0) {
     XEvent ev;
     if (x11_read_event_from_wire(display, &ev) == 0)
       x11_event_push_back(&ev);
+    x11dbg("x11:pending rxbuf-hit queued=%d", g_event_count);
     return g_event_count > 0 ? 1 : 0;
   }
 
@@ -2810,6 +2975,7 @@ XPending(Display *display)
     if (x11_read_event_from_wire(display, &ev) == 0)
       x11_event_push_back(&ev);
   }
+  x11dbg("x11:pending poll-hit queued=%d revents=%d", g_event_count, pfd.revents);
   return g_event_count > 0 ? 1 : 0;
 }
 
@@ -2891,7 +3057,15 @@ KeyCode XKeysymToKeycode(Display *display, KeySym keysym) {
     default:           return (KeyCode)(keysym & 0xff);
   }
 }
-KeySym XKeycodeToKeysym(Display *display, KeyCode keycode, int index) { (void)display; (void)index; return x11_keycode_to_keysym(keycode); }
+KeySym XKeycodeToKeysym(Display *display, KeyCode keycode, int index) {
+  KeySym ks;
+  (void)display;
+  (void)index;
+  ks = x11_keycode_to_keysym(keycode);
+  if (keycode == 10)
+    x11dbg("x11:keycode->keysym keycode=%u -> keysym=0x%lx", (uint)keycode, (unsigned long)ks);
+  return ks;
+}
 void XDisplayKeycodes(Display *display, int *min_keycodes_return, int *max_keycodes_return) {
   (void)display;
   if (min_keycodes_return) *min_keycodes_return = 8;

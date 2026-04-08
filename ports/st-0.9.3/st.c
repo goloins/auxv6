@@ -171,6 +171,7 @@ stdbg2(const char *fmt, ...)
 	int n;
 	va_list ap;
 	int fd;
+	int cfd;
 
 	va_start(ap, fmt);
 	n = vsnprintf(line, sizeof(line), fmt, ap);
@@ -183,7 +184,11 @@ stdbg2(const char *fmt, ...)
 	line[n++] = '\n';
 	line[n] = '\0';
 
-	write(2, line, (size_t)n);
+	cfd = open("/dev/console", O_WRONLY);
+	if (cfd >= 0) {
+		write(cfd, line, (size_t)n);
+		close(cfd);
+	}
 	fd = open("/tmp/st-debug.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
 	if (fd >= 0) {
 		write(fd, line, (size_t)n);
@@ -710,8 +715,12 @@ execsh(char *cmd, char **args)
 			die("who are you?\n");
 	}
 
-	if ((sh = getenv("SHELL")) == NULL)
-		sh = (pw->pw_shell[0]) ? pw->pw_shell : cmd;
+	/* Prefer the configured shell from config.h; only fall back if missing. */
+	if (cmd && cmd[0]) {
+		sh = cmd;
+	} else if ((sh = getenv("SHELL")) == NULL) {
+		sh = (pw->pw_shell[0]) ? pw->pw_shell : "/bin/sh";
+	}
 
 	if (args) {
 		prog = args[0];
@@ -2818,13 +2827,22 @@ void
 drawregion(int x1, int y1, int x2, int y2)
 {
 	int y;
+	int dirty = 0;
+	static int dbg_drawregion;
 
 	for (y = y1; y < y2; y++) {
 		if (!term.dirty[y])
 			continue;
+		dirty++;
 
 		term.dirty[y] = 0;
 		xdrawline(term.line[y], x1, y, x2);
+	}
+
+	if (dbg_drawregion < 64) {
+		stdbg2("st:drawregion call=%d x1=%d y1=%d x2=%d y2=%d dirty=%d",
+		       dbg_drawregion, x1, y1, x2, y2, dirty);
+		dbg_drawregion++;
 	}
 }
 
@@ -2832,8 +2850,16 @@ void
 draw(void)
 {
 	int cx = term.c.x, ocx = term.ocx, ocy = term.ocy;
+	static int dbg_draw;
+	int start_ok;
 
-	if (!xstartdraw())
+	start_ok = xstartdraw();
+	if (dbg_draw < 64) {
+		stdbg2("st:draw call=%d start_ok=%d mode=0x%x cursor=%d,%d ocursor=%d,%d",
+		       dbg_draw, start_ok, term.mode, term.c.x, term.c.y, term.ocx, term.ocy);
+	}
+
+	if (!start_ok)
 		return;
 
 	/* adjust cursor position */
@@ -2850,6 +2876,9 @@ draw(void)
 	term.ocx = cx;
 	term.ocy = term.c.y;
 	xfinishdraw();
+	if (dbg_draw < 64)
+		stdbg2("st:draw call=%d finish ocursor=%d,%d", dbg_draw, term.ocx, term.ocy);
+	dbg_draw++;
 	if (ocx != term.ocx || ocy != term.ocy)
 		xximspot(term.ocx, term.ocy);
 }

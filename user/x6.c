@@ -13,6 +13,7 @@
 #include "poll.h"
 #include "termios.h"
 #include <string.h>
+#include <stdarg.h>
 
 #define XK_BackSpace 0xff08
 #define XK_Return 0xff0d
@@ -188,6 +189,53 @@ static int x6_next_z = 1;
 static struct x6_event_queue *current_event_queue = 0;
 static struct x6_event_queue *wm_event_queue = 0;
 static int wm_client_fd = -1;
+static int x6_dbg_count;
+static int x6_draw_rx_count;
+static int x6_draw_reply_tx_count;
+
+static int
+x6_is_chatty_draw_cmd(const char *cmd)
+{
+  if(!cmd)
+    return 0;
+  return strncmp(cmd, "DRAW_TEXT ", 10) == 0 ||
+         strncmp(cmd, "DRAW_RECT ", 10) == 0;
+}
+
+static void
+x6dbg(const char *fmt, ...)
+{
+  char line[320];
+  int n;
+  int fd;
+  int cfd;
+  va_list ap;
+
+  if(x6_dbg_count >= 8000)
+    return;
+  x6_dbg_count++;
+
+  va_start(ap, fmt);
+  n = vsnprintf(line, sizeof(line), fmt, ap);
+  va_end(ap);
+  if(n < 0)
+    return;
+  if((size_t)n >= sizeof(line))
+    n = (int)sizeof(line) - 1;
+  line[n++] = '\n';
+  line[n] = '\0';
+
+  cfd = open("/dev/console", O_WRONLY);
+  if(cfd >= 0) {
+    write(cfd, line, (size_t)n);
+    close(cfd);
+  }
+  fd = open("/tmp/x6-debug.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+  if(fd >= 0) {
+    write(fd, line, (size_t)n);
+    close(fd);
+  }
+}
 
 // WM state (Phase 2.1b: SubstructureRedirect semantics)
 static int wm_has_redirect = 0;  // Does WM hold SubstructureRedirect on root?
@@ -567,10 +615,15 @@ x6_find_key_grab_target(uint keycode, uint state, uint *target_wid)
       continue;
     if(g->modifiers != X6_ANY_MODIFIER && g->modifiers != mods)
       continue;
+    if(keycode == 10)
+      x6dbg("x6:key-grab match keycode=%u mods=0x%x -> wid=%u owner_fd=%d",
+            keycode, mods, g->wid, g->owner_fd);
     if(target_wid)
       *target_wid = g->wid;
     return 1;
   }
+  if(keycode == 10)
+    x6dbg("x6:key-grab miss keycode=%u mods=0x%x", keycode, mods);
   return 0;
 }
 
@@ -1681,6 +1734,15 @@ x6_send_line(int cfd, const char *s)
   if(cfd < 0 || s == 0)
     return;
 
+  if(strncmp(s, "OK draw", 7) == 0 || strncmp(s, "OK text", 7) == 0) {
+    if((x6_draw_reply_tx_count++ % 256) == 0)
+      x6dbg("x6:wire:tx(sampled) fd=%d '%s'", cfd, s);
+  } else if(strncmp(s, "OK copy_area", 12) == 0 ||
+            strncmp(s, "EVENT ", 6) == 0 ||
+            strncmp(s, "ERR ", 4) == 0) {
+    x6dbg("x6:wire:tx fd=%d '%s'", cfd, s);
+  }
+
   len = (int)strlen(s);
   off = 0;
   while(off < len) {
@@ -1959,6 +2021,13 @@ handle_one_command(int cfd, char *cmd)
   int i;
   int listed;
 
+  if(x6_is_chatty_draw_cmd(cmd)) {
+    if((x6_draw_rx_count++ % 256) == 0)
+      x6dbg("x6:wire:rx(sampled) fd=%d '%s'", cfd, cmd ? cmd : "(null)");
+  } else {
+    x6dbg("x6:wire:rx fd=%d '%s'", cfd, cmd ? cmd : "(null)");
+  }
+
   if(strncmp(cmd, "HELLO x6/1", 10) == 0) {
     char out[128];
     int sw;
@@ -2025,6 +2094,7 @@ handle_one_command(int cfd, char *cmd)
       evt.wid = id;
       if(wm_event_queue != 0) {
         x6_event_queue_enqueue(wm_event_queue, &evt);
+        x6dbg("x6:map queued MapRequest wid=%u owner_fd=%d wm_fd=%d", id, win->owner_fd, wm_client_fd);
       }
       x6_send_line(cfd, "PENDING map\n");  // Client is notified of pending state
       return;
@@ -2033,6 +2103,7 @@ handle_one_command(int cfd, char *cmd)
     // Otherwise, map directly
     win->mapped = 1;
     x6_raise_window(win);
+    x6dbg("x6:map direct wid=%u owner_fd=%d geom=%d,%d %dx%d", id, win->owner_fd, win->x, win->y, win->w, win->h);
     {
       struct x6_client *owner = x6_find_client_by_fd(win->owner_fd);
       if(owner && owner->in_use && owner->hello_done) {
@@ -2059,6 +2130,7 @@ handle_one_command(int cfd, char *cmd)
     }
     win->mapped = 1;
     x6_raise_window(win);
+    x6dbg("x6:wm_map wid=%u owner_fd=%d geom=%d,%d %dx%d", id, win->owner_fd, win->x, win->y, win->w, win->h);
     {
       struct x6_client *owner = x6_find_client_by_fd(win->owner_fd);
       if(owner && owner->in_use && owner->hello_done) {
@@ -2186,10 +2258,14 @@ handle_one_command(int cfd, char *cmd)
     return;
   }
 
-  if(sscanf(cmd, "DRAW_RECT %u %d %d %u %u %u", &id, &x, &y, &uw, &uh, &color) == 6) {
+  if(sscanf(cmd, "DRAW_RECT %u %d %d %u %u %u", &id, &x, &y, &uw, &uh, &color) == 6 ||
+     sscanf(cmd, "DRAW_DRAW_RECT %u %d %d %u %u %u", &id, &x, &y, &uw, &uh, &color) == 6) {
     int ox = 0;
     int oy = 0;
     struct x6_pixmap *pm = 0;
+
+    if(strncmp(cmd, "DRAW_DRAW_RECT ", 15) == 0)
+      x6dbg("x6:compat accepted malformed cmd='%s'", cmd);
     
     if(uw == 0 || uh == 0 || uw > 4096U || uh > 4096U) {
       x6_send_line(cfd, "OK draw\n");
@@ -2201,6 +2277,7 @@ handle_one_command(int cfd, char *cmd)
     /* Check if target is a pixmap */
     pm = find_pixmap((uint)id);
     if(pm) {
+      x6dbg("x6:draw_rect pixmap=%u xy=%d,%d wh=%dx%d color=%u", id, x, y, w, h, color);
       /* Draw to pixmap buffer */
       int i, j, px, py;
       for(j = 0; j < h && (y + j) < pm->height; j++) {
@@ -2228,6 +2305,8 @@ handle_one_command(int cfd, char *cmd)
       }
       ox = win->x;
       oy = win->y;
+      x6dbg("x6:draw_rect win=%u mapped=%d local=%d,%d wh=%dx%d abs=%d,%d color=%u",
+        id, win->mapped, x, y, w, h, ox + x, oy + y, color);
     }
     x6_canvas_fill_pixels(ox + x, oy + y, w, h, color);
     x6_send_line(cfd, "OK draw\n");
@@ -2245,6 +2324,8 @@ handle_one_command(int cfd, char *cmd)
       /* Check if target is a pixmap */
       pm = find_pixmap((uint)id);
       if(pm) {
+        if(tlen > 0 || (x % 64) == 0)
+          x6dbg("x6:draw_text pixmap=%u x=%d y=%d len=%d color=%u", id, x, y, tlen, color);
         x6_draw_text_pixmap(pm, x, y, color, text, tlen);
         x6_send_line(cfd, "OK text\n");
         return;
@@ -2264,6 +2345,13 @@ handle_one_command(int cfd, char *cmd)
         }
         ox = win->x;
         oy = win->y;
+      }
+
+      if(tlen > 0 || (x % 64) == 0) {
+        x6dbg("x6:draw_text win=%u mapped=%d local=%d,%d abs=%d,%d len=%d color=%u text='%.*s'",
+          id, (id == (uint)wm_redirect_root) ? 1 : (win ? win->mapped : 0),
+          x, y, ox + x, oy + y, tlen, color,
+          tlen > 48 ? 48 : tlen, text ? text : "");
       }
 
       if(tlen > 0)
@@ -2295,6 +2383,7 @@ handle_one_command(int cfd, char *cmd)
     /* Source should be a pixmap */
     src_pm = find_pixmap(src_id);
     if(!src_pm) {
+      x6dbg("x6:copy_area src=%u missing", src_id);
       x6_send_line(cfd, "ERR source-not-found\n");
       return;
     }
@@ -2302,9 +2391,16 @@ handle_one_command(int cfd, char *cmd)
     /* Destination should be a window */
     dest_win = find_window(dst_id);
     if(!dest_win) {
+      x6dbg("x6:copy_area dst=%u missing", dst_id);
       x6_send_line(cfd, "ERR dest-not-found\n");
       return;
     }
+
+    x6dbg("x6:copy_area src=%u(%dx%d) dst=%u mapped=%d src_xy=%d,%d wh=%u,%u dst_xy=%d,%d dst_abs=%d,%d",
+          src_id, src_pm->width, src_pm->height,
+          dst_id, dest_win->mapped,
+          src_x, src_y, width, height, dest_x, dest_y,
+          dest_win->x + dest_x, dest_win->y + dest_y);
     
     if(!dest_win->mapped) {
       /* Silently succeed even if dest not mapped (happens in redraw) */
@@ -2887,6 +2983,8 @@ handle_one_command(int cfd, char *cmd)
     key_grabs[slot].wid = grab_wid;
     key_grabs[slot].keycode = keycode;
     key_grabs[slot].modifiers = modifiers;
+        x6dbg("x6:grab-key add fd=%d keycode=%u mods=0x%x wid=%u slot=%d",
+          cfd, keycode, modifiers, grab_wid, slot);
     x6_send_line(cfd, "OK key_grabbed\n");
     return;
   }
@@ -3374,6 +3472,7 @@ handle_one_command(int cfd, char *cmd)
     return;
   }
 
+  x6dbg("x6:unknown-cmd fd=%d cmd='%s'", cfd, cmd ? cmd : "(null)");
   x6_send_line(cfd, "ERR unknown\n");
 }
 
@@ -3462,6 +3561,7 @@ x6_flush_client_events(struct x6_client *client)
     } else {
       continue;
     }
+    x6dbg("x6:event->fd=%d '%s'", client->fd, eventbuf);
     x6_send_line(client->fd, eventbuf);
   }
 }

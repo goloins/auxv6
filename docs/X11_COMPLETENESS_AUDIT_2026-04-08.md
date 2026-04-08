@@ -194,6 +194,46 @@ Build status after this tranche:
 - make _x6 _dwm _xinit: success
 - make _st: success
 
+## Debug Session: st Mapped But No Visible Content (April 8, 2026)
+
+Observed runtime trace from `/tmp/st-debug.log`:
+- st reaches `xinit` successfully (`XOpenDisplay`, font/color init, `XCreateWindow`, `XMapWindow`, `XSync`).
+- st reaches runtime start (`about-to-run`) and exits map wait (`MapNotify received`).
+- st creates shell IO pipes in AUXV6 no-PTY mode and records parent/child fork success.
+- st reaches `ttynew`, `cresize`, initial `draw+flush`, and explicit `enter-loop` marker.
+
+What was changed during this debug cycle:
+1. Event delivery correctness
+- Added `MapNotify` emission in `x6` on map paths.
+- Added `MapNotify` parsing/routing in `x11` shim.
+
+2. Temporary st startup diagnostics
+- Added high-granularity breadcrumbs in `x.c` and `st.c`:
+	- startup milestones
+	- map wait exit
+	- no-PTY pipe/fork details
+	- tty read/write path counters
+	- select-loop wake diagnostics
+	- child exec/signal diagnostics
+
+3. Temporary behavior nudges for narrowing
+- Forced `MODE_VISIBLE` on after `MapNotify`.
+- Forced one early `draw()+XFlush()` after `cresize`.
+- Added short non-blocking select fallback for early loops in no-PTY mode.
+
+4. Shell selection trial
+- Switched st shell setting to `/bin/dash` for testing (`config.h` lane).
+
+Current inference:
+- The original `MapNotify` deadlock is fixed.
+- st advances past map and initial paint path.
+- Remaining issue is likely in loop wake/input flow or present path after first paint (still no visible terminal content despite entering loop).
+
+Next recommended probes:
+1. Confirm whether loop wake logs continue after `enter-loop` (or halt there).
+2. Confirm any `ttyread` records (shell output arrival) after loop entry.
+3. If loop + ttyread occur, instrument `xfinishdraw`/`XCopyArea` round-trip success path in shim/server.
+
 ## Follow-Up Fixes (Post Tranche)
 
 1. Repaired clip helper regression

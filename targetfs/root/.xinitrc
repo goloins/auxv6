@@ -1,4 +1,4 @@
 #!/bin/sh
 
 wallpaper '#4169E1'
-exec /usr/bin/st
+exec /usr/bin/dwm

@@ -92,16 +92,14 @@ RUNTIME_OBJS := \
   $(ROOT)/user/printf.o \
   $(ROOT)/user/resolve.o
 
+
 .PHONY: all clean toolchain-check
 
-all: toolchain-check $(ST_DIR)/config.h $(OUT)
+all: toolchain-check $(OUT)
 
 toolchain-check:
 	@$(CC) -m32 -dM -E -x c /dev/null | grep -q '__i386__' || \
 		(echo "ERROR: $(CC) is not producing i386 output with -m32" >&2; exit 1)
-
-$(ST_DIR)/config.h:
-	cp $(ST_DIR)/config.auxv6.h $@
 
 $(ST_DIR)/%.o: $(ST_DIR)/%.c $(ST_DIR)/config.h
 	$(CC) -c $(CFLAGS) -o $@ $<
@@ -114,4 +112,4 @@ $(OUT): $(OBJ) $(RUNTIME_OBJS)
 	$(OBJDUMP) -S $@ > $(ST_DIR)/st-auxv6.asm || true
 
 clean:
-	rm -f $(OBJ) $(OUT) $(ST_DIR)/config.h $(SRC:.c=.d)
+	rm -f $(OBJ) $(OUT) $(SRC:.c=.d)

@@ -21,6 +21,7 @@
  * To understand everything else, start reading main().
  */
 #include <errno.h>
+#include <fcntl.h>
 #include <locale.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -87,6 +88,31 @@ typedef union {
 	float f;
 	const void *v;
 } Arg;
+
+static void
+dwmdbg(const char *fmt, ...)
+{
+	char line[256];
+	int n;
+	int cfd;
+	va_list ap;
+
+	va_start(ap, fmt);
+	n = vsnprintf(line, sizeof(line), fmt, ap);
+	va_end(ap);
+	if (n < 0)
+		return;
+	if ((size_t)n >= sizeof(line))
+		n = (int)sizeof(line) - 1;
+	line[n++] = '\n';
+	line[n] = '\0';
+
+	cfd = open("/dev/console", O_WRONLY);
+	if (cfd >= 0) {
+		write(cfd, line, (size_t)n);
+		close(cfd);
+	}
+}
 
 typedef struct {
 	unsigned int click;
@@ -1022,11 +1048,16 @@ keypress(XEvent *e)
 	ev = &e->xkey;
 	keysym = XKeycodeToKeysym(dpy, (KeyCode)ev->keycode, 0);
  	clean = CLEANMASK(ev->state);
+	dwmdbg("dwm:keypress keycode=%u state=0x%x clean=0x%x keysym=0x%lx",
+	       ev->keycode, ev->state, clean, (unsigned long)keysym);
 	for (i = 0; i < LENGTH(keys); i++)
 		if (keysym == keys[i].keysym
 		&& CLEANMASK(keys[i].mod) == clean
-		&& keys[i].func)
+		&& keys[i].func) {
+			dwmdbg("dwm:keypress matched idx=%u mod=0x%x keysym=0x%lx func=%p",
+			       i, keys[i].mod, (unsigned long)keys[i].keysym, (void *)keys[i].func);
 			keys[i].func(&(keys[i].arg));
+		}
 }
 
 void
@@ -1402,9 +1433,12 @@ run(void)
 	XEvent ev;
 	/* main event loop */
 	XSync(dpy, False);
-	while (running && !XNextEvent(dpy, &ev))
+	while (running && !XNextEvent(dpy, &ev)) {
+		if (ev.type == KeyPress || ev.type == KeyRelease)
+			dwmdbg("dwm:run event type=%d keycode=%u state=0x%x", ev.type, ev.xkey.keycode, ev.xkey.state);
 		if (handler[ev.type])
 			handler[ev.type](&ev); /* call handler */
+	}
 }
 
 void
@@ -1665,10 +1699,15 @@ void
 spawn(const Arg *arg)
 {
 	struct sigaction sa;
+	pid_t pid;
+	char **argv;
 
 	if (arg->v == dmenucmd)
 		dmenumon[0] = '0' + selmon->num;
-	if (fork() == 0) {
+	argv = (char **)arg->v;
+	dwmdbg("dwm:spawn request cmd=%s", (argv && argv[0]) ? argv[0] : "(null)");
+	pid = fork();
+	if (pid == 0) {
 		if (dpy)
 			close(ConnectionNumber(dpy));
 		setsid();
@@ -1678,8 +1717,14 @@ spawn(const Arg *arg)
 		sa.sa_handler = SIG_DFL;
 		sigaction(SIGCHLD, &sa, NULL);
 
-		execvp(((char **)arg->v)[0], (char **)arg->v);
-		die("dwm: execvp '%s' failed:", ((char **)arg->v)[0]);
+		dwmdbg("dwm:spawn child execvp cmd=%s", (argv && argv[0]) ? argv[0] : "(null)");
+		execvp(argv[0], argv);
+		dwmdbg("dwm:spawn execvp failed cmd=%s errno=%d", (argv && argv[0]) ? argv[0] : "(null)", errno);
+		die("dwm: execvp '%s' failed:", argv[0]);
+	} else if (pid < 0) {
+		dwmdbg("dwm:spawn fork failed errno=%d", errno);
+	} else {
+		dwmdbg("dwm:spawn parent forked pid=%d cmd=%s", (int)pid, (argv && argv[0]) ? argv[0] : "(null)");
 	}
 }
 

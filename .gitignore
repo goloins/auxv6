@@ -67,6 +67,9 @@ user/isotest
 user/looptest
 user/ahcitest
 targetfs/tmp/test.iso
+targetfs/usr/bin/st
+targetfs/bin/st
+ports/st-0.9.3/_st
 user/mv
 user/umount
 user/uname
@@ -174,3 +177,4 @@ aux.bootkern
 user/fdtest
 .btrfsroot/
 
+targetfs/usr/bin/st

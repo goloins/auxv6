@@ -7,7 +7,7 @@
 static char *font = "fixed:pixelsize=16";
 static int borderpx = 2;
 
-static char *shell = "/bin/sh";
+static char *shell = "/bin/dash";
 char *utmp = NULL;
 char *scroll = NULL;
 char *stty_args = "stty raw pass8 nl -echo -iexten -cstopb 38400";
