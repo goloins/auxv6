@@ -3282,6 +3282,10 @@ consputc_ansi(struct console_tty_state *t, int c)
 #define KEY_F11   0xF4
 #define KEY_F12   0xF5
 
+#define KBDMOD_SHIFT (1U << 0)
+#define KBDMOD_CTL   (1U << 1)
+#define KBDMOD_ALT   (1U << 2)
+
 static int
 console_utf8_erase_len(struct console_tty_state *t)
 {
@@ -3840,6 +3844,12 @@ console_mouse_poll_events(int *rd, int *wr, int *err)
   release(&cons.input_lock);
 }
 
+void
+console_kbd_poll_events(int *rd, int *wr, int *err)
+{
+  kbd_event_poll(rd, wr, err);
+}
+
 /* --------------------------------------------------------------------------
  * consoleread / consolewrite
  * -------------------------------------------------------------------------- */
@@ -3894,6 +3904,28 @@ consoleread(struct inode *ip, char *dst, uint64_t off, int n)
       got_bytes += (int)sizeof(*evt);
     }
     release(&cons.input_lock);
+    ilock(ip);
+    return got_bytes;
+  }
+
+  if(ip && ip->minor == CONSOLE_MINOR_KBD0) {
+    int got_events;
+    int max_events;
+    int got_bytes;
+
+    iunlock(ip);
+    if(n < (int)sizeof(struct aux_kbd_event)) {
+      ilock(ip);
+      return -1;
+    }
+
+    max_events = n / (int)sizeof(struct aux_kbd_event);
+    got_events = kbd_event_read((struct aux_kbd_event *)dst, max_events, 1);
+    if(got_events < 0) {
+      ilock(ip);
+      return -1;
+    }
+    got_bytes = got_events * (int)sizeof(struct aux_kbd_event);
     ilock(ip);
     return got_bytes;
   }
@@ -4025,6 +4057,11 @@ consolewrite(struct inode *ip, char *buf, uint64_t off, int n)
   iunlock(ip);
 
   if(ip && ip->minor == CONSOLE_MINOR_MOUSE0) {
+    ilock(ip);
+    return -1;
+  }
+
+  if(ip && ip->minor == CONSOLE_MINOR_KBD0) {
     ilock(ip);
     return -1;
   }

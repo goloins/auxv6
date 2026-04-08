@@ -1091,6 +1091,7 @@ x11_keycode_to_keysym(KeyCode keycode)
   switch ((unsigned int)keycode) {
     case 8:   return XK_BackSpace;
     case 9:   return XK_Tab;
+    case 10:  return XK_Return;
     case 13:  return XK_Return;
     case 27:  return XK_Escape;
     case 127: return XK_Delete;
@@ -1098,7 +1099,17 @@ x11_keycode_to_keysym(KeyCode keycode)
   }
 }
 
-KeyCode XKeysymToKeycode(Display *display, KeySym keysym) { (void)display; return (KeyCode)(keysym & 0xff); }
+KeyCode XKeysymToKeycode(Display *display, KeySym keysym) {
+  (void)display;
+  switch ((unsigned long)keysym) {
+    case XK_BackSpace: return 8;
+    case XK_Tab:       return 9;
+    case XK_Return:    return 10;
+    case XK_Escape:    return 27;
+    case XK_Delete:    return 127;
+    default:           return (KeyCode)(keysym & 0xff);
+  }
+}
 KeySym XKeycodeToKeysym(Display *display, KeyCode keycode, int index) { (void)display; (void)index; return x11_keycode_to_keysym(keycode); }
 void XDisplayKeycodes(Display *display, int *min_keycodes_return, int *max_keycodes_return) {
   (void)display;

@@ -33,6 +33,7 @@ struct vnode_ops;
 struct mount;
 struct vfs_mount_info;
 struct vnode;
+struct aux_kbd_event;
 
 struct kalloc_stats_k {
 	uint total_pages;
@@ -133,6 +134,7 @@ int             console_gfx_server_owner(void);
 uint            console_input_events(void);
 void            console_mouse_packet(int dx, int dy, uchar buttons);
 void            console_mouse_poll_events(int *rd, int *wr, int *err);
+void            console_kbd_poll_events(int *rd, int *wr, int *err);
 uint            console_gfx_stats_sync_calls(void);
 uint            console_gfx_stats_cells_changed(void);
 uint            console_gfx_stats_cells_rendered(void);
@@ -441,7 +443,11 @@ uint            kpage_refcount(uint pa);
 int             kpage_is_managed(uint pa);
 
 // kbd.c
+int             kbdgetc(void);
 void            kbdintr(void);
+uint            kbdmodstate(void);
+int             kbd_event_read(struct aux_kbd_event *dst, int max_events, int blocking);
+void            kbd_event_poll(int *rd, int *wr, int *err);
 
 // mouse.c
 void            mouseinit(void);

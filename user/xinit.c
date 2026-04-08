@@ -66,8 +66,15 @@ probe_x6_ready(int port)
 {
   int fd;
   struct sockaddr_in dst;
-  char buf[160];
+  char buf[256];
+  char line[256];
+  int i;
+  int j;
+  int state;
   int n;
+  int to_ticks;
+
+  to_ticks = 300; /* 3 seconds at 100Hz */
 
   fd = socket(AF_INET, SOCK_STREAM, 0);
   if(fd < 0)
@@ -83,36 +90,77 @@ probe_x6_ready(int port)
     return -1;
   }
 
-  n = recv(fd, buf, sizeof(buf) - 1);
-  if(n <= 0) {
-    close(fd);
-    return -1;
-  }
-  buf[n] = 0;
+  dprintf(1, "xinit: probe connected fd=%d port=%d\n", fd, port);
 
-  send(fd, "HELLO x6/1\n", 11);
-  n = recv(fd, buf, sizeof(buf) - 1);
-  if(n <= 0)
-  {
-    close(fd);
-    return -1;
-  }
-  buf[n] = 0;
-
-  if(strncmp(buf, "OK proto=", 9) != 0) {
-    close(fd);
-    return -1;
-  }
-
-  send(fd, "DETACH\n", 7);
-  n = recv(fd, buf, sizeof(buf) - 1);
-  close(fd);
-  if(n > 0) {
-    buf[n] = 0;
-    if(strncmp(buf, "BYE", 3) != 0)
+  state = 0;
+  for(i = 0; i < 20; i++) {
+    n = recvtimeout(fd, buf, sizeof(buf) - 1, to_ticks);
+    if(n <= 0) {
+      dprintf(2, "xinit: probe recv failed state=%d n=%d\n", state, n);
+      close(fd);
       return -1;
+    }
+    buf[n] = 0;
+
+    j = 0;
+    while(j < n) {
+      int k;
+      int ll;
+
+      while(j < n && (buf[j] == '\r' || buf[j] == '\n'))
+        j++;
+      if(j >= n)
+        break;
+      k = j;
+      while(k < n && buf[k] != '\r' && buf[k] != '\n')
+        k++;
+
+      ll = k - j;
+      if(ll >= (int)sizeof(line))
+        ll = (int)sizeof(line) - 1;
+      memmove(line, buf + j, (size_t)ll);
+      line[ll] = 0;
+      j = k;
+
+      if(line[0] == 0)
+        continue;
+
+      if(strncmp(line, "EVENT ", 6) == 0)
+        continue;
+
+      if(state == 0) {
+        if(strncmp(line, "X6/1 READY", 10) != 0)
+          continue;
+        dprintf(1, "xinit: probe READY: %s\n", line);
+        send(fd, "HELLO x6/1\n", 11);
+        dprintf(1, "xinit: probe sent HELLO\n");
+        state = 1;
+        continue;
+      }
+
+      if(state == 1) {
+        if(strncmp(line, "OK proto=", 9) != 0)
+          continue;
+        dprintf(1, "xinit: probe HELLO reply: %s\n", line);
+        send(fd, "DETACH\n", 7);
+        dprintf(1, "xinit: probe sent DETACH\n");
+        state = 2;
+        continue;
+      }
+
+      if(state == 2) {
+        if(strncmp(line, "BYE", 3) != 0)
+          continue;
+        dprintf(1, "xinit: probe DETACH reply: %s\n", line);
+        close(fd);
+        return 0;
+      }
+    }
   }
-  return 0;
+
+  dprintf(2, "xinit: probe timed out waiting for protocol completion\n");
+  close(fd);
+  return -1;
 }
 
 static int

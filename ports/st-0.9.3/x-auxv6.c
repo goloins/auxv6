@@ -410,20 +410,25 @@ aux_xinit(int cols, int rows)
 	auxw.ch = MAX((int)(16 * chscale), 1);
 	w = 2 * borderpx + cols * auxw.cw;
 	h = 2 * borderpx + rows * auxw.ch;
+	fprintf(stderr, "st: aux_xinit cols=%d rows=%d win=%dx%d\n", cols, rows, w, h);
 
 	auxw.dpy = XOpenDisplay(NULL);
 	if (!auxw.dpy)
 		die("cannot open display\n");
+	fprintf(stderr, "st: XOpenDisplay ok\n");
 	auxw.scr = DefaultScreen(auxw.dpy);
 	auxw.win = XCreateSimpleWindow(auxw.dpy, RootWindow(auxw.dpy, auxw.scr),
 			0, 0, (unsigned int)w, (unsigned int)h, 0, 0, 0);
+	fprintf(stderr, "st: XCreateSimpleWindow win=%lu\n", (unsigned long)auxw.win);
 	auxw.gc = XCreateGC(auxw.dpy, auxw.win, 0, NULL);
 	auxw.event_mask = KeyPressMask | ExposureMask | StructureNotifyMask | FocusChangeMask;
 	XSelectInput(auxw.dpy, auxw.win, auxw.event_mask);
 	auxw.wmdelete = XInternAtom(auxw.dpy, "WM_DELETE_WINDOW", False);
 	XMapWindow(auxw.dpy, auxw.win);
+	fprintf(stderr, "st: XMapWindow win=%lu\n", (unsigned long)auxw.win);
 	/* Request keyboard focus so x6 routes KeyPress events to our window. */
 	XSetInputFocus(auxw.dpy, auxw.win, RevertToPointerRoot, CurrentTime);
+	fprintf(stderr, "st: XSetInputFocus win=%lu\n", (unsigned long)auxw.win);
 	xloadcols();
 	xsettitle(opt_title);
 	aux_cresize(w, h);
@@ -439,6 +444,7 @@ aux_run(void)
 	int maxfd;
 
 	ttyfd = ttynew(opt_line, shell, opt_io, opt_cmd);
+	fprintf(stderr, "st: ttynew fd=%d\n", ttyfd);
 	xfd = ConnectionNumber(auxw.dpy);
 	maxfd = (ttyfd > xfd) ? ttyfd : xfd;
 	draw();

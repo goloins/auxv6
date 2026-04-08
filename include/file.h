@@ -55,6 +55,7 @@ extern struct devsw devsw[];
 #define CONSOLE 1
 #define CONSOLE_MINOR_FB0 100
 #define CONSOLE_MINOR_MOUSE0 101
+#define CONSOLE_MINOR_KBD0 102
 #define BLOCKDEV 2
 #define PTYDEV 3
 #define SERIALDEV 4

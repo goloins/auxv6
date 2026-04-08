@@ -10,4 +10,15 @@ struct aux_mouse_event {
   uchar changed;
 };
 
+struct aux_kbd_event {
+  ushort keycode;
+  ushort state;
+  uchar value;
+  uchar reserved[3];
+};
+
+#define AUX_KBD_VALUE_RELEASE 0
+#define AUX_KBD_VALUE_PRESS   1
+#define AUX_KBD_VALUE_REPEAT  2
+
 #endif
