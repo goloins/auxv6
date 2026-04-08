@@ -21,7 +21,6 @@ typedef struct {
 } atom_entry;
 
 static Display *g_display;
-static unsigned long g_next_window = 2;
 static unsigned long g_next_atom = 128;
 static atom_entry g_atoms[X11_MAX_ATOMS];
 static int g_atom_count;
@@ -235,6 +234,22 @@ x11_parse_event_line(Display *display, const char *line, XEvent *event)
     event->xmotion.y_root = event->xmotion.y;
     return 0;
   }
+  if (strncmp(line + 6, "ConfigureNotify", 15) == 0) {
+    event->type = ConfigureNotify;
+    sscanf(line, "EVENT ConfigureNotify wid=%u x=%d y=%d w=%d h=%d",
+           &event->xconfigure.window,
+           &event->xconfigure.x, &event->xconfigure.y,
+           &event->xconfigure.width, &event->xconfigure.height);
+    return 0;
+  }
+  if (strncmp(line + 6, "Expose", 6) == 0) {
+    event->type = Expose;
+    sscanf(line, "EVENT Expose wid=%u x=%d y=%d w=%d h=%d",
+           &event->xexpose.window,
+           &event->xexpose.x, &event->xexpose.y,
+           &event->xexpose.width, &event->xexpose.height);
+    return 0;
+  }
   return -1;
 }
 
@@ -261,6 +276,7 @@ x11_event_mask_for_type(int type)
   case FocusOut:
     return FocusChangeMask;
   case DestroyNotify:
+  case ConfigureNotify:
     return StructureNotifyMask;
   default:
     return 0;
@@ -523,11 +539,12 @@ XCreateWindow(Display *display, Window parent, int x, int y,
   if (!display)
     return None;
 
-  w = g_next_window++;
-  snprintf(cmd, sizeof(cmd), "CREATE %u %d %d %d %d\n", (uint)w, x, y, (int)width, (int)height);
+  snprintf(cmd, sizeof(cmd), "CREATE %d %d %d %d\n", x, y, (int)width, (int)height);
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return None;
-  return strncmp(line, "OK create", 9) == 0 ? w : None;
+  if (sscanf(line, "OK create wid=%lu", &w) != 1)
+    return None;
+  return w;
 }
 
 Window
@@ -610,11 +627,13 @@ int XLowerWindow(Display *display, Window w) { (void)display; (void)w; return 0;
 int
 XConfigureWindow(Display *display, Window w, unsigned int value_mask, XWindowChanges *values)
 {
-  int x = values ? values->x : 0;
-  int y = values ? values->y : 0;
-  unsigned int ww = values ? (unsigned int)values->width : 1;
-  unsigned int hh = values ? (unsigned int)values->height : 1;
-  (void)value_mask;
+  int x = (values && (value_mask & CWX))      ? values->x      : 0;
+  int y = (values && (value_mask & CWY))      ? values->y      : 0;
+  unsigned int ww = (values && (value_mask & CWWidth))  ? (unsigned int)values->width  : 0;
+  unsigned int hh = (values && (value_mask & CWHeight)) ? (unsigned int)values->height : 0;
+  /* If no geometry fields are set, nothing to configure */
+  if (!(value_mask & (CWX | CWY | CWWidth | CWHeight)))
+    return 0;
   return XMoveResizeWindow(display, w, x, y, ww, hh);
 }
 
@@ -1054,6 +1073,15 @@ XPending(Display *display)
     return 0;
   if (g_has_pending_event)
     return 1;
+
+  /* Check if we already have bytes buffered from a previous recv */
+  if (g_rxlen > 0) {
+    if (x11_read_event(display, &ev) < 0)
+      return 0;
+    g_pending_event = ev;
+    g_has_pending_event = 1;
+    return 1;
+  }
 
   pfd.fd = display->fd;
   pfd.events = POLLIN;

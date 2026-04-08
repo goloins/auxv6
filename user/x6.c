@@ -51,6 +51,8 @@
 #define X6_EVENT_BUTTON_PRESS 7
 #define X6_EVENT_BUTTON_RELEASE 8
 #define X6_EVENT_MOTION_NOTIFY 9
+#define X6_EVENT_CONFIGURE_NOTIFY 10
+#define X6_EVENT_EXPOSE 11
 
 struct x6_event {
   int type;
@@ -107,6 +109,7 @@ static volatile sig_atomic_t keep_running = 1;
 static struct x6_window wins[X6_MAX_WINDOWS];
 static struct x6_window *wins_by_id[256];  // Hash table for O(1) window lookup by ID (id % 256)
 static struct x6_client clients[X6_MAX_CLIENTS];
+static uint x6_next_wid = 2;  // Server-assigned window IDs; 0=none, 1=root
 
 static struct x6_event_queue *current_event_queue = 0;
 static struct x6_event_queue *wm_event_queue = 0;
@@ -1545,11 +1548,8 @@ handle_one_command(int cfd, char *cmd)
     return;
   }
 
-  if(sscanf(cmd, "CREATE %u %d %d %d %d", &id, &x, &y, &w, &h) == 5) {
-    if(find_window(id) != 0) {
-      x6_send_line(cfd, "ERR exists\n");
-      return;
-    }
+  if(sscanf(cmd, "CREATE %d %d %d %d", &x, &y, &w, &h) == 4) {
+    id = x6_next_wid++;
     win = alloc_window(id);
     if(win == 0) {
       x6_send_line(cfd, "ERR no-slots\n");
@@ -1564,7 +1564,11 @@ handle_one_command(int cfd, char *cmd)
     win->w = w;
     win->h = h;
     win->owner_fd = cfd;
-    x6_send_line(cfd, "OK create\n");
+    {
+      char out[64];
+      snprintf(out, sizeof(out), "OK create wid=%u\n", id);
+      x6_send_line(cfd, out);
+    }
     return;
   }
 
@@ -1661,14 +1665,18 @@ handle_one_command(int cfd, char *cmd)
         x6_send_line(cfd, "ERR not-found\n");
         return;
       }
+      if(!win->mapped) {
+        x6_send_line(cfd, "OK draw\n");
+        return;
+      }
       ox = win->x;
       oy = win->y;
     }
     x6_canvas_fill_pixels(ox + x, oy + y, w, h, color);
     x6_draw_rect_count++;
-    if(x6_draw_rect_count <= 5) {
-      dprintf(1, "x6: draw#%u wid=%u xy=%d,%d wh=%d,%d color=%u\n",
-              x6_draw_rect_count, id, ox + x, oy + y, w, h, color);
+    if(x6_draw_rect_count <= 30) {
+      dprintf(1, "x6: draw#%u wid=%u abs=%d,%d wh=%d,%d\n",
+              x6_draw_rect_count, id, ox + x, oy + y, w, h);
     }
     x6_send_line(cfd, "OK draw\n");
     return;
@@ -1687,6 +1695,10 @@ handle_one_command(int cfd, char *cmd)
         win = find_window(id);
         if(win == 0) {
           x6_send_line(cfd, "ERR not-found\n");
+          return;
+        }
+        if(!win->mapped) {
+          x6_send_line(cfd, "OK text\n");
           return;
         }
         ox = win->x;
@@ -1732,10 +1744,22 @@ handle_one_command(int cfd, char *cmd)
     }
     if(w < 1) w = 1;
     if(h < 1) h = 1;
+    dprintf(1, "x6: wm_cfg wid=%u x=%d y=%d w=%d h=%d mapped=%d\n", id, x, y, w, h, win->mapped);
     win->x = x;
     win->y = y;
     win->w = w;
     win->h = h;
+    // Notify the window owner of its new geometry
+    {
+      struct x6_client *owner = x6_find_client_by_fd(win->owner_fd);
+      if(owner && owner->in_use && owner->hello_done) {
+        struct x6_event cn;
+        cn.type = X6_EVENT_CONFIGURE_NOTIFY;
+        cn.wid = id;
+        cn.x = x; cn.y = y; cn.w = w; cn.h = h;
+        x6_event_queue_enqueue(&owner->queue, &cn);
+      }
+    }
     x6_send_line(cfd, "OK configured\n");
     return;
   }
@@ -1752,6 +1776,17 @@ handle_one_command(int cfd, char *cmd)
       return;
     }
     win->mapped = 1;
+    // Notify the window owner to redraw
+    {
+      struct x6_client *owner = x6_find_client_by_fd(win->owner_fd);
+      if(owner && owner->in_use && owner->hello_done) {
+        struct x6_event ex;
+        ex.type = X6_EVENT_EXPOSE;
+        ex.wid = id;
+        ex.x = 0; ex.y = 0; ex.w = win->w; ex.h = win->h;
+        x6_event_queue_enqueue(&owner->queue, &ex);
+      }
+    }
     x6_send_line(cfd, "OK mapped\n");
     return;
   }
@@ -2125,6 +2160,14 @@ x6_flush_client_events(struct x6_client *client)
       break;
     if(evt.type == X6_EVENT_MAP_REQUEST) {
       snprintf(eventbuf, sizeof(eventbuf), "EVENT MapRequest wid=%u\n", evt.wid);
+    } else if(evt.type == X6_EVENT_CONFIGURE_NOTIFY) {
+      snprintf(eventbuf, sizeof(eventbuf),
+               "EVENT ConfigureNotify wid=%u x=%d y=%d w=%d h=%d\n",
+               evt.wid, evt.x, evt.y, evt.w, evt.h);
+    } else if(evt.type == X6_EVENT_EXPOSE) {
+      snprintf(eventbuf, sizeof(eventbuf),
+               "EVENT Expose wid=%u x=%d y=%d w=%d h=%d\n",
+               evt.wid, evt.x, evt.y, evt.w, evt.h);
     } else if(evt.type == X6_EVENT_CONFIGURE_REQUEST) {
       snprintf(eventbuf, sizeof(eventbuf),
                "EVENT ConfigureRequest wid=%u geom=%d,%d %dx%d\n",
