@@ -201,6 +201,8 @@ fileread(struct file *f, char *addr, int n)
     return -1;
   if(f->type == FD_PIPE)
     return piperead(f->pipe, addr, n);
+  if(f->type == FD_SOCKET)
+    return socket_fileread(f, addr, n);
   if(f->type == FD_INODE){
     VFSDBG("vfs: fileread dev=%d ino=%d off=%d n=%d\n",
            f->ip->dev, f->ip->inum, (int)f->off, n);
@@ -340,6 +342,8 @@ filewrite(struct file *f, char *addr, int n)
     return -1;
   if(f->type == FD_PIPE)
     return pipewrite(f->pipe, addr, n);
+  if(f->type == FD_SOCKET)
+    return socket_filewrite(f, addr, n);
   if(f->type == FD_INODE){
     VFSDBG("vfs: filewrite dev=%d ino=%d off=%d n=%d\n",
            f->ip->dev, f->ip->inum, (int)f->off, n);

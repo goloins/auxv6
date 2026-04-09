@@ -730,6 +730,139 @@ ksock_recvfrom_timeout(struct socket *s, char *buf, uint len, int timeout_ticks,
   return n;
 }
 
+int
+socket_fileread(struct file *f, char *dst, int n)
+{
+  struct socket *s;
+  int r;
+
+  if(f == 0 || f->type != FD_SOCKET || dst == 0)
+    return -1;
+  if(n < 0)
+    return -1;
+  if(n == 0)
+    return 0;
+
+  s = f->socket;
+  if(s == 0)
+    return -1;
+
+  acquire(&socket_lock);
+  while(s->recv_len == 0) {
+    if(socket_stream_eof_locked(s)) {
+      release(&socket_lock);
+      return 0;
+    }
+    sleep(s, &socket_lock);
+  }
+
+  r = socket_recv_copy_locked(s, dst, n, 0);
+  release(&socket_lock);
+
+  socket_stream_window_update(s, r);
+  return r;
+}
+
+int
+socket_filewrite(struct file *f, char *src_buf, int n)
+{
+  struct socket *s;
+  struct sockaddr_in src;
+  struct sockaddr_in dst;
+  struct ifnet *ifp;
+  uint route_src;
+  int type;
+  uint proto;
+  uint tcp_state;
+
+  if(f == 0 || f->type != FD_SOCKET || src_buf == 0)
+    return -1;
+  if(n < 0)
+    return -1;
+  if(n == 0)
+    return 0;
+
+  s = f->socket;
+  if(s == 0)
+    return -1;
+
+  acquire(&socket_lock);
+  if(s->shut_wr) {
+    release(&socket_lock);
+    return -1;
+  }
+  memmove(&src, &s->local_addr, sizeof(src));
+  memmove(&dst, &s->remote_addr, sizeof(dst));
+  type = (int)s->type;
+  proto = s->protocol;
+  tcp_state = s->tcp.state;
+  release(&socket_lock);
+
+  route_src = 0;
+  ifp = route_lookup(dst.sin_addr, &route_src, 0);
+  if(ifp == 0)
+    return -1;
+  if(src.sin_addr == 0)
+    src.sin_addr = route_src;
+
+  if(type == SOCK_DGRAM) {
+    if((uint)n > MBUF_SIZE - sizeof(struct udp_hdr))
+      return -1;
+    if(src.sin_port == 0 || dst.sin_port == 0)
+      return -1;
+    if(udp_output(ifp, &src, &dst, src_buf, (uint)n) < 0)
+      return -1;
+    return n;
+  }
+
+  if(type == SOCK_STREAM) {
+    const char *sp;
+    int remaining;
+    int total_sent;
+    int r;
+
+    if(src.sin_port == 0 || dst.sin_port == 0)
+      return -1;
+    if(tcp_state != TCPS_ESTABLISHED)
+      return -1;
+
+    sp = src_buf;
+    remaining = n;
+    total_sent = 0;
+    while(remaining > 0) {
+      r = tcp_output(ifp, &src, &dst, (char*)sp, (uint)remaining);
+      if(r <= 0)
+        break;
+      total_sent += r;
+      sp += r;
+      remaining -= r;
+    }
+    return (total_sent > 0) ? total_sent : -1;
+  }
+
+  if(type == SOCK_RAW) {
+    uchar snd_ttl;
+
+    if((uint)n > MBUF_SIZE - sizeof(struct ip_hdr))
+      return -1;
+    if(dst.sin_addr == 0)
+      return -1;
+    if(src.sin_addr == 0)
+      src.sin_addr = route_src;
+
+    acquire(&socket_lock);
+    snd_ttl = s->ttl ? s->ttl : 64;
+    release(&socket_lock);
+
+    if(ip_output_ttl(ifp, (uchar)proto, src.sin_addr, dst.sin_addr,
+                     src_buf, (uint)n, snd_ttl) < 0)
+      return -1;
+    return n;
+  }
+
+  return -1;
+}
+
 // ============ SYSCALL HANDLERS ============
 
 // socket(family, type, protocol) syscall
