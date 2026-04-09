@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include "X11/Xlib.h"
 #include "X11/Xutil.h"
+#include "X11/Xresource.h"
 #include "X11/keysym.h"
 #include "X11/extensions/Xcomposite.h"
 #include "X11/extensions/Xdamage.h"
@@ -39,6 +40,7 @@
 #define X11_MAX_SHM_IMAGES 256
 #define X11_MAX_SELECTIONS 16
 #define X11_MAX_EVENTS 128
+#define X11_MAX_CONTEXT_ENTRIES 512
 #define X11_X6_ANY_MODIFIER (1U << 15)
 #define DoRed 1
 #define DoGreen 2
@@ -51,6 +53,17 @@
 #define X11_EXT_EVENT_BASE_XFIXES 120
 #define X11_EXT_EVENT_BASE_XINERAMA 130
 #define X11_EXT_EVENT_BASE_XSHM 140
+#define X11_EXT_EVENT_BASE_RENDER 150
+
+#define X11_EXT_OPCODE_COMPOSITE 130
+#define X11_EXT_OPCODE_DAMAGE 131
+#define X11_EXT_OPCODE_RANDR 132
+#define X11_EXT_OPCODE_SHAPE 133
+#define X11_EXT_OPCODE_XINERAMA 134
+#define X11_EXT_OPCODE_XFIXES 135
+#define X11_EXT_OPCODE_XSHM 136
+#define X11_EXT_OPCODE_RENDER 137
+#define X11_EXT_OPCODE_XRES 138
 
 #define X11_EXT_ERROR_BASE_COMPOSITE 160
 #define X11_EXT_ERROR_BASE_DAMAGE 170
@@ -97,6 +110,34 @@ static int g_x11_draw_call_count;
 static int g_x11_draw_reply_seen;
 static unsigned long g_ext_event_serial = 1;
 static Time g_ext_event_time = 1;
+static unsigned long g_next_cursor_id = 0x10000;
+
+#define X11_XRM_MAX_ENTRIES 256
+
+struct x11_xrm_entry {
+  char *name;
+  char *value;
+};
+
+struct _XrmHashBucketRec {
+  int count;
+  struct x11_xrm_entry entries[X11_XRM_MAX_ENTRIES];
+};
+
+struct x11_context_entry {
+  int in_use;
+  XID rid;
+  XContext context;
+  const char *data;
+};
+
+struct _XRegion {
+  XRectangle extents;
+};
+
+static char *g_xrm_root_string;
+static struct x11_context_entry g_context_entries[X11_MAX_CONTEXT_ENTRIES];
+static XContext g_next_context_id = 1;
 
 static int
 x11_is_chatty_draw_cmd(const char *cmd)
@@ -210,6 +251,17 @@ struct x11_gc_state {
   int in_use;
   GC id;
   unsigned long fg;
+  unsigned long bg;
+  int function;
+  int fill_style;
+  Pixmap tile;
+  int ts_x_origin;
+  int ts_y_origin;
+  Pixmap clip_mask;
+  int clip_x_origin;
+  int clip_y_origin;
+  int dash_offset;
+  char dashes;
 };
 
 struct x11_pixmap_state {
@@ -594,6 +646,9 @@ x11_alloc_gc(void)
       g_gcs[i].in_use = 1;
       g_gcs[i].id = g_next_gc++;
       g_gcs[i].fg = 0xffffffUL;
+      g_gcs[i].bg = 0x000000UL;
+      g_gcs[i].function = 3;
+      g_gcs[i].fill_style = FillSolid;
       return &g_gcs[i];
     }
   }
@@ -1459,6 +1514,24 @@ x11_event_find_and_pop_window_mask(Window w, long mask, XEvent *ev)
 }
 
 static int
+x11_event_find_and_pop_predicate(Display *display, XEvent *ev,
+                                 Bool (*predicate)(Display *, XEvent *, XPointer),
+                                 XPointer arg)
+{
+  int i;
+
+  if (!display || !ev || !predicate)
+    return -1;
+
+  for (i = 0; i < g_event_count; i++) {
+    XEvent candidate = g_events[i];
+    if (predicate(display, &candidate, arg))
+      return x11_event_pop_index(i, ev);
+  }
+  return -1;
+}
+
+static int
 x11_handle_unsolicited_line(Display *display, const char *line)
 {
   if (!display || !line)
@@ -2201,13 +2274,14 @@ XCreateWindow(Display *display, Window parent, int x, int y,
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
   Window w;
   char attrcmd[X6_BUF_SIZE];
-  (void)parent; (void)depth; (void)class;
+  (void)depth; (void)class;
   (void)visual;
 
   if (!display)
     return None;
 
-  snprintf(cmd, sizeof(cmd), "CREATE %d %d %d %d\n", x, y, (int)width, (int)height);
+  snprintf(cmd, sizeof(cmd), "CREATE %u %d %d %d %d\n", (uint)(parent ? parent : display->root),
+           x, y, (int)width, (int)height);
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return None;
   if (sscanf(line, "OK create wid=%lu", &w) != 1)
@@ -2561,6 +2635,26 @@ Bool XCheckMaskEvent(Display *display, long event_mask, XEvent *event) {
 }
 
 Bool
+XCheckIfEvent(Display *display, XEvent *event_return,
+              Bool (*predicate)(Display *, XEvent *, XPointer),
+              XPointer arg)
+{
+  if (!display || !event_return || !predicate)
+    return False;
+
+  if (x11_event_find_and_pop_predicate(display, event_return, predicate, arg) == 0)
+    return True;
+
+  if (!XPending(display))
+    return False;
+
+  if (x11_event_find_and_pop_predicate(display, event_return, predicate, arg) == 0)
+    return True;
+
+  return False;
+}
+
+Bool
 XCheckTypedEvent(Display *display, int event_type, XEvent *event_return)
 {
   if (!display || !event_return)
@@ -2661,6 +2755,88 @@ XGetAtomName(Display *display, Atom atom)
 {
   (void)display;
   return (char *)atom_to_name(atom);
+}
+
+XContext
+XUniqueContext(void)
+{
+  XContext id;
+
+  id = g_next_context_id++;
+  if (id == 0)
+    id = g_next_context_id++;
+  return id;
+}
+
+int
+XSaveContext(Display *display, XID rid, XContext context, const char *data)
+{
+  int i;
+
+  (void)display;
+
+  for (i = 0; i < X11_MAX_CONTEXT_ENTRIES; i++) {
+    if (!g_context_entries[i].in_use)
+      continue;
+    if (g_context_entries[i].rid == rid && g_context_entries[i].context == context) {
+      g_context_entries[i].data = data;
+      return 0;
+    }
+  }
+
+  for (i = 0; i < X11_MAX_CONTEXT_ENTRIES; i++) {
+    if (g_context_entries[i].in_use)
+      continue;
+    g_context_entries[i].in_use = 1;
+    g_context_entries[i].rid = rid;
+    g_context_entries[i].context = context;
+    g_context_entries[i].data = data;
+    return 0;
+  }
+
+  return 1;
+}
+
+int
+XFindContext(Display *display, XID rid, XContext context, char **data_return)
+{
+  int i;
+
+  (void)display;
+
+  if (data_return)
+    *data_return = 0;
+
+  for (i = 0; i < X11_MAX_CONTEXT_ENTRIES; i++) {
+    if (!g_context_entries[i].in_use)
+      continue;
+    if (g_context_entries[i].rid != rid || g_context_entries[i].context != context)
+      continue;
+    if (data_return)
+      *data_return = (char *)g_context_entries[i].data;
+    return 0;
+  }
+
+  return 1;
+}
+
+int
+XDeleteContext(Display *display, XID rid, XContext context)
+{
+  int i;
+
+  (void)display;
+
+  for (i = 0; i < X11_MAX_CONTEXT_ENTRIES; i++) {
+    if (!g_context_entries[i].in_use)
+      continue;
+    if (g_context_entries[i].rid != rid || g_context_entries[i].context != context)
+      continue;
+    memset(&g_context_entries[i], 0, sizeof(g_context_entries[i]));
+    return 0;
+  }
+
+  return 1;
 }
 
 static int
@@ -3325,6 +3501,24 @@ int XUndefineCursor(Display *display, Window w) {
   return strncmp(line, "OK cursor_unset", 15) == 0 ? 0 : -1;
 }
 Cursor XCreateFontCursor(Display *display, unsigned int shape) { (void)display; return (Cursor)(shape + 1); }
+Cursor XCreatePixmapCursor(Display *display, Pixmap source, Pixmap mask,
+                           XColor *foreground_color, XColor *background_color,
+                           unsigned int x, unsigned int y) {
+  unsigned long id;
+
+  (void)display;
+  (void)source;
+  (void)mask;
+  (void)foreground_color;
+  (void)background_color;
+  (void)x;
+  (void)y;
+
+  id = g_next_cursor_id++;
+  if (id == 0)
+    id = g_next_cursor_id++;
+  return (Cursor)id;
+}
 int XFreeCursor(Display *display, Cursor cursor) { (void)display; (void)cursor; return 0; }
 
 Pixmap XCreatePixmap(Display *display, Drawable d, unsigned int width, unsigned int height, unsigned int depth) {
@@ -3387,13 +3581,41 @@ int XFreePixmap(Display *display, Pixmap pixmap) {
 }
 GC XCreateGC(Display *display, Drawable d, unsigned long valuemask, void *values) {
   struct x11_gc_state *gs;
+  XGCValues *v;
   (void)display;
   (void)d;
-  (void)valuemask;
-  (void)values;
   gs = x11_alloc_gc();
   if (!gs)
     return 0;
+
+  v = (XGCValues *)values;
+  if (v) {
+    if (valuemask & GCForeground)
+      gs->fg = v->foreground;
+    if (valuemask & GCBackground)
+      gs->bg = v->background;
+    if (valuemask & GCFunction)
+      gs->function = v->function;
+    if (valuemask & GCFillStyle)
+      gs->fill_style = v->fill_style;
+    if (valuemask & GCTile)
+      gs->tile = v->tile;
+    if (valuemask & GCTileStipXOrigin)
+      gs->ts_x_origin = v->ts_x_origin;
+    if (valuemask & GCTileStipYOrigin)
+      gs->ts_y_origin = v->ts_y_origin;
+    if (valuemask & GCClipMask)
+      gs->clip_mask = v->clip_mask;
+    if (valuemask & GCClipXOrigin)
+      gs->clip_x_origin = v->clip_x_origin;
+    if (valuemask & GCClipYOrigin)
+      gs->clip_y_origin = v->clip_y_origin;
+    if (valuemask & GCDashOffset)
+      gs->dash_offset = v->dash_offset;
+    if (valuemask & GCDashList)
+      gs->dashes = v->dashes;
+  }
+
   return gs->id;
 }
 int XFreeGC(Display *display, GC gc) {
@@ -3412,8 +3634,164 @@ int XSetForeground(Display *display, GC gc, unsigned long foreground) {
     gs->fg = foreground;
   return 0;
 }
+int XSetBackground(Display *display, GC gc, unsigned long background) {
+  struct x11_gc_state *gs;
+  (void)display;
+  gs = x11_find_gc(gc);
+  if (gs)
+    gs->bg = background;
+  return 0;
+}
+
+int XSetFillStyle(Display *display, GC gc, int fill_style) {
+  struct x11_gc_state *gs;
+  (void)display;
+  gs = x11_find_gc(gc);
+  if (gs)
+    gs->fill_style = fill_style;
+  return 0;
+}
+
+int XSetFunction(Display *display, GC gc, int function) {
+  struct x11_gc_state *gs;
+  (void)display;
+  gs = x11_find_gc(gc);
+  if (gs)
+    gs->function = function;
+  return 0;
+}
+
+int XSetTile(Display *display, GC gc, Pixmap tile) {
+  struct x11_gc_state *gs;
+  (void)display;
+  gs = x11_find_gc(gc);
+  if (gs)
+    gs->tile = tile;
+  return 0;
+}
+
+int XSetTSOrigin(Display *display, GC gc, int ts_x_origin, int ts_y_origin) {
+  struct x11_gc_state *gs;
+  (void)display;
+  gs = x11_find_gc(gc);
+  if (gs) {
+    gs->ts_x_origin = ts_x_origin;
+    gs->ts_y_origin = ts_y_origin;
+  }
+  return 0;
+}
+
+int XSetClipMask(Display *display, GC gc, Pixmap pixmap) {
+  struct x11_gc_state *gs;
+  (void)display;
+  gs = x11_find_gc(gc);
+  if (gs)
+    gs->clip_mask = pixmap;
+  return 0;
+}
+
+int XSetClipRectangles(Display *display, GC gc, int clip_x_origin, int clip_y_origin,
+                       XRectangle *rectangles, int n, int ordering) {
+  struct x11_gc_state *gs;
+  (void)display;
+  (void)rectangles;
+  (void)n;
+  (void)ordering;
+  gs = x11_find_gc(gc);
+  if (gs) {
+    gs->clip_x_origin = clip_x_origin;
+    gs->clip_y_origin = clip_y_origin;
+  }
+  return 0;
+}
+
+int XSetDashes(Display *display, GC gc, int dash_offset, const char *dash_list, int n) {
+  struct x11_gc_state *gs;
+  (void)display;
+  gs = x11_find_gc(gc);
+  if (!gs)
+    return 0;
+  gs->dash_offset = dash_offset;
+  gs->dashes = (dash_list && n > 0) ? dash_list[0] : 0;
+  return 0;
+}
+
+int XChangeGC(Display *display, GC gc, unsigned long valuemask, XGCValues *values) {
+  struct x11_gc_state *gs;
+
+  (void)display;
+  gs = x11_find_gc(gc);
+  if (!gs || !values)
+    return 0;
+
+  if (valuemask & GCForeground)
+    gs->fg = values->foreground;
+  if (valuemask & GCBackground)
+    gs->bg = values->background;
+  if (valuemask & GCFunction)
+    gs->function = values->function;
+  if (valuemask & GCFillStyle)
+    gs->fill_style = values->fill_style;
+  if (valuemask & GCTile)
+    gs->tile = values->tile;
+  if (valuemask & GCTileStipXOrigin)
+    gs->ts_x_origin = values->ts_x_origin;
+  if (valuemask & GCTileStipYOrigin)
+    gs->ts_y_origin = values->ts_y_origin;
+  if (valuemask & GCClipMask)
+    gs->clip_mask = values->clip_mask;
+  if (valuemask & GCClipXOrigin)
+    gs->clip_x_origin = values->clip_x_origin;
+  if (valuemask & GCClipYOrigin)
+    gs->clip_y_origin = values->clip_y_origin;
+  if (valuemask & GCDashOffset)
+    gs->dash_offset = values->dash_offset;
+  if (valuemask & GCDashList)
+    gs->dashes = values->dashes;
+  return 0;
+}
+
 int XSetLineAttributes(Display *display, GC gc, unsigned int line_width, int line_style, int cap_style, int join_style) {
   (void)display; (void)gc; (void)line_width; (void)line_style; (void)cap_style; (void)join_style; return 0;
+}
+
+Status XGetGCValues(Display *display, GC gc, unsigned long valuemask,
+                    XGCValues *values_return) {
+  struct x11_gc_state *gs;
+
+  (void)display;
+  if (!values_return)
+    return 0;
+
+  gs = x11_find_gc(gc);
+  if (!gs)
+    return 0;
+
+  if (valuemask & GCForeground)
+    values_return->foreground = gs->fg;
+  if (valuemask & GCBackground)
+    values_return->background = gs->bg;
+  if (valuemask & GCFunction)
+    values_return->function = gs->function;
+  if (valuemask & GCFillStyle)
+    values_return->fill_style = gs->fill_style;
+  if (valuemask & GCTile)
+    values_return->tile = gs->tile;
+  if (valuemask & GCTileStipXOrigin)
+    values_return->ts_x_origin = gs->ts_x_origin;
+  if (valuemask & GCTileStipYOrigin)
+    values_return->ts_y_origin = gs->ts_y_origin;
+  if (valuemask & GCClipMask)
+    values_return->clip_mask = gs->clip_mask;
+  if (valuemask & GCClipXOrigin)
+    values_return->clip_x_origin = gs->clip_x_origin;
+  if (valuemask & GCClipYOrigin)
+    values_return->clip_y_origin = gs->clip_y_origin;
+  if (valuemask & GCDashOffset)
+    values_return->dash_offset = gs->dash_offset;
+  if (valuemask & GCDashList)
+    values_return->dashes = gs->dashes;
+  return 1;
 }
 
 static int
@@ -4047,6 +4425,548 @@ int XDrawString(Display *display, Drawable d, GC gc, int x, int y, const char *s
   }
   return 0;
 }
+
+int XDrawLine(Display *display, Drawable d, GC gc, int x1, int y1, int x2, int y2) {
+  int dx;
+  int sx;
+  int dy;
+  int sy;
+  int err;
+
+  dx = x2 - x1;
+  sx = dx >= 0 ? 1 : -1;
+  dx = dx >= 0 ? dx : -dx;
+
+  dy = y2 - y1;
+  sy = dy >= 0 ? 1 : -1;
+  dy = dy >= 0 ? dy : -dy;
+
+  err = dx - dy;
+  while (1) {
+    XFillRectangle(display, d, gc, x1, y1, 1, 1);
+    if (x1 == x2 && y1 == y2)
+      break;
+    {
+      int e2 = err << 1;
+      if (e2 > -dy) {
+        err -= dy;
+        x1 += sx;
+      }
+      if (e2 < dx) {
+        err += dx;
+        y1 += sy;
+      }
+    }
+  }
+  return 0;
+}
+
+int XDrawLines(Display *display, Drawable d, GC gc, XPoint *points, int npoints, int mode) {
+  int i;
+  int cx;
+  int cy;
+
+  if (!points || npoints <= 0)
+    return 0;
+  cx = points[0].x;
+  cy = points[0].y;
+  for (i = 1; i < npoints; i++) {
+    int nx = points[i].x;
+    int ny = points[i].y;
+    if (mode != 0) {
+      nx += cx;
+      ny += cy;
+    }
+    XDrawLine(display, d, gc, cx, cy, nx, ny);
+    cx = nx;
+    cy = ny;
+  }
+  return 0;
+}
+
+int XDrawSegments(Display *display, Drawable d, GC gc, void *segments, int nsegments) {
+  struct x11_segment {
+    short x1, y1, x2, y2;
+  };
+  struct x11_segment *s;
+  int i;
+
+  if (!segments || nsegments <= 0)
+    return 0;
+  s = (struct x11_segment *)segments;
+  for (i = 0; i < nsegments; i++)
+    XDrawLine(display, d, gc, s[i].x1, s[i].y1, s[i].x2, s[i].y2);
+  return 0;
+}
+
+int XDrawPoint(Display *display, Drawable d, GC gc, int x, int y) {
+  return XFillRectangle(display, d, gc, x, y, 1, 1);
+}
+
+static int
+x11_norm_angle64(int a)
+{
+  int full = 360 * 64;
+  a %= full;
+  if (a < 0)
+    a += full;
+  return a;
+}
+
+/* Fast monotonic pseudo-angle in X11 units (1/64 degree) without trig.
+ * Input vector uses X11 arc-space coordinates: +x right, +y up. */
+static int
+x11_vector_angle64(int vx, int vy)
+{
+  int ax;
+  int ay;
+  int t;
+
+  if (vx == 0 && vy == 0)
+    return 0;
+
+  ax = vx >= 0 ? vx : -vx;
+  ay = vy >= 0 ? vy : -vy;
+  t = (ay << 10) / (ax + ay + 1);
+
+  if (vx >= 0 && vy >= 0)
+    return ((t * (90 * 64)) >> 10);
+  if (vx < 0 && vy >= 0)
+    return (90 * 64) + (((1024 - t) * (90 * 64)) >> 10);
+  if (vx < 0 && vy < 0)
+    return (180 * 64) + ((t * (90 * 64)) >> 10);
+  return (270 * 64) + (((1024 - t) * (90 * 64)) >> 10);
+}
+
+static int
+x11_angle_in_arc64(int angle, int start, int extent)
+{
+  int full = 360 * 64;
+  int end;
+  int s;
+  int e;
+  int a;
+
+  if (extent == 0)
+    return 0;
+  if (extent >= full || extent <= -full)
+    return 1;
+
+  a = x11_norm_angle64(angle);
+  s = x11_norm_angle64(start);
+  end = start + extent;
+  e = x11_norm_angle64(end);
+
+  if (extent > 0) {
+    if (s <= e)
+      return a >= s && a <= e;
+    return a >= s || a <= e;
+  }
+
+  if (e <= s)
+    return a >= e && a <= s;
+  return a >= e || a <= s;
+}
+
+int XDrawArc(Display *display, Drawable d, GC gc, int x, int y,
+             unsigned int width, unsigned int height, int angle1, int angle2) {
+  int rx;
+  int ry;
+  int cx;
+  int cy;
+  int px;
+  int py;
+  int start;
+  int extent;
+  long rx2;
+  long ry2;
+  long tworx2;
+  long twory2;
+  long dx;
+  long dy;
+  long p;
+
+  (void)angle1;
+  (void)angle2;
+  if (width == 0 || height == 0)
+    return 0;
+
+  start = x11_norm_angle64(angle1);
+  extent = angle2;
+  if (extent == 0)
+    return 0;
+
+  rx = (int)width / 2;
+  ry = (int)height / 2;
+  if (rx <= 0 || ry <= 0)
+    return XDrawRectangle(display, d, gc, x, y, width, height);
+
+  cx = x + rx;
+  cy = y + ry;
+  px = 0;
+  py = ry;
+
+  rx2 = (long)rx * (long)rx;
+  ry2 = (long)ry * (long)ry;
+  tworx2 = 2L * rx2;
+  twory2 = 2L * ry2;
+  dx = 0;
+  dy = tworx2 * (long)py;
+
+  p = ry2 - (rx2 * (long)ry) + (rx2 / 4L);
+  while (dx < dy) {
+    if (x11_angle_in_arc64(x11_vector_angle64(px, -py), start, extent))
+      XDrawPoint(display, d, gc, cx + px, cy + py);
+    if (x11_angle_in_arc64(x11_vector_angle64(-px, -py), start, extent))
+      XDrawPoint(display, d, gc, cx - px, cy + py);
+    if (x11_angle_in_arc64(x11_vector_angle64(px, py), start, extent))
+      XDrawPoint(display, d, gc, cx + px, cy - py);
+    if (x11_angle_in_arc64(x11_vector_angle64(-px, py), start, extent))
+      XDrawPoint(display, d, gc, cx - px, cy - py);
+
+    px++;
+    dx += twory2;
+    if (p < 0) {
+      p += ry2 + dx;
+    } else {
+      py--;
+      dy -= tworx2;
+      p += ry2 + dx - dy;
+    }
+  }
+
+  p = ry2 * (long)(px + 1) * (long)(px + 1)
+      + rx2 * (long)(py - 1) * (long)(py - 1)
+      - rx2 * ry2;
+  while (py >= 0) {
+    if (x11_angle_in_arc64(x11_vector_angle64(px, -py), start, extent))
+      XDrawPoint(display, d, gc, cx + px, cy + py);
+    if (x11_angle_in_arc64(x11_vector_angle64(-px, -py), start, extent))
+      XDrawPoint(display, d, gc, cx - px, cy + py);
+    if (x11_angle_in_arc64(x11_vector_angle64(px, py), start, extent))
+      XDrawPoint(display, d, gc, cx + px, cy - py);
+    if (x11_angle_in_arc64(x11_vector_angle64(-px, py), start, extent))
+      XDrawPoint(display, d, gc, cx - px, cy - py);
+
+    py--;
+    dy -= tworx2;
+    if (p > 0) {
+      p += rx2 - dy;
+    } else {
+      px++;
+      dx += twory2;
+      p += rx2 - dy + dx;
+    }
+  }
+  return 0;
+}
+
+int XDrawRectangles(Display *display, Drawable d, GC gc, XRectangle *rectangles, int nrectangles) {
+  int i;
+
+  if (!rectangles || nrectangles <= 0)
+    return 0;
+  for (i = 0; i < nrectangles; i++) {
+    XDrawRectangle(display, d, gc,
+                   rectangles[i].x, rectangles[i].y,
+                   rectangles[i].width, rectangles[i].height);
+  }
+  return 0;
+}
+
+int XFillArc(Display *display, Drawable d, GC gc, int x, int y,
+             unsigned int width, unsigned int height, int angle1, int angle2) {
+  int rx;
+  int ry;
+  int cx;
+  int cy;
+  int px;
+  int py;
+  int start;
+  int extent;
+  int xi;
+  int run_start;
+  long rx2;
+  long ry2;
+  long tworx2;
+  long twory2;
+  long dx;
+  long dy;
+  long p;
+
+  (void)angle1;
+  (void)angle2;
+  if (width == 0 || height == 0)
+    return 0;
+
+  start = x11_norm_angle64(angle1);
+  extent = angle2;
+  if (extent == 0)
+    return 0;
+
+  rx = (int)width / 2;
+  ry = (int)height / 2;
+  if (rx <= 0 || ry <= 0)
+    return XFillRectangle(display, d, gc, x, y, width, height);
+
+  cx = x + rx;
+  cy = y + ry;
+  px = 0;
+  py = ry;
+
+  rx2 = (long)rx * (long)rx;
+  ry2 = (long)ry * (long)ry;
+  tworx2 = 2L * rx2;
+  twory2 = 2L * ry2;
+  dx = 0;
+  dy = tworx2 * (long)py;
+
+  p = ry2 - (rx2 * (long)ry) + (rx2 / 4L);
+  while (dx < dy) {
+    run_start = 999999;
+    for (xi = -px; xi <= px; xi++) {
+      int inside = x11_angle_in_arc64(x11_vector_angle64(xi, -py), start, extent);
+      if (inside && run_start == 999999)
+        run_start = xi;
+      if ((!inside || xi == px) && run_start != 999999) {
+        int xend = inside && xi == px ? xi : xi - 1;
+        XDrawLine(display, d, gc, cx + run_start, cy + py, cx + xend, cy + py);
+        run_start = 999999;
+      }
+    }
+    if (py != 0) {
+      run_start = 999999;
+      for (xi = -px; xi <= px; xi++) {
+        int inside = x11_angle_in_arc64(x11_vector_angle64(xi, py), start, extent);
+        if (inside && run_start == 999999)
+          run_start = xi;
+        if ((!inside || xi == px) && run_start != 999999) {
+          int xend = inside && xi == px ? xi : xi - 1;
+          XDrawLine(display, d, gc, cx + run_start, cy - py, cx + xend, cy - py);
+          run_start = 999999;
+        }
+      }
+    }
+
+    px++;
+    dx += twory2;
+    if (p < 0) {
+      p += ry2 + dx;
+    } else {
+      py--;
+      dy -= tworx2;
+      p += ry2 + dx - dy;
+    }
+  }
+
+  p = ry2 * (long)(px + 1) * (long)(px + 1)
+      + rx2 * (long)(py - 1) * (long)(py - 1)
+      - rx2 * ry2;
+  while (py >= 0) {
+    run_start = 999999;
+    for (xi = -px; xi <= px; xi++) {
+      int inside = x11_angle_in_arc64(x11_vector_angle64(xi, -py), start, extent);
+      if (inside && run_start == 999999)
+        run_start = xi;
+      if ((!inside || xi == px) && run_start != 999999) {
+        int xend = inside && xi == px ? xi : xi - 1;
+        XDrawLine(display, d, gc, cx + run_start, cy + py, cx + xend, cy + py);
+        run_start = 999999;
+      }
+    }
+    if (py != 0) {
+      run_start = 999999;
+      for (xi = -px; xi <= px; xi++) {
+        int inside = x11_angle_in_arc64(x11_vector_angle64(xi, py), start, extent);
+        if (inside && run_start == 999999)
+          run_start = xi;
+        if ((!inside || xi == px) && run_start != 999999) {
+          int xend = inside && xi == px ? xi : xi - 1;
+          XDrawLine(display, d, gc, cx + run_start, cy - py, cx + xend, cy - py);
+          run_start = 999999;
+        }
+      }
+    }
+
+    py--;
+    dy -= tworx2;
+    if (p > 0) {
+      p += rx2 - dy;
+    } else {
+      px++;
+      dx += twory2;
+      p += rx2 - dy + dx;
+    }
+  }
+  return 0;
+}
+
+int XFillArcs(Display *display, Drawable d, GC gc, void *arcs, int narcs) {
+  struct x11_arc {
+    short x, y;
+    unsigned short width, height;
+    short angle1, angle2;
+  };
+  struct x11_arc *a;
+  int i;
+
+  if (!arcs || narcs <= 0)
+    return 0;
+  a = (struct x11_arc *)arcs;
+  for (i = 0; i < narcs; i++)
+    XFillArc(display, d, gc, a[i].x, a[i].y, a[i].width, a[i].height, a[i].angle1, a[i].angle2);
+  return 0;
+}
+
+int XFillPolygon(Display *display, Drawable d, GC gc, XPoint *points, int npoints, int shape, int mode) {
+  int i;
+  int miny;
+  int maxy;
+  int cx;
+  int cy;
+  int *px;
+  int *py;
+  int *ix;
+  int ninter;
+  int y;
+
+  (void)shape;
+  if (!points || npoints <= 0)
+    return 0;
+
+  px = (int *)malloc((size_t)npoints * sizeof(int));
+  py = (int *)malloc((size_t)npoints * sizeof(int));
+  ix = (int *)malloc((size_t)npoints * sizeof(int));
+  if (!px || !py || !ix) {
+    if (px) free(px);
+    if (py) free(py);
+    if (ix) free(ix);
+    return 0;
+  }
+
+  cx = points[0].x;
+  cy = points[0].y;
+  px[0] = cx;
+  py[0] = cy;
+  miny = maxy = cy;
+
+  for (i = 1; i < npoints; i++) {
+    int vx = points[i].x;
+    int vy = points[i].y;
+    if (mode != 0) {
+      vx += cx;
+      vy += cy;
+      cx = vx;
+      cy = vy;
+    }
+    px[i] = vx;
+    py[i] = vy;
+    if (vy < miny) miny = vy;
+    if (vy > maxy) maxy = vy;
+  }
+
+  for (y = miny; y <= maxy; y++) {
+    ninter = 0;
+    for (i = 0; i < npoints; i++) {
+      int j = (i + 1) % npoints;
+      int y1 = py[i];
+      int y2 = py[j];
+      int x1 = px[i];
+      int x2 = px[j];
+
+      if (y1 == y2)
+        continue;
+      if ((y < y1 && y < y2) || (y >= y1 && y >= y2))
+        continue;
+
+      ix[ninter++] = x1 + (int)(((long)(y - y1) * (long)(x2 - x1)) / (long)(y2 - y1));
+    }
+
+    if (ninter < 2)
+      continue;
+
+    for (i = 0; i < ninter - 1; i++) {
+      int j;
+      for (j = i + 1; j < ninter; j++) {
+        if (ix[j] < ix[i]) {
+          int t = ix[i];
+          ix[i] = ix[j];
+          ix[j] = t;
+        }
+      }
+    }
+
+    for (i = 0; i + 1 < ninter; i += 2) {
+      int x1 = ix[i];
+      int x2 = ix[i + 1];
+      if (x2 < x1) {
+        int t = x1;
+        x1 = x2;
+        x2 = t;
+      }
+      if (x2 >= x1)
+        XFillRectangle(display, d, gc, x1, y, (unsigned int)(x2 - x1 + 1), 1);
+    }
+  }
+
+  free(px);
+  free(py);
+  free(ix);
+  return 0;
+}
+
+int XFillRectangles(Display *display, Drawable d, GC gc, XRectangle *rectangles, int nrectangles) {
+  int i;
+
+  if (!rectangles || nrectangles <= 0)
+    return 0;
+  for (i = 0; i < nrectangles; i++) {
+    XFillRectangle(display, d, gc,
+                   rectangles[i].x, rectangles[i].y,
+                   rectangles[i].width, rectangles[i].height);
+  }
+  return 0;
+}
+
+int XClearArea(Display *display, Window w, int x, int y,
+               unsigned int width, unsigned int height,
+               Bool exposures) {
+  char cmd[X6_BUF_SIZE];
+  int rw;
+  int rh;
+
+  (void)exposures;
+
+  if (!display)
+    return -1;
+
+  rw = 0;
+  rh = 0;
+  if ((width == 0 || height == 0) && x11_drawable_size(display, w, &rw, &rh) == 0) {
+    if (width == 0)
+      width = (rw > 0) ? (unsigned int)rw : 1;
+    if (height == 0)
+      height = (rh > 0) ? (unsigned int)rh : 1;
+  }
+  if (width == 0)
+    width = 1;
+  if (height == 0)
+    height = 1;
+
+  if (x11_sanitize_rect(display, &x, &y, &width, &height) < 0)
+    return 0;
+
+  snprintf(cmd, sizeof(cmd), "DRAW_RECT %u %d %d %u %u %u\n", (uint)w, x, y, width, height, 0x000000U);
+  if (x11_send(display->fd, cmd) < 0)
+    return -1;
+  g_pending_draw_replies++;
+  return 0;
+}
+
+int XClearWindow(Display *display, Window w) {
+  return XClearArea(display, w, 0, 0, 0, 0, False);
+}
+
 int XCopyArea(Display *display, Drawable src, Drawable dest, GC gc, int src_x, int src_y, unsigned int width, unsigned int height, int dest_x, int dest_y) {
   struct x11_gc_state *gs;
   char cmd[256];
@@ -4071,6 +4991,13 @@ int XCopyArea(Display *display, Drawable src, Drawable dest, GC gc, int src_x, i
   ret = x11_cmd(display, cmd, response, sizeof(response));
   x11dbg("x11:copy-area resp ret=%d line='%s'", ret, response);
   return ret < 0 ? -1 : 0;
+}
+
+int XCopyPlane(Display *display, Drawable src, Drawable dest, GC gc,
+               int src_x, int src_y, unsigned int width, unsigned int height,
+               int dest_x, int dest_y, unsigned long plane) {
+  (void)plane;
+  return XCopyArea(display, src, dest, gc, src_x, src_y, width, height, dest_x, dest_y);
 }
 
 int XGetTransientForHint(Display *display, Window w, Window *prop_window_return) {
@@ -4130,6 +5057,110 @@ Bool XQueryPointer(Display *display, Window w, Window *root_return, Window *chil
   return True;
 }
 
+int XGetGeometry(Display *display, Drawable d, Window *root_return,
+                 int *x_return, int *y_return,
+                 unsigned int *width_return, unsigned int *height_return,
+                 unsigned int *border_width_return,
+                 unsigned int *depth_return) {
+  struct x11_pixmap_state *pm;
+
+  if (!display)
+    return 0;
+
+  pm = x11_find_pixmap((Pixmap)d);
+  if (pm) {
+    if (root_return) *root_return = display->root;
+    if (x_return) *x_return = 0;
+    if (y_return) *y_return = 0;
+    if (width_return) *width_return = pm->width;
+    if (height_return) *height_return = pm->height;
+    if (border_width_return) *border_width_return = 0;
+    if (depth_return) *depth_return = pm->depth ? pm->depth : (unsigned int)display->depth;
+    return 1;
+  }
+
+  {
+    XWindowAttributes attrs;
+    if (!XGetWindowAttributes(display, (Window)d, &attrs))
+      return 0;
+    if (root_return) *root_return = display->root;
+    if (x_return) *x_return = attrs.x;
+    if (y_return) *y_return = attrs.y;
+    if (width_return) *width_return = (unsigned int)attrs.width;
+    if (height_return) *height_return = (unsigned int)attrs.height;
+    if (border_width_return) *border_width_return = (unsigned int)attrs.border_width;
+    if (depth_return) *depth_return = (unsigned int)(attrs.depth > 0 ? attrs.depth : display->depth);
+    return 1;
+  }
+}
+
+static int
+x11_window_origin(Display *display, Window w, int *x_out, int *y_out)
+{
+  XWindowAttributes attrs;
+
+  if (!display || !x_out || !y_out)
+    return -1;
+  if (w == display->root) {
+    *x_out = 0;
+    *y_out = 0;
+    return 0;
+  }
+  if (!XGetWindowAttributes(display, w, &attrs))
+    return -1;
+  *x_out = attrs.x;
+  *y_out = attrs.y;
+  return 0;
+}
+
+int XTranslateCoordinates(Display *display, Window src_w, Window dest_w,
+                          int src_x, int src_y,
+                          int *dest_x_return, int *dest_y_return,
+                          Window *child_return) {
+  int src_ox;
+  int src_oy;
+  int dst_ox;
+  int dst_oy;
+  int root_x;
+  int root_y;
+  char cmd[X6_BUF_SIZE];
+  char line[X6_BUF_SIZE];
+  unsigned int child = 0;
+
+  if (!display)
+    return 0;
+  if (x11_window_origin(display, src_w, &src_ox, &src_oy) < 0)
+    return 0;
+  if (x11_window_origin(display, dest_w, &dst_ox, &dst_oy) < 0)
+    return 0;
+
+  root_x = src_ox + src_x;
+  root_y = src_oy + src_y;
+
+  if (dest_x_return)
+    *dest_x_return = root_x - dst_ox;
+  if (dest_y_return)
+    *dest_y_return = root_y - dst_oy;
+
+  if (child_return) {
+    *child_return = None;
+    if (dest_w == display->root) {
+      snprintf(cmd, sizeof(cmd), "QUERY_WINDOW_AT %d %d\n", root_x, root_y);
+      if (x11_cmd(display, cmd, line, sizeof(line)) >= 0) {
+        if (sscanf(line, "OK window_at child=%u", &child) == 1 && child != 0)
+          *child_return = (Window)child;
+      }
+    } else {
+      snprintf(cmd, sizeof(cmd), "QUERY_CHILD_AT %u %d %d\n", (uint)dest_w, root_x, root_y);
+      if (x11_cmd(display, cmd, line, sizeof(line)) >= 0) {
+        if (sscanf(line, "OK child_at child=%u", &child) == 1 && child != 0)
+          *child_return = (Window)child;
+      }
+    }
+  }
+  return 1;
+}
+
 int
 XPending(Display *display)
 {
@@ -4168,11 +5199,31 @@ XPending(Display *display)
   return g_event_count > 0 ? 1 : 0;
 }
 
+int
+XEventsQueued(Display *display, int mode)
+{
+  int before;
+
+  (void)mode;
+  if (!display)
+    return 0;
+
+  before = g_event_count;
+  if (before > 0)
+    return before;
+
+  (void)XPending(display);
+  return g_event_count;
+}
+
 int (*XSetErrorHandler(int (*handler)(Display *, XErrorEvent *)))(Display *, XErrorEvent *) {
   int (*old)(Display *, XErrorEvent *) = g_error_handler;
   g_error_handler = handler;
   return old;
 }
+int XBell(Display *display, int percent) { (void)display; (void)percent; return 0; }
+int XAddToSaveSet(Display *display, Window w) { (void)display; (void)w; return 0; }
+int XRemoveFromSaveSet(Display *display, Window w) { (void)display; (void)w; return 0; }
 void XSetCloseDownMode(Display *display, int close_mode) { (void)display; (void)close_mode; }
 void XGrabServer(Display *display) { (void)display; }
 void XUngrabServer(Display *display) { (void)display; }
@@ -4381,10 +5432,300 @@ int XmbTextPropertyToTextList(Display *display, XTextProperty *text_prop, char *
   *count_return = 1;
   return Success;
 }
+int XTextPropertyToStringList(void *text_prop, char ***list_return,
+                              int *count_return) {
+  XTextProperty *tp;
+  unsigned long i;
+  int count;
+
+  if (list_return)
+    *list_return = 0;
+  if (count_return)
+    *count_return = 0;
+
+  if (!text_prop || !list_return || !count_return)
+    return 0;
+
+  tp = (XTextProperty *)text_prop;
+  if (!tp->value || tp->nitems == 0)
+    return 0;
+
+  count = 0;
+  for (i = 0; i < tp->nitems; i++) {
+    if (tp->value[i] == '\0')
+      count++;
+  }
+  if (tp->value[tp->nitems - 1] != '\0')
+    count++;
+
+  if (count <= 0)
+    return 0;
+
+  *list_return = (char **)calloc((size_t)count + 1, sizeof(char *));
+  if (!*list_return)
+    return 0;
+
+  {
+    unsigned long start = 0;
+    int out = 0;
+    for (i = 0; i < tp->nitems && out < count; i++) {
+      if (tp->value[i] == '\0') {
+        (*list_return)[out] = (char *)malloc((size_t)(i - start) + 1);
+        if (!(*list_return)[out])
+          break;
+        memmove((*list_return)[out], tp->value + start, (size_t)(i - start));
+        (*list_return)[out][i - start] = '\0';
+        out++;
+        start = i + 1;
+      }
+    }
+    if (start < tp->nitems && out < count) {
+      (*list_return)[out] = (char *)malloc((size_t)(tp->nitems - start) + 1);
+      if ((*list_return)[out]) {
+        memmove((*list_return)[out], tp->value + start, (size_t)(tp->nitems - start));
+        (*list_return)[out][tp->nitems - start] = '\0';
+        out++;
+      }
+    }
+
+    if (out == 0) {
+      free(*list_return);
+      *list_return = 0;
+      return 0;
+    }
+
+    if (out < count) {
+      int j;
+      for (j = 0; j < out; j++)
+        free((*list_return)[j]);
+      free(*list_return);
+      *list_return = 0;
+      return 0;
+    }
+
+    *count_return = out;
+  }
+
+  return Success;
+}
 void XFreeStringList(char **list) {
+  int i;
   if (!list) return;
-  if (list[0]) free(list[0]);
+  for (i = 0; list[i]; i++)
+    free(list[i]);
   free(list);
+}
+
+static int
+x11_is_space(char c)
+{
+  return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f' || c == '\v';
+}
+
+static int
+x11_is_hex_digit(char c)
+{
+  return (c >= '0' && c <= '9') ||
+         (c >= 'a' && c <= 'f') ||
+         (c >= 'A' && c <= 'F');
+}
+
+static int
+x11_hex_digit_value(char c)
+{
+  if (c >= '0' && c <= '9')
+    return c - '0';
+  if (c >= 'a' && c <= 'f')
+    return 10 + (c - 'a');
+  if (c >= 'A' && c <= 'F')
+    return 10 + (c - 'A');
+  return -1;
+}
+
+static int
+x11_parse_int_token(const char **pp, unsigned int *value_out)
+{
+  const char *p;
+  unsigned int v;
+  int seen;
+
+  if (!pp || !*pp || !value_out)
+    return -1;
+
+  p = *pp;
+  while (*p && x11_is_space(*p))
+    p++;
+
+  v = 0;
+  seen = 0;
+  while (*p >= '0' && *p <= '9') {
+    v = v * 10U + (unsigned int)(*p - '0');
+    p++;
+    seen = 1;
+  }
+
+  if (!seen)
+    return -1;
+
+  *value_out = v;
+  *pp = p;
+  return 0;
+}
+
+int XReadBitmapFileData(const char *filename,
+                        unsigned int *width_return,
+                        unsigned int *height_return,
+                        unsigned char **data_return,
+                        int *x_hot_return,
+                        int *y_hot_return) {
+  int fd;
+  char *buf;
+  int nread;
+  int total;
+  const char *p;
+  unsigned int width;
+  unsigned int height;
+  unsigned int xhot;
+  unsigned int yhot;
+  int has_xhot;
+  int has_yhot;
+  int max_bytes;
+  unsigned char *bytes;
+  int count;
+
+  if (width_return)
+    *width_return = 0;
+  if (height_return)
+    *height_return = 0;
+  if (data_return)
+    *data_return = 0;
+  if (x_hot_return)
+    *x_hot_return = -1;
+  if (y_hot_return)
+    *y_hot_return = -1;
+
+  if (!filename || !width_return || !height_return || !data_return)
+    return 1;
+
+  fd = open(filename, O_RDONLY);
+  if (fd < 0)
+    return 1;
+
+  buf = (char *)malloc(65537);
+  if (!buf) {
+    close(fd);
+    return 3;
+  }
+
+  total = 0;
+  while (total < 65536) {
+    nread = read(fd, buf + total, 65536 - total);
+    if (nread < 0) {
+      close(fd);
+      free(buf);
+      return 2;
+    }
+    if (nread == 0)
+      break;
+    total += nread;
+  }
+  close(fd);
+  if (total <= 0) {
+    free(buf);
+    return 2;
+  }
+  buf[total] = '\0';
+
+  width = 0;
+  height = 0;
+  xhot = 0;
+  yhot = 0;
+  has_xhot = 0;
+  has_yhot = 0;
+
+  p = buf;
+  while (*p) {
+    if (strncmp(p, "#define", 7) == 0 && x11_is_space(p[7])) {
+      const char *q = p + 7;
+      char name[128];
+      int name_len = 0;
+      unsigned int v;
+
+      while (*q && x11_is_space(*q))
+        q++;
+      while (*q && !x11_is_space(*q) && name_len < (int)sizeof(name) - 1)
+        name[name_len++] = *q++;
+      name[name_len] = '\0';
+      if (x11_parse_int_token(&q, &v) == 0) {
+        if (name_len >= 6 && strcmp(name + name_len - 6, "_width") == 0)
+          width = v;
+        else if (name_len >= 7 && strcmp(name + name_len - 7, "_height") == 0)
+          height = v;
+        else if (name_len >= 5 && strcmp(name + name_len - 5, "_x_hot") == 0) {
+          xhot = v;
+          has_xhot = 1;
+        } else if (name_len >= 5 && strcmp(name + name_len - 5, "_y_hot") == 0) {
+          yhot = v;
+          has_yhot = 1;
+        }
+      }
+    }
+
+    while (*p && *p != '\n')
+      p++;
+    if (*p == '\n')
+      p++;
+  }
+
+  if (width == 0 || height == 0) {
+    free(buf);
+    return 2;
+  }
+
+  max_bytes = (int)(((width + 7U) / 8U) * height);
+  if (max_bytes <= 0) {
+    free(buf);
+    return 2;
+  }
+
+  bytes = (unsigned char *)malloc((size_t)max_bytes);
+  if (!bytes) {
+    free(buf);
+    return 3;
+  }
+
+  count = 0;
+  p = buf;
+  while (*p && count < max_bytes) {
+    if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X') && x11_is_hex_digit(p[2])) {
+      unsigned int v = 0;
+      int d;
+      p += 2;
+      while ((d = x11_hex_digit_value(*p)) >= 0) {
+        v = (v << 4) | (unsigned int)d;
+        p++;
+      }
+      bytes[count++] = (unsigned char)(v & 0xffU);
+      continue;
+    }
+    p++;
+  }
+
+  free(buf);
+
+  if (count < max_bytes) {
+    free(bytes);
+    return 2;
+  }
+
+  *width_return = width;
+  *height_return = height;
+  *data_return = bytes;
+  if (x_hot_return && has_xhot)
+    *x_hot_return = (int)xhot;
+  if (y_hot_return && has_yhot)
+    *y_hot_return = (int)yhot;
+  return 0;
 }
 int XGetWMProtocols(Display *display, Window w, Atom **protocols_return, int *count_return) {
   unsigned char *prop = 0;
@@ -4949,6 +6290,76 @@ Status XCompositeQueryExtension(Display *display,
   if (error_base_return)
     *error_base_return = X11_EXT_ERROR_BASE_COMPOSITE;
   return 1;
+}
+
+Bool XQueryExtension(Display *display, const char *name,
+                     int *major_opcode_return,
+                     int *first_event_return,
+                     int *first_error_return) {
+  (void)display;
+
+  if (!name || !*name)
+    return False;
+
+  if (strcmp(name, "Composite") == 0) {
+    if (major_opcode_return) *major_opcode_return = X11_EXT_OPCODE_COMPOSITE;
+    if (first_event_return) *first_event_return = X11_EXT_EVENT_BASE_COMPOSITE;
+    if (first_error_return) *first_error_return = X11_EXT_ERROR_BASE_COMPOSITE;
+    return True;
+  }
+  if (strcmp(name, "DAMAGE") == 0 || strcmp(name, "Damage") == 0) {
+    if (major_opcode_return) *major_opcode_return = X11_EXT_OPCODE_DAMAGE;
+    if (first_event_return) *first_event_return = X11_EXT_EVENT_BASE_DAMAGE;
+    if (first_error_return) *first_error_return = X11_EXT_ERROR_BASE_DAMAGE;
+    return True;
+  }
+  if (strcmp(name, "RANDR") == 0) {
+    if (major_opcode_return) *major_opcode_return = X11_EXT_OPCODE_RANDR;
+    if (first_event_return) *first_event_return = X11_EXT_EVENT_BASE_RANDR;
+    if (first_error_return) *first_error_return = X11_EXT_ERROR_BASE_RANDR;
+    return True;
+  }
+  if (strcmp(name, "SHAPE") == 0) {
+    if (major_opcode_return) *major_opcode_return = X11_EXT_OPCODE_SHAPE;
+    if (first_event_return) *first_event_return = X11_EXT_EVENT_BASE_SHAPE;
+    if (first_error_return) *first_error_return = X11_EXT_ERROR_BASE_SHAPE;
+    return True;
+  }
+  if (strcmp(name, "XINERAMA") == 0) {
+    if (major_opcode_return) *major_opcode_return = X11_EXT_OPCODE_XINERAMA;
+    if (first_event_return) *first_event_return = X11_EXT_EVENT_BASE_XINERAMA;
+    if (first_error_return) *first_error_return = X11_EXT_ERROR_BASE_XINERAMA;
+    return True;
+  }
+  if (strcmp(name, "XFIXES") == 0) {
+    if (major_opcode_return) *major_opcode_return = X11_EXT_OPCODE_XFIXES;
+    if (first_event_return) *first_event_return = X11_EXT_EVENT_BASE_XFIXES;
+    if (first_error_return) *first_error_return = X11_EXT_ERROR_BASE_XFIXES;
+    return True;
+  }
+  if (strcmp(name, "MIT-SHM") == 0) {
+    if (major_opcode_return) *major_opcode_return = X11_EXT_OPCODE_XSHM;
+    if (first_event_return) *first_event_return = X11_EXT_EVENT_BASE_XSHM;
+    if (first_error_return) *first_error_return = X11_EXT_ERROR_BASE_XSHM;
+    return True;
+  }
+  if (strcmp(name, "RENDER") == 0) {
+    if (major_opcode_return) *major_opcode_return = X11_EXT_OPCODE_RENDER;
+    if (first_event_return) *first_event_return = X11_EXT_EVENT_BASE_RENDER;
+    if (first_error_return) *first_error_return = 0;
+    return True;
+  }
+  if (strcmp(name, "X-Resource") == 0 || strcmp(name, "XRes") == 0) {
+    if (major_opcode_return) *major_opcode_return = X11_EXT_OPCODE_XRES;
+    if (first_event_return) *first_event_return = 0;
+    if (first_error_return) *first_error_return = 0;
+    return True;
+  }
+
+  if (major_opcode_return) *major_opcode_return = 0;
+  if (first_event_return) *first_event_return = 0;
+  if (first_error_return) *first_error_return = 0;
+  return False;
 }
 
 Status XCompositeQueryVersion(Display *display,
@@ -5802,6 +7213,66 @@ int XDefaultDepth(Display *display, int screen) {
   return display->depth;
 }
 
+unsigned long XBlackPixel(Display *display, int screen_number) {
+  (void)display;
+  (void)screen_number;
+  return 0x000000UL;
+}
+
+unsigned long XWhitePixel(Display *display, int screen_number) {
+  (void)display;
+  (void)screen_number;
+  return 0x00ffffffUL;
+}
+
+Region XCreateRegion(void) {
+  Region r;
+
+  r = (Region)malloc(sizeof(*r));
+  if (!r)
+    return 0;
+  memset(r, 0, sizeof(*r));
+  return r;
+}
+
+int XUnionRectWithRegion(XRectangle *rectangle, Region src_region,
+                         Region dest_region) {
+  int x1;
+  int y1;
+  int x2;
+  int y2;
+
+  if (!dest_region)
+    return 0;
+
+  if (!rectangle && !src_region)
+    return 0;
+
+  if (!rectangle) {
+    *dest_region = *src_region;
+    return 1;
+  }
+  if (!src_region) {
+    dest_region->extents = *rectangle;
+    return 1;
+  }
+
+  x1 = rectangle->x < src_region->extents.x ? rectangle->x : src_region->extents.x;
+  y1 = rectangle->y < src_region->extents.y ? rectangle->y : src_region->extents.y;
+  x2 = (rectangle->x + (int)rectangle->width) > (src_region->extents.x + (int)src_region->extents.width)
+         ? (rectangle->x + (int)rectangle->width)
+         : (src_region->extents.x + (int)src_region->extents.width);
+  y2 = (rectangle->y + (int)rectangle->height) > (src_region->extents.y + (int)src_region->extents.height)
+         ? (rectangle->y + (int)rectangle->height)
+         : (src_region->extents.y + (int)src_region->extents.height);
+
+  dest_region->extents.x = (short)x1;
+  dest_region->extents.y = (short)y1;
+  dest_region->extents.width = (unsigned short)(x2 - x1);
+  dest_region->extents.height = (unsigned short)(y2 - y1);
+  return 1;
+}
+
 int XReparentWindow(Display *display, Window w, Window parent, int x, int y) {
   (void)display;
   (void)w;
@@ -6092,6 +7563,285 @@ int XRecolorCursor(Display *display, Cursor cursor, XColor *foreground, XColor *
   (void)foreground;
   (void)background;
   return 0;
+}
+
+static char *
+x11_xrm_strdup_range(const char *start, int n)
+{
+  char *s;
+
+  if(!start || n < 0)
+    return 0;
+  s = (char*)malloc((size_t)n + 1);
+  if(!s)
+    return 0;
+  if(n > 0)
+    memmove(s, start, (size_t)n);
+  s[n] = '\0';
+  return s;
+}
+
+static void
+x11_xrm_trim_span(const char **pstart, int *plen)
+{
+  const char *s;
+  int n;
+
+  if(!pstart || !plen)
+    return;
+  s = *pstart;
+  n = *plen;
+  while(n > 0 && (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n')) {
+    s++;
+    n--;
+  }
+  while(n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t' || s[n - 1] == '\r' || s[n - 1] == '\n'))
+    n--;
+  *pstart = s;
+  *plen = n;
+}
+
+static int
+x11_xrm_find_entry(XrmDatabase db, const char *name)
+{
+  int i;
+
+  if(!db || !name)
+    return -1;
+  for(i = 0; i < db->count; i++) {
+    if(db->entries[i].name && strcmp(db->entries[i].name, name) == 0)
+      return i;
+  }
+  return -1;
+}
+
+static int
+x11_xrm_put_entry(XrmDatabase db, const char *name, const char *value)
+{
+  int idx;
+  char *ncopy;
+  char *vcopy;
+
+  if(!db || !name || !value)
+    return -1;
+
+  idx = x11_xrm_find_entry(db, name);
+  if(idx >= 0) {
+    vcopy = strdup(value);
+    if(!vcopy)
+      return -1;
+    if(db->entries[idx].value)
+      free(db->entries[idx].value);
+    db->entries[idx].value = vcopy;
+    return 0;
+  }
+
+  if(db->count >= X11_XRM_MAX_ENTRIES)
+    return -1;
+
+  ncopy = strdup(name);
+  vcopy = strdup(value);
+  if(!ncopy || !vcopy) {
+    if(ncopy)
+      free(ncopy);
+    if(vcopy)
+      free(vcopy);
+    return -1;
+  }
+
+  db->entries[db->count].name = ncopy;
+  db->entries[db->count].value = vcopy;
+  db->count++;
+  return 0;
+}
+
+void
+XrmInitialize(void)
+{
+}
+
+char *
+XResourceManagerString(Display *display)
+{
+  Atom prop_atom;
+  Atom actual;
+  int format;
+  unsigned long nitems;
+  unsigned long bytes_after;
+  unsigned char *prop;
+
+  if(!display)
+    return 0;
+
+  prop_atom = XInternAtom(display, "RESOURCE_MANAGER", False);
+  prop = 0;
+  if(XGetWindowProperty(display, display->root, prop_atom,
+                        0, 1L << 20, False, XA_STRING,
+                        &actual, &format, &nitems, &bytes_after,
+                        &prop) != Success)
+    return g_xrm_root_string;
+
+  if(actual == XA_STRING && format == 8 && prop) {
+    char *tmp = strdup((const char*)prop);
+    if(tmp) {
+      if(g_xrm_root_string)
+        free(g_xrm_root_string);
+      g_xrm_root_string = tmp;
+    }
+  }
+  if(prop)
+    XFree(prop);
+  return g_xrm_root_string;
+}
+
+XrmDatabase
+XrmGetStringDatabase(const char *data)
+{
+  XrmDatabase db;
+  const char *p;
+
+  db = (XrmDatabase)malloc(sizeof(*db));
+  if(!db)
+    return 0;
+  memset(db, 0, sizeof(*db));
+
+  if(!data)
+    return db;
+
+  p = data;
+  while(*p) {
+    const char *line = p;
+    const char *sep = 0;
+    int len;
+    int i;
+
+    while(*p && *p != '\n')
+      p++;
+    len = (int)(p - line);
+    if(*p == '\n')
+      p++;
+
+    x11_xrm_trim_span(&line, &len);
+    if(len <= 0)
+      continue;
+    if(line[0] == '!' || line[0] == '#')
+      continue;
+
+    for(i = 0; i < len; i++) {
+      if(line[i] == ':' || line[i] == '=') {
+        sep = line + i;
+        break;
+      }
+    }
+    if(!sep)
+      continue;
+
+    {
+      const char *k = line;
+      int klen = (int)(sep - line);
+      const char *v = sep + 1;
+      int vlen = len - klen - 1;
+      char *ks;
+      char *vs;
+
+      x11_xrm_trim_span(&k, &klen);
+      x11_xrm_trim_span(&v, &vlen);
+      if(klen <= 0)
+        continue;
+
+      ks = x11_xrm_strdup_range(k, klen);
+      vs = x11_xrm_strdup_range(v, vlen > 0 ? vlen : 0);
+      if(!ks || !vs) {
+        if(ks)
+          free(ks);
+        if(vs)
+          free(vs);
+        continue;
+      }
+      x11_xrm_put_entry(db, ks, vs);
+      free(ks);
+      free(vs);
+    }
+  }
+
+  return db;
+}
+
+void
+XrmDestroyDatabase(XrmDatabase database)
+{
+  int i;
+
+  if(!database)
+    return;
+  for(i = 0; i < database->count; i++) {
+    if(database->entries[i].name)
+      free(database->entries[i].name);
+    if(database->entries[i].value)
+      free(database->entries[i].value);
+  }
+  free(database);
+}
+
+Bool
+XrmGetResource(XrmDatabase database, const char *str_name,
+               const char *str_class, char **str_type_return,
+               XrmValue *value_return)
+{
+  int idx;
+
+  if(!database || !value_return)
+    return False;
+
+  idx = -1;
+  if(str_name)
+    idx = x11_xrm_find_entry(database, str_name);
+  if(idx < 0 && str_class)
+    idx = x11_xrm_find_entry(database, str_class);
+  if(idx < 0)
+    return False;
+
+  value_return->addr = database->entries[idx].value;
+  value_return->size = database->entries[idx].value
+                         ? (unsigned int)strlen(database->entries[idx].value) + 1
+                         : 0;
+  if(str_type_return)
+    *str_type_return = "String";
+  return True;
+}
+
+void
+XrmPutStringResource(XrmDatabase *database, const char *specifier,
+                     const char *value)
+{
+  if(!database || !specifier || !value)
+    return;
+  if(!*database) {
+    *database = (XrmDatabase)malloc(sizeof(**database));
+    if(!*database)
+      return;
+    memset(*database, 0, sizeof(**database));
+  }
+  x11_xrm_put_entry(*database, specifier, value);
+}
+
+void
+XrmMergeDatabases(XrmDatabase source_db, XrmDatabase *target_db)
+{
+  int i;
+
+  if(!source_db || !target_db)
+    return;
+  if(!*target_db) {
+    *target_db = source_db;
+    return;
+  }
+  for(i = 0; i < source_db->count; i++) {
+    if(source_db->entries[i].name && source_db->entries[i].value)
+      x11_xrm_put_entry(*target_db, source_db->entries[i].name,
+                        source_db->entries[i].value);
+  }
+  XrmDestroyDatabase(source_db);
 }
 
 

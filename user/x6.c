@@ -144,6 +144,7 @@ struct x6_selection {
 struct x6_window {
   int in_use;
   uint id;
+  uint parent;
   int owner_fd;
   int x;
   int y;
@@ -319,6 +320,7 @@ static struct x6_cursor_overlay x6_cursor;
 
 static int x6_event_queue_enqueue(struct x6_event_queue *q, struct x6_event *evt);
 static struct x6_window *x6_pick_window_at(int px, int py);
+static struct x6_window *x6_pick_child_at(uint parent, int px, int py);
 static struct x6_window *find_window(uint id);
 static struct x6_client *x6_find_client_by_fd(int fd);
 static struct x6_event_queue *x6_queue_for_window(uint wid);
@@ -806,6 +808,30 @@ x6_pick_window_at(int px, int py)
     if(!wins[i].in_use || !wins[i].mapped)
       continue;
     w = &wins[i];
+    if(px < w->x || py < w->y)
+      continue;
+    if(px >= w->x + w->w || py >= w->y + w->h)
+      continue;
+    if(!best || w->z >= best->z)
+      best = w;
+  }
+  return best;
+}
+
+static struct x6_window *
+x6_pick_child_at(uint parent, int px, int py)
+{
+  int i;
+  struct x6_window *best;
+
+  best = 0;
+  for(i = 0; i < X6_MAX_WINDOWS; i++) {
+    struct x6_window *w;
+    if(!wins[i].in_use || !wins[i].mapped)
+      continue;
+    w = &wins[i];
+    if(w->parent != parent)
+      continue;
     if(px < w->x || py < w->y)
       continue;
     if(px >= w->x + w->w || py >= w->y + w->h)
@@ -2097,6 +2123,7 @@ alloc_window(uint id)
     if(!wins[i].in_use) {
       wins[i].in_use = 1;
       wins[i].id = id;
+      wins[i].parent = (uint)wm_redirect_root;
       wins[i].owner_fd = -1;
       wins[i].x = 0;
       wins[i].y = 0;
@@ -2487,28 +2514,43 @@ handle_one_command(int cfd, char *cmd)
     return;
   }
 
-  if(sscanf(cmd, "CREATE %d %d %d %d", &x, &y, &w, &h) == 4) {
-    id = x6_next_wid++;
-    win = alloc_window(id);
-    if(win == 0) {
-      x6_send_line(cfd, "ERR no-slots\n");
+  {
+    uint parent_id;
+    int parsed;
+
+    parent_id = (uint)wm_redirect_root;
+    parsed = sscanf(cmd, "CREATE %u %d %d %d %d", &parent_id, &x, &y, &w, &h);
+    if(parsed == 5 || (parsed = sscanf(cmd, "CREATE %d %d %d %d", &x, &y, &w, &h)) == 4) {
+      if(parsed == 4)
+        parent_id = (uint)wm_redirect_root;
+
+      id = x6_next_wid++;
+      win = alloc_window(id);
+      if(win == 0) {
+        x6_send_line(cfd, "ERR no-slots\n");
+        return;
+      }
+
+      if(parent_id != (uint)wm_redirect_root && find_window(parent_id) == 0)
+        parent_id = (uint)wm_redirect_root;
+      win->parent = parent_id;
+
+      if(w < 1)
+        w = 1;
+      if(h < 1)
+        h = 1;
+      win->x = x;
+      win->y = y;
+      win->w = w;
+      win->h = h;
+      win->owner_fd = cfd;
+      {
+        char out[96];
+        snprintf(out, sizeof(out), "OK create wid=%u parent=%u\n", id, win->parent);
+        x6_send_line(cfd, out);
+      }
       return;
     }
-    if(w < 1)
-      w = 1;
-    if(h < 1)
-      h = 1;
-    win->x = x;
-    win->y = y;
-    win->w = w;
-    win->h = h;
-    win->owner_fd = cfd;
-    {
-      char out[64];
-      snprintf(out, sizeof(out), "OK create wid=%u\n", id);
-      x6_send_line(cfd, out);
-    }
-    return;
   }
 
   if(sscanf(cmd, "MAP %u", &id) == 1) {
@@ -3290,6 +3332,29 @@ handle_one_command(int cfd, char *cmd)
     return;
   }
 
+  if(strncmp(cmd, "QUERY_CHILD_AT", 14) == 0) {
+    uint parent_id;
+    int qx;
+    int qy;
+    char out[96];
+    struct x6_window *hit;
+
+    if(sscanf(cmd, "QUERY_CHILD_AT %u %d %d", &parent_id, &qx, &qy) != 3) {
+      x6_send_line(cfd, "ERR bad-syntax\n");
+      return;
+    }
+
+    if(parent_id != (uint)wm_redirect_root && find_window(parent_id) == 0) {
+      x6_send_line(cfd, "ERR not-found\n");
+      return;
+    }
+
+    hit = x6_pick_child_at(parent_id, qx, qy);
+    snprintf(out, sizeof(out), "OK child_at child=%u\n", hit ? hit->id : 0);
+    x6_send_line(cfd, out);
+    return;
+  }
+
   // Phase 2.1c: Focus and keyboard grab
   if(sscanf(cmd, "SET_FOCUS %u", &id) == 1) {
     struct x6_event evt;
@@ -3425,6 +3490,23 @@ handle_one_command(int cfd, char *cmd)
     hit = x6_pick_window_at(pointer_x, pointer_y);
     snprintf(out, sizeof(out), "OK pointer root=1 child=%u x=%d y=%d state=%u\n",
              hit ? hit->id : 0, pointer_x, pointer_y, pointer_state);
+    x6_send_line(cfd, out);
+    return;
+  }
+
+  if(strncmp(cmd, "QUERY_WINDOW_AT", 15) == 0) {
+    int qx;
+    int qy;
+    char out[96];
+    struct x6_window *hit;
+
+    if(sscanf(cmd, "QUERY_WINDOW_AT %d %d", &qx, &qy) != 2) {
+      x6_send_line(cfd, "ERR bad-syntax\n");
+      return;
+    }
+
+    hit = x6_pick_window_at(qx, qy);
+    snprintf(out, sizeof(out), "OK window_at child=%u\n", hit ? hit->id : 0);
     x6_send_line(cfd, out);
     return;
   }

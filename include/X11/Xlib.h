@@ -1078,6 +1078,10 @@ Bool XQueryPointer(Display *display, Window w, Window *root_return, Window *chil
                    int *root_x_return, int *root_y_return,
                    int *win_x_return, int *win_y_return,
                    unsigned int *mask_return);
+Bool XQueryExtension(Display *display, const char *name,
+                     int *major_opcode_return,
+                     int *first_event_return,
+                     int *first_error_return);
 
 int (*XSetErrorHandler(int (*handler)(Display *, XErrorEvent *)))(Display *, XErrorEvent *);
 char *XDisplayName(const char *string);

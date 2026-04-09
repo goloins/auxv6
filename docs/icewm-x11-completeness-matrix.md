@@ -1,7 +1,7 @@
 # IceWM-Driven X11 Completeness Matrix
 
 Date: 2026-04-08
-Status: Initial baseline
+Status: Active execution baseline
 
 ## Goal
 
@@ -14,6 +14,13 @@ This document tracks gaps at three layers:
 3. Server/protocol behavior in user/x6.c.
 
 Imlib2 is treated as a first-class dependency and must be ported fully (static linking is acceptable and preferred for now).
+
+Scope constraints for this roadmap:
+
+- IceWM and Imlib2 live in `ports/` and are built as static ports.
+- Do not integrate Imlib2 into the base system.
+- Do not add compatibility hacks that diverge from expected X11 behavior.
+- Expand/complete real X11 surface and behavior in `include/X11`, `user/x11.c`, and `user/x6.c` so ports build and run.
 
 ## Baseline (Measured)
 
@@ -105,17 +112,19 @@ IceWM currently uses at least the following Imlib2 APIs (31 unique symbols found
 | RandR extension | Missing | Missing | Missing | Blocked |
 | Xinerama extension | Missing | Missing | Missing | Blocked |
 | XFixes extension | Missing | Missing | Missing | Blocked |
-| X resource manager | Missing | Missing | N/A | Blocked |
+| X resource manager | Partial | Partial | N/A | In progress |
 | Session management (SM/ICE) | Missing | Missing | N/A | Blocked |
 | Xpm helpers | Missing | Missing | N/A | Blocked |
-| Context API (XUniqueContext, etc.) | Missing/partial | Missing/partial | N/A | Blocked |
+| Context API (XUniqueContext, etc.) | Partial | Partial | N/A | In progress |
 | Selection/clipboard | Partial | Partial | Partial | In progress |
 | Property/ICCCM/EWMH | Partial | Partial | Partial | In progress |
 | Imlib2 full library | Missing | Missing | N/A | Blocked |
 
-## High-Priority Missing X Symbols (IceWM-Relevant)
+## High-Priority X Symbols (IceWM-Relevant Initial Target Set)
 
-This is the first working set to attack before deeper polish:
+This was the first working set to attack before deeper polish.
+
+Many symbols in this set have now been implemented across Iteration 1 and Iteration 2; keep this section as historical targeting context and use the Iteration Log for current per-symbol landing status.
 
 ### Extension and rendering path
 
@@ -206,24 +215,20 @@ Exit criteria:
 
 - IceWM can run without extension-symbol crashes and can render/tray reasonably.
 
-### Tranche 2 Utility Track: Xorg/Xenocara runtime utilities
+### Tranche 2 Tooling Track: Ports-only diagnostics
 
-Target utilities to stage as X extension behavior hardens:
+Target diagnostics are optional helper ports to validate X behavior while keeping base system unchanged:
 
 - RandR: xrandr
 - Render/composite diagnostics: xdpyinfo, xprop, xwininfo
 - Resource manager path: xrdb
 - Event/protocol inspection: xev, xlsclients
 
-Directive-aligned integration instructions for new binaries/utilities:
+Policy for this track:
 
-- Treat X utilities as base-system tools, not optional ports.
-- Implement/build them in-tree under user/ and wire them directly into Makefile user program targets.
-- Add each utility to `UPROGS` so ext2-root staging picks it up as part of the base image flow.
-- Ensure `make clean` removes produced binaries/objects and add `.gitignore` entries for new top-level binaries.
-- Add man pages under `targetfs/usr/share/man/` for each new utility.
-- Stage/test through ext2-root flow (`tools/stage-ext2-root.sh` and ext2 targets), not xv6 mkfs.
-- Keep `docs/Prompt-Directive.md` policy as hard gate: xv6 mkfs is deprecated/legacy-gated and must not be used in normal flows.
+- Keep diagnostics in `ports/` (same policy as IceWM/Imlib2).
+- Do not add these tools to base-system `UPROGS` unless explicitly requested later.
+- Use them as validation workloads for X11 surface/behavior fidelity.
 
 ### Tranche 3: Imlib2 static port
 
@@ -246,9 +251,9 @@ Exit criteria:
 - [x] Tranche 2.4: RandR extension minimum path wired.
 - [ ] Tranche 2.F1: Extension event/fidelity semantics pass.
 - [ ] Tranche 2.F2: Extension backend/protocol fidelity pass in x6.
-- [ ] Utility Track U1: xrandr base-system integration.
-- [ ] Utility Track U2: xrdb + xprop + xwininfo base-system integration.
-- [ ] Utility Track U3: xdpyinfo + xev + xlsclients base-system integration.
+- [ ] Tooling Track T1: xrandr port build/run validation.
+- [ ] Tooling Track T2: xrdb + xprop + xwininfo port build/run validation.
+- [ ] Tooling Track T3: xdpyinfo + xev + xlsclients port build/run validation.
 - [ ] Tranche 3.1: Imlib2 static build integrated.
 - [ ] Tranche 3.2: Imlib2 runtime paths validated with IceWM assets.
 
@@ -469,7 +474,82 @@ Validation evidence:
 Remaining in this iteration:
 
 - Complete Tranche 2.F1/F2 fidelity work: extension event semantics and x6 backend behavior alignment.
-- Continue providing X functionality needed by downstream image libraries (Imlib2 dependency path), without integrating Imlib2 itself yet.
+- Continue providing X functionality needed by downstream image libraries (Imlib2 dependency path) while keeping Imlib2 in ports.
+
+### Iteration 2 (2026-04-09)
+
+Direction lock-in:
+
+- Confirmed roadmap policy: Imlib2 and IceWM remain ports-only static builds.
+- Confirmed non-goal: no base-system Imlib2 integration.
+- Confirmed quality bar: no non-X11 compatibility hacks; fix behavior to match expected X11 semantics.
+
+Delivered:
+
+- Added Xlib surface for extension probing:
+	- `XQueryExtension` declaration in `include/X11/Xlib.h`.
+	- `XQueryExtension` implementation in `user/x11.c` with stable metadata for Composite, Damage, RandR, Shape, Xinerama, XFixes, MIT-SHM, Render, and XRes.
+- Added X resource manager runtime surface (`Xrm`) for ports-side consumers:
+	- `include/X11/Xresource.h` now declares `XrmInitialize`, `XResourceManagerString`, `XrmGetStringDatabase`, `XrmDestroyDatabase`, `XrmGetResource`, `XrmPutStringResource`, `XrmMergeDatabases`.
+	- `user/x11.c` now implements the same APIs with an in-memory Xrm database parser/lookup and root `RESOURCE_MANAGER` retrieval via X properties.
+- Added missing core/Xutil utility surfaces used by downstream X11 consumers:
+	- `XCreatePixmapCursor` implemented in `user/x11.c` with stable client-side cursor id allocation.
+	- `XTextPropertyToStringList` implemented in `user/x11.c` with proper NUL-split list expansion.
+	- `XReadBitmapFileData` implemented in `user/x11.c` with XBM `#define` metadata parsing and hex payload decode.
+- Added event/context primitives needed by toolkit-style consumers:
+	- `XCheckIfEvent` implemented in `user/x11.c` with predicate matching over queued and newly pending events.
+	- `XUniqueContext`, `XSaveContext`, `XFindContext`, `XDeleteContext` implemented in `user/x11.c` with table-backed per-resource context storage.
+- Added additional core Xlib utility coverage for compatibility and correctness:
+	- `XEventsQueued` implemented in `user/x11.c` using queued-event accounting with non-blocking pending refresh.
+	- `XCreateRegion` and `XUnionRectWithRegion` implemented in `user/x11.c` with simple region-extents union semantics.
+	- `XBlackPixel` and `XWhitePixel` implemented in `user/x11.c` with canonical 24-bit defaults.
+	- `XBell`, `XAddToSaveSet`, and `XRemoveFromSaveSet` implemented in `user/x11.c` as explicit compatibility no-op success paths.
+- Expanded GC state/ops coverage for compatibility with toolkit draw pipelines:
+	- `XChangeGC` implemented in `user/x11.c` with valuemask-driven state updates.
+	- `XSetBackground`, `XSetFillStyle`, `XSetFunction`, `XSetTile`, `XSetTSOrigin`, `XSetClipMask`, `XSetClipRectangles`, and `XSetDashes` implemented in `user/x11.c` with tracked GC state.
+	- `XCreateGC` now consumes compatible `XGCValues` fields from `valuemask` at creation time.
+- Added missing drawing/clearing helper surface using existing x6 primitives:
+	- `XDrawLine`, `XDrawLines`, `XDrawSegments`, `XDrawPoint` implemented as compatibility wrappers on top of rectangle rasterization.
+	- `XDrawArc`, `XDrawRectangles`, `XFillArc`, `XFillArcs`, `XFillPolygon`, `XFillRectangles` implemented with rectangle-based fallback behavior.
+	- `XClearArea` and `XClearWindow` implemented using drawable-size-aware clear rectangle emission.
+	- `XCopyPlane` implemented as `XCopyArea` compatibility wrapper.
+- Added geometry/state query helpers that higher-level clients commonly depend on:
+	- `XGetGCValues` implemented in `user/x11.c` with valuemask-driven reads from tracked GC state.
+	- `XGetGeometry` implemented in `user/x11.c` for pixmaps and windows via existing drawable/window attribute paths.
+	- `XTranslateCoordinates` implemented in `user/x11.c` and refined to translate through source/destination root-space origins from live window attributes.
+	- `XTranslateCoordinates` now also reports `child_return` for root-destination queries via server-backed topmost hit-testing at translated coordinates.
+	- `XTranslateCoordinates` now also reports `child_return` for non-root destination queries via parent-scoped child hit-testing (`QUERY_CHILD_AT`) at translated root coordinates.
+- Improved behavior fidelity for key draw primitives (replacing coarse rectangle fallbacks):
+	- `XDrawLine` now uses integer Bresenham rasterization.
+	- `XDrawArc` and `XFillArc` now use integer ellipse rasterization/fill paths with angle-sector clipping via X11 `angle1`/`angle2` units (1/64 degree).
+	- `XFillPolygon` now uses scanline edge-intersection filling instead of bounding-box fill.
+- Hardened WM redirect ownership stability in x6:
+	- `REQUEST_REDIRECT` is now idempotent for the current WM client fd, preventing WM-mode demotion during repeated redirect claims.
+- Added hierarchy-aware x6 window query semantics needed for non-root child resolution:
+	- `CREATE` now accepts/records parent id in `user/x6.c` (with root fallback for invalid parents).
+	- Added `QUERY_CHILD_AT <parent> <x> <y>` in `user/x6.c` and wired `user/x11.c` to use it from `XTranslateCoordinates`.
+- Added usermode runtime validation utility for startup-console verification:
+	- Added `xwmselftest` in `user/xwmselftest.c` to exercise `XTranslateCoordinates` root/non-root child-hit semantics with PASS/FAIL console output.
+	- Wired `targetfs/root/.xinitrc` to run `xwmselftest` before WM launch so validation is possible without additional target ports.
+
+Validation evidence:
+
+- Forced rebuild: `make -B _x6 _dwm _st _xinit` -> success (exit 0) after XQueryExtension surface addition.
+- Forced rebuild: `make -B _x6 _dwm _st _xinit` -> success (exit 0) after Xrm surface addition.
+- Forced rebuild: `make -B _x6 _st _xinit` -> success (exit 0) after `XCreatePixmapCursor` / `XTextPropertyToStringList` / `XReadBitmapFileData` addition.
+- Forced rebuild: `make -B _x6 _st _xinit` -> success (exit 0) after `XCheckIfEvent` / context API (`XUniqueContext`/`XSaveContext`/`XFindContext`/`XDeleteContext`) addition.
+- Forced rebuild: `make -B _x6 _st _xinit` -> success (exit 0) after `XEventsQueued` / region helpers (`XCreateRegion`/`XUnionRectWithRegion`) / utility APIs (`XBlackPixel`/`XWhitePixel`/`XBell`/save-set) addition.
+- Forced rebuild: `make -B _x6 _st _xinit` -> success (exit 0) after GC API tranche (`XChangeGC`, `XSetBackground`, `XSetFillStyle`, `XSetFunction`, `XSetTile`, `XSetTSOrigin`, `XSetClipMask`, `XSetClipRectangles`, `XSetDashes`) addition.
+- Forced rebuild: `make -B _x6 _st _xinit` -> success (exit 0) after draw-helper tranche (`XDrawLine`, `XDrawLines`, `XDrawSegments`, `XDrawPoint`, `XDrawArc`, `XDrawRectangles`, `XFillArc`, `XFillArcs`, `XFillPolygon`, `XFillRectangles`, `XClearArea`, `XClearWindow`, `XCopyPlane`) addition.
+- Forced rebuild: `make -B _x6 _st _xinit` -> success (exit 0) after geometry/query tranche (`XGetGCValues`, `XGetGeometry`, `XTranslateCoordinates`) addition.
+- Forced rebuild: `make -B _x6 _st _xinit` -> success (exit 0) after fidelity rasterization pass (`XDrawLine` Bresenham, `XDrawArc`/`XFillArc` ellipse paths, `XFillPolygon` scanline fill).
+- Forced rebuild: `make -B _x6 _st _xinit` -> success (exit 0) after angle-aware arc clipping pass (`XDrawArc`/`XFillArc` honoring `angle1`/`angle2`).
+- Forced rebuild: `make -B _x6 _st _xinit` -> success (exit 0) after `XTranslateCoordinates` semantic refinement (source/destination root-space offset translation).
+- Forced rebuild: `make -B _x6 _st _xinit` -> success (exit 0) after `XTranslateCoordinates` root child hit-testing refinement (`child_return` via `QUERY_WINDOW_AT`).
+- Forced rebuild: `make -B _x6 _st _xinit` -> success (exit 0) after parent-aware create + non-root child hit-testing refinement (`QUERY_CHILD_AT` path in `XTranslateCoordinates`).
+- Forced rebuild: `make -B _xwmselftest _xinit` -> success (exit 0) after adding xinitrc-driven usermode child-hit self-test utility.
+- Forced rebuild: `make -B _x6 _dwm _st _xinit` -> success (exit 0) after redirect idempotency fix.
+- Image staging: `make test_ext2.img` -> success (exit 0) after redirect idempotency fix.
 
 Current Tranche 2.1 status:
 

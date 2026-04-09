@@ -778,6 +778,14 @@ _xinit: user/xinit
 _xwmtrace: user/xwmtrace
 	cp user/xwmtrace _xwmtrace
 
+user/xwmselftest: user/xwmselftest.o user/x11.o $(ULIB) | toolchain-check
+	$(LD) $(LDFLAGS) -N -e _start -Ttext 0 -o $@ $^ $(LIBGCC)
+	$(OBJDUMP) -S $@ > $(basename $@).asm
+	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(basename $@).sym
+
+_xwmselftest: user/xwmselftest
+	cp user/xwmselftest _xwmselftest
+
 _startx: user/startx
 	cp user/startx _startx
 
@@ -1050,6 +1058,7 @@ UPROGS=\
 	_x6\
 	_xinit\
 	_xwmtrace\
+	_xwmselftest\
 	_startx\
 	_x6test\
 	_wallpaper\
@@ -1173,7 +1182,7 @@ clean:
 	user/lsof user/which user/file \
 	user/uniq user/sort user/sum user/sleep user/yes user/boolean user/sync user/touch user/hashsum user/baseenc user/asroot \
 	user/audioctl user/audiostat user/audiotest user/audiotone user/audiopollstress user/audiod user/audiodctl \
-	user/server7 \
+	user/server7 user/xwmselftest \
 	user/top \
 	user/date user/time user/killall user/halt user/wallpaper \
 	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/stackgrowtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/dmesg user/tail user/lspci user/v6init user/testdaemon \
