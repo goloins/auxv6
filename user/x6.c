@@ -2263,10 +2263,30 @@ destroy_window(uint id)
 {
   struct x6_window *w;
   int idx;
+  int i;
+
+  if(id == (uint)wm_redirect_root)
+    return;
 
   w = find_window(id);
   if(w == 0)
     return;
+
+  for(;;) {
+    uint child = 0;
+    for(i = 0; i < X6_MAX_WINDOWS; i++) {
+      if(!wins[i].in_use)
+        continue;
+      if(wins[i].parent != id)
+        continue;
+      child = wins[i].id;
+      break;
+    }
+    if(child == 0)
+      break;
+    destroy_window(child);
+  }
+
   // Clear hash table entry
   idx = (int)(id % 256);
   if(wins_by_id[idx] == w)
@@ -2724,6 +2744,71 @@ handle_one_command(int cfd, char *cmd)
     }
     x6_lower_window(win);
     x6_send_line(cfd, "OK lowered\n");
+    return;
+  }
+
+  if(sscanf(cmd, "REPARENT %u %u %d %d", &id, &color, &x, &y) == 4) {
+    uint parent_id;
+    struct x6_window *parent_win;
+    struct x6_window *walker;
+
+    parent_id = color;
+    win = find_window(id);
+    if(win == 0) {
+      x6_send_line(cfd, "ERR not-found\n");
+      return;
+    }
+
+    if(parent_id == (uint)wm_redirect_root) {
+      parent_win = 0;
+    } else {
+      parent_win = find_window(parent_id);
+      if(parent_win == 0) {
+        x6_send_line(cfd, "ERR bad-parent\n");
+        return;
+      }
+    }
+
+    if(parent_id == id) {
+      x6_send_line(cfd, "ERR bad-parent\n");
+      return;
+    }
+
+    walker = parent_win;
+    while(walker) {
+      if(walker->id == id) {
+        x6_send_line(cfd, "ERR cycle\n");
+        return;
+      }
+      if(walker->parent == (uint)wm_redirect_root)
+        break;
+      walker = find_window(walker->parent);
+    }
+
+    win->parent = parent_id;
+    win->x = x;
+    win->y = y;
+    x6_enqueue_shape_notify(win, 0, win->mapped ? 1 : 0);
+    if(win->mapped)
+      x6_enqueue_randr_notify(win->id, win->w, win->h);
+
+    {
+      struct x6_client *owner = x6_find_client_by_fd(win->owner_fd);
+      if(owner && owner->in_use && owner->hello_done) {
+        struct x6_event cn;
+        x6_event_queue_drop_extension_for_window(&owner->queue, id);
+        memset(&cn, 0, sizeof(cn));
+        cn.type = X6_EVENT_CONFIGURE_NOTIFY;
+        cn.wid = id;
+        cn.x = x;
+        cn.y = y;
+        cn.w = win->w;
+        cn.h = win->h;
+        x6_event_queue_enqueue(&owner->queue, &cn);
+      }
+    }
+
+    x6_send_line(cfd, "OK reparent\n");
     return;
   }
 
@@ -3368,6 +3453,97 @@ handle_one_command(int cfd, char *cmd)
       listed++;
     }
     snprintf(out, sizeof(out), "OK list count=%d\n", listed);
+    x6_send_line(cfd, out);
+    return;
+  }
+
+  if(strncmp(cmd, "QUERY_TREE", 10) == 0) {
+    uint qid;
+    struct x6_window *qwin;
+    uint child_ids[X6_MAX_WINDOWS];
+    int child_z[X6_MAX_WINDOWS];
+    int nchild;
+    int ii;
+    int jj;
+    char out[1024];
+    int len;
+
+    if(sscanf(cmd, "QUERY_TREE %u", &qid) != 1) {
+      x6_send_line(cfd, "ERR bad-syntax\n");
+      return;
+    }
+
+    if(qid == (uint)wm_redirect_root)
+      qwin = 0;
+    else
+      qwin = find_window(qid);
+    if(qid != (uint)wm_redirect_root && qwin == 0) {
+      x6_send_line(cfd, "ERR not-found\n");
+      return;
+    }
+
+    nchild = 0;
+    for(ii = 0; ii < X6_MAX_WINDOWS && nchild < X6_MAX_WINDOWS; ii++) {
+      if(!wins[ii].in_use)
+        continue;
+      if(wins[ii].parent != qid)
+        continue;
+      child_ids[nchild] = wins[ii].id;
+      child_z[nchild] = wins[ii].z;
+      nchild++;
+    }
+
+    for(ii = 1; ii < nchild; ii++) {
+      uint idv = child_ids[ii];
+      int zv = child_z[ii];
+      jj = ii - 1;
+      while(jj >= 0 && child_z[jj] > zv) {
+        child_z[jj + 1] = child_z[jj];
+        child_ids[jj + 1] = child_ids[jj];
+        jj--;
+      }
+      child_z[jj + 1] = zv;
+      child_ids[jj + 1] = idv;
+    }
+
+    len = snprintf(out, sizeof(out), "OK tree root=%u parent=%u n=%d children=",
+                   (uint)wm_redirect_root,
+                   (qid == (uint)wm_redirect_root) ? 0U : qwin->parent,
+                   nchild);
+    if(len < 0)
+      len = 0;
+    if((size_t)len >= sizeof(out))
+      len = (int)sizeof(out) - 1;
+
+    if(nchild == 0) {
+      if(len < (int)sizeof(out) - 2) {
+        out[len++] = '-';
+        out[len++] = '\n';
+      }
+      out[len] = 0;
+      x6_send_line(cfd, out);
+      return;
+    }
+
+    for(ii = 0; ii < nchild; ii++) {
+      int wrote;
+      wrote = snprintf(out + len, sizeof(out) - (size_t)len,
+                       "%u%s", child_ids[ii], (ii + 1 < nchild) ? "," : "");
+      if(wrote < 0)
+        break;
+      if((size_t)wrote >= sizeof(out) - (size_t)len) {
+        len = (int)sizeof(out) - 1;
+        break;
+      }
+      len += wrote;
+    }
+    if(len < (int)sizeof(out) - 2) {
+      out[len++] = '\n';
+      out[len] = 0;
+    } else {
+      out[sizeof(out) - 2] = '\n';
+      out[sizeof(out) - 1] = 0;
+    }
     x6_send_line(cfd, out);
     return;
   }

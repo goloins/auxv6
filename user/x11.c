@@ -5029,12 +5029,80 @@ int XGetTransientForHint(Display *display, Window w, Window *prop_window_return)
   return 0;
 }
 int XQueryTree(Display *display, Window w, Window *root_return, Window *parent_return, Window **children_return, unsigned int *nchildren_return) {
-  (void)display;
-  if (root_return) *root_return = 1;
-  if (parent_return) *parent_return = 1;
-  if (children_return) *children_return = 0;
-  if (nchildren_return) *nchildren_return = 0;
-  (void)w;
+  char cmd[X6_BUF_SIZE];
+  char line[X6_BUF_SIZE];
+  unsigned int root = 0;
+  unsigned int parent = 0;
+  unsigned int nchild = 0;
+  char children[256];
+  unsigned int parsed;
+
+  if (children_return)
+    *children_return = 0;
+  if (nchildren_return)
+    *nchildren_return = 0;
+  if (!display)
+    return 0;
+
+  children[0] = 0;
+  snprintf(cmd, sizeof(cmd), "QUERY_TREE %u\n", (uint)w);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return 0;
+
+  parsed = (unsigned int)sscanf(line, "OK tree root=%u parent=%u n=%u children=%255s",
+                                &root, &parent, &nchild, children);
+  if (parsed < 3)
+    return 0;
+
+  if (root_return)
+    *root_return = (Window)root;
+  if (parent_return)
+    *parent_return = (Window)parent;
+
+  if (nchild == 0 || !children_return) {
+    if (nchildren_return)
+      *nchildren_return = nchild;
+    return 1;
+  }
+
+  {
+    Window *arr;
+    unsigned int count;
+    const char *p;
+
+    arr = (Window *)calloc((size_t)nchild, sizeof(Window));
+    if (!arr)
+      return 0;
+
+    count = 0;
+    p = children;
+    while (*p && count < nchild) {
+      unsigned int cid;
+      int step;
+      if (*p == ',') {
+        p++;
+        continue;
+      }
+      if (*p == '-')
+        break;
+      step = 0;
+      if (sscanf(p, "%u%n", &cid, &step) != 1 || step <= 0)
+        break;
+      arr[count++] = (Window)cid;
+      p += step;
+      if (*p == ',')
+        p++;
+    }
+
+    if (nchildren_return)
+      *nchildren_return = count;
+    if (count == 0) {
+      free(arr);
+      *children_return = 0;
+    } else {
+      *children_return = arr;
+    }
+  }
   return 1;
 }
 Bool XQueryPointer(Display *display, Window w, Window *root_return, Window *child_return, int *root_x_return, int *root_y_return, int *win_x_return, int *win_y_return, unsigned int *mask_return) {
@@ -7277,12 +7345,19 @@ int XUnionRectWithRegion(XRectangle *rectangle, Region src_region,
 }
 
 int XReparentWindow(Display *display, Window w, Window parent, int x, int y) {
-  (void)display;
-  (void)w;
-  (void)parent;
-  (void)x;
-  (void)y;
-  return 0;
+  char cmd[X6_BUF_SIZE];
+  char line[X6_BUF_SIZE];
+
+  if (!display)
+    return -1;
+
+  snprintf(cmd, sizeof(cmd), "REPARENT %u %u %d %d\n",
+           (uint)w,
+           (uint)(parent ? parent : display->root),
+           x, y);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return -1;
+  return strncmp(line, "OK reparent", 11) == 0 ? 0 : -1;
 }
 
 int XRegisterIMInstantiateCallback(Display *display, void *rdb, char *res_name, char *res_class, void (*callback)(Display *, XPointer, XPointer), void *client_data) {

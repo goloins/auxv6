@@ -534,6 +534,17 @@ Delivered:
 - Fixed startup/runtime regressions found by `xwmselftest`:
 	- `XCloseDisplay` in `user/x11.c` now sends `DETACH` (not `QUIT`) so closing one client does not terminate the x6 server before WM startup.
 	- `x6` hit-testing (`x6_pick_window_at` / `x6_pick_child_at`) now resolves window geometry in root-space using parent-chain origins, fixing non-root child lookup in `QUERY_CHILD_AT`.
+	- Corrected `xwmselftest` root-destination expectation: `XTranslateCoordinates(..., dest=root, ...)` returns the immediate root child under the translated point (often a mapped child window, not always the source parent), and added a complementary parent-hit assertion.
+- Added missing core tree-query behavior for downstream WM/toolkit compatibility:
+	- Implemented backend `QUERY_TREE <wid>` in `user/x6.c` returning root id, parent id, and immediate children (z-order sorted).
+	- Implemented `XQueryTree` in `user/x11.c` to consume backend tree data and return real parent/children results instead of fixed root-only stubs.
+- Added reparent correctness plumbing and X11-level transition validation:
+	- Implemented backend `REPARENT <wid> <parent> <x> <y>` in `user/x6.c` with parent validation/cycle guard and owner `ConfigureNotify` emission.
+	- Implemented `XReparentWindow` in `user/x11.c` via backend `REPARENT` command path.
+	- Expanded `xwmselftest` to validate `XQueryTree` parent/children state before/after reparent and to validate translated child-hit behavior after reparent transitions.
+- Hardened window lifecycle correctness for tree semantics:
+	- `DESTROY` in `user/x6.c` now destroys subtrees recursively (parent + inferiors), avoiding orphaned child windows after parent destruction.
+	- Expanded `xwmselftest` with subtree-destroy assertions that verify both parent and child become non-queryable via `XQueryTree` after destroying the parent.
 
 Validation evidence:
 
@@ -552,8 +563,20 @@ Validation evidence:
 - Forced rebuild: `make -B _x6 _st _xinit` -> success (exit 0) after parent-aware create + non-root child hit-testing refinement (`QUERY_CHILD_AT` path in `XTranslateCoordinates`).
 - Forced rebuild: `make -B _xwmselftest _xinit` -> success (exit 0) after adding xinitrc-driven usermode child-hit self-test utility.
 - Forced rebuild: `make -B _x6 _xwmselftest _xinit _dwm` -> success (exit 0) after fixing `XCloseDisplay` detach semantics and root-space child hit-testing.
+- Forced rebuild: `make -B _xwmselftest` -> success (exit 0) after correcting root child-return self-test expectations and adding parent-hit coverage.
+- Forced rebuild: `make -B _x6 _xwmselftest _dwm` -> success (exit 0) after `QUERY_TREE` / `XQueryTree` implementation tranche.
+- Forced rebuild: `make -B _x6 _xwmselftest _dwm` -> success (exit 0) after `REPARENT` / `XReparentWindow` + reparent-transition self-test tranche.
+- Forced rebuild: `make -B _x6 _xwmselftest _dwm` -> success (exit 0) after recursive `DESTROY` subtree semantics + destroy-transition self-test tranche.
 - Forced rebuild: `make -B _x6 _dwm _st _xinit` -> success (exit 0) after redirect idempotency fix.
 - Image staging: `make test_ext2.img` -> success (exit 0) after redirect idempotency fix.
+
+Runtime evidence (2026-04-09, user-run in guest console):
+
+- `startx` with `/root/.xinitrc` startup path now keeps x6 alive through pre-WM self-test and WM launch (no premature `x6: exiting` regression).
+- `xwmselftest` now reports full pass for coordinate translation/child-hit checks (root->parent child hits, root->parent no-child, parent->root child hit, parent->root parent hit).
+- Updated guest-run `xwmselftest` output now reports `summary pass=14 fail=0`, including: `XQueryTree` parent/child topology before and after `XReparentWindow`, and recursive destroy-subtree verification (`doomed_parent`/`doomed_child` both non-queryable after destroy).
+- `dwm` launch path remains stable after self-test completion; x11/x6 trace stream shows expected map flow continuity.
+- This validates the regression fixes for `XCloseDisplay` detach semantics and root-space hit-testing behavior, plus tree/reparent/destroy lifecycle correctness at the X11/X6 boundary.
 
 Current Tranche 2.1 status:
 
@@ -596,12 +619,13 @@ Current Tranche 2.F2 status:
 - Progress: mixed core/extension queue semantics now clear stale extension notifications before map/configure transitions, merge pending Damage rectangles, and upsert pending RandR notifications per window.
 - Progress: backend RandR notify coverage now includes map/unmap transitions in addition to configure-time updates.
 - Progress: fixed unsolicited `ShapeNotify` handling so x11 no longer logs/queues uninitialized type-0 events and no longer risks re-entrant command traffic while parsing backend extension events.
+- Progress: guest-run startup/runtime validation now confirms stable `startx` -> self-test -> `dwm` flow and full pass of the expanded `xwmselftest` suite (translation/child-hit + tree/reparent + destroy-subtree checks).
 - Pending: complete focused runtime validation pass and close out Tranche 2.F1/2.F2 status gates.
 
-Runtime closeout checklist for Tranche 2.F1/2.F2 (user-run in guest/QEMU console):
+Runtime closeout checklist for Tranche 2.F1/2.F2 (user-run in guest/QEMU console, future IceWM-stage validation):
 
-- [ ] Start X stack and WM path (`x6`, `dwm`, and a client workload such as `st`) and confirm no startup extension errors in console/debug logs.
-- [ ] Exercise resize/configure churn on at least one mapped client window and confirm:
+- [ ] Start X stack and WM path under the target integration workload (IceWM + intended clients) and confirm no startup extension errors in console/debug logs.
+- [ ] Exercise resize/configure churn on at least one mapped client window (floating WM path) and confirm:
 	- [ ] ConfigureNotify arrives before post-transition redraw notifications.
 	- [ ] RandR screen-change updates are observed for mapped geometry transitions.
 - [ ] Exercise repeated draw operations on the same window and confirm:
@@ -611,7 +635,7 @@ Runtime closeout checklist for Tranche 2.F1/2.F2 (user-run in guest/QEMU console
 	- [ ] Shape notifications reflect shaped/unshaped transition semantics.
 	- [ ] RandR notify path remains stable across map/unmap cycles.
 - [ ] Exercise clipboard/property activity and confirm no regressions in PropertyNotify / Selection events while extension event traffic is active.
-- [ ] Capture serial/debug evidence for one complete run and append summary outcomes here.
+- [ ] Capture serial/debug evidence for one complete IceWM-stage run and append summary outcomes here.
 
 Completion gate:
 
