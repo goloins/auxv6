@@ -545,6 +545,33 @@ Delivered:
 - Hardened window lifecycle correctness for tree semantics:
 	- `DESTROY` in `user/x6.c` now destroys subtrees recursively (parent + inferiors), avoiding orphaned child windows after parent destruction.
 	- Expanded `xwmselftest` with subtree-destroy assertions that verify both parent and child become non-queryable via `XQueryTree` after destroying the parent.
+- Added stack-order correctness for `XConfigureWindow`:
+	- Implemented backend `RESTACK <wid> <sibling> <mode>` in `user/x6.c` to reorder siblings for `Above`/`Below`/`TopIf`/`BottomIf`/`Opposite` stack modes.
+	- Updated shim `XConfigureWindow` in `user/x11.c` to honor `CWStackMode` and `CWSibling` via backend restack command path.
+	- Expanded `xwmselftest` with `XQueryTree` ordering assertions across sibling-targeted and top-stack restack transitions.
+- Added `XRestackWindows` list-order semantics for compatibility with WM/client stack choreography:
+	- Implemented `XRestackWindows` in `user/x11.c` by applying bottom-to-top `CWStackMode=Above` transitions so top-first list order is preserved.
+	- Expanded `xwmselftest` with explicit `XRestackWindows` list-order assertions validated via `XQueryTree` child ordering.
+- Added `XMapRaised` stack semantics for map-plus-raise behavior:
+	- Updated `XMapRaised` in `user/x11.c` to map then raise, instead of aliasing plain map behavior.
+	- Expanded `xwmselftest` with `XMapRaised` ordering validation (`tree stack mapraised`) using `XQueryTree` stack order.
+- Refined map semantics to preserve stack ordering for no-op map requests:
+	- Updated backend `MAP`/`WM_MAP` handling in `user/x6.c` so already-mapped windows return success without restacking or emitting duplicate map transitions.
+	- Updated backend map paths to avoid implicit raises, preserving stack order distinction between `XMapWindow` and explicit raise operations.
+	- Expanded `xwmselftest` with `map mapped stack_a` and `tree stack map-noop` assertions to verify that mapping an already-mapped window does not change tree stack order.
+- Refined unmap/remap semantics for idempotent transitions:
+	- Updated backend `UNMAP`/`WM_UNMAP` handling in `user/x6.c` so already-unmapped windows return success without duplicate unmap transition side effects.
+	- Expanded `xwmselftest` with `unmap stack_a`, `remap stack_a`, and `tree stack remap` assertions to verify remap preserves prior stack ordering.
+- Hardened shim response validation and repeated-unmap coverage:
+	- Updated `XDestroyWindow` and `XUnmapWindow` in `user/x11.c` to require explicit backend `OK` acknowledgements instead of treating transport success as operation success.
+	- Expanded `xwmselftest` with `unmap unmapped a` assertion to verify repeated unmap requests remain idempotent.
+- Added direct raise/lower API validation coverage:
+	- Expanded `xwmselftest` with explicit `XLowerWindow`/`XRaiseWindow` assertions (`lower stack_b`, `raise stack_b`) and `XQueryTree` stack-order checks (`tree stack lower`, `tree stack raise`).
+- Added explicit `CWStackMode` conditional-mode coverage:
+	- Expanded `xwmselftest` with `TopIf`/`BottomIf`/`Opposite` transitions against a sibling and `XQueryTree` ordering assertions (`tree stack topif`, `tree stack bottomif`, `tree stack opposite`).
+	- Added local fallback macro definitions in `xwmselftest` for `TopIf`/`BottomIf`/`Opposite` when the local Xlib headers omit those symbolic constants.
+- Expanded `CWStackMode` coverage for no-sibling semantics:
+	- Expanded `xwmselftest` with no-sibling `TopIf`/`BottomIf`/`Opposite` transitions (`topif c no sibling`, `bottomif c no sib`, `opposite c no sib`) and corresponding `XQueryTree` checks (`tree stack topif nosib`, `tree stack bottom nosib`, `tree stack opp nosib`).
 
 Validation evidence:
 
@@ -567,6 +594,15 @@ Validation evidence:
 - Forced rebuild: `make -B _x6 _xwmselftest _dwm` -> success (exit 0) after `QUERY_TREE` / `XQueryTree` implementation tranche.
 - Forced rebuild: `make -B _x6 _xwmselftest _dwm` -> success (exit 0) after `REPARENT` / `XReparentWindow` + reparent-transition self-test tranche.
 - Forced rebuild: `make -B _x6 _xwmselftest _dwm` -> success (exit 0) after recursive `DESTROY` subtree semantics + destroy-transition self-test tranche.
+- Forced rebuild: `make -B _x6 _xwmselftest _dwm` -> success (exit 0) after `RESTACK` backend + `XConfigureWindow(CWStackMode/CWSibling)` + stack-order self-test tranche.
+- Forced rebuild: `make -B _xwmselftest _x6 _dwm` -> success (exit 0) after `XRestackWindows` list-order implementation + self-test tranche.
+- Forced rebuild: `make -B _xwmselftest _x6 _dwm` -> success (exit 0) after `XMapRaised` map-plus-raise semantics + stack-order self-test tranche.
+- Object validation: `make user/x6.o user/x11.o user/xwmselftest.o` -> success (exit 0) after map no-op stack-order semantics tranche.
+- Object validation: `make user/x6.o user/xwmselftest.o user/x11.o` -> success (exit 0) after unmap/remap idempotent transition tranche.
+- Object validation: `make user/x11.o user/xwmselftest.o user/x6.o` -> success (exit 0) after shim response-validation + repeated-unmap idempotency tranche.
+- Object validation: `make user/xwmselftest.o user/x11.o user/x6.o` -> success (exit 0) after direct raise/lower self-test tranche.
+- Object validation: `make user/xwmselftest.o user/x11.o user/x6.o` -> success (exit 0) after TopIf/BottomIf/Opposite stack-mode self-test tranche.
+- Object validation: `make user/xwmselftest.o user/x11.o user/x6.o` -> success (exit 0) after no-sibling TopIf/BottomIf/Opposite stack-mode tranche.
 - Forced rebuild: `make -B _x6 _dwm _st _xinit` -> success (exit 0) after redirect idempotency fix.
 - Image staging: `make test_ext2.img` -> success (exit 0) after redirect idempotency fix.
 
@@ -575,6 +611,13 @@ Runtime evidence (2026-04-09, user-run in guest console):
 - `startx` with `/root/.xinitrc` startup path now keeps x6 alive through pre-WM self-test and WM launch (no premature `x6: exiting` regression).
 - `xwmselftest` now reports full pass for coordinate translation/child-hit checks (root->parent child hits, root->parent no-child, parent->root child hit, parent->root parent hit).
 - Updated guest-run `xwmselftest` output now reports `summary pass=14 fail=0`, including: `XQueryTree` parent/child topology before and after `XReparentWindow`, and recursive destroy-subtree verification (`doomed_parent`/`doomed_child` both non-queryable after destroy).
+- Updated guest-run `xwmselftest` output now reports `summary pass=23 fail=0`, adding stack-order validation for `RESTACK` (`CWStackMode`/`CWSibling`) and `XRestackWindows` list-order transitions.
+- Updated guest-run `xwmselftest` output now reports `summary pass=25 fail=0`, adding `XMapRaised` stack behavior and map-no-op stack preservation checks.
+- Updated guest-run `xwmselftest` output now reports `summary pass=27 fail=0`, adding map-no-op stack preservation checks on top of restack/mapraised/reparent/destroy coverage.
+- Updated guest-run `xwmselftest` output now reports `summary pass=30 fail=0`, adding unmap/remap stack-preservation checks (`unmap stack_a`, `remap stack_a`, `tree stack remap`) on top of prior restack/mapraised/reparent/destroy coverage.
+- Updated guest-run `xwmselftest` output now reports `summary pass=31 fail=0`, adding repeated-unmap idempotency validation (`unmap unmapped a`) while preserving all prior stack/tree/reparent/destroy checks.
+- Updated guest-run `xwmselftest` output now reports `summary pass=35 fail=0`, adding direct raise/lower stack-order validation (`lower stack_b`, `raise stack_b`) and preserving all prior checks.
+- Updated guest-run `xwmselftest` output now reports `summary pass=41 fail=0`, adding sibling-relative `TopIf`/`BottomIf`/`Opposite` stack-mode validation while preserving all prior checks.
 - `dwm` launch path remains stable after self-test completion; x11/x6 trace stream shows expected map flow continuity.
 - This validates the regression fixes for `XCloseDisplay` detach semantics and root-space hit-testing behavior, plus tree/reparent/destroy lifecycle correctness at the X11/X6 boundary.
 

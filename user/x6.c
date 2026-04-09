@@ -83,6 +83,13 @@
 #define X6_EVENT_SHAPE_NOTIFY 22
 #define X6_EVENT_RANDR_NOTIFY 23
 
+// X11 CWStackMode values carried over wire by XConfigureWindow.
+#define X6_STACKMODE_ABOVE 0
+#define X6_STACKMODE_BELOW 1
+#define X6_STACKMODE_TOP_IF 2
+#define X6_STACKMODE_BOTTOM_IF 3
+#define X6_STACKMODE_OPPOSITE 4
+
 struct x6_event {
   int type;
   uint wid;      // window ID
@@ -345,6 +352,7 @@ static void x6_enqueue_shape_notify(struct x6_window *win, int kind, int shaped)
 static void x6_enqueue_randr_notify(uint wid, int width, int height);
 static int x6_window_shape_mask_for_fd(const struct x6_window *win, int fd);
 static int x6_window_randr_mask_for_fd(const struct x6_window *win, int fd);
+static int x6_restack_window(struct x6_window *w, struct x6_window *sibling, int mode);
 
 static void
 x6_raise_window(struct x6_window *w)
@@ -373,6 +381,123 @@ x6_lower_window(struct x6_window *w)
       minz = wins[i].z;
   }
   w->z = minz - 1;
+}
+
+static int
+x6_restack_window(struct x6_window *w, struct x6_window *sibling, int mode)
+{
+  struct x6_window *children[X6_MAX_WINDOWS];
+  struct x6_window *ordered[X6_MAX_WINDOWS];
+  int zslots[X6_MAX_WINDOWS];
+  int n;
+  int i;
+  int j;
+  int old_idx;
+  int sib_idx;
+  int insert_idx;
+  int was_above_sibling;
+
+  if(w == 0)
+    return -1;
+
+  if(sibling && sibling->parent != w->parent)
+    return -1;
+
+  n = 0;
+  for(i = 0; i < X6_MAX_WINDOWS && n < X6_MAX_WINDOWS; i++) {
+    if(!wins[i].in_use)
+      continue;
+    if(wins[i].parent != w->parent)
+      continue;
+    children[n++] = &wins[i];
+  }
+
+  if(n <= 1)
+    return 0;
+
+  for(i = 1; i < n; i++) {
+    struct x6_window *wv = children[i];
+    int zv = wv->z;
+    j = i - 1;
+    while(j >= 0 && children[j]->z > zv) {
+      children[j + 1] = children[j];
+      j--;
+    }
+    children[j + 1] = wv;
+  }
+
+  old_idx = -1;
+  sib_idx = -1;
+  for(i = 0; i < n; i++) {
+    zslots[i] = children[i]->z;
+    if(children[i] == w)
+      old_idx = i;
+    if(sibling && children[i] == sibling)
+      sib_idx = i;
+  }
+
+  if(old_idx < 0)
+    return -1;
+  if(sibling && sib_idx < 0)
+    return -1;
+
+  was_above_sibling = 0;
+  if(sibling)
+    was_above_sibling = old_idx > sib_idx;
+
+  {
+    int out = 0;
+    for(i = 0; i < n; i++) {
+      if(i == old_idx)
+        continue;
+      ordered[out++] = children[i];
+    }
+  }
+
+  if(sibling) {
+    if(sib_idx > old_idx)
+      sib_idx--;
+  }
+
+  insert_idx = n - 1;
+  if(mode == X6_STACKMODE_ABOVE) {
+    insert_idx = sibling ? (sib_idx + 1) : (n - 1);
+  } else if(mode == X6_STACKMODE_BELOW) {
+    insert_idx = sibling ? sib_idx : 0;
+  } else if(mode == X6_STACKMODE_TOP_IF) {
+    if(sibling && was_above_sibling)
+      return 0;
+    insert_idx = n - 1;
+  } else if(mode == X6_STACKMODE_BOTTOM_IF) {
+    if(sibling && !was_above_sibling)
+      return 0;
+    insert_idx = 0;
+  } else if(mode == X6_STACKMODE_OPPOSITE) {
+    if(sibling) {
+      if(was_above_sibling)
+        insert_idx = sib_idx;
+      else
+        insert_idx = sib_idx + 1;
+    } else {
+      insert_idx = (old_idx >= (n - 1)) ? 0 : (n - 1);
+    }
+  } else {
+    return -1;
+  }
+
+  if(insert_idx < 0)
+    insert_idx = 0;
+  if(insert_idx > n - 1)
+    insert_idx = n - 1;
+
+  for(i = n - 2; i >= insert_idx; i--)
+    ordered[i + 1] = ordered[i];
+  ordered[insert_idx] = w;
+
+  for(i = 0; i < n; i++)
+    ordered[i]->z = zslots[i];
+
+  return 0;
 }
 
 static uint
@@ -2619,6 +2744,11 @@ handle_one_command(int cfd, char *cmd)
       x6_send_line(cfd, "ERR not-found\n");
       return;
     }
+
+    if(win->mapped) {
+      x6_send_line(cfd, "OK map\n");
+      return;
+    }
     
     // Phase 2.1b: If WM holds SubstructureRedirect, queue MapRequest for WM approval
     if(wm_has_redirect && cfd != wm_client_fd && win->owner_fd != wm_client_fd) {
@@ -2633,9 +2763,8 @@ handle_one_command(int cfd, char *cmd)
       return;
     }
     
-    // Otherwise, map directly
+    // Otherwise, map directly without changing existing stack order.
     win->mapped = 1;
-    x6_raise_window(win);
     x6_enqueue_randr_notify(win->id, win->w, win->h);
     x6dbg("x6:map direct wid=%u owner_fd=%d geom=%d,%d %dx%d", id, win->owner_fd, win->x, win->y, win->w, win->h);
     {
@@ -2665,9 +2794,14 @@ handle_one_command(int cfd, char *cmd)
       x6_send_line(cfd, "ERR not-found\n");
       return;
     }
+
+    if(win->mapped) {
+      x6_send_line(cfd, "OK map\n");
+      return;
+    }
+
     win->mapped = 1;
-    x6_raise_window(win);
-    x6trace_console(X6_TRACE_WMMAP, "x6:wm_map step=after_raise wid=%u", id);
+    x6trace_console(X6_TRACE_WMMAP, "x6:wm_map step=after_map_state wid=%u", id);
     x6_enqueue_randr_notify(win->id, win->w, win->h);
     x6trace_console(X6_TRACE_WMMAP, "x6:wm_map step=after_randr wid=%u", id);
     x6dbg("x6:wm_map wid=%u owner_fd=%d geom=%d,%d %dx%d", id, win->owner_fd, win->x, win->y, win->w, win->h);
@@ -2701,6 +2835,10 @@ handle_one_command(int cfd, char *cmd)
       x6_send_line(cfd, "ERR not-found\n");
       return;
     }
+    if(!win->mapped) {
+      x6_send_line(cfd, "OK unmap\n");
+      return;
+    }
     win->mapped = 0;
     x6_enqueue_randr_notify(win->id, win->w, win->h);
     x6_enqueue_shape_notify(win, 0, 0);
@@ -2716,6 +2854,10 @@ handle_one_command(int cfd, char *cmd)
     win = find_window(id);
     if(win == 0) {
       x6_send_line(cfd, "ERR not-found\n");
+      return;
+    }
+    if(!win->mapped) {
+      x6_send_line(cfd, "OK unmap\n");
       return;
     }
     win->mapped = 0;
@@ -2744,6 +2886,33 @@ handle_one_command(int cfd, char *cmd)
     }
     x6_lower_window(win);
     x6_send_line(cfd, "OK lowered\n");
+    return;
+  }
+
+  if(sscanf(cmd, "RESTACK %u %u %d", &id, &color, &x) == 3) {
+    struct x6_window *sibling;
+
+    win = find_window(id);
+    if(win == 0) {
+      x6_send_line(cfd, "ERR not-found\n");
+      return;
+    }
+
+    sibling = 0;
+    if(color != 0) {
+      sibling = find_window(color);
+      if(sibling == 0) {
+        x6_send_line(cfd, "ERR bad-sibling\n");
+        return;
+      }
+    }
+
+    if(x6_restack_window(win, sibling, x) < 0) {
+      x6_send_line(cfd, "ERR bad-restack\n");
+      return;
+    }
+
+    x6_send_line(cfd, "OK restack\n");
     return;
   }
 

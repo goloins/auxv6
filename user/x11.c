@@ -2321,7 +2321,9 @@ XDestroyWindow(Display *display, Window w)
 {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
   snprintf(cmd, sizeof(cmd), "DESTROY %u\n", (uint)w);
-  return x11_cmd(display, cmd, line, sizeof(line)) < 0 ? -1 : 0;
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return -1;
+  return strncmp(line, "OK destroy", 10) == 0 ? 0 : -1;
 }
 
 int
@@ -2344,7 +2346,13 @@ XMapWindow(Display *display, Window w)
   return -1;
 }
 
-int XMapRaised(Display *display, Window w) { return XMapWindow(display, w); }
+int
+XMapRaised(Display *display, Window w)
+{
+  if (XMapWindow(display, w) != 0)
+    return -1;
+  return XRaiseWindow(display, w);
+}
 
 int
 XUnmapWindow(Display *display, Window w)
@@ -2356,7 +2364,10 @@ XUnmapWindow(Display *display, Window w)
   else
     snprintf(cmd, sizeof(cmd), "UNMAP %u\n", (uint)w);
 
-  return x11_cmd(display, cmd, line, sizeof(line)) < 0 ? -1 : 0;
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return -1;
+  return strncmp(line, "OK unmap", 8) == 0 ||
+         strncmp(line, "OK unmapped", 11) == 0 ? 0 : -1;
 }
 
 int
@@ -2406,6 +2417,30 @@ int XLowerWindow(Display *display, Window w) {
 }
 
 int
+XRestackWindows(Display *display, Window windows[], int nwindows)
+{
+  XWindowChanges wc;
+  int i;
+
+  if (!display)
+    return 0;
+  if (!windows || nwindows < 0)
+    return 0;
+  if (nwindows <= 1)
+    return 1;
+
+  /* Apply from bottom-to-top so list order (top-first) is preserved. */
+  for (i = nwindows - 1; i >= 0; i--) {
+    wc.sibling = (Window)0;
+    wc.stack_mode = Above;
+    if (XConfigureWindow(display, windows[i], CWStackMode, &wc) != 0)
+      return 0;
+  }
+
+  return 1;
+}
+
+int
 XConfigureWindow(Display *display, Window w, unsigned int value_mask, XWindowChanges *values)
 {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
@@ -2423,6 +2458,23 @@ XConfigureWindow(Display *display, Window w, unsigned int value_mask, XWindowCha
       bw = 0;
     snprintf(cmd, sizeof(cmd), "SET_BORDER_WIDTH %u %d\n", (uint)w, bw);
     if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+      return -1;
+  }
+
+  if (value_mask & CWStackMode) {
+    Window sibling = 0;
+    int stack_mode = Above;
+
+    if (values) {
+      stack_mode = values->stack_mode;
+      if (value_mask & CWSibling)
+        sibling = values->sibling;
+    }
+
+    snprintf(cmd, sizeof(cmd), "RESTACK %u %u %d\n", (uint)w, (uint)sibling, stack_mode);
+    if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+      return -1;
+    if (strncmp(line, "OK restack", 10) != 0)
       return -1;
   }
 
