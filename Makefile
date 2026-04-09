@@ -483,6 +483,9 @@ _6get: user/6get
 _6fetch: user/6fetch
 	cp user/6fetch _6fetch
 
+_6doc: user/6doc
+	cp user/6doc _6doc
+
 _abrowse: user/abrowse
 	cp user/abrowse _abrowse
 
@@ -969,6 +972,7 @@ UPROGS=\
 	_netcat\
 	_6get\
 	_6fetch\
+	_6doc\
 	_telnet\
 	_runlevel\
 	_telinit\
@@ -1164,6 +1168,7 @@ clean:
 	user/dhcp user/v6dhcpd user/ntpd user/nslookup \
 	user/6get \
 	user/6fetch \
+	user/6doc \
 	user/abrowse \
 	user/lsof user/which user/file \
 	user/uniq user/sort user/sum user/sleep user/yes user/boolean user/sync user/touch user/hashsum user/baseenc user/asroot \

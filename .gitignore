@@ -35,6 +35,7 @@ user/init
 user/netcat
 user/6get
 user/6fetch
+user/6doc
 user/abrowse
 user/telnet
 user/runlevel
