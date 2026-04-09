@@ -321,6 +321,7 @@ static struct x6_cursor_overlay x6_cursor;
 static int x6_event_queue_enqueue(struct x6_event_queue *q, struct x6_event *evt);
 static struct x6_window *x6_pick_window_at(int px, int py);
 static struct x6_window *x6_pick_child_at(uint parent, int px, int py);
+static int x6_window_root_origin(struct x6_window *w, int *rx, int *ry);
 static struct x6_window *find_window(uint id);
 static struct x6_client *x6_find_client_by_fd(int fd);
 static struct x6_event_queue *x6_queue_for_window(uint wid);
@@ -805,17 +806,52 @@ x6_pick_window_at(int px, int py)
   best = 0;
   for(i = 0; i < X6_MAX_WINDOWS; i++) {
     struct x6_window *w;
+    int wx;
+    int wy;
     if(!wins[i].in_use || !wins[i].mapped)
       continue;
     w = &wins[i];
-    if(px < w->x || py < w->y)
+    if(x6_window_root_origin(w, &wx, &wy) < 0)
       continue;
-    if(px >= w->x + w->w || py >= w->y + w->h)
+    if(px < wx || py < wy)
+      continue;
+    if(px >= wx + w->w || py >= wy + w->h)
       continue;
     if(!best || w->z >= best->z)
       best = w;
   }
   return best;
+}
+
+static int
+x6_window_root_origin(struct x6_window *w, int *rx, int *ry)
+{
+  int x;
+  int y;
+  int guard;
+  struct x6_window *cur;
+
+  if(!w || !rx || !ry)
+    return -1;
+
+  x = w->x;
+  y = w->y;
+  cur = w;
+  for(guard = 0; guard < X6_MAX_WINDOWS; guard++) {
+    struct x6_window *p;
+    if(cur->parent == (uint)wm_redirect_root)
+      break;
+    p = find_window(cur->parent);
+    if(!p)
+      break;
+    x += p->x;
+    y += p->y;
+    cur = p;
+  }
+
+  *rx = x;
+  *ry = y;
+  return 0;
 }
 
 static struct x6_window *
@@ -827,14 +863,18 @@ x6_pick_child_at(uint parent, int px, int py)
   best = 0;
   for(i = 0; i < X6_MAX_WINDOWS; i++) {
     struct x6_window *w;
+    int wx;
+    int wy;
     if(!wins[i].in_use || !wins[i].mapped)
       continue;
     w = &wins[i];
     if(w->parent != parent)
       continue;
-    if(px < w->x || py < w->y)
+    if(x6_window_root_origin(w, &wx, &wy) < 0)
       continue;
-    if(px >= w->x + w->w || py >= w->y + w->h)
+    if(px < wx || py < wy)
+      continue;
+    if(px >= wx + w->w || py >= wy + w->h)
       continue;
     if(!best || w->z >= best->z)
       best = w;

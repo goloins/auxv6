@@ -531,6 +531,9 @@ Delivered:
 - Added usermode runtime validation utility for startup-console verification:
 	- Added `xwmselftest` in `user/xwmselftest.c` to exercise `XTranslateCoordinates` root/non-root child-hit semantics with PASS/FAIL console output.
 	- Wired `targetfs/root/.xinitrc` to run `xwmselftest` before WM launch so validation is possible without additional target ports.
+- Fixed startup/runtime regressions found by `xwmselftest`:
+	- `XCloseDisplay` in `user/x11.c` now sends `DETACH` (not `QUIT`) so closing one client does not terminate the x6 server before WM startup.
+	- `x6` hit-testing (`x6_pick_window_at` / `x6_pick_child_at`) now resolves window geometry in root-space using parent-chain origins, fixing non-root child lookup in `QUERY_CHILD_AT`.
 
 Validation evidence:
 
@@ -548,6 +551,7 @@ Validation evidence:
 - Forced rebuild: `make -B _x6 _st _xinit` -> success (exit 0) after `XTranslateCoordinates` root child hit-testing refinement (`child_return` via `QUERY_WINDOW_AT`).
 - Forced rebuild: `make -B _x6 _st _xinit` -> success (exit 0) after parent-aware create + non-root child hit-testing refinement (`QUERY_CHILD_AT` path in `XTranslateCoordinates`).
 - Forced rebuild: `make -B _xwmselftest _xinit` -> success (exit 0) after adding xinitrc-driven usermode child-hit self-test utility.
+- Forced rebuild: `make -B _x6 _xwmselftest _xinit _dwm` -> success (exit 0) after fixing `XCloseDisplay` detach semantics and root-space child hit-testing.
 - Forced rebuild: `make -B _x6 _dwm _st _xinit` -> success (exit 0) after redirect idempotency fix.
 - Image staging: `make test_ext2.img` -> success (exit 0) after redirect idempotency fix.
 

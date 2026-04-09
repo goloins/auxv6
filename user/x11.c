@@ -2234,10 +2234,13 @@ fail:
 int
 XCloseDisplay(Display *display)
 {
+  char line[X6_BUF_SIZE];
+
   if (!display)
     return 0;
   if (display->fd >= 0) {
-    x11_send(display->fd, "QUIT\n");
+    if (x11_cmd(display, "DETACH\n", line, sizeof(line)) < 0)
+      x11_send(display->fd, "DETACH\n");
     close(display->fd);
   }
   if (g_display == display)
