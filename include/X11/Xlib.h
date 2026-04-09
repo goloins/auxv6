@@ -341,6 +341,12 @@ typedef struct _XDisplay {
   int width;
   int height;
   int depth;
+  int is_wm;
+  void *event_queue;
+  int event_count;
+  char *rxbuf;
+  int rxlen;
+  int pending_draw_replies;
 } _XDisplay;
 
 typedef struct {

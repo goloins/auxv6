@@ -572,6 +572,33 @@ Delivered:
 	- Added local fallback macro definitions in `xwmselftest` for `TopIf`/`BottomIf`/`Opposite` when the local Xlib headers omit those symbolic constants.
 - Expanded `CWStackMode` coverage for no-sibling semantics:
 	- Expanded `xwmselftest` with no-sibling `TopIf`/`BottomIf`/`Opposite` transitions (`topif c no sibling`, `bottomif c no sib`, `opposite c no sib`) and corresponding `XQueryTree` checks (`tree stack topif nosib`, `tree stack bottom nosib`, `tree stack opp nosib`).
+- Added conditional-mode no-op and toggle-symmetry checks:
+	- Expanded `xwmselftest` with sibling-relative no-op validations for `TopIf` and `BottomIf` (`topif c under b`, `bottomif a over b`) and tree-order assertions that verify stack order is unchanged.
+	- Expanded `xwmselftest` with additional `Opposite` toggle coverage (`opposite c vs b`, `tree stack opp flip`) to validate inversion behavior from an alternate ordering state.
+- Added negative-path stack/reparent validation and tree-stability checks:
+	- Expanded `xwmselftest` with expected-failure checks for invalid sibling restack and invalid reparent operations (`restack invalid sib`, `reparent self reject`, `reparent cycle reject`, `reparent bad parent`).
+	- Added post-reject `XQueryTree` invariants (`tree stack rejects`, `tree foreign stable`) to verify failed operations do not mutate existing tree topology.
+- Added invalid-window-ID negative-path coverage for core window operations:
+	- Expanded `xwmselftest` with expected-failure checks for invalid-window `XRaiseWindow`, `XLowerWindow`, `XMapWindow`, `XUnmapWindow`, and `XDestroyWindow` calls.
+	- Added `XQueryTree` invalid-id check (`tree missing bad wid`) plus post-failure topology invariant (`tree foreign after bad`) to verify failures do not mutate valid tree state.
+- Fixed backend `DESTROY` invalid-id acknowledgment regression:
+	- Updated `user/x6.c` so `DESTROY` now returns `ERR not-found` for invalid window ids (and root id), instead of always returning `OK destroy`.
+	- This aligns backend semantics with new negative-path `XDestroyWindow` expectations in `xwmselftest`.
+- Added invalid-stackmode rejection coverage:
+	- Expanded `xwmselftest` with expected-failure checks for invalid `CWStackMode` values in `XConfigureWindow` (with and without sibling: `restack bad mode`, `restack bad mode ns`).
+	- Added post-failure stack topology invariant (`tree stack badmode`) to verify invalid stack modes do not mutate sibling ordering.
+- Added self-sibling restack rejection coverage:
+	- Updated backend `RESTACK` semantics in `user/x6.c` to reject requests where `sibling == target`.
+	- Expanded `xwmselftest` with expected-failure `restack self sib` and stability check `tree stack selfsib`.
+- Added destroy idempotency and post-destroy operation rejection coverage:
+	- Expanded `xwmselftest` with lifecycle checks on a temporary window (`destroy temp once`, `destroy temp twice`, `map destroyed temp`, `unmap destroyed temp`).
+	- Added `tree missing temp` to verify the destroyed temp window remains non-queryable after repeated/invalid operations.
+- Added `XTranslateCoordinates` missing-window failure coverage:
+	- Expanded `xwmselftest` with expected-failure translation checks for invalid source/destination and destroyed source windows (`translate missing src`, `translate missing dst`, `translate destroyed src`).
+	- These checks validate `XTranslateCoordinates` failure semantics for non-queryable windows in addition to successful translation/hit paths.
+- Added core-operation negative-path refinements:
+	- Expanded `xwmselftest` with expected-failure checks for `XMapRaised` invalid window (`mapraised bad wid`) and root-destroy rejection (`destroy root reject`).
+	- Expanded translation failure coverage with destroyed-destination check (`translate destroyed dst`) to validate both source and destination invalidation paths.
 
 Validation evidence:
 
@@ -603,6 +630,18 @@ Validation evidence:
 - Object validation: `make user/xwmselftest.o user/x11.o user/x6.o` -> success (exit 0) after direct raise/lower self-test tranche.
 - Object validation: `make user/xwmselftest.o user/x11.o user/x6.o` -> success (exit 0) after TopIf/BottomIf/Opposite stack-mode self-test tranche.
 - Object validation: `make user/xwmselftest.o user/x11.o user/x6.o` -> success (exit 0) after no-sibling TopIf/BottomIf/Opposite stack-mode tranche.
+- Object validation: `make user/xwmselftest.o user/x11.o user/x6.o` -> success (exit 0) after sibling no-op + opposite-toggle stack-mode tranche.
+- Object validation: `make user/xwmselftest.o user/x11.o user/x6.o` -> success (exit 0) after negative-path restack/reparent + tree-stability tranche.
+- Object validation: `make user/xwmselftest.o user/x11.o user/x6.o` -> success (exit 0) after invalid-window operation negative-path tranche.
+- Object validation: `make user/x6.o user/x11.o user/xwmselftest.o` -> success (exit 0) after `DESTROY` invalid-id error-path fix.
+- Object validation: `make user/xwmselftest.o user/x11.o user/x6.o` -> success (exit 0) after invalid-stackmode rejection tranche.
+- Object validation: `make user/x6.o user/xwmselftest.o user/x11.o` -> success (exit 0) after self-sibling restack rejection tranche.
+- Object validation: `make user/xwmselftest.o user/x11.o user/x6.o` -> success (exit 0) after destroy-idempotency/post-destroy-operation tranche.
+- Object validation: `make user/xwmselftest.o user/x11.o user/x6.o` -> success (exit 0) after translate missing-window failure-path tranche.
+- Object validation: `make user/xwmselftest.o user/x11.o user/x6.o` -> success (exit 0) after mapraised-badwid/root-destroy/translate-dst failure tranche.
+- Object validation: `make user/xwmselftest.o user/x11.o user/x6.o` -> success (exit 0) after adding `XResizeWindow` shim implementation + geometry/attribute self-test tranche.
+- Object validation: `make user/xwmselftest.o user/x11.o user/x6.o` and `make _xwmselftest` -> success (exit 0) after bulk extension/event fidelity tranche (`CONFIGURE` notify ordering in x6 + shape/randr/damage/property event coverage in `xwmselftest`).
+- Object validation: `make user/x6.o user/x11.o user/xwmselftest.o && make _x6 _xwmselftest` -> success (exit 0) after pointer-query fidelity (`QUERY_POINTER <wid>` root/win-relative coords) and cross-client routing self-test tranche.
 - Forced rebuild: `make -B _x6 _dwm _st _xinit` -> success (exit 0) after redirect idempotency fix.
 - Image staging: `make test_ext2.img` -> success (exit 0) after redirect idempotency fix.
 
@@ -618,6 +657,23 @@ Runtime evidence (2026-04-09, user-run in guest console):
 - Updated guest-run `xwmselftest` output now reports `summary pass=31 fail=0`, adding repeated-unmap idempotency validation (`unmap unmapped a`) while preserving all prior stack/tree/reparent/destroy checks.
 - Updated guest-run `xwmselftest` output now reports `summary pass=35 fail=0`, adding direct raise/lower stack-order validation (`lower stack_b`, `raise stack_b`) and preserving all prior checks.
 - Updated guest-run `xwmselftest` output now reports `summary pass=41 fail=0`, adding sibling-relative `TopIf`/`BottomIf`/`Opposite` stack-mode validation while preserving all prior checks.
+- Updated guest-run `xwmselftest` output now reports `summary pass=47 fail=0`, adding no-sibling `TopIf`/`BottomIf`/`Opposite` stack-mode coverage while preserving all prior checks.
+- Updated guest-run `xwmselftest` output now reports `summary pass=53 fail=0`, adding conditional-mode no-op/toggle checks (`topif c under b`, `bottomif a over b`, `opposite c vs b`) while preserving all prior checks.
+- Updated guest-run `xwmselftest` output now reports `summary pass=59 fail=0`, adding invalid-sibling and invalid-reparent rejection checks with tree-stability assertions while preserving all prior checks.
+- Updated guest-run `xwmselftest` output now reports `summary pass=66 fail=0`, confirming invalid-window rejection behavior (`raise/lower/map/unmap/destroy bad wid`) and corrected `DESTROY` invalid-id semantics.
+- Updated guest-run `xwmselftest` output now reports `summary pass=69 fail=0`, confirming invalid-stackmode rejection behavior (`restack bad mode`, `restack bad mode ns`) with stable tree invariants.
+- Updated guest-run `xwmselftest` output now reports `summary pass=71 fail=0`, confirming self-sibling restack rejection (`restack self sib`) with stable tree invariants.
+- Updated guest-run `xwmselftest` output now reports `summary pass=76 fail=0`, confirming destroy-idempotency and post-destroy operation rejection checks (`destroy temp twice`, `map/unmap destroyed temp`, `tree missing temp`) while preserving all prior invariants.
+- Updated guest-run `xwmselftest` output now reports `summary pass=87 fail=0`, confirming translation failure coverage (`translate missing src/dst`, `translate destroyed src`) and partial-child-destroy invariants (`tree prune after`, `tree missing prune_a`, `tree missing prune_parent`, `tree missing prune_b`).
+- Updated guest-run `xwmselftest` output now reports `summary pass=90 fail=0`, confirming continued all-pass stability while preserving prior translation/tree/reparent/restack/destroy negative-path invariants.
+- Updated guest-run `xwmselftest` output now reports `summary pass=104 fail=0`, confirming geometry/attribute fidelity checks (`XMoveWindow`, `XResizeWindow`, partial-mask `XConfigureWindow` preservation, min-size clamp, and invalid-window move/resize/configure rejection) while preserving all prior invariants.
+- Updated guest-run `xwmselftest` output now reports `summary pass=133 fail=0`, confirming bulk extension/event and selection/focus/input coverage remains green.
+- Updated guest-run `xwmselftest` output now reports `summary pass=163 fail=0`, confirming release-path and crossing-event tranche stability.
+- Updated guest-run `xwmselftest` output now reports `summary pass=170 fail=0`, confirming crossing/query-pointer ordering fixes and deterministic pointer checks.
+- Updated guest-run `xwmselftest` output now reports `summary pass=172 fail=0`, confirming per-window `XQueryPointer` semantics (`wx/wy`, query-window-relative child behavior).
+- Updated guest-run `xwmselftest` output now reports `summary pass=188 fail=0`, confirming multi-client selection/focus routing tranche stability after singleton-display close regression fix.
+- Regression/fix note: auxv6 x11 currently behaves as singleton `XOpenDisplay`; multi-client self-test close logic now guards against closing the primary `Display*` alias (`dpy2 == dpy`) mid-run.
+- Hardening note: WM-role tracking in x11 has been moved from global process state to per-`Display` state (`display->is_wm`) to prevent cross-client mode leakage as multi-client behavior expands.
 - `dwm` launch path remains stable after self-test completion; x11/x6 trace stream shows expected map flow continuity.
 - This validates the regression fixes for `XCloseDisplay` detach semantics and root-space hit-testing behavior, plus tree/reparent/destroy lifecycle correctness at the X11/X6 boundary.
 

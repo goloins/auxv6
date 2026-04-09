@@ -96,13 +96,7 @@ static unsigned long g_next_atom = 128;
 static atom_entry g_atoms[X11_MAX_ATOMS];
 static int g_atom_count;
 static int (*g_error_handler)(Display *, XErrorEvent *);
-static int g_is_wm;
-static XEvent g_events[X11_MAX_EVENTS];
-static int g_event_count;
 static unsigned long g_next_gc = 1;
-static char g_rxbuf[X11_RXBUF_SIZE];
-static int g_rxlen;
-static int g_pending_draw_replies;
 static GC g_xft_gc;
 static int g_x11_dbg_count;
 static int g_x11_draw_tx_count;
@@ -111,6 +105,14 @@ static int g_x11_draw_reply_seen;
 static unsigned long g_ext_event_serial = 1;
 static Time g_ext_event_time = 1;
 static unsigned long g_next_cursor_id = 0x10000;
+
+static XEvent *
+x11_event_queue(Display *display)
+{
+  if (!display || !display->event_queue)
+    return 0;
+  return (XEvent *)display->event_queue;
+}
 
 #define X11_XRM_MAX_ENTRIES 256
 
@@ -365,7 +367,7 @@ static struct x11_shape_state g_shapes[X11_MAX_SHAPE_WINDOWS];
 static struct x11_randr_select_state g_randr_selects[X11_MAX_RANDR_SELECTS];
 static struct x11_shm_image_state g_shm_images[X11_MAX_SHM_IMAGES];
 static struct x11_pixmap_state *x11_find_pixmap(Pixmap pm);
-static int x11_event_push_back(const XEvent *ev);
+static int x11_event_push_back(Display *display, const XEvent *ev);
 
 static int
 x11_tolower_ascii(int c)
@@ -950,7 +952,7 @@ x11_emit_shape_notify(Display *display, struct x11_shape_state *s, int kind)
     sev->shaped = s->clip_shaped;
   }
   x11_stamp_synthetic_event(&ev);
-  x11_event_push_back(&ev);
+  x11_event_push_back(display, &ev);
 }
 
 static void
@@ -977,7 +979,7 @@ x11_emit_randr_screen_change(Display *display, Window w)
   rev->mwidth = rev->width;
   rev->mheight = rev->height;
   x11_stamp_synthetic_event(&ev);
-  x11_event_push_back(&ev);
+  x11_event_push_back(display, &ev);
 }
 
 static int
@@ -1163,7 +1165,7 @@ x11_notify_drawable_damage_region(Display *display, Drawable d,
     dev->geometry.width = (unsigned short)((ww > 0) ? ww : 0);
     dev->geometry.height = (unsigned short)((wh > 0) ? wh : 0);
     x11_stamp_synthetic_event(&ev);
-    x11_event_push_back(&ev);
+    x11_event_push_back(display, &ev);
   }
 }
 
@@ -1196,7 +1198,7 @@ x11_emit_shm_completion(Display *display, Drawable d, XImage *image)
   sev->shmseg = state ? state->shmseg : 0;
 
   x11_stamp_synthetic_event(&ev);
-  x11_event_push_back(&ev);
+  x11_event_push_back(display, &ev);
 }
 
 static struct x11_pixmap_state *
@@ -1392,123 +1394,164 @@ x11_pick_fontset_name(const char *base_font_name_list)
   return chosen;
 }
 
-static int x11_read_line(int fd, char *line, int maxlen);
+static int x11_read_line(Display *display, char *line, int maxlen);
 static int x11_parse_event_line(Display *display, const char *line, XEvent *event);
 static long x11_event_mask_for_type(int type);
 static Window x11_event_window(const XEvent *event);
 
 static int
-x11_event_push_back(const XEvent *ev)
+x11_event_push_back(Display *display, const XEvent *ev)
 {
+  XEvent *events;
+
+  if (!display)
+    return -1;
+  events = x11_event_queue(display);
+  if (!events)
+    return -1;
   if (!ev)
     return -1;
-  if (g_event_count >= X11_MAX_EVENTS) {
-    memmove(&g_events[0], &g_events[1], (size_t)(X11_MAX_EVENTS - 1) * sizeof(XEvent));
-    g_event_count = X11_MAX_EVENTS - 1;
+  if (display->event_count >= X11_MAX_EVENTS) {
+    memmove(&events[0], &events[1], (size_t)(X11_MAX_EVENTS - 1) * sizeof(XEvent));
+    display->event_count = X11_MAX_EVENTS - 1;
   }
-  g_events[g_event_count++] = *ev;
+  events[display->event_count++] = *ev;
   if (ev->type == KeyPress || ev->type == KeyRelease) {
     x11crit("x11:key-queue push type=%d keycode=%u state=%u qlen=%d",
-            ev->type, ev->xkey.keycode, ev->xkey.state, g_event_count);
+            ev->type, ev->xkey.keycode, ev->xkey.state, display->event_count);
   }
   return 0;
 }
 
 static int
-x11_event_push_front(const XEvent *ev)
+x11_event_push_front(Display *display, const XEvent *ev)
 {
+  XEvent *events;
+
+  if (!display)
+    return -1;
+  events = x11_event_queue(display);
+  if (!events)
+    return -1;
   if (!ev)
     return -1;
-  if (g_event_count >= X11_MAX_EVENTS)
-    g_event_count = X11_MAX_EVENTS - 1;
-  if (g_event_count > 0)
-    memmove(&g_events[1], &g_events[0], (size_t)g_event_count * sizeof(XEvent));
-  g_events[0] = *ev;
-  g_event_count++;
+  if (display->event_count >= X11_MAX_EVENTS)
+    display->event_count = X11_MAX_EVENTS - 1;
+  if (display->event_count > 0)
+    memmove(&events[1], &events[0], (size_t)display->event_count * sizeof(XEvent));
+  events[0] = *ev;
+  display->event_count++;
   return 0;
 }
 
 static int
-x11_event_pop_front(XEvent *ev)
+x11_event_pop_front(Display *display, XEvent *ev)
 {
-  if (!ev || g_event_count <= 0)
+  XEvent *events;
+
+  if (!display || !ev || display->event_count <= 0)
     return -1;
-  *ev = g_events[0];
-  if (g_event_count > 1)
-    memmove(&g_events[0], &g_events[1], (size_t)(g_event_count - 1) * sizeof(XEvent));
-  g_event_count--;
+  events = x11_event_queue(display);
+  if (!events)
+    return -1;
+  *ev = events[0];
+  if (display->event_count > 1)
+    memmove(&events[0], &events[1], (size_t)(display->event_count - 1) * sizeof(XEvent));
+  display->event_count--;
   if (ev->type == KeyPress || ev->type == KeyRelease) {
     x11crit("x11:key-queue pop type=%d keycode=%u state=%u qlen=%d",
-            ev->type, ev->xkey.keycode, ev->xkey.state, g_event_count);
+            ev->type, ev->xkey.keycode, ev->xkey.state, display->event_count);
   }
   return 0;
 }
 
 static int
-x11_event_peek_front(XEvent *ev)
+x11_event_peek_front(Display *display, XEvent *ev)
 {
-  if (!ev || g_event_count <= 0)
+  XEvent *events;
+
+  if (!display || !ev || display->event_count <= 0)
     return -1;
-  *ev = g_events[0];
+  events = x11_event_queue(display);
+  if (!events)
+    return -1;
+  *ev = events[0];
   return 0;
 }
 
 static int
-x11_event_pop_index(int idx, XEvent *ev)
+x11_event_pop_index(Display *display, int idx, XEvent *ev)
 {
-  if (idx < 0 || idx >= g_event_count || !ev)
+  XEvent *events;
+
+  if (!display || idx < 0 || idx >= display->event_count || !ev)
     return -1;
-  *ev = g_events[idx];
-  if (idx + 1 < g_event_count)
-    memmove(&g_events[idx], &g_events[idx + 1], (size_t)(g_event_count - idx - 1) * sizeof(XEvent));
-  g_event_count--;
+  events = x11_event_queue(display);
+  if (!events)
+    return -1;
+  *ev = events[idx];
+  if (idx + 1 < display->event_count)
+    memmove(&events[idx], &events[idx + 1], (size_t)(display->event_count - idx - 1) * sizeof(XEvent));
+  display->event_count--;
   return 0;
 }
 
 static int
-x11_event_find_and_pop_mask(long mask, XEvent *ev)
+x11_event_find_and_pop_mask(Display *display, long mask, XEvent *ev)
 {
+  XEvent *events;
   int i;
 
-  if (!ev)
+  if (!display || !ev)
     return -1;
-  for (i = 0; i < g_event_count; i++) {
-    if (x11_event_mask_for_type(g_events[i].type) & mask)
-      return x11_event_pop_index(i, ev);
-  }
-  return -1;
-}
-
-static int
-x11_event_find_and_pop_type(int type, Window w, int check_window, XEvent *ev)
-{
-  int i;
-
-  if (!ev)
+  events = x11_event_queue(display);
+  if (!events)
     return -1;
-  for (i = 0; i < g_event_count; i++) {
-    if (g_events[i].type != type)
-      continue;
-    if (check_window && x11_event_window(&g_events[i]) != w)
-      continue;
-    return x11_event_pop_index(i, ev);
+  for (i = 0; i < display->event_count; i++) {
+    if (x11_event_mask_for_type(events[i].type) & mask)
+      return x11_event_pop_index(display, i, ev);
   }
   return -1;
 }
 
 static int
-x11_event_find_and_pop_window_mask(Window w, long mask, XEvent *ev)
+x11_event_find_and_pop_type(Display *display, int type, Window w, int check_window, XEvent *ev)
 {
+  XEvent *events;
   int i;
 
-  if (!ev)
+  if (!display || !ev)
     return -1;
-  for (i = 0; i < g_event_count; i++) {
-    if (x11_event_window(&g_events[i]) != w)
+  events = x11_event_queue(display);
+  if (!events)
+    return -1;
+  for (i = 0; i < display->event_count; i++) {
+    if (events[i].type != type)
       continue;
-    if ((x11_event_mask_for_type(g_events[i].type) & mask) == 0)
+    if (check_window && x11_event_window(&events[i]) != w)
       continue;
-    return x11_event_pop_index(i, ev);
+    return x11_event_pop_index(display, i, ev);
+  }
+  return -1;
+}
+
+static int
+x11_event_find_and_pop_window_mask(Display *display, Window w, long mask, XEvent *ev)
+{
+  XEvent *events;
+  int i;
+
+  if (!display || !ev)
+    return -1;
+  events = x11_event_queue(display);
+  if (!events)
+    return -1;
+  for (i = 0; i < display->event_count; i++) {
+    if (x11_event_window(&events[i]) != w)
+      continue;
+    if ((x11_event_mask_for_type(events[i].type) & mask) == 0)
+      continue;
+    return x11_event_pop_index(display, i, ev);
   }
   return -1;
 }
@@ -1523,10 +1566,10 @@ x11_event_find_and_pop_predicate(Display *display, XEvent *ev,
   if (!display || !ev || !predicate)
     return -1;
 
-  for (i = 0; i < g_event_count; i++) {
-    XEvent candidate = g_events[i];
+  for (i = 0; i < display->event_count; i++) {
+    XEvent candidate = x11_event_queue(display)[i];
     if (predicate(display, &candidate, arg))
-      return x11_event_pop_index(i, ev);
+      return x11_event_pop_index(display, i, ev);
   }
   return -1;
 }
@@ -1541,8 +1584,8 @@ x11_handle_unsolicited_line(Display *display, const char *line)
     XEvent ev;
     memset(&ev, 0, sizeof(ev));
     if (x11_parse_event_line(display, line, &ev) == 0) {
-      x11_event_push_back(&ev);
-      x11dbg("x11:event queued type=%d qlen=%d", ev.type, g_event_count);
+      x11_event_push_back(display, &ev);
+      x11dbg("x11:event queued type=%d qlen=%d", ev.type, display->event_count);
     } else {
       x11dbg("x11:event dropped raw='%s'", line);
     }
@@ -1550,21 +1593,21 @@ x11_handle_unsolicited_line(Display *display, const char *line)
   }
 
   if ((strncmp(line, "OK draw", 7) == 0 || strncmp(line, "OK text", 7) == 0) &&
-      g_pending_draw_replies > 0) {
-    g_pending_draw_replies--;
+      display->pending_draw_replies > 0) {
+    display->pending_draw_replies--;
     g_x11_draw_reply_seen++;
-    if ((g_x11_draw_reply_seen % 256) == 0 || g_pending_draw_replies == 0) {
-      x11dbg("x11:draw-reply seen=%d pending=%d", g_x11_draw_reply_seen, g_pending_draw_replies);
+    if ((g_x11_draw_reply_seen % 256) == 0 || display->pending_draw_replies == 0) {
+      x11dbg("x11:draw-reply seen=%d pending=%d", g_x11_draw_reply_seen, display->pending_draw_replies);
     }
     return 1;
   }
 
   /* Draw commands can also fail (e.g. ERR not-found / ERR unknown). Consume
    * these while draining draw replies so pending accounting does not wedge. */
-  if (strncmp(line, "ERR ", 4) == 0 && g_pending_draw_replies > 0) {
-    g_pending_draw_replies--;
+  if (strncmp(line, "ERR ", 4) == 0 && display->pending_draw_replies > 0) {
+    display->pending_draw_replies--;
     g_x11_draw_reply_seen++;
-    x11dbg("x11:draw-reply error='%s' pending=%d", line, g_pending_draw_replies);
+    x11dbg("x11:draw-reply error='%s' pending=%d", line, display->pending_draw_replies);
     return 1;
   }
 
@@ -1580,9 +1623,9 @@ x11_drain_draw_replies(Display *display)
   if (!display)
     return -1;
 
-  before = g_pending_draw_replies;
-  while (g_pending_draw_replies > 0) {
-    if (x11_read_line(display->fd, line, sizeof(line)) < 0)
+  before = display->pending_draw_replies;
+  while (display->pending_draw_replies > 0) {
+    if (x11_read_line(display, line, sizeof(line)) < 0)
       return -1;
     if (!x11_handle_unsolicited_line(display, line))
       return -1;
@@ -2025,7 +2068,7 @@ x11_read_event_from_wire(Display *display, XEvent *event)
     return -1;
 
   while (1) {
-    if (x11_read_line(display->fd, line, sizeof(line)) < 0)
+    if (x11_read_line(display, line, sizeof(line)) < 0)
       return -1;
     if (x11_handle_unsolicited_line(display, line))
       continue;
@@ -2037,50 +2080,52 @@ x11_read_event_from_wire(Display *display, XEvent *event)
 static int
 x11_read_event(Display *display, XEvent *event)
 {
-  if (x11_event_pop_front(event) == 0)
+  if (x11_event_pop_front(display, event) == 0)
     return 0;
   return x11_read_event_from_wire(display, event);
 }
 
 static int
-x11_read_line(int fd, char *line, int maxlen)
+x11_read_line(Display *display, char *line, int maxlen)
 {
   int i;
+  int fd;
 
-  if (!line || maxlen <= 1)
+  if (!display || !display->rxbuf || !line || maxlen <= 1)
     return -1;
+  fd = display->fd;
 
   while (1) {
-    for (i = 0; i < g_rxlen; i++) {
-      if (g_rxbuf[i] == '\n' || g_rxbuf[i] == '\r') {
+    for (i = 0; i < display->rxlen; i++) {
+      if (display->rxbuf[i] == '\n' || display->rxbuf[i] == '\r') {
         int copy_len;
         int consume;
 
         copy_len = i;
         if (copy_len > maxlen - 1)
           copy_len = maxlen - 1;
-        memmove(line, g_rxbuf, (size_t)copy_len);
+        memmove(line, display->rxbuf, (size_t)copy_len);
         line[copy_len] = '\0';
 
         consume = i + 1;
-        while (consume < g_rxlen && (g_rxbuf[consume] == '\n' || g_rxbuf[consume] == '\r'))
+        while (consume < display->rxlen && (display->rxbuf[consume] == '\n' || display->rxbuf[consume] == '\r'))
           consume++;
-        memmove(g_rxbuf, g_rxbuf + consume, (size_t)(g_rxlen - consume));
-        g_rxlen -= consume;
+        memmove(display->rxbuf, display->rxbuf + consume, (size_t)(display->rxlen - consume));
+        display->rxlen -= consume;
         if (strncmp(line, "OK text", 7) != 0 && strncmp(line, "OK draw", 7) != 0)
-          x11dbg("x11:wire:rx '%s' buffered=%d", line, g_rxlen);
+          x11dbg("x11:wire:rx '%s' buffered=%d", line, display->rxlen);
         return copy_len;
       }
     }
 
-    if (g_rxlen >= (int)sizeof(g_rxbuf))
+    if (display->rxlen >= X11_RXBUF_SIZE)
       return -1;
 
     {
-      int n = recv(fd, g_rxbuf + g_rxlen, sizeof(g_rxbuf) - (size_t)g_rxlen);
+      int n = recv(fd, display->rxbuf + display->rxlen, (size_t)(X11_RXBUF_SIZE - display->rxlen));
       if (n <= 0)
         return -1;
-      g_rxlen += n;
+      display->rxlen += n;
     }
   }
 }
@@ -2114,7 +2159,7 @@ x11_cmd(Display *dpy, const char *cmd, char *resp, int maxlen)
     return 0;
 
   while (1) {
-    if (x11_read_line(dpy->fd, line, sizeof(line)) < 0)
+    if (x11_read_line(dpy, line, sizeof(line)) < 0)
       return -1;
 
     if (x11_handle_unsolicited_line(dpy, line))
@@ -2187,6 +2232,11 @@ XOpenDisplay(char *display_name)
   if (!dpy)
     return 0;
   memset(dpy, 0, sizeof(*dpy));
+  dpy->fd = -1;
+  dpy->event_queue = malloc((size_t)X11_MAX_EVENTS * sizeof(XEvent));
+  dpy->rxbuf = malloc(X11_RXBUF_SIZE);
+  if (!dpy->event_queue || !dpy->rxbuf)
+    goto fail;
 
   dpy->fd = socket(AF_INET, SOCK_STREAM, 0);
   if (dpy->fd < 0) {
@@ -2201,7 +2251,7 @@ XOpenDisplay(char *display_name)
     goto fail;
   }
 
-  if (x11_read_line(dpy->fd, line, sizeof(line)) < 0) {
+  if (x11_read_line(dpy, line, sizeof(line)) < 0) {
     goto fail;
   }
   x11dbg("x11:open hello='%s'", line);
@@ -2217,8 +2267,10 @@ XOpenDisplay(char *display_name)
   dpy->width = x11_parse_hello_dim(line, "width=", 1024);
   dpy->height = x11_parse_hello_dim(line, "height=", 768);
   dpy->depth = 32;
-  g_rxlen = 0;
-  g_pending_draw_replies = 0;
+  dpy->is_wm = 0;
+  dpy->event_count = 0;
+  dpy->rxlen = 0;
+  dpy->pending_draw_replies = 0;
   g_x11_dbg_count = 0;
   x11dbg("x11:open ready fd=%d root=%lu size=%dx%d", dpy->fd, dpy->root, dpy->width, dpy->height);
   g_display = dpy;
@@ -2227,6 +2279,10 @@ XOpenDisplay(char *display_name)
 fail:
   if (dpy->fd >= 0)
     close(dpy->fd);
+  if (dpy->event_queue)
+    free(dpy->event_queue);
+  if (dpy->rxbuf)
+    free(dpy->rxbuf);
   free(dpy);
   return 0;
 }
@@ -2246,8 +2302,10 @@ XCloseDisplay(Display *display)
   if (g_display == display)
     g_display = 0;
   g_xft_gc = 0;
-  g_rxlen = 0;
-  g_pending_draw_replies = 0;
+  if (display->event_queue)
+    free(display->event_queue);
+  if (display->rxbuf)
+    free(display->rxbuf);
   free(display);
   return 0;
 }
@@ -2331,7 +2389,7 @@ XMapWindow(Display *display, Window w)
 {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
 
-  if (g_is_wm)
+  if (display->is_wm)
     snprintf(cmd, sizeof(cmd), "WM_MAP %u\n", (uint)w);
   else
     snprintf(cmd, sizeof(cmd), "MAP %u\n", (uint)w);
@@ -2359,7 +2417,7 @@ XUnmapWindow(Display *display, Window w)
 {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
 
-  if (g_is_wm)
+  if (display->is_wm)
     snprintf(cmd, sizeof(cmd), "WM_UNMAP %u\n", (uint)w);
   else
     snprintf(cmd, sizeof(cmd), "UNMAP %u\n", (uint)w);
@@ -2375,7 +2433,7 @@ XMoveResizeWindow(Display *display, Window w, int x, int y, unsigned int width, 
 {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
 
-  if (g_is_wm)
+  if (display->is_wm)
     snprintf(cmd, sizeof(cmd), "WM_CONFIGURE %u %d %d %d %d\n", (uint)w, x, y, (int)width, (int)height);
   else
     snprintf(cmd, sizeof(cmd), "CONFIGURE %u %d %d %d %d\n", (uint)w, x, y, (int)width, (int)height);
@@ -2397,6 +2455,19 @@ int XMoveWindow(Display *display, Window w, int x, int y) {
     return -1;
   return XMoveResizeWindow(display, w, x, y, (unsigned int)attrs.width, (unsigned int)attrs.height);
 }
+
+int
+XResizeWindow(Display *display, Window w, unsigned int width, unsigned int height)
+{
+  XWindowAttributes attrs;
+
+  if (!display)
+    return -1;
+  if (!XGetWindowAttributes(display, w, &attrs))
+    return -1;
+  return XMoveResizeWindow(display, w, attrs.x, attrs.y, width, height);
+}
+
 int XRaiseWindow(Display *display, Window w) {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
   if (!display)
@@ -2553,9 +2624,9 @@ XSelectInput(Display *display, Window w, long event_mask)
     if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
       return -1;
     if (strncmp(line, "OK redirect_granted", 19) == 0)
-      g_is_wm = 1;
+      display->is_wm = 1;
     else if (strncmp(line, "ERR redirect-in-use", 19) == 0)
-      g_is_wm = 0;
+      display->is_wm = 0;
     else
       return -1;
   }
@@ -2621,10 +2692,10 @@ x11_event_window(const XEvent *event)
 int
 XNextEvent(Display *display, XEvent *event)
 {
-  if (x11_event_pop_front(event) == 0) {
+  if (x11_event_pop_front(display, event) == 0) {
     if (event && (event->type == KeyPress || event->type == KeyRelease)) {
       x11dbg("x11:next-event(pop) type=%d keycode=%u state=%u qlen=%d",
-             event->type, event->xkey.keycode, event->xkey.state, g_event_count);
+             event->type, event->xkey.keycode, event->xkey.state, display->event_count);
     }
     return 0;
   }
@@ -2641,11 +2712,11 @@ XPeekEvent(Display *display, XEvent *event)
 
   if (!display || !event)
     return -1;
-  if (x11_event_peek_front(event) == 0)
+  if (x11_event_peek_front(display, event) == 0)
     return 0;
   if (x11_read_event(display, &tmp) < 0)
     return -1;
-  x11_event_push_front(&tmp);
+  x11_event_push_front(display, &tmp);
   *event = tmp;
   return 0;
 }
@@ -2653,10 +2724,11 @@ XPeekEvent(Display *display, XEvent *event)
 int
 XPutBackEvent(Display *display, XEvent *event)
 {
-  (void)display;
+  if (!display)
+    return 0;
   if (!event)
     return 0;
-  x11_event_push_front(event);
+  x11_event_push_front(display, event);
   return 0;
 }
 
@@ -2666,7 +2738,7 @@ XMaskEvent(Display *display, long event_mask, XEvent *event)
   if (!display || !event)
     return -1;
 
-  if (x11_event_find_and_pop_mask(event_mask, event) == 0)
+  if (x11_event_find_and_pop_mask(display, event_mask, event) == 0)
     return 0;
 
   while (1) {
@@ -2677,7 +2749,7 @@ XMaskEvent(Display *display, long event_mask, XEvent *event)
       *event = tmp;
       return 0;
     }
-    x11_event_push_back(&tmp);
+    x11_event_push_back(display, &tmp);
   }
 }
 
@@ -2686,7 +2758,7 @@ Bool XCheckMaskEvent(Display *display, long event_mask, XEvent *event) {
     return False;
   if (!event)
     return False;
-  return x11_event_find_and_pop_mask(event_mask, event) == 0 ? True : False;
+  return x11_event_find_and_pop_mask(display, event_mask, event) == 0 ? True : False;
 }
 
 Bool
@@ -2714,11 +2786,11 @@ XCheckTypedEvent(Display *display, int event_type, XEvent *event_return)
 {
   if (!display || !event_return)
     return False;
-  if (x11_event_find_and_pop_type(event_type, None, 0, event_return) == 0)
+  if (x11_event_find_and_pop_type(display, event_type, None, 0, event_return) == 0)
     return True;
   if (!XPending(display))
     return False;
-  if (x11_event_find_and_pop_type(event_type, None, 0, event_return) == 0)
+  if (x11_event_find_and_pop_type(display, event_type, None, 0, event_return) == 0)
     return True;
   return False;
 }
@@ -2728,11 +2800,11 @@ XCheckTypedWindowEvent(Display *display, Window w, int event_type, XEvent *event
 {
   if (!display || !event_return)
     return False;
-  if (x11_event_find_and_pop_type(event_type, w, 1, event_return) == 0)
+  if (x11_event_find_and_pop_type(display, event_type, w, 1, event_return) == 0)
     return True;
   if (!XPending(display))
     return False;
-  if (x11_event_find_and_pop_type(event_type, w, 1, event_return) == 0)
+  if (x11_event_find_and_pop_type(display, event_type, w, 1, event_return) == 0)
     return True;
   return False;
 }
@@ -2742,11 +2814,11 @@ XCheckWindowEvent(Display *display, Window w, long event_mask, XEvent *event_ret
 {
   if (!display || !event_return)
     return False;
-  if (x11_event_find_and_pop_window_mask(w, event_mask, event_return) == 0)
+  if (x11_event_find_and_pop_window_mask(display, w, event_mask, event_return) == 0)
     return True;
   if (!XPending(display))
     return False;
-  if (x11_event_find_and_pop_window_mask(w, event_mask, event_return) == 0)
+  if (x11_event_find_and_pop_window_mask(display, w, event_mask, event_return) == 0)
     return True;
   return False;
 }
@@ -2759,7 +2831,7 @@ XWindowEvent(Display *display, Window w, long event_mask, XEvent *event_return)
   if (!display || !event_return)
     return -1;
 
-  if (x11_event_find_and_pop_window_mask(w, event_mask, event_return) == 0)
+  if (x11_event_find_and_pop_window_mask(display, w, event_mask, event_return) == 0)
     return 0;
 
   while (1) {
@@ -2770,7 +2842,7 @@ XWindowEvent(Display *display, Window w, long event_mask, XEvent *event_return)
       *event_return = ev;
       return 0;
     }
-    x11_event_push_back(&ev);
+    x11_event_push_back(display, &ev);
   }
 }
 
@@ -3310,7 +3382,7 @@ Status XSendEvent(Display *display, Window w, Bool propagate, long event_mask, X
            event_send->xconfigure.width,
            event_send->xconfigure.height);
 
-    if (g_is_wm) {
+    if (display->is_wm) {
       /* WM-originated ConfigureNotify should reflect actual WM geometry.
        * Route via WM_CONFIGURE so server-side state and client notify stay
        * coherent, matching normal X11 WM flow expectations. */
@@ -3409,7 +3481,9 @@ int XGrabKeyboard(Display *display, Window grab_window, Bool owner_events, int p
 int XUngrabKeyboard(Display *display, Time time) {
   char line[X6_BUF_SIZE];
   (void)time;
-  return x11_cmd(display, "UNGRAB_KEYBOARD\n", line, sizeof(line)) < 0 ? -1 : 0;
+  if (x11_cmd(display, "UNGRAB_KEYBOARD\n", line, sizeof(line)) < 0)
+    return -1;
+  return strncmp(line, "OK ungrab_done", 14) == 0 ? 0 : -1;
 }
 
 int XGrabPointer(Display *display, Window grab_window, Bool owner_events, unsigned int event_mask, int pointer_mode, int keyboard_mode, Window confine_to, Cursor cursor, Time time) {
@@ -3424,13 +3498,17 @@ int XGrabPointer(Display *display, Window grab_window, Bool owner_events, unsign
 int XUngrabPointer(Display *display, Time time) {
   char line[X6_BUF_SIZE];
   (void)time;
-  return x11_cmd(display, "UNGRAB_POINTER\n", line, sizeof(line)) < 0 ? -1 : 0;
+  if (x11_cmd(display, "UNGRAB_POINTER\n", line, sizeof(line)) < 0)
+    return -1;
+  return strncmp(line, "OK pointer_ungrabbed", 20) == 0 ? 0 : -1;
 }
 int XWarpPointer(Display *display, Window src_w, Window dest_w, int src_x, int src_y, unsigned int src_width, unsigned int src_height, int dest_x, int dest_y) {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
   (void)src_w; (void)dest_w; (void)src_x; (void)src_y; (void)src_width; (void)src_height;
   snprintf(cmd, sizeof(cmd), "WARP_POINTER %d %d\n", dest_x, dest_y);
-  return x11_cmd(display, cmd, line, sizeof(line)) < 0 ? -1 : 0;
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return -1;
+  return strncmp(line, "OK pointer_warped", 16) == 0 ? 0 : -1;
 }
 
 int XGrabKey(Display *display, int keycode, unsigned int modifiers, Window grab_window, Bool owner_events, int pointer_mode, int keyboard_mode) {
@@ -3446,7 +3524,7 @@ int XGrabKey(Display *display, int keycode, unsigned int modifiers, Window grab_
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return -1;
   x11dbg("x11:grab-key resp '%s'", line);
-  return 0;
+  return strncmp(line, "OK key_grabbed", 14) == 0 ? 0 : -1;
 }
 int XUngrabKey(Display *display, int keycode, unsigned int modifiers, Window grab_window) {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
@@ -3457,7 +3535,7 @@ int XUngrabKey(Display *display, int keycode, unsigned int modifiers, Window gra
   snprintf(cmd, sizeof(cmd), "UNGRAB_KEY %u %u %u\n", (uint)keycode, (uint)x6_mods, (uint)grab_window);
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return -1;
-  return 0;
+  return strncmp(line, "OK key_ungrabbed", 16) == 0 ? 0 : -1;
 }
 int XGrabButton(Display *display, unsigned int button, unsigned int modifiers, Window grab_window, Bool owner_events, unsigned int event_mask, int pointer_mode, int keyboard_mode, Window confine_to, Cursor cursor) {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
@@ -4432,9 +4510,9 @@ int XFillRectangle(Display *display, Drawable d, GC gc, int x, int y, unsigned i
   snprintf(cmd, sizeof(cmd), "DRAW_RECT %u %d %d %u %u %u\n", (uint)d, x, y, width, height, color);
   if (x11_send(display->fd, cmd) < 0)
     return -1;
-  g_pending_draw_replies++;
+  display->pending_draw_replies++;
   x11dbg("x11:draw-rect d=%u x=%d y=%d w=%u h=%u color=%u pending=%d",
-         (uint)d, x, y, width, height, color, g_pending_draw_replies);
+         (uint)d, x, y, width, height, color, display->pending_draw_replies);
   return 0;
 }
 int XDrawRectangle(Display *display, Drawable d, GC gc, int x, int y, unsigned int width, unsigned int height) {
@@ -4473,10 +4551,10 @@ int XDrawString(Display *display, Drawable d, GC gc, int x, int y, const char *s
   snprintf(cmd, sizeof(cmd), "DRAW_TEXT %u %d %d %u %d %.*s\n", (uint)d, x, y, color, n, n, string);
   if (x11_send(display->fd, cmd) < 0)
     return -1;
-  g_pending_draw_replies++;
+  display->pending_draw_replies++;
   if ((g_x11_draw_call_count++ % 256) == 0) {
     x11dbg("x11:draw-text(sampled) d=%u x=%d y=%d len=%d color=%u pending=%d",
-           (uint)d, x, y, n, color, g_pending_draw_replies);
+           (uint)d, x, y, n, color, display->pending_draw_replies);
   }
   return 0;
 }
@@ -5014,7 +5092,7 @@ int XClearArea(Display *display, Window w, int x, int y,
   snprintf(cmd, sizeof(cmd), "DRAW_RECT %u %d %d %u %u %u\n", (uint)w, x, y, width, height, 0x000000U);
   if (x11_send(display->fd, cmd) < 0)
     return -1;
-  g_pending_draw_replies++;
+  display->pending_draw_replies++;
   return 0;
 }
 
@@ -5158,24 +5236,34 @@ int XQueryTree(Display *display, Window w, Window *root_return, Window *parent_r
   return 1;
 }
 Bool XQueryPointer(Display *display, Window w, Window *root_return, Window *child_return, int *root_x_return, int *root_y_return, int *win_x_return, int *win_y_return, unsigned int *mask_return) {
+  char cmd[X6_BUF_SIZE];
   char line[X6_BUF_SIZE];
+  unsigned int root = 0;
   unsigned int child = 0;
   int px = 0;
   int py = 0;
+  int wx = 0;
+  int wy = 0;
   unsigned int state = 0;
-  (void)w;
 
-  if (x11_cmd(display, "QUERY_POINTER\n", line, sizeof(line)) < 0)
+  snprintf(cmd, sizeof(cmd), "QUERY_POINTER %u\n", (uint)w);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return False;
-  if (sscanf(line, "OK pointer root=1 child=%u x=%d y=%d state=%u", &child, &px, &py, &state) < 4)
-    return False;
+  if (sscanf(line, "OK pointer root=%u child=%u x=%d y=%d wx=%d wy=%d state=%u",
+             &root, &child, &px, &py, &wx, &wy, &state) < 7) {
+    if (sscanf(line, "OK pointer root=%u child=%u x=%d y=%d state=%u",
+               &root, &child, &px, &py, &state) < 5)
+      return False;
+    wx = px;
+    wy = py;
+  }
 
-  if (root_return) *root_return = 1;
+  if (root_return) *root_return = (Window)root;
   if (child_return) *child_return = (Window)child;
   if (root_x_return) *root_x_return = px;
   if (root_y_return) *root_y_return = py;
-  if (win_x_return) *win_x_return = px;
-  if (win_y_return) *win_y_return = py;
+  if (win_x_return) *win_x_return = wx;
+  if (win_y_return) *win_y_return = wy;
   if (mask_return) *mask_return = state;
   return True;
 }
@@ -5291,19 +5379,19 @@ XPending(Display *display)
 
   if (!display)
     return 0;
-  if (g_event_count > 0)
+  if (display->event_count > 0)
   {
-    x11dbg("x11:pending immediate queued=%d", g_event_count);
+    x11dbg("x11:pending immediate queued=%d", display->event_count);
     return 1;
   }
 
   /* Check if we already have bytes buffered from a previous recv */
-  if (g_rxlen > 0) {
+  if (display->rxlen > 0) {
     XEvent ev;
     if (x11_read_event_from_wire(display, &ev) == 0)
-      x11_event_push_back(&ev);
-    x11dbg("x11:pending rxbuf-hit queued=%d", g_event_count);
-    return g_event_count > 0 ? 1 : 0;
+      x11_event_push_back(display, &ev);
+    x11dbg("x11:pending rxbuf-hit queued=%d", display->event_count);
+    return display->event_count > 0 ? 1 : 0;
   }
 
   pfd.fd = display->fd;
@@ -5316,10 +5404,10 @@ XPending(Display *display)
   {
     XEvent ev;
     if (x11_read_event_from_wire(display, &ev) == 0)
-      x11_event_push_back(&ev);
+      x11_event_push_back(display, &ev);
   }
-  x11dbg("x11:pending poll-hit queued=%d revents=%d", g_event_count, pfd.revents);
-  return g_event_count > 0 ? 1 : 0;
+  x11dbg("x11:pending poll-hit queued=%d revents=%d", display->event_count, pfd.revents);
+  return display->event_count > 0 ? 1 : 0;
 }
 
 int
@@ -5331,12 +5419,12 @@ XEventsQueued(Display *display, int mode)
   if (!display)
     return 0;
 
-  before = g_event_count;
+  before = display->event_count;
   if (before > 0)
     return before;
 
   (void)XPending(display);
-  return g_event_count;
+  return display->event_count;
 }
 
 int (*XSetErrorHandler(int (*handler)(Display *, XErrorEvent *)))(Display *, XErrorEvent *) {

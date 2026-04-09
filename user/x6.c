@@ -400,6 +400,9 @@ x6_restack_window(struct x6_window *w, struct x6_window *sibling, int mode)
   if(w == 0)
     return -1;
 
+  if(sibling && sibling == w)
+    return -1;
+
   if(sibling && sibling->parent != w->parent)
     return -1;
 
@@ -2984,6 +2987,7 @@ handle_one_command(int cfd, char *cmd)
   if(sscanf(cmd, "CONFIGURE %u %d %d %d %d", &id, &x, &y, &w, &h) == 5) {
     int redirected_client;
     int apply_direct;
+    struct x6_client *owner;
 
     win = find_window(id);
     if(win == 0) {
@@ -3028,6 +3032,24 @@ handle_one_command(int cfd, char *cmd)
     win->y = y;
     win->w = w;
     win->h = h;
+
+    owner = x6_find_client_by_fd(win->owner_fd);
+    if(owner && owner->in_use && owner->hello_done) {
+      struct x6_event cn;
+      x6_event_queue_drop_extension_for_window(&owner->queue, id);
+      memset(&cn, 0, sizeof(cn));
+      cn.type = X6_EVENT_CONFIGURE_NOTIFY;
+      cn.wid = id;
+      cn.x = x;
+      cn.y = y;
+      cn.w = w;
+      cn.h = h;
+      x6_event_queue_enqueue(&owner->queue, &cn);
+      if(win->mapped)
+        x6_enqueue_expose_notify(win, 0, 0, win->w, win->h);
+      x6_flush_client_events(owner);
+    }
+
     x6_enqueue_shape_notify(win, 0, win->mapped ? 1 : 0);
     if(win->mapped)
       x6_enqueue_randr_notify(win->id, win->w, win->h);
@@ -3036,6 +3058,10 @@ handle_one_command(int cfd, char *cmd)
   }
 
   if(sscanf(cmd, "DESTROY %u", &id) == 1) {
+    if(id == (uint)wm_redirect_root || find_window(id) == 0) {
+      x6_send_line(cfd, "ERR not-found\n");
+      return;
+    }
     destroy_window(id);
     x6_send_line(cfd, "OK destroy\n");
     return;
@@ -3559,6 +3585,26 @@ handle_one_command(int cfd, char *cmd)
     return;
   }
 
+  if(sscanf(cmd, "INJECT_KEY_RELEASE %u %d %d", &id, &x, &y) == 3) {
+    struct x6_event evt;
+    if(current_event_queue == 0) {
+      x6_send_line(cfd, "ERR not-ready\n");
+      return;
+    }
+    evt.type = X6_EVENT_KEY_RELEASE;
+    evt.wid = id;
+    evt.keycode = x;
+    evt.state = (uint)y;
+    evt.x = evt.y = evt.w = evt.h = 0;
+    evt.button = 0;
+    if(x6_event_queue_enqueue(current_event_queue, &evt) < 0) {
+      x6_send_line(cfd, "ERR queue-full\n");
+      return;
+    }
+    x6_send_line(cfd, "OK key_release_injected\n");
+    return;
+  }
+
   if(sscanf(cmd, "INJECT_BUTTON %u %d %d %d %d", &id, &x, &y, &w, &h) == 5) {
     struct x6_event evt;
     if(current_event_queue == 0) {
@@ -3579,6 +3625,29 @@ handle_one_command(int cfd, char *cmd)
       return;
     }
     x6_send_line(cfd, "OK button_injected\n");
+    return;
+  }
+
+  if(sscanf(cmd, "INJECT_BUTTON_RELEASE %u %d %d %d %d", &id, &x, &y, &w, &h) == 5) {
+    struct x6_event evt;
+    if(current_event_queue == 0) {
+      x6_send_line(cfd, "ERR not-ready\n");
+      return;
+    }
+    // x=button, y=state, w=px, h=py
+    evt.type = X6_EVENT_BUTTON_RELEASE;
+    evt.wid = id;
+    evt.button = x;
+    evt.state = (uint)y;
+    evt.x = w;
+    evt.y = h;
+    evt.keycode = 0;
+    evt.w = evt.h = 0;
+    if(x6_event_queue_enqueue(current_event_queue, &evt) < 0) {
+      x6_send_line(cfd, "ERR queue-full\n");
+      return;
+    }
+    x6_send_line(cfd, "OK button_release_injected\n");
     return;
   }
 
@@ -3746,6 +3815,11 @@ handle_one_command(int cfd, char *cmd)
     struct x6_event_queue *target_q;
     uint old_focus = focus_wid;
 
+    if(id != (uint)wm_redirect_root && find_window(id) == 0) {
+      x6_send_line(cfd, "ERR no-such-window\n");
+      return;
+    }
+
     // PointerRoot/root focus means "no explicit client focus".
     if(id == (uint)wm_redirect_root)
       focus_wid = 0;
@@ -3822,11 +3896,31 @@ handle_one_command(int cfd, char *cmd)
   if(sscanf(cmd, "WARP_POINTER %d %d", &x, &y) == 2) {
     int sw;
     int sh;
+    uint old_wid;
+    uint new_wid;
+    struct x6_window *hit;
+
+    hit = x6_pick_window_at(pointer_x, pointer_y);
+    old_wid = hit ? hit->id : 0;
+
     x6_cursor_hide();
     x6_screen_size(&sw, &sh);
     pointer_x = x6_clamp_int(x, 0, sw - 1);
     pointer_y = x6_clamp_int(y, 0, sh - 1);
     x6_cursor_show();
+
+    if(!pointer_grab_active) {
+      hit = x6_pick_window_at(pointer_x, pointer_y);
+      new_wid = hit ? hit->id : 0;
+      if(new_wid != old_wid) {
+        x6_enqueue_crossing_event(X6_EVENT_LEAVE_NOTIFY, old_wid);
+        x6_enqueue_crossing_event(X6_EVENT_ENTER_NOTIFY, new_wid);
+      }
+      pointer_hover_wid = new_wid;
+    } else {
+      pointer_hover_wid = 0;
+    }
+
     x6_send_line(cfd, "OK pointer_warped\n");
     return;
   }
@@ -3870,11 +3964,45 @@ handle_one_command(int cfd, char *cmd)
   }
 
   if(strncmp(cmd, "QUERY_POINTER", 13) == 0) {
-    char out[128];
-    struct x6_window *hit;
-    hit = x6_pick_window_at(pointer_x, pointer_y);
-    snprintf(out, sizeof(out), "OK pointer root=1 child=%u x=%d y=%d state=%u\n",
-             hit ? hit->id : 0, pointer_x, pointer_y, pointer_state);
+    char out[192];
+    uint query_wid;
+    struct x6_window *query_w;
+    struct x6_window *child;
+    int qrx;
+    int qry;
+    int wx;
+    int wy;
+
+    query_wid = (uint)wm_redirect_root;
+    if(sscanf(cmd, "QUERY_POINTER %u", &query_wid) == 1) {
+      if(query_wid != (uint)wm_redirect_root && find_window(query_wid) == 0) {
+        x6_send_line(cfd, "ERR not-found\n");
+        return;
+      }
+    }
+
+    if(query_wid == (uint)wm_redirect_root) {
+      qrx = 0;
+      qry = 0;
+      child = x6_pick_child_at((uint)wm_redirect_root, pointer_x, pointer_y);
+    } else {
+      query_w = find_window(query_wid);
+      if(!query_w || x6_window_root_origin(query_w, &qrx, &qry) < 0) {
+        x6_send_line(cfd, "ERR not-found\n");
+        return;
+      }
+      child = x6_pick_child_at(query_wid, pointer_x, pointer_y);
+    }
+
+    wx = pointer_x - qrx;
+    wy = pointer_y - qry;
+
+    snprintf(out, sizeof(out),
+             "OK pointer root=1 child=%u x=%d y=%d wx=%d wy=%d state=%u\n",
+             child ? child->id : 0,
+             pointer_x, pointer_y,
+             wx, wy,
+             pointer_state);
     x6_send_line(cfd, out);
     return;
   }

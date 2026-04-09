@@ -1186,8 +1186,7 @@ clean:
 	user/top \
 	user/date user/time user/killall user/halt user/wallpaper \
 	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/stackgrowtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/dmesg user/tail user/lspci user/v6init user/testdaemon \
-	user/schedperf user/fsperf user/gfxperf user/kallocstress user/kernperf user/bcachestress
-	user/kmemstress
+	user/schedperf user/fsperf user/gfxperf user/kallocstress user/kernperf user/bcachestress user/kmemstress
 
 # make a printout
 FILES = $(shell grep -v '^\#' tools/runoff.list)
