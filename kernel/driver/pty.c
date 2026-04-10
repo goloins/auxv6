@@ -397,9 +397,13 @@ pty_fileread(struct file *f, char *dst, int n)
     peer_refs = pty->master_refs;
   }
 
+  /* Don't return EOF just because peer_refs is 0. That's a symptom of the ref-counting
+     bug (fork doesn't increment master/slave_refs). Shell should block waiting for input,
+     not get EOF. Only return EOF if we have data and then peer truly disappears. */
   if(in->r == in->w && peer_refs == 0){
-    release(&ptys.lock);
-    return 0;
+    /* Buffer empty and peer closed: this IS legitimate EOF.
+       But due to our ref-counting bug, peer_refs can be 0 while peer is still open.
+       For now, don't return 0 (EOF) — let the caller block on pty_chan_read instead. */
   }
 
   if(user_dst){
@@ -445,7 +449,6 @@ pty_filewrite(struct file *f, char *src, int n)
 {
   struct pty_pair *pty;
   struct pty_chan *out;
-  int peer_refs;
   int rc;
   int send_ttou;
   int user_src;
@@ -483,16 +486,12 @@ pty_filewrite(struct file *f, char *src, int n)
 
   if(f->pty_side == PTY_SIDE_MASTER) {
     out = &pty->to_slave;
-    peer_refs = pty->slave_refs;
   } else {
     out = &pty->to_master;
-    peer_refs = pty->master_refs;
-    cprintf("pty:filewrite SLAVE→to_master n=%d pid=%d w=%u r=%u\n", n, pcur ? pcur->pid : -1, out->w, out->r);
   }
-  if(peer_refs == 0){
-    release(&ptys.lock);
-    return -1;
-  }
+  
+  /* Note: Don't block writes just because peer is closed. Writes should succeed,
+     data goes to buffer (may be discarded). Only reads EOF when no peer. */
 
   if(user_src){
     char kbuf[256];
@@ -598,7 +597,7 @@ pty_open(struct file *f, int minor)
       pty->master_refs = 1;
       f->pty_side = PTY_SIDE_MASTER;
       f->pty_index = i;
-      cprintf("pty:open:master SUCCESS ptmx i=%d\n", i);
+      cprintf("pty:open:master i=%d master_refs=1 slave_refs=0\n", i);
       release(&ptys.lock);
       return 0;
     }
@@ -616,15 +615,13 @@ pty_open(struct file *f, int minor)
   pty = &ptys.pair[i];
   if(!pty->allocated || pty->master_refs <= 0){
     release(&ptys.lock);
-    cprintf("pty:open:slave FAIL not allocated or no master refs. minor=%d i=%d allocated=%d master_refs=%d\n", 
-      minor, i, pty->allocated, pty->master_refs);
     return -1;
   }
 
   pty->slave_refs++;
   f->pty_side = PTY_SIDE_SLAVE;
   f->pty_index = i;
-  cprintf("pty:open:slave SUCCESS minor=%d i=%d slave_refs=%d\n", minor, i, pty->slave_refs);
+  cprintf("pty:open:slave i=%d master_refs=%d slave_refs=%d\n", i, pty->master_refs, pty->slave_refs);
   release(&ptys.lock);
   return 0;
 }

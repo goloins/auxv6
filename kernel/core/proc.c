@@ -1118,6 +1118,8 @@ exit(int status)
   struct proc *curproc = myproc();
   struct proc *p;
 
+  cprintf("shell:exit status=%d pid=%d\n", status, curproc ? curproc->pid : -1);
+
   if(curproc == initproc)
     panic("init exiting");
 

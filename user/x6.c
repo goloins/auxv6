@@ -762,10 +762,35 @@ x6_cursor_refresh(void)
   x6_cursor_show();
 }
 
+/* Extend the pending deferred dirty region to cover rows [y0, y1] inclusive.
+ * The actual FB blit is deferred to x6_fb_flush_deferred(), called once per
+ * command burst.  No-op when shadow is unavailable or stride is padded. */
+static void
+x6_fb_mark_dirty(int y0, int y1)
+{
+  if(!x6_fb_shadow || x6_fb.fd < 0 || x6_backend != X6_BACKEND_FB)
+    return;
+  if(x6_fb.stride != x6_fb.width * 4)
+    return;
+  if(y0 < 0) y0 = 0;
+  if(y1 >= x6_fb.height) y1 = x6_fb.height - 1;
+  if(y0 > y1)
+    return;
+  if(!x6_fb_defer_dirty) {
+    x6_fb_defer_y0 = y0;
+    x6_fb_defer_y1 = y1;
+    x6_fb_defer_dirty = 1;
+  } else {
+    if(y0 < x6_fb_defer_y0) x6_fb_defer_y0 = y0;
+    if(y1 > x6_fb_defer_y1) x6_fb_defer_y1 = y1;
+  }
+}
+
 /* Flush any pending deferred dirty framebuffer rows to /dev/fb0 in one
  * sequential write pass.  Called once per command burst (end of poll
- * iteration) so that batched small draws (e.g. Bresenham lines) don't
- * each incur a separate seek+write syscall per pixel.
+ * iteration) so that batched small draws (DRAW_RECT, DRAW_TEXT, COPY_AREA,
+ * DRAW_LINE) accumulate into shadow and reach the framebuffer in a single
+ * lseek + write pair regardless of how many draw commands were in the burst.
  *
  * This function is a no-op when there is no shadow buffer, no pending
  * dirty region, or when we're not in FB mode. */
@@ -802,10 +827,17 @@ x6_fb_flush_deferred(void)
 
   off = (uint64_t)y0 * (uint64_t)x6_fb.stride;
   if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) >= 0) {
-    for(r = y0; r <= y1; r++) {
-      size_t row_base = (size_t)r * (size_t)x6_fb_shadow_w;
-      write(x6_fb.fd, x6_fb_shadow + row_base,
-            (size_t)x6_fb.width * sizeof(uint));
+    if(x6_fb.stride == x6_fb.width * 4) {
+      /* Packed stride: entire band is contiguous in shadow — single write. */
+      size_t nbytes = (size_t)(y1 - y0 + 1) * (size_t)x6_fb.width * sizeof(uint);
+      write(x6_fb.fd, x6_fb_shadow + (size_t)y0 * (size_t)x6_fb_shadow_w, nbytes);
+    } else {
+      /* Padded stride fallback: one write per row. */
+      for(r = y0; r <= y1; r++) {
+        size_t row_base = (size_t)r * (size_t)x6_fb_shadow_w;
+        write(x6_fb.fd, x6_fb_shadow + row_base,
+              (size_t)x6_fb.width * sizeof(uint));
+      }
     }
   }
 
@@ -826,33 +858,6 @@ x6_parse_backend(const char *s)
     return X6_BACKEND_FB;
   return -1;
 }
-
-  /* Write a contiguous band of full-width shadow rows to /dev/fb0 in a single
-   * lseek + write pair.  Requires shadow buffer and no row-stride padding.
-   * Returns 0 on success, -1 if the write was skipped or failed. */
-  static int
-  x6_fb_shadow_flush_rows(int y0, int y1)
-  {
-    uint64_t off;
-    size_t nbytes;
-
-    if(!x6_fb_shadow || x6_fb.fd < 0 || x6_backend != X6_BACKEND_FB)
-      return -1;
-    if(x6_fb.stride != x6_fb.width * 4)
-      return -1;
-    if(y0 < 0) y0 = 0;
-    if(y1 >= x6_fb.height) y1 = x6_fb.height - 1;
-    if(y0 > y1)
-      return 0;
-
-    off = (uint64_t)y0 * (uint64_t)x6_fb.stride;
-    nbytes = (size_t)(y1 - y0 + 1) * (size_t)x6_fb.width * sizeof(uint);
-    if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) < 0)
-      return -1;
-    if(write(x6_fb.fd, x6_fb_shadow + (size_t)y0 * (size_t)x6_fb_shadow_w, nbytes) < 0)
-      return -1;
-    return 0;
-  }
 
 static int
 x6_clamp_int(int v, int lo, int hi)
@@ -1220,11 +1225,6 @@ x6_canvas_fill_pixels(int x, int y, int w, int h, uint pixel)
     uint p;
     int need_cursor_refresh;
 
-    // Only hide/show cursor if drawing overlaps cursor area
-    need_cursor_refresh = x6_cursor_overlaps_rect(x, y, w, h);
-    if(need_cursor_refresh)
-      x6_cursor_hide();
-
     x0 = x;
     y0 = y;
     x1 = x + w;
@@ -1233,14 +1233,31 @@ x6_canvas_fill_pixels(int x, int y, int w, int h, uint pixel)
     if(y0 < 0) y0 = 0;
     if(x1 > x6_fb.width) x1 = x6_fb.width;
     if(y1 > x6_fb.height) y1 = x6_fb.height;
-    if(x1 <= x0 || y1 <= y0) {
-      if(need_cursor_refresh)
-        x6_cursor_show();
+    if(x1 <= x0 || y1 <= y0)
       return;
-    }
 
     rw = x1 - x0;
     rh = y1 - y0;
+
+    /* Best path: shadow present and stride is unpadded.  Write to shadow RAM
+     * only and defer the FB blit to x6_fb_flush_deferred() at burst end.
+     * Batches all DRAW_RECT commands in a burst into one lseek + one write. */
+    if(x6_fb_shadow && x6_fb.stride == x6_fb.width * 4) {
+      int j;
+      p = pixel & 0x00ffffffU;
+      for(i = y0; i < y1; i++) {
+        size_t row_base = (size_t)i * (size_t)x6_fb_shadow_w;
+        for(j = x0; j < x1; j++)
+          x6_fb_shadow[row_base + (size_t)j] = p;
+      }
+      x6_fb_mark_dirty(y0, y1 - 1);
+      return; /* cursor handled by x6_fb_flush_deferred */
+    }
+
+    /* Cursor check: only needed for direct-FB paths below. */
+    need_cursor_refresh = x6_cursor_overlaps_rect(x, y, w, h);
+    if(need_cursor_refresh)
+      x6_cursor_hide();
 
     /* Fast path: full-width contiguous fills can be written in one bulk write. */
     if(x0 == 0 && rw == x6_fb.width && x6_fb.stride == x6_fb.width * 4 && rh > 1) {
@@ -1458,7 +1475,7 @@ x6_draw_text_pixels(int x, int baseline_y, uint color, const char *text, int len
       }
 
       if(dirty_y0 <= dirty_y1)
-        x6_fb_shadow_flush_rows(dirty_y0, dirty_y1);
+        x6_fb_mark_dirty(dirty_y0, dirty_y1); /* deferred: flushed at burst end */
 
     } else {
       /* Fallback: per-glyph-row lseek+write (no shadow or padded stride). */
@@ -3341,18 +3358,9 @@ handle_one_command(int cfd, char *cmd)
           }
         }
 
-        /* Flush dirty rows sequentially: 1 lseek + N writes */
-        if(dirty_y0 <= dirty_y1) {
-          uint64_t off = (uint64_t)dirty_y0 * (uint64_t)x6_fb.stride;
-          if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) >= 0) {
-            int r;
-            for(r = dirty_y0; r <= dirty_y1; r++) {
-              size_t row_base = (size_t)r * (size_t)x6_fb_shadow_w;
-              write(x6_fb.fd, x6_fb_shadow + row_base,
-                    (size_t)x6_fb.width * sizeof(uint));
-            }
-          }
-        }
+        /* Defer to burst-end flush: no per-command FB writes needed. */
+        if(dirty_y0 <= dirty_y1)
+          x6_fb_mark_dirty(dirty_y0, dirty_y1);
 
         if(need_cursor)
           x6_cursor_show();
@@ -3523,9 +3531,9 @@ handle_one_command(int cfd, char *cmd)
           if(dy > last_dy)  last_dy  = dy;
         }
 
-        /* Single lseek + single write for the entire dirty band. */
+        /* Defer to burst-end flush: no per-command FB writes needed. */
         if(first_dy <= last_dy)
-          x6_fb_shadow_flush_rows(first_dy, last_dy);
+          x6_fb_mark_dirty(first_dy, last_dy);
 
       } else {
         /* Fallback: per-row lseek+write (no shadow buffer or padded stride). */
