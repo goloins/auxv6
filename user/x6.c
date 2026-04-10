@@ -18,6 +18,7 @@
 #define XK_BackSpace 0xff08
 #define XK_Return 0xff0d
 #define X6_POLL_MS 50
+#define X6_HEARTBEAT_POLL_MS 200
 #define X6_CANVAS_COLS 120
 #define X6_CANVAS_ROWS 40
 #define X6_CELL_W 8
@@ -48,6 +49,9 @@
 #define X6_MAX_PIXMAPS 32
 #define X6_MAX_SELECTIONS 16
 #define X6_MAX_CMDS_PER_CLIENT_TICK 32
+#define X6_MAX_CMDS_PER_TICK 64
+#define X6_MAX_CMDS_PER_TICK_BOOST 512
+#define X6_FB_FLUSH_BUDGET_BYTES (512U * 1024U)
 #define X6_ANY_MODIFIER (1U << 15)
 #define X6_STATE_BUTTON1 (1U << 8)
 #define X6_STATE_BUTTON2 (1U << 9)
@@ -197,6 +201,7 @@ struct x6_client {
   int rxlen;
   int logged_first_cmd;
   int hello_done;
+  int disconnect_pending;
 };
 
 static volatile sig_atomic_t keep_running = 1;
@@ -224,6 +229,8 @@ static uint x6_trace_mask;
 static int x6_fb_defer_dirty;
 static int x6_fb_defer_y0;
 static int x6_fb_defer_y1;
+static uchar *x6_fb_dirty_rows;
+static int x6_fb_dirty_count;
 
 static int
 x6_is_chatty_draw_cmd(const char *cmd)
@@ -383,7 +390,9 @@ struct x6_cursor_overlay {
 static struct x6_cursor_overlay x6_cursor;
 
 static int x6_event_queue_enqueue(struct x6_event_queue *q, struct x6_event *evt);
+static int x6_event_queue_len(struct x6_event_queue *q);
 static struct x6_window *x6_pick_window_at(int px, int py);
+static struct x6_window *x6_pick_top_mapped_client_window(void);
 static struct x6_window *x6_pick_child_at(uint parent, int px, int py);
 static int x6_window_root_origin(struct x6_window *w, int *rx, int *ry);
 static struct x6_window *find_window(uint id);
@@ -796,6 +805,8 @@ x6_cursor_refresh(void)
 static void
 x6_fb_mark_dirty(int y0, int y1)
 {
+  int r;
+
   if(!x6_fb_shadow || x6_fb.fd < 0 || x6_backend != X6_BACKEND_FB)
     return;
   if(x6_fb.stride != x6_fb.width * 4)
@@ -804,6 +815,27 @@ x6_fb_mark_dirty(int y0, int y1)
   if(y1 >= x6_fb.height) y1 = x6_fb.height - 1;
   if(y0 > y1)
     return;
+
+  if(x6_fb_dirty_rows) {
+    for(r = y0; r <= y1; r++) {
+      if(x6_fb_dirty_rows[r])
+        continue;
+      x6_fb_dirty_rows[r] = 1;
+      x6_fb_dirty_count++;
+    }
+    if(x6_fb_defer_dirty) {
+      if(y0 < x6_fb_defer_y0)
+        x6_fb_defer_y0 = y0;
+      if(y1 > x6_fb_defer_y1)
+        x6_fb_defer_y1 = y1;
+    } else {
+      x6_fb_defer_y0 = y0;
+      x6_fb_defer_y1 = y1;
+    }
+    x6_fb_defer_dirty = (x6_fb_dirty_count > 0);
+    return;
+  }
+
   if(!x6_fb_defer_dirty) {
     x6_fb_defer_y0 = y0;
     x6_fb_defer_y1 = y1;
@@ -825,16 +857,116 @@ x6_fb_mark_dirty(int y0, int y1)
 static void
 x6_fb_flush_deferred(void)
 {
+  int r;
   int y0;
   int y1;
-  int r;
+  int flush_y1;
   uint64_t off;
   int was_drawn;
+  int row_bytes;
+  int max_rows;
+  int rows_written;
 
   if(!x6_fb_defer_dirty)
     return;
   if(!x6_fb_shadow || x6_fb.fd < 0 || x6_backend != X6_BACKEND_FB) {
     x6_fb_defer_dirty = 0;
+    x6_fb_dirty_count = 0;
+    if(x6_fb_dirty_rows)
+      memset(x6_fb_dirty_rows, 0, (size_t)x6_fb.height);
+    return;
+  }
+
+  if(x6_fb_dirty_rows) {
+    int rows_budget;
+    int first_dirty;
+    int last_dirty;
+
+    row_bytes = x6_fb.width * (int)sizeof(uint);
+    if(row_bytes <= 0)
+      return;
+
+    max_rows = (int)(X6_FB_FLUSH_BUDGET_BYTES / (uint)row_bytes);
+    if(max_rows < 1)
+      max_rows = 1;
+
+    was_drawn = x6_cursor.drawn;
+    if(was_drawn)
+      x6_cursor_hide();
+
+    rows_budget = max_rows;
+    for(r = 0; r < x6_fb.height && rows_budget > 0; r++) {
+      int run0;
+      int run;
+      int rows_req;
+      int rows_done;
+      int k;
+      size_t nbytes;
+      int nw;
+
+      if(!x6_fb_dirty_rows[r])
+        continue;
+
+      run0 = r;
+      run = 1;
+      while(run0 + run < x6_fb.height && x6_fb_dirty_rows[run0 + run] && run < rows_budget)
+        run++;
+
+      off = (uint64_t)run0 * (uint64_t)x6_fb.stride;
+      if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) < 0)
+        break;
+
+      rows_req = run;
+      nbytes = (size_t)rows_req * (size_t)row_bytes;
+      nw = write(x6_fb.fd, x6_fb_shadow + (size_t)run0 * (size_t)x6_fb_shadow_w, nbytes);
+      if(nw <= 0)
+        break;
+
+      rows_done = nw / row_bytes;
+      if(rows_done <= 0)
+        break;
+
+      for(k = 0; k < rows_done; k++) {
+        int rr;
+
+        rr = run0 + k;
+        if(rr >= x6_fb.height)
+          break;
+        if(x6_fb_dirty_rows[rr]) {
+          x6_fb_dirty_rows[rr] = 0;
+          if(x6_fb_dirty_count > 0)
+            x6_fb_dirty_count--;
+        }
+      }
+
+      rows_budget -= rows_done;
+      if(rows_done < rows_req)
+        break;
+      r = run0 + run - 1;
+    }
+
+    first_dirty = -1;
+    last_dirty = -1;
+    if(x6_fb_dirty_count > 0) {
+      for(r = 0; r < x6_fb.height; r++) {
+        if(!x6_fb_dirty_rows[r])
+          continue;
+        if(first_dirty < 0)
+          first_dirty = r;
+        last_dirty = r;
+      }
+    }
+
+    if(first_dirty >= 0) {
+      x6_fb_defer_y0 = first_dirty;
+      x6_fb_defer_y1 = last_dirty;
+      x6_fb_defer_dirty = 1;
+    } else {
+      x6_fb_defer_dirty = 0;
+    }
+
+    if(was_drawn)
+      x6_cursor_show();
     return;
   }
 
@@ -847,27 +979,59 @@ x6_fb_flush_deferred(void)
   if(y0 > y1)
     return;
 
+  row_bytes = x6_fb.width * (int)sizeof(uint);
+  if(row_bytes <= 0)
+    return;
+
+  max_rows = (int)(X6_FB_FLUSH_BUDGET_BYTES / (uint)row_bytes);
+  if(max_rows < 1)
+    max_rows = 1;
+  flush_y1 = y0 + max_rows - 1;
+  if(flush_y1 > y1)
+    flush_y1 = y1;
+
   /* Remove cursor overlay so the blit uses clean shadow content, then
    * re-draw it afterwards so it stays visible. */
   was_drawn = x6_cursor.drawn;
   if(was_drawn)
     x6_cursor_hide();
 
+  rows_written = 0;
   off = (uint64_t)y0 * (uint64_t)x6_fb.stride;
   if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) >= 0) {
     if(x6_fb.stride == x6_fb.width * 4) {
-      /* Packed stride: entire band is contiguous in shadow — single write. */
-      size_t nbytes = (size_t)(y1 - y0 + 1) * (size_t)x6_fb.width * sizeof(uint);
-      write(x6_fb.fd, x6_fb_shadow + (size_t)y0 * (size_t)x6_fb_shadow_w, nbytes);
+      /* Packed stride: contiguous in shadow. Still cap per-tick bytes. */
+      int rows_req;
+      size_t nbytes;
+      int nw;
+
+      rows_req = flush_y1 - y0 + 1;
+      nbytes = (size_t)rows_req * (size_t)row_bytes;
+      nw = write(x6_fb.fd, x6_fb_shadow + (size_t)y0 * (size_t)x6_fb_shadow_w, nbytes);
+      if(nw > 0)
+        rows_written = nw / row_bytes;
     } else {
       /* Padded stride fallback: one write per row. */
-      for(r = y0; r <= y1; r++) {
+      for(r = y0; r <= flush_y1; r++) {
+        int nw;
         size_t row_base = (size_t)r * (size_t)x6_fb_shadow_w;
-        write(x6_fb.fd, x6_fb_shadow + row_base,
+        nw = write(x6_fb.fd, x6_fb_shadow + row_base,
               (size_t)x6_fb.width * sizeof(uint));
+        if(nw != row_bytes)
+          break;
+        rows_written++;
       }
     }
   }
+
+  if(rows_written < 0)
+    rows_written = 0;
+  if(rows_written > (flush_y1 - y0 + 1))
+    rows_written = flush_y1 - y0 + 1;
+
+  /* Keep remaining dirty rows queued for the next poll iteration. */
+  if(y0 + rows_written <= y1)
+    x6_fb_mark_dirty(y0 + rows_written, y1);
 
   if(was_drawn)
     x6_cursor_show();
@@ -1107,6 +1271,24 @@ x6_pick_window_at(int px, int py)
       continue;
     if(!best || w->z >= best->z)
       best = w;
+  }
+  return best;
+}
+
+static struct x6_window *
+x6_pick_top_mapped_client_window(void)
+{
+  int i;
+  struct x6_window *best;
+
+  best = 0;
+  for(i = 0; i < X6_MAX_WINDOWS; i++) {
+    if(!wins[i].in_use || !wins[i].mapped)
+      continue;
+    if(wins[i].owner_fd == wm_client_fd)
+      continue;
+    if(!best || wins[i].z >= best->z)
+      best = &wins[i];
   }
   return best;
 }
@@ -1691,8 +1873,13 @@ x6_enqueue_keyevent(int type, uint keycode, uint state)
     hit = x6_pick_window_at(pointer_x, pointer_y);
     if(hit && hit->mapped)
       target = hit->id;
-    else
-      target = wm_redirect_root;
+    else {
+      hit = x6_pick_top_mapped_client_window();
+      if(hit)
+        target = hit->id;
+      else
+        target = wm_redirect_root;
+    }
   }
 
   target_q = x6_queue_for_window(target);
@@ -2325,9 +2512,16 @@ x6_fb_try_init(void)
   x6_fb.bpp = (int)vinfo.bits_per_pixel;
   x6_fb_shadow_w = x6_fb.width;
   x6_fb_shadow_h = x6_fb.height;
+  x6_fb_defer_dirty = 0;
+  x6_fb_defer_y0 = 0;
+  x6_fb_defer_y1 = -1;
+  x6_fb_dirty_count = 0;
   x6_fb_shadow = (uint *)malloc((size_t)x6_fb_shadow_w * (size_t)x6_fb_shadow_h * sizeof(uint));
   if(x6_fb_shadow)
     memset(x6_fb_shadow, 0, (size_t)x6_fb_shadow_w * (size_t)x6_fb_shadow_h * sizeof(uint));
+  x6_fb_dirty_rows = (uchar *)malloc((size_t)x6_fb.height);
+  if(x6_fb_dirty_rows)
+    memset(x6_fb_dirty_rows, 0, (size_t)x6_fb.height);
   x6_backend = X6_BACKEND_FB;
   dprintf(1, "x6: framebuffer backend active %dx%d stride=%d bpp=%d\n",
           x6_fb.width, x6_fb.height, x6_fb.stride, x6_fb.bpp);
@@ -2354,6 +2548,13 @@ x6_fb_shutdown(void)
   x6_fb_shadow = 0;
   x6_fb_shadow_w = 0;
   x6_fb_shadow_h = 0;
+  if(x6_fb_dirty_rows)
+    free(x6_fb_dirty_rows);
+  x6_fb_dirty_rows = 0;
+  x6_fb_defer_dirty = 0;
+  x6_fb_defer_y0 = 0;
+  x6_fb_defer_y1 = -1;
+  x6_fb_dirty_count = 0;
   if(x6_copy_tmp)
     free(x6_copy_tmp);
   x6_copy_tmp = 0;
@@ -2391,12 +2592,14 @@ x6_send_line(int cfd, const char *s)
   int len;
   int off;
   int is_event;
+  int max_wait_retries;
   int wait_retries;
 
   if(cfd < 0 || s == 0)
     return;
 
   is_event = (strncmp(s, "EVENT ", 6) == 0);
+  max_wait_retries = is_event ? 0 : 5;
   wait_retries = 0;
 
   if(strncmp(s, "OK draw", 7) == 0 || strncmp(s, "OK text", 7) == 0) {
@@ -2427,22 +2630,32 @@ x6_send_line(int cfd, const char *s)
       if(is_event)
         break;
 
-      /* Keep control-plane responses reliable without introducing 1s stalls. */
+      /* Keep control-plane responses reliable without introducing long stalls. */
       wait_retries++;
-      if(wait_retries > 200) {
+      if(wait_retries > max_wait_retries) {
+        struct x6_client *cl;
         dprintf(2, "x6: send retry timeout fd=%d off=%d len=%d errno=%d\n", cfd, off, len, errno);
+        cl = x6_find_client_by_fd(cfd);
+        if(cl)
+          cl->disconnect_pending = 1;
         break;
       }
 
       pfd.fd = cfd;
       pfd.events = POLLOUT;
       pfd.revents = 0;
-      pr = poll(&pfd, 1, 10);
+      pr = poll(&pfd, 1, 5);
       if(pr < 0 && errno == EINTR)
         continue;
       continue;
     }
 
+    {
+      struct x6_client *cl;
+      cl = x6_find_client_by_fd(cfd);
+      if(cl)
+        cl->disconnect_pending = 1;
+    }
     dprintf(2, "x6: send failed fd=%d off=%d len=%d n=%d errno=%d\n", cfd, off, len, n, errno);
     break;
   }
@@ -2680,6 +2893,16 @@ static int
 x6_event_queue_empty(struct x6_event_queue *q)
 {
   return q->head == q->tail;
+}
+
+static int
+x6_event_queue_len(struct x6_event_queue *q)
+{
+  if(!q)
+    return 0;
+  if(q->tail >= q->head)
+    return q->tail - q->head;
+  return (q->tail + X6_MAX_EVENTS_PER_CLIENT) - q->head;
 }
 
 static int
@@ -3349,7 +3572,7 @@ handle_one_command(int cfd, char *cmd)
           px = x + i;
           py = y + j;
           if(px >= 0 && px < pm->width && py >= 0 && py < pm->height)
-            pm->pixels[py * pm->width + px] = color;
+            pm->pixels[py * pm->width + px] = color & 0x00ffffffU;
         }
       }
       return;
@@ -3667,15 +3890,12 @@ handle_one_command(int cfd, char *cmd)
             int dy;
             uint *src_row;
             uint *dst_row;
-            int i;
 
             sy = src_y + j;
             dy = base_dy + j;
             src_row = &src_pm->pixels[sy * src_pm->width + (src_x + i0)];
             dst_row = &x6_fb_shadow[(size_t)dy * (size_t)x6_fb_shadow_w + (size_t)(base_dx + i0)];
-
-            for(i = 0; i < run; i++)
-              dst_row[i] = src_row[i] & 0x00ffffffU;
+            memmove(dst_row, src_row, (size_t)run * sizeof(uint));
           }
 
           x6_fb_mark_dirty(base_dy + j0, base_dy + j1 - 1);
@@ -5465,6 +5685,12 @@ main(int argc, char **argv)
     int kbd_poll_index;
     int did_work;
     int poll_timeout_ms;
+    int cmds_tick_budget;
+    int rx_backlog_total;
+    int client_cmd_budget;
+    uint t0;
+    uint t1;
+    uint defer_now;
 
     nfds = 0;
     listen_index = nfds;
@@ -5504,7 +5730,7 @@ main(int argc, char **argv)
       nfds++;
     }
 
-    poll_timeout_ms = -1;
+    poll_timeout_ms = X6_HEARTBEAT_POLL_MS;
     if(x6_fb_defer_dirty)
       poll_timeout_ms = 0;
     else {
@@ -5525,6 +5751,16 @@ main(int argc, char **argv)
       x6_poll_wake_count++;
 
     did_work = 0;
+    rx_backlog_total = 0;
+    for(i = 0; i < X6_MAX_CLIENTS; i++) {
+      if(!clients[i].in_use)
+        continue;
+      if(clients[i].rxlen > 0)
+        rx_backlog_total += clients[i].rxlen;
+    }
+    cmds_tick_budget = X6_MAX_CMDS_PER_TICK + (rx_backlog_total / 64);
+    if(cmds_tick_budget > X6_MAX_CMDS_PER_TICK_BOOST)
+      cmds_tick_budget = X6_MAX_CMDS_PER_TICK_BOOST;
 
     if(kbd_poll_index >= 0 && (pfds[kbd_poll_index].revents & POLLIN)) {
       if(x6_pump_keyboard() > 0)
@@ -5581,8 +5817,13 @@ main(int argc, char **argv)
       client = &clients[idx];
       if(!client->in_use)
         continue;
-      if((pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) == 0)
+      if((pfds[i].revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL)) == 0)
         continue;
+      if(client->disconnect_pending) {
+        x6_disconnect_client(client);
+        did_work = 1;
+        continue;
+      }
       if(x6_client_fill_rxbuf(client->fd, client->rxbuf, &client->rxlen, sizeof(client->rxbuf)) < 0) {
         x6_disconnect_client(client);
         did_work = 1;
@@ -5591,12 +5832,17 @@ main(int argc, char **argv)
 
       should_detach = 0;
       cmds_this_client = 0;
+      client_cmd_budget = X6_MAX_CMDS_PER_CLIENT_TICK + (client->rxlen / 128);
+      if(client_cmd_budget > 128)
+        client_cmd_budget = 128;
       while(client->in_use &&
-            cmds_this_client < X6_MAX_CMDS_PER_CLIENT_TICK &&
+            cmds_tick_budget > 0 &&
+        cmds_this_client < client_cmd_budget &&
             x6_client_next_line(client->rxbuf, &client->rxlen, line, sizeof(line)) > 0) {
         if(line[0] == 0)
           continue;
         x6_cmd_total_count++;
+        cmds_tick_budget--;
         cmds_this_client++;
         if(!client->logged_first_cmd)
           client->logged_first_cmd = 1;
@@ -5606,6 +5852,10 @@ main(int argc, char **argv)
         handle_one_command(client->fd, line);
         current_event_queue = 0;
         did_work = 1;
+        if(client->disconnect_pending) {
+          should_detach = 1;
+          break;
+        }
         if(strncmp(line, "QUIT", 4) == 0 || strncmp(line, "DETACH", 6) == 0) {
           should_detach = 1;
           break;
@@ -5620,7 +5870,16 @@ main(int argc, char **argv)
     /* Flush any deferred framebuffer dirty rows accumulated during the command
      * burst above.  Must happen before event flush so clients get expose
      * notifications only after pixels are visibly updated. */
+    t0 = uptime();
     x6_fb_flush_deferred();
+    t1 = uptime();
+    if((uint)(t1 - t0) >= 20U) {
+      if(x6_fb_dirty_rows)
+        defer_now = (uint)x6_fb_dirty_count;
+      else
+        defer_now = x6_fb_defer_dirty ? (uint)(x6_fb_defer_y1 - x6_fb_defer_y0 + 1) : 0U;
+      x6consolecrit("x6:slow fb_flush dt=%u defer=%u", (uint)(t1 - t0), defer_now);
+    }
 
     /* Flush queued async events after ingesting commands so synchronous
      * request/response traffic is not delayed by event backlog. */
@@ -5647,6 +5906,11 @@ main(int argc, char **argv)
         uint d_copy_drop;
         uint d_event_flush;
         uint d_poll;
+        uint rx_backlog_bytes;
+        uint ev_pending;
+        uint clients_live;
+        uint clients_disc_pending;
+        uint defer_rows;
 
         d_cmd = x6_cmd_total_count - x6_hb_last_cmd_total;
         d_copy_cmd = x6_copy_cmd_count - x6_hb_last_copy_cmd;
@@ -5655,11 +5919,32 @@ main(int argc, char **argv)
         d_event_flush = x6_event_flush_count - x6_hb_last_event_flush;
         d_poll = x6_poll_wake_count - x6_hb_last_poll_wake;
 
-        x6trace_console(X6_TRACE_QUEUE,
-            "x6:hb dt=%u cmd=%u copy_cmd=%u copy_exec=%u copy_drop=%u ev_flush=%u poll=%u defer=%d",
+        rx_backlog_bytes = 0;
+        ev_pending = 0;
+        clients_live = 0;
+        clients_disc_pending = 0;
+        for(i = 0; i < X6_MAX_CLIENTS; i++) {
+          if(!clients[i].in_use)
+            continue;
+          clients_live++;
+          if(clients[i].disconnect_pending)
+            clients_disc_pending++;
+          if(clients[i].rxlen > 0)
+            rx_backlog_bytes += (uint)clients[i].rxlen;
+          ev_pending += (uint)x6_event_queue_len(&clients[i].queue);
+        }
+        if(x6_fb_dirty_rows)
+          defer_rows = (uint)x6_fb_dirty_count;
+        else
+          defer_rows = x6_fb_defer_dirty ? (uint)(x6_fb_defer_y1 - x6_fb_defer_y0 + 1) : 0U;
+
+        x6consolecrit(
+            "x6:hb dt=%u cmd=%u copy_cmd=%u copy_exec=%u copy_drop=%u ev_flush=%u poll=%u live=%u disc=%u rx=%u evq=%u defer=%u",
             (uint)(now - x6_hb_last_tick),
             d_cmd, d_copy_cmd, d_copy_exec, d_copy_drop,
-            d_event_flush, d_poll, x6_fb_defer_dirty);
+            d_event_flush, d_poll,
+            clients_live, clients_disc_pending,
+            rx_backlog_bytes, ev_pending, defer_rows);
 
         x6_hb_last_tick = now;
         x6_hb_last_cmd_total = x6_cmd_total_count;

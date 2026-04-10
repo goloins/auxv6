@@ -5493,6 +5493,21 @@ int XCopyArea(Display *display, Drawable src, Drawable dest, GC gc, int src_x, i
   area = (unsigned long)width * (unsigned long)height;
   now = (uint)uptime();
 
+  /* Large presents under scroll storms can vary slightly frame-to-frame
+   * (cursor and small dirty-region shifts). Rate-cap same src/dst traffic
+   * first, then keep the stricter identical-geometry drop as a fallback. */
+  if (area >= 300000UL &&
+      src == g_copy_area_last_src &&
+      dest == g_copy_area_last_dest &&
+      (now - g_copy_area_last_tick) < 4U) {
+    g_copy_area_drop_seq++;
+    if ((g_copy_area_drop_seq & 127U) == 1U) {
+      x11dbg("x11:copy-area ratecap drops=%u wh=%u,%u dt=%u",
+             g_copy_area_drop_seq, width, height, (uint)(now - g_copy_area_last_tick));
+    }
+    return 0;
+  }
+
   /* Drop redundant large presents that arrive too quickly with identical
    * geometry. This keeps text flood workloads from saturating x6. */
   if (area >= 300000UL &&
