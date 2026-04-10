@@ -7,6 +7,14 @@
 static void
 ld_echo_char(char c, char *echo_out, int echo_cap, int *echo_len)
 {
+  if(c == '\n') {
+    if(*echo_len < echo_cap)
+      echo_out[(*echo_len)++] = '\r';
+    if(*echo_len < echo_cap)
+      echo_out[(*echo_len)++] = '\n';
+    return;
+  }
+
   if(*echo_len >= echo_cap)
     return;
   echo_out[(*echo_len)++] = c;

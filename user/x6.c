@@ -56,6 +56,7 @@
 #define X6_MASK_EXPOSURE (1L << 15)
 #define X6_MASK_PROPERTY_CHANGE (1L << 22)
 #define X6_SHAPE_NOTIFY_MASK (1L << 0)
+#define X6_DAMAGE_NOTIFY_MASK (1L << 0)
 #define X6_RANDR_NOTIFY_MASKS ((1L << 0) | (1L << 1) | (1L << 2) | (1L << 3))
 
 // Event types
@@ -167,6 +168,8 @@ struct x6_window {
   long event_mask;  /* X11 event mask registered via SELECT_EVENTS / XSelectInput */
   long shape_owner_mask;
   long shape_wm_mask;
+  long damage_owner_mask;
+  long damage_wm_mask;
   long randr_owner_mask;
   long randr_wm_mask;
   struct x6_property props[X6_MAX_PROPERTIES_PER_WINDOW];
@@ -176,6 +179,7 @@ struct x6_window {
 struct x6_pixmap {
   int in_use;
   uint id;
+  int owner_fd;
   int width;
   int height;
   int depth;
@@ -301,28 +305,6 @@ x6consolecrit(const char *fmt, ...)
   write(1, line, (size_t)n);
 }
 
-static uint
-x6_pixmap_sample_nonzero(struct x6_pixmap *pm)
-{
-  int i;
-  int step;
-  uint seen;
-
-  if(!pm || !pm->pixels || pm->pixels_size <= 0)
-    return 0;
-
-  step = pm->pixels_size / 64;
-  if(step < 1)
-    step = 1;
-
-  seen = 0;
-  for(i = 0; i < pm->pixels_size; i += step) {
-    if((pm->pixels[i] & 0x00ffffffU) != 0)
-      seen++;
-  }
-  return seen;
-}
-
 // WM state (Phase 2.1b: SubstructureRedirect semantics)
 static int wm_has_redirect = 0;  // Does WM hold SubstructureRedirect on root?
 static int wm_redirect_root = 1; // Root window ID is always 1
@@ -362,6 +344,8 @@ static struct x6_fb_state x6_fb = { -1, 0, 0, 0, 0, 0, 0 };
 static uint *x6_fb_shadow;
 static int x6_fb_shadow_w;
 static int x6_fb_shadow_h;
+static uint *x6_copy_tmp;
+static size_t x6_copy_tmp_cap;
 
 struct x6_cursor_overlay {
   int drawn;
@@ -390,7 +374,7 @@ static struct x6_selection *x6_find_or_alloc_selection(const char *name);
 static void x6_clear_key_grabs_for_fd(int owner_fd);
 static void x6_clear_button_grabs_for_fd(int owner_fd);
 static void x6_disconnect_client(struct x6_client *client);
-static void x6_flush_client_events(struct x6_client *client);
+static int x6_flush_client_events(struct x6_client *client);
 static void x6_enqueue_property_notify(struct x6_window *win, const char *atom, int state);
 static void x6_event_queue_drop_extension_for_window(struct x6_event_queue *q, uint wid);
 static int x6_event_queue_merge_expose(struct x6_event_queue *q, struct x6_event *evt);
@@ -400,8 +384,29 @@ static void x6_enqueue_damage_notify(struct x6_window *win, int x, int y, int w,
 static void x6_enqueue_shape_notify(struct x6_window *win, int kind, int shaped);
 static void x6_enqueue_randr_notify(uint wid, int width, int height);
 static int x6_window_shape_mask_for_fd(const struct x6_window *win, int fd);
+static int x6_window_damage_mask_for_fd(const struct x6_window *win, int fd);
 static int x6_window_randr_mask_for_fd(const struct x6_window *win, int fd);
 static int x6_restack_window(struct x6_window *w, struct x6_window *sibling, int mode);
+
+static uint *
+x6_copy_tmp_ensure(size_t pixels)
+{
+  uint *nbuf;
+
+  if(pixels == 0)
+    return 0;
+  if(x6_copy_tmp && x6_copy_tmp_cap >= pixels)
+    return x6_copy_tmp;
+
+  nbuf = (uint *)malloc(pixels * sizeof(uint));
+  if(!nbuf)
+    return 0;
+  if(x6_copy_tmp)
+    free(x6_copy_tmp);
+  x6_copy_tmp = nbuf;
+  x6_copy_tmp_cap = pixels;
+  return x6_copy_tmp;
+}
 
 static void
 x6_raise_window(struct x6_window *w)
@@ -586,8 +591,7 @@ x6_cursor_shape_hit(int dx, int dy)
     return 0;
   if(dx == 5 || dy == 5)
     return 2;
-  if(dx == 4 || dx == 6 || dy == 4 || dy == 6)
-    return 1;
+  /* Keep cursor minimal to avoid opaque dark halo artifacts over wallpaper. */
   return 0;
 }
 
@@ -1888,8 +1892,15 @@ x6_enqueue_damage_notify(struct x6_window *win, int x, int y, int w, int h)
   evt.h = y1 - y0;
 
   owner_q = x6_queue_for_window(win->id);
-  if(owner_q && !x6_event_queue_merge_damage(owner_q, &evt))
+  if(owner_q &&
+     (x6_window_damage_mask_for_fd(win, win->owner_fd) & X6_DAMAGE_NOTIFY_MASK) &&
+     !x6_event_queue_merge_damage(owner_q, &evt))
     x6_event_queue_enqueue(owner_q, &evt);
+
+  if(wm_event_queue && wm_event_queue != owner_q &&
+     (x6_window_damage_mask_for_fd(win, wm_client_fd) & X6_DAMAGE_NOTIFY_MASK) &&
+     !x6_event_queue_merge_damage(wm_event_queue, &evt))
+    x6_event_queue_enqueue(wm_event_queue, &evt);
 }
 
 static void
@@ -1975,6 +1986,18 @@ x6_window_randr_mask_for_fd(const struct x6_window *win, int fd)
   return 0;
 }
 
+static int
+x6_window_damage_mask_for_fd(const struct x6_window *win, int fd)
+{
+  if(!win || fd < 0)
+    return 0;
+  if(fd == win->owner_fd)
+    return (int)win->damage_owner_mask;
+  if(fd == wm_client_fd)
+    return (int)win->damage_wm_mask;
+  return 0;
+}
+
 static void
 x6_mouse_setup(void)
 {
@@ -2013,67 +2036,96 @@ x6_keyboard_setup(void)
   }
 }
 
-static void
+static int
 x6_pump_keyboard(void)
 {
   struct aux_kbd_event evbuf[16];
   int n;
   int i;
+  int total;
 
   if(x6_kbd_fd < 0)
-    return;
+    return 0;
 
-  n = read(x6_kbd_fd, evbuf, sizeof(evbuf));
-  if(n < 0) {
-    return;
-  }
-  if(n == 0)
-    return;
-  if(n < (int)sizeof(struct aux_kbd_event))
-    return;
-  n /= (int)sizeof(struct aux_kbd_event);
-  for(i = 0; i < n; i++) {
-    keyboard_mod_state = (uint)evbuf[i].state;
-    if(evbuf[i].value == AUX_KBD_VALUE_PRESS ||
-       evbuf[i].value == AUX_KBD_VALUE_REPEAT) {
-      x6_enqueue_keyevent(X6_EVENT_KEY_PRESS, (uint)evbuf[i].keycode, (uint)evbuf[i].state);
-    } else if(evbuf[i].value == AUX_KBD_VALUE_RELEASE) {
-      x6_enqueue_keyevent(X6_EVENT_KEY_RELEASE, (uint)evbuf[i].keycode, (uint)evbuf[i].state);
+  total = 0;
+
+  for(;;) {
+    n = read(x6_kbd_fd, evbuf, sizeof(evbuf));
+    if(n < 0) {
+      if(errno == EAGAIN || errno == EWOULDBLOCK)
+        break;
+      break;
     }
+    if(n == 0)
+      break;
+    if(n < (int)sizeof(struct aux_kbd_event))
+      break;
+
+    n /= (int)sizeof(struct aux_kbd_event);
+    total += n;
+    for(i = 0; i < n; i++) {
+      keyboard_mod_state = (uint)evbuf[i].state;
+      if(evbuf[i].value == AUX_KBD_VALUE_PRESS ||
+         evbuf[i].value == AUX_KBD_VALUE_REPEAT) {
+        x6_enqueue_keyevent(X6_EVENT_KEY_PRESS, (uint)evbuf[i].keycode, (uint)evbuf[i].state);
+      } else if(evbuf[i].value == AUX_KBD_VALUE_RELEASE) {
+        x6_enqueue_keyevent(X6_EVENT_KEY_RELEASE, (uint)evbuf[i].keycode, (uint)evbuf[i].state);
+      }
+    }
+
+    if(n < 16)
+      break;
   }
+
+  return total;
 }
 
-static void
+static int
 x6_pump_mouse(void)
 {
   struct aux_mouse_event evt;
   int n;
   int bit;
+  int total;
 
   if(x6_mouse_fd < 0)
-    return;
+    return 0;
 
-  n = read(x6_mouse_fd, &evt, sizeof(evt));
-  if(n != (int)sizeof(evt))
-    return;
-
-  if(evt.dx != 0 || evt.dy != 0)
-    x6_move_pointer((int)evt.dx, -(int)evt.dy);
-
-  for(bit = 0; bit < 3; bit++) {
-    uint mask;
-
-    mask = (uint)(1U << bit);
-    if((evt.changed & (uchar)mask) == 0)
-      continue;
-    if(evt.buttons & mask) {
-      pointer_state |= mask;
-      x6_enqueue_pointer_event(X6_EVENT_BUTTON_PRESS, bit + 1);
-    } else {
-      pointer_state &= ~mask;
-      x6_enqueue_pointer_event(X6_EVENT_BUTTON_RELEASE, bit + 1);
+  total = 0;
+  for(;;) {
+    n = read(x6_mouse_fd, &evt, sizeof(evt));
+    if(n < 0) {
+      if(errno == EAGAIN || errno == EWOULDBLOCK)
+        break;
+      break;
     }
+    if(n != (int)sizeof(evt))
+      break;
+    total++;
+
+    if(evt.dx != 0 || evt.dy != 0)
+      x6_move_pointer((int)evt.dx, -(int)evt.dy);
+
+    for(bit = 0; bit < 3; bit++) {
+      uint mask;
+
+      mask = (uint)(1U << bit);
+      if((evt.changed & (uchar)mask) == 0)
+        continue;
+      if(evt.buttons & mask) {
+        pointer_state |= mask;
+        x6_enqueue_pointer_event(X6_EVENT_BUTTON_PRESS, bit + 1);
+      } else {
+        pointer_state &= ~mask;
+        x6_enqueue_pointer_event(X6_EVENT_BUTTON_RELEASE, bit + 1);
+      }
+    }
+
+    if((evt.changed & 0x07) == 0 && evt.dx == 0 && evt.dy == 0)
+      break;
   }
+
+  return total;
 }
 
 static void
@@ -2270,6 +2322,10 @@ x6_fb_shutdown(void)
   x6_fb_shadow = 0;
   x6_fb_shadow_w = 0;
   x6_fb_shadow_h = 0;
+  if(x6_copy_tmp)
+    free(x6_copy_tmp);
+  x6_copy_tmp = 0;
+  x6_copy_tmp_cap = 0;
 }
 
 static int
@@ -2339,22 +2395,19 @@ x6_send_line(int cfd, const char *s)
       if(is_event)
         break;
 
+      /* Keep control-plane responses reliable without introducing 1s stalls. */
+      wait_retries++;
+      if(wait_retries > 200) {
+        dprintf(2, "x6: send retry timeout fd=%d off=%d len=%d errno=%d\n", cfd, off, len, errno);
+        break;
+      }
+
       pfd.fd = cfd;
       pfd.events = POLLOUT;
       pfd.revents = 0;
-      pr = poll(&pfd, 1, 200);
-      if(pr <= 0)
-      {
-        if(is_event)
-          break;
-        wait_retries++;
-        if(wait_retries > 100) {
-          dprintf(2, "x6: send poll timeout fd=%d off=%d len=%d errno=%d\n", cfd, off, len, errno);
-          break;
-        }
+      pr = poll(&pfd, 1, 10);
+      if(pr < 0 && errno == EINTR)
         continue;
-      }
-      wait_retries = 0;
       continue;
     }
 
@@ -2392,18 +2445,22 @@ static int
 x6_client_next_line(char *buf, int *buflen, char *line, int linecap)
 {
   int i;
+  int overlong;
 
   if(buf == 0 || buflen == 0 || line == 0 || linecap <= 1)
     return -1;
 
+  overlong = 0;
   for(i = 0; i < *buflen; i++) {
     if(buf[i] == '\n' || buf[i] == '\r') {
       int copy_len;
       int consume;
 
       copy_len = i;
-      if(copy_len >= linecap)
+      if(copy_len >= linecap) {
         copy_len = linecap - 1;
+        overlong = 1;
+      }
       memmove(line, buf, (size_t)copy_len);
       line[copy_len] = 0;
 
@@ -2412,6 +2469,8 @@ x6_client_next_line(char *buf, int *buflen, char *line, int linecap)
         consume++;
       memmove(buf, buf + consume, (size_t)(*buflen - consume));
       *buflen -= consume;
+      if(overlong)
+        x6dbg("x6:wire:rx overlong line truncated to %d bytes", linecap - 1);
       return 1;
     }
   }
@@ -2459,6 +2518,8 @@ alloc_window(uint id)
       wins[i].event_mask = 0;
       wins[i].shape_owner_mask = 0;
       wins[i].shape_wm_mask = 0;
+      wins[i].damage_owner_mask = 0;
+      wins[i].damage_wm_mask = 0;
       wins[i].randr_owner_mask = 0;
       wins[i].randr_wm_mask = 0;
       wins[i].prop_count = 0;  // Initialize properties (Phase 2.1d)
@@ -2510,6 +2571,7 @@ alloc_pixmap(int width, int height, int depth)
       
       pm->in_use = 1;
       pm->id = x6_next_pmid++;
+      pm->owner_fd = -1;
       pm->width = width;
       pm->height = height;
       pm->depth = depth;
@@ -2534,6 +2596,7 @@ destroy_pixmap(uint id)
       free(pm->pixels);
       pm->pixels = 0;
     }
+    pm->owner_fd = -1;
     pm->in_use = 0;
   }
 }
@@ -3228,6 +3291,7 @@ handle_one_command(int cfd, char *cmd)
       x6_send_line(cfd, "ERR no-slots\n");
       return;
     }
+    pm->owner_fd = cfd;
     x6consolecrit("x6:pixmap create id=%u size=%dx%d depth=%d", pm->id, w, h, x);
     {
       char out[64];
@@ -3289,7 +3353,9 @@ handle_one_command(int cfd, char *cmd)
     }
     x6_canvas_fill_pixels(ox + x, oy + y, w, h, color);
     if(win) {
-      x6_enqueue_expose_notify(win, x, y, w, h);
+      /* Drawing into an already mapped window should not synthesize Expose;
+       * that event is for visibility/uncover changes and can cause redraw
+       * feedback loops in clients if emitted per draw op. */
       x6_enqueue_damage_notify(win, x, y, w, h);
     }
     return;
@@ -3423,7 +3489,7 @@ handle_one_command(int cfd, char *cmd)
       if(tlen > 0)
         x6_draw_text_pixels(ox + x, oy + y, color, text, tlen);
       if(win && tlen > 0) {
-        x6_enqueue_expose_notify(win, x, y - X6_CELL_H, tlen * X6_CELL_W, X6_CELL_H);
+        /* Keep text draws from recursively driving Expose/redraw cycles. */
         x6_enqueue_damage_notify(win, x, y - X6_CELL_H, tlen * X6_CELL_W, X6_CELL_H);
       }
       return;
@@ -3444,187 +3510,262 @@ handle_one_command(int cfd, char *cmd)
     if(sscanf(cmd, "COPY_AREA %u %u %d %d %u %u %d %d",
               &src_id, &dst_id, &src_x, &src_y,
               &width, &height, &dest_x, &dest_y) == 8) {
-    struct x6_pixmap *src_pm = 0;
-    struct x6_window *dest_win = 0;
-    int i, j;
-    int trace_console;
-    uint pixel;
-    
-    /* Source should be a pixmap */
-    src_pm = find_pixmap(src_id);
-    if(!src_pm) {
-      x6dbg("x6:copy_area src=%u missing", src_id);
-      return;
-    }
-    
-    /* Destination should be a window */
-    dest_win = find_window(dst_id);
-    if(!dest_win) {
-      x6dbg("x6:copy_area dst=%u missing", dst_id);
-      return;
-    }
+      struct x6_pixmap *src_pm;
+      struct x6_pixmap *dst_pm;
+      struct x6_window *src_win;
+      struct x6_window *dst_win;
+      uint *tmp;
+      size_t pixels;
+      size_t idx;
+      int i;
+      int j;
 
-    x6dbg("x6:copy_area src=%u(%dx%d) dst=%u mapped=%d src_xy=%d,%d wh=%u,%u dst_xy=%d,%d dst_abs=%d,%d",
-          src_id, src_pm->width, src_pm->height,
-          dst_id, dest_win->mapped,
-          src_x, src_y, width, height, dest_x, dest_y,
-          dest_win->x + dest_x, dest_win->y + dest_y);
-        trace_console = !(dst_id == 2U && dest_y == 0 && height <= 32U);
-        if(trace_console) {
-      x6consolecrit("x6:copy_area src=%u dst=%u mapped=%d wh=%u,%u src_nonzero=%u first=%06x mid=%06x",
-          src_id, dst_id, dest_win->mapped, width, height,
-          x6_pixmap_sample_nonzero(src_pm),
-          src_pm->pixels_size > 0 ? (src_pm->pixels[0] & 0x00ffffffU) : 0,
-          src_pm->pixels_size > 0 ? (src_pm->pixels[src_pm->pixels_size / 2] & 0x00ffffffU) : 0);
-        }
-    
-    if(!dest_win->mapped) {
-      /* Silently drop when destination is not mapped. */
-      return;
-    }
-    
-    /* Copy pixels from pixmap to destination window. */
-    if(x6_backend == X6_BACKEND_FB && x6_fb.fd >= 0) {
-      int need_cursor_refresh;
+      if(width == 0 || height == 0)
+        return;
+      if(width > 16384U || height > 16384U)
+        return;
 
-      need_cursor_refresh = x6_cursor_overlaps_rect(dest_win->x + dest_x,
-                                                    dest_win->y + dest_y,
-                                                    (int)width, (int)height);
-      if(need_cursor_refresh)
-        x6_cursor_hide();
+      src_pm = find_pixmap(src_id);
+      src_win = src_pm ? 0 : find_window(src_id);
+      dst_pm = find_pixmap(dst_id);
+      dst_win = dst_pm ? 0 : find_window(dst_id);
 
-      /*
-       * Fast path: if the shadow buffer is available and stride is packed,
-       * composite all pixmap rows into shadow (no per-row FB writes), then
-       * flush the entire dirty band with a single lseek + write.  This
-       * converts N_rows lseek+write pairs into 2 syscalls total.
-       */
-      if(x6_fb_shadow && x6_fb.stride == x6_fb.width * 4) {
-        int first_dy = x6_fb.height;
-        int last_dy  = -1;
-
-        for(j = 0; j < (int)height; j++) {
-          int sy = src_y + j;
-          int dy = dest_win->y + dest_y + j;
-          int sx0, dx0, copy_w, k;
-          size_t base;
-
-          if(sy < 0 || sy >= src_pm->height) continue;
-          if(dy < 0 || dy >= x6_fb.height)   continue;
-
-          sx0    = src_x;
-          dx0    = dest_win->x + dest_x;
-          copy_w = (int)width;
-
-          if(sx0 < 0)             { dx0 -= sx0; copy_w += sx0; sx0 = 0; }
-          if(dx0 < 0)             { sx0 -= dx0; copy_w += dx0; dx0 = 0; }
-          if(sx0 + copy_w > src_pm->width) copy_w = src_pm->width - sx0;
-          if(dx0 + copy_w > x6_fb.width)  copy_w = x6_fb.width   - dx0;
-          if(copy_w <= 0) continue;
-
-          base = (size_t)dy * (size_t)x6_fb_shadow_w + (size_t)dx0;
-          for(k = 0; k < copy_w; k++)
-            x6_fb_shadow[base + (size_t)k] =
-              src_pm->pixels[sy * src_pm->width + sx0 + k] & 0x00ffffffU;
-
-          if(dy < first_dy) first_dy = dy;
-          if(dy > last_dy)  last_dy  = dy;
-        }
-
-        /* Defer to burst-end flush: no per-command FB writes needed. */
-        if(first_dy <= last_dy)
-          x6_fb_mark_dirty(first_dy, last_dy);
-
-      } else {
-        /* Fallback: per-row lseek+write (no shadow buffer or padded stride). */
-        for(j = 0; j < (int)height; j++) {
-          int sy = src_y + j;
-          int dy = dest_win->y + dest_y + j;
-          int sx0, dx0, copy_w, k;
-          uint64_t off;
-
-          if(sy < 0 || sy >= src_pm->height) continue;
-          if(dy < 0 || dy >= x6_fb.height)   continue;
-
-          sx0    = src_x;
-          dx0    = dest_win->x + dest_x;
-          copy_w = (int)width;
-
-          if(sx0 < 0)             { dx0 -= sx0; copy_w += sx0; sx0 = 0; }
-          if(dx0 < 0)             { sx0 -= dx0; copy_w += dx0; dx0 = 0; }
-          if(sx0 + copy_w > src_pm->width) copy_w = src_pm->width - sx0;
-          if(dx0 + copy_w > x6_fb.width)  copy_w = x6_fb.width   - dx0;
-          if(copy_w <= 0) continue;
-
-          if(copy_w > x6_fb.rowcap) {
-            uint *nbuf = (uint *)malloc((size_t)copy_w * sizeof(uint));
-            if(!nbuf) continue;
-            if(x6_fb.rowbuf) free(x6_fb.rowbuf);
-            x6_fb.rowbuf = nbuf;
-            x6_fb.rowcap = copy_w;
-          }
-          for(k = 0; k < copy_w; k++)
-            x6_fb.rowbuf[k] =
-              src_pm->pixels[sy * src_pm->width + sx0 + k] & 0x00ffffffU;
-
-          off = (uint64_t)dy * (uint64_t)x6_fb.stride + (uint64_t)dx0 * 4ULL;
-          if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) >= 0)
-            write(x6_fb.fd, x6_fb.rowbuf, copy_w * (int)sizeof(uint));
-          if(x6_fb_shadow) {
-            size_t base = (size_t)dy * (size_t)x6_fb_shadow_w + (size_t)dx0;
-            for(k = 0; k < copy_w; k++)
-              x6_fb_shadow[base + (size_t)k] = x6_fb.rowbuf[k];
-          }
-        }
+      if(!src_pm && !src_win) {
+        x6dbg("x6:copy_area src=%u missing", src_id);
+        return;
       }
-      if(need_cursor_refresh)
-        x6_cursor_show();
-    } else {
-      int row0;
-      int row1;
-      row0 = X6_CANVAS_ROWS;
-      row1 = -1;
+      if(!dst_pm && !dst_win) {
+        x6dbg("x6:copy_area dst=%u missing", dst_id);
+        return;
+      }
+      /* Keep COPY_AREA semantics close to X11: clients may blit into a
+       * window before the WM finishes mapping it. Dropping the blit here
+       * leaves terminals blank until a later Expose-driven redraw. */
 
+      pixels = (size_t)width * (size_t)height;
+      if(width != 0 && pixels / (size_t)width != (size_t)height)
+        return;
+      tmp = x6_copy_tmp_ensure(pixels);
+      if(!tmp)
+        return;
+
+      idx = 0;
       for(j = 0; j < (int)height; j++) {
         for(i = 0; i < (int)width; i++) {
           int sx;
           int sy;
-          int px;
-          int py;
-          int cx;
-          int cy;
+          uint pixel;
 
           sx = src_x + i;
           sy = src_y + j;
-          if(sx < 0 || sy < 0 || sx >= src_pm->width || sy >= src_pm->height)
-            continue;
+          pixel = 0;
 
-          px = dest_win->x + dest_x + i;
-          py = dest_win->y + dest_y + j;
-          if(px < 0 || py < 0)
-            continue;
+          if(src_pm) {
+            if(sx >= 0 && sy >= 0 && sx < src_pm->width && sy < src_pm->height)
+              pixel = src_pm->pixels[sy * src_pm->width + sx] & 0x00ffffffU;
+          } else if(src_win) {
+            int absx;
+            int absy;
 
-          cx = px / X6_CELL_W;
-          cy = py / X6_CELL_H;
-          if(cx < 0 || cy < 0 || cx >= X6_CANVAS_COLS || cy >= X6_CANVAS_ROWS)
-            continue;
+            if(sx < 0 || sy < 0 || sx >= src_win->w || sy >= src_win->h) {
+              tmp[idx++] = 0;
+              continue;
+            }
 
-          pixel = src_pm->pixels[sy * src_pm->width + sx] & 0x00ffffffU;
-          canvas_pixels[cy][cx] = pixel;
-          if(cy < row0) row0 = cy;
-          if(cy > row1) row1 = cy;
+            absx = src_win->x + sx;
+            absy = src_win->y + sy;
+            if(x6_backend == X6_BACKEND_FB && x6_fb_shadow &&
+               absx >= 0 && absy >= 0 &&
+               absx < x6_fb_shadow_w && absy < x6_fb_shadow_h) {
+              pixel = x6_fb_shadow[(size_t)absy * (size_t)x6_fb_shadow_w + (size_t)absx] & 0x00ffffffU;
+            } else {
+              int cx;
+              int cy;
+
+              cx = absx / X6_CELL_W;
+              cy = absy / X6_CELL_H;
+              if(cx >= 0 && cy >= 0 && cx < X6_CANVAS_COLS && cy < X6_CANVAS_ROWS)
+                pixel = canvas_pixels[cy][cx] & 0x00ffffffU;
+            }
+          }
+
+          tmp[idx++] = pixel;
         }
       }
 
-      if(row1 >= row0)
-        x6_canvas_flush_rows(row0, row1);
-    }
+      if(dst_pm) {
+        idx = 0;
+        for(j = 0; j < (int)height; j++) {
+          for(i = 0; i < (int)width; i++) {
+            int dx;
+            int dy;
 
-    x6_enqueue_expose_notify(dest_win, dest_x, dest_y, (int)width, (int)height);
-    x6_enqueue_damage_notify(dest_win, dest_x, dest_y, (int)width, (int)height);
-    
-    return;
-  }
+            dx = dest_x + i;
+            dy = dest_y + j;
+            if(dx >= 0 && dy >= 0 && dx < dst_pm->width && dy < dst_pm->height)
+              dst_pm->pixels[dy * dst_pm->width + dx] = tmp[idx];
+            idx++;
+          }
+        }
+        return;
+      }
+
+      if(dst_win) {
+        if(x6_backend == X6_BACKEND_FB && x6_fb.fd >= 0) {
+          int need_cursor_refresh;
+          int dirty_y0;
+          int dirty_y1;
+
+          need_cursor_refresh = x6_cursor_overlaps_rect(dst_win->x + dest_x,
+                                                        dst_win->y + dest_y,
+                                                        (int)width, (int)height);
+          if(need_cursor_refresh)
+            x6_cursor_hide();
+
+          dirty_y0 = x6_fb.height;
+          dirty_y1 = -1;
+          idx = 0;
+          for(j = 0; j < (int)height; j++) {
+            for(i = 0; i < (int)width; i++) {
+              int dx;
+              int dy;
+              int dx_local;
+              int dy_local;
+
+              dx_local = dest_x + i;
+              dy_local = dest_y + j;
+              if(dx_local < 0 || dy_local < 0 ||
+                 dx_local >= dst_win->w || dy_local >= dst_win->h) {
+                idx++;
+                continue;
+              }
+              dx = dst_win->x + dx_local;
+              dy = dst_win->y + dy_local;
+              if(dx >= 0 && dy >= 0 && dx < x6_fb.width && dy < x6_fb.height) {
+                if(x6_fb_shadow)
+                  x6_fb_shadow[(size_t)dy * (size_t)x6_fb_shadow_w + (size_t)dx] = tmp[idx] & 0x00ffffffU;
+                if(dy < dirty_y0)
+                  dirty_y0 = dy;
+                if(dy > dirty_y1)
+                  dirty_y1 = dy;
+              }
+              idx++;
+            }
+          }
+
+          if(dirty_y0 <= dirty_y1) {
+            if(x6_fb_shadow) {
+              x6_fb_mark_dirty(dirty_y0, dirty_y1);
+            } else {
+              int abs_base_x;
+              abs_base_x = dst_win->x + dest_x;
+              for(j = 0; j < (int)height; j++) {
+                int dy_local;
+                int dy;
+                int i0;
+                int i1;
+                int run;
+                int write_x;
+                uint64_t off;
+
+                dy_local = dest_y + j;
+                if(dy_local < 0 || dy_local >= dst_win->h)
+                  continue;
+                dy = dst_win->y + dy_local;
+                if(dy < 0 || dy >= x6_fb.height)
+                  continue;
+
+                i0 = 0;
+                i1 = (int)width;
+
+                if(dest_x + i0 < 0)
+                  i0 = -dest_x;
+                if(dest_x + i1 > dst_win->w)
+                  i1 = dst_win->w - dest_x;
+                if(i1 <= i0)
+                  continue;
+
+                if(abs_base_x + i0 < 0)
+                  i0 = -abs_base_x;
+                if(abs_base_x + i1 > x6_fb.width)
+                  i1 = x6_fb.width - abs_base_x;
+                if(i1 <= i0)
+                  continue;
+
+                run = i1 - i0;
+                write_x = abs_base_x + i0;
+                if(run > x6_fb.rowcap) {
+                  uint *nbuf;
+                  nbuf = (uint *)malloc((size_t)run * sizeof(uint));
+                  if(!nbuf)
+                    break;
+                  if(x6_fb.rowbuf)
+                    free(x6_fb.rowbuf);
+                  x6_fb.rowbuf = nbuf;
+                  x6_fb.rowcap = run;
+                }
+
+                for(i = 0; i < run; i++)
+                  x6_fb.rowbuf[i] = tmp[(size_t)j * (size_t)width + (size_t)(i0 + i)] & 0x00ffffffU;
+
+                off = (uint64_t)dy * (uint64_t)x6_fb.stride + (uint64_t)write_x * 4ULL;
+                if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) < 0)
+                  break;
+                if(write(x6_fb.fd, x6_fb.rowbuf, run * (int)sizeof(uint)) < 0)
+                  break;
+              }
+            }
+          }
+
+          if(need_cursor_refresh)
+            x6_cursor_show();
+        } else {
+          int row0;
+          int row1;
+
+          row0 = X6_CANVAS_ROWS;
+          row1 = -1;
+          idx = 0;
+          for(j = 0; j < (int)height; j++) {
+            for(i = 0; i < (int)width; i++) {
+              int px;
+              int py;
+              int cx;
+              int cy;
+              int dx_local;
+              int dy_local;
+
+              dx_local = dest_x + i;
+              dy_local = dest_y + j;
+              if(dx_local < 0 || dy_local < 0 ||
+                 dx_local >= dst_win->w || dy_local >= dst_win->h) {
+                idx++;
+                continue;
+              }
+              px = dst_win->x + dx_local;
+              py = dst_win->y + dy_local;
+              cx = px / X6_CELL_W;
+              cy = py / X6_CELL_H;
+              if(cx >= 0 && cy >= 0 && cx < X6_CANVAS_COLS && cy < X6_CANVAS_ROWS) {
+                canvas_pixels[cy][cx] = tmp[idx] & 0x00ffffffU;
+                if(cy < row0)
+                  row0 = cy;
+                if(cy > row1)
+                  row1 = cy;
+              }
+              idx++;
+            }
+          }
+          if(row1 >= row0)
+            x6_canvas_flush_rows(row0, row1);
+        }
+
+        /* COPY_AREA mutates pixels but should not generate Expose. */
+        x6_enqueue_damage_notify(dst_win, dest_x, dest_y, (int)width, (int)height);
+      }
+
+      return;
+    }
   }
 
   // Phase 2.1b: REQUEST_REDIRECT for WM to claim SubstructureRedirect on root
@@ -4838,6 +4979,28 @@ handle_one_command(int cfd, char *cmd)
     return;
   }
 
+  if(strncmp(cmd, "DAMAGE_SELECT_INPUT", 19) == 0) {
+    uint wid;
+    long mask;
+    struct x6_window *win;
+
+    if(sscanf(cmd, "DAMAGE_SELECT_INPUT %u %ld", &wid, &mask) != 2) {
+      x6_send_line(cfd, "ERR bad-syntax\n");
+      return;
+    }
+    win = find_window(wid);
+    if(!win) {
+      x6_send_line(cfd, "ERR no-such-window\n");
+      return;
+    }
+    if(cfd == win->owner_fd)
+      win->damage_owner_mask = mask;
+    else if(cfd == wm_client_fd)
+      win->damage_wm_mask = mask;
+    x6_send_line(cfd, "OK damage_events_set\n");
+    return;
+  }
+
   if(strncmp(cmd, "RANDR_SELECT_INPUT", 18) == 0) {
     uint wid;
     long mask;
@@ -4864,7 +5027,7 @@ handle_one_command(int cfd, char *cmd)
   x6_send_line(cfd, "ERR unknown\n");
 }
 
-static void
+static int
 x6_flush_client_events(struct x6_client *client)
 {
   char eventbuf[256];
@@ -4872,7 +5035,7 @@ x6_flush_client_events(struct x6_client *client)
   int sent;
 
   if(client == 0 || !client->in_use || !client->hello_done)
-    return;
+    return 0;
 
   sent = 0;
   while(!x6_event_queue_empty(&client->queue)) {
@@ -4969,11 +5132,13 @@ x6_flush_client_events(struct x6_client *client)
     x6_send_line(client->fd, eventbuf);
     sent++;
   }
+  return sent;
 }
 
 static void
 x6_disconnect_client(struct x6_client *client)
 {
+  int pi;
   int si;
   int wi;
 
@@ -4990,12 +5155,21 @@ x6_disconnect_client(struct x6_client *client)
       if(!wins[wi].in_use)
         continue;
       wins[wi].shape_wm_mask = 0;
+      wins[wi].damage_wm_mask = 0;
       wins[wi].randr_wm_mask = 0;
     }
   }
 
   x6_clear_key_grabs_for_fd(client->fd);
   x6_clear_button_grabs_for_fd(client->fd);
+
+  for(pi = 0; pi < X6_MAX_PIXMAPS; pi++) {
+    if(!pixmaps[pi].in_use)
+      continue;
+    if(pixmaps[pi].owner_fd != client->fd)
+      continue;
+    destroy_pixmap(pixmaps[pi].id);
+  }
 
   for(si = 0; si < X6_MAX_SELECTIONS; si++) {
     struct x6_window *owner;
@@ -5134,6 +5308,8 @@ main(int argc, char **argv)
     int listen_index;
     int mouse_poll_index;
     int kbd_poll_index;
+    int did_work;
+    int poll_timeout_ms;
 
     nfds = 0;
     listen_index = nfds;
@@ -5173,14 +5349,34 @@ main(int argc, char **argv)
       nfds++;
     }
 
-    pr = poll(pfds, (nfds_t)nfds, X6_POLL_MS);
+    poll_timeout_ms = -1;
+    if(x6_fb_defer_dirty)
+      poll_timeout_ms = 0;
+    else {
+      for(i = 0; i < X6_MAX_CLIENTS; i++) {
+        if(!clients[i].in_use || !clients[i].hello_done)
+          continue;
+        if(!x6_event_queue_empty(&clients[i].queue)) {
+          poll_timeout_ms = 0;
+          break;
+        }
+      }
+    }
+
+    pr = poll(pfds, (nfds_t)nfds, poll_timeout_ms);
     if(pr < 0)
       continue;
 
-    if(kbd_poll_index >= 0 && (pfds[kbd_poll_index].revents & POLLIN))
-      x6_pump_keyboard();
-    if(mouse_poll_index >= 0 && (pfds[mouse_poll_index].revents & POLLIN))
-      x6_pump_mouse();
+    did_work = 0;
+
+    if(kbd_poll_index >= 0 && (pfds[kbd_poll_index].revents & POLLIN)) {
+      if(x6_pump_keyboard() > 0)
+        did_work = 1;
+    }
+    if(mouse_poll_index >= 0 && (pfds[mouse_poll_index].revents & POLLIN)) {
+      if(x6_pump_mouse() > 0)
+        did_work = 1;
+    }
 
     if(pfds[listen_index].revents & POLLIN) {
       int cfd;
@@ -5198,6 +5394,7 @@ main(int argc, char **argv)
             x6_event_queue_init(&clients[i].queue);
             x6_send_line(cfd, "X6/1 READY\n");
             cfd = -1;
+            did_work = 1;
             break;
           }
         }
@@ -5209,7 +5406,7 @@ main(int argc, char **argv)
     }
 
     for(i = 0; i < nfds; i++) {
-      char line[192];
+      char line[2048];
       struct x6_client *client;
       int idx;
       int should_detach;
@@ -5224,6 +5421,7 @@ main(int argc, char **argv)
         continue;
       if(x6_client_fill_rxbuf(client->fd, client->rxbuf, &client->rxlen, sizeof(client->rxbuf)) < 0) {
         x6_disconnect_client(client);
+        did_work = 1;
         continue;
       }
 
@@ -5238,13 +5436,16 @@ main(int argc, char **argv)
         current_event_queue = &client->queue;
         handle_one_command(client->fd, line);
         current_event_queue = 0;
+        did_work = 1;
         if(strncmp(line, "QUIT", 4) == 0 || strncmp(line, "DETACH", 6) == 0) {
           should_detach = 1;
           break;
         }
       }
-      if(should_detach)
+      if(should_detach) {
         x6_disconnect_client(client);
+        did_work = 1;
+      }
     }
 
     /* Flush any deferred framebuffer dirty rows accumulated during the command
@@ -5254,8 +5455,14 @@ main(int argc, char **argv)
 
     /* Flush queued async events after ingesting commands so synchronous
      * request/response traffic is not delayed by event backlog. */
-    for(i = 0; i < X6_MAX_CLIENTS; i++)
-      x6_flush_client_events(&clients[i]);
+    for(i = 0; i < X6_MAX_CLIENTS; i++) {
+      if(x6_flush_client_events(&clients[i]) > 0)
+        did_work = 1;
+    }
+
+    /* Guard against noisy/spurious readiness causing a tight poll loop. */
+    if(pr > 0 && !did_work)
+      poll(0, 0, 10);
   }
 
   for(i = 0; i < X6_MAX_CLIENTS; i++)

@@ -471,6 +471,7 @@ static struct x11_randr_select_state g_randr_selects[X11_MAX_RANDR_SELECTS];
 static struct x11_shm_image_state g_shm_images[X11_MAX_SHM_IMAGES];
 static struct x11_pixmap_state *x11_find_pixmap(Pixmap pm);
 static int x11_event_push_back(Display *display, const XEvent *ev);
+static int x11_cmd(Display *dpy, const char *cmd, char *resp, int maxlen);
 
 static int
 x11_tolower_ascii(int c)
@@ -827,6 +828,38 @@ x11_alloc_damage(Drawable drawable, int level)
     }
   }
   return 0;
+}
+
+static int
+x11_damage_count_for_drawable(Drawable drawable)
+{
+  int i;
+  int count;
+
+  count = 0;
+  for (i = 0; i < X11_MAX_DAMAGE; i++) {
+    if (!g_damages[i].in_use)
+      continue;
+    if (g_damages[i].drawable == drawable)
+      count++;
+  }
+  return count;
+}
+
+static void
+x11_damage_select_input(Display *display, Drawable drawable, int enable)
+{
+  char cmd[96];
+  char line[128];
+
+  if (!display)
+    return;
+  if (x11_find_pixmap((Pixmap)drawable))
+    return;
+
+  snprintf(cmd, sizeof(cmd), "DAMAGE_SELECT_INPUT %u %d\n", (uint)drawable,
+           enable ? 1 : 0);
+  x11_cmd(display, cmd, line, sizeof(line));
 }
 
 static struct x11_composite_redirect_state *
@@ -1416,18 +1449,11 @@ x11_fill_xft_font_metrics(XftFont *f, const char *name, double pixel_size)
   if (name)
     x11_parse_font_metrics(name, &width, &height, &ascent, &descent);
 
-  if (pixel_size > 0.0) {
-    height = (int)(pixel_size + 0.5);
-    if (height < 6)
-      height = 6;
-    width = (height + 1) / 2;
-    if (width < 4)
-      width = 4;
-    ascent = (height * 3) / 4;
-    descent = height - ascent;
-    if (descent < 1)
-      descent = 1;
-  }
+  /* x6 currently rasterizes text with a fixed builtin bitmap font (8x16).
+   * Keep Xft metrics aligned to that renderer even if a pixel size was
+   * requested through fontconfig, otherwise st/dwm layout drifts and glyphs
+   * overlap or clip. */
+  (void)pixel_size;
 
   f->ascent = ascent;
   f->descent = descent;
@@ -2441,6 +2467,9 @@ XCloseDisplay(Display *display)
     free(display->event_queue);
   if (display->rxbuf)
     free(display->rxbuf);
+  if (display->draw_batch_buf) {
+    free(display->draw_batch_buf);
+  }
   free(display);
   return 0;
 }
@@ -3331,6 +3360,9 @@ XGetWindowProperty(Display *display, Window w, Atom property,
                    unsigned long *bytes_after_return,
                    unsigned char **prop_return)
 {
+  static Atom wm_class_atom;
+  static Atom wm_name_atom;
+  static Atom net_wm_name_atom;
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
   unsigned char *all_bytes;
   unsigned long all_nitems;
@@ -3346,15 +3378,22 @@ XGetWindowProperty(Display *display, Window w, Atom property,
   const char *name = atom_to_name(property);
   int track_title_prop;
 
-  track_title_prop = (property == XInternAtom(display, "WM_CLASS", False) ||
-                      property == XInternAtom(display, "WM_NAME", False) ||
-                      property == XInternAtom(display, "_NET_WM_NAME", False));
+  if (!display || !prop_return)
+    return -1;
+
+  if (wm_class_atom == 0)
+    wm_class_atom = XInternAtom(display, "WM_CLASS", False);
+  if (wm_name_atom == 0)
+    wm_name_atom = XInternAtom(display, "WM_NAME", False);
+  if (net_wm_name_atom == 0)
+    net_wm_name_atom = XInternAtom(display, "_NET_WM_NAME", False);
+
+  track_title_prop = (property == wm_class_atom ||
+                      property == wm_name_atom ||
+                      property == net_wm_name_atom);
 
   if (track_title_prop)
     x11consolecrit("x11:getprop begin wid=%u name=%s req_type=%lu", (uint)w, name, (unsigned long)req_type);
-
-  if (!display || !prop_return)
-    return -1;
 
   snprintf(cmd, sizeof(cmd), "GET_PROPERTY %u %s\n", (uint)w, name);
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
@@ -3840,12 +3879,18 @@ Pixmap XCreatePixmap(Display *display, Drawable d, unsigned int width, unsigned 
   /* Send CREATE_PIXMAP command to x6 server */
   snprintf(cmd, sizeof(cmd), "CREATE_PIXMAP %u %u %u %u\n", depth, width, height, depth);
   if (x11_cmd(display, cmd, response, sizeof(response)) < 0) {
+    if (pm->pixels)
+      free(pm->pixels);
+    pm->pixels = 0;
     pm->in_use = 0;
     x11dbg("x11:create-pixmap failed cmd transport w=%u h=%u d=%u", width, height, depth);
     return 0;
   }
 
   if (sscanf(response, "OK create_pixmap pmid=%u", &pmid) != 1 || pmid == 0) {
+    if (pm->pixels)
+      free(pm->pixels);
+    pm->pixels = 0;
     pm->in_use = 0;
     x11dbg("x11:create-pixmap bad response '%s'", response);
     return 0;
@@ -6922,22 +6967,30 @@ Status XDamageQueryVersion(Display *display,
 
 Damage XDamageCreate(Display *display, Drawable drawable, int level) {
   struct x11_damage_state *dmg;
+  int existing;
+
+  existing = x11_damage_count_for_drawable(drawable);
 
   dmg = x11_alloc_damage(drawable, level);
   if (!dmg)
     return 0;
+  if (existing == 0)
+    x11_damage_select_input(display, drawable, 1);
   x11_notify_drawable_damage(display, drawable);
   return dmg->id;
 }
 
 void XDamageDestroy(Display *display, Damage damage) {
   struct x11_damage_state *dmg;
+  Drawable drawable;
 
-  (void)display;
   dmg = x11_find_damage(damage);
   if (!dmg)
     return;
+  drawable = dmg->drawable;
   memset(dmg, 0, sizeof(*dmg));
+  if (x11_damage_count_for_drawable(drawable) == 0)
+    x11_damage_select_input(display, drawable, 0);
 }
 
 void XDamageSubtract(Display *display, Damage damage,
