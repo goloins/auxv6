@@ -41,12 +41,13 @@
 #define X6_CONSOLE_MINOR_KBD0 102
 
 #define X6_MAX_WINDOWS 128
-#define X6_MAX_EVENTS_PER_CLIENT 64
+#define X6_MAX_EVENTS_PER_CLIENT 128
 #define X6_MAX_CLIENTS 16
 #define X6_MAX_KEY_GRABS 256
 #define X6_MAX_BUTTON_GRABS 256
 #define X6_MAX_PIXMAPS 32
 #define X6_MAX_SELECTIONS 16
+#define X6_MAX_CMDS_PER_CLIENT_TICK 32
 #define X6_ANY_MODIFIER (1U << 15)
 #define X6_STATE_BUTTON1 (1U << 8)
 #define X6_STATE_BUTTON2 (1U << 9)
@@ -346,6 +347,29 @@ static int x6_fb_shadow_w;
 static int x6_fb_shadow_h;
 static uint *x6_copy_tmp;
 static size_t x6_copy_tmp_cap;
+static uint x6_copy_last_src;
+static uint x6_copy_last_dst;
+static int x6_copy_last_src_x;
+static int x6_copy_last_src_y;
+static uint x6_copy_last_w;
+static uint x6_copy_last_h;
+static int x6_copy_last_dst_x;
+static int x6_copy_last_dst_y;
+static uint x6_copy_last_tick;
+static uint x6_copy_drop_count;
+static uint x6_copy_last_large_present_tick;
+static uint x6_cmd_total_count;
+static uint x6_copy_cmd_count;
+static uint x6_copy_exec_count;
+static uint x6_event_flush_count;
+static uint x6_poll_wake_count;
+static uint x6_hb_last_tick;
+static uint x6_hb_last_cmd_total;
+static uint x6_hb_last_copy_cmd;
+static uint x6_hb_last_copy_exec;
+static uint x6_hb_last_copy_drop;
+static uint x6_hb_last_event_flush;
+static uint x6_hb_last_poll_wake;
 
 struct x6_cursor_overlay {
   int drawn;
@@ -2272,6 +2296,14 @@ x6_fb_try_init(void)
     return -1;
   }
 
+  {
+    int flags;
+
+    flags = fcntl(x6_fb.fd, F_GETFL, 0);
+    if(flags >= 0)
+      fcntl(x6_fb.fd, F_SETFL, flags | O_NONBLOCK);
+  }
+
   if(ioctl(x6_fb.fd, X6_FBIOGET_VSCREENINFO, &vinfo) < 0) {
     dprintf(2, "x6: fb ioctl FBIOGET_VSCREENINFO failed\n");
     goto fail;
@@ -2651,13 +2683,42 @@ x6_event_queue_empty(struct x6_event_queue *q)
 }
 
 static int
+x6_event_type_is_noisy(int type)
+{
+  return (type == X6_EVENT_MOTION_NOTIFY ||
+          type == X6_EVENT_EXPOSE ||
+          type == X6_EVENT_DAMAGE_NOTIFY);
+}
+
+static int
 x6_event_queue_enqueue(struct x6_event_queue *q, struct x6_event *evt)
 {
+  int prev;
+  struct x6_event *tail_evt;
   int next_tail;
 
+  if(!q || !evt)
+    return -1;
+
+  if(evt->type == X6_EVENT_MOTION_NOTIFY && q->head != q->tail) {
+    prev = (q->tail - 1 + X6_MAX_EVENTS_PER_CLIENT) % X6_MAX_EVENTS_PER_CLIENT;
+    tail_evt = &q->events[prev];
+    if(tail_evt->type == X6_EVENT_MOTION_NOTIFY && tail_evt->wid == evt->wid) {
+      *tail_evt = *evt;
+      return 0;
+    }
+  }
+
   next_tail = (q->tail + 1) % X6_MAX_EVENTS_PER_CLIENT;
-  if(next_tail == q->head)
-    return -1; // Queue full, drop oldest
+  if(next_tail == q->head) {
+    if(x6_event_type_is_noisy(evt->type))
+      return 0;
+    if(x6_event_type_is_noisy(q->events[q->head].type))
+      q->head = (q->head + 1) % X6_MAX_EVENTS_PER_CLIENT;
+    else
+      return -1;
+    next_tail = (q->tail + 1) % X6_MAX_EVENTS_PER_CLIENT;
+  }
   q->events[q->tail] = *evt;
   q->tail = next_tail;
   return 0;
@@ -2708,46 +2769,23 @@ x6_event_queue_drop_extension_for_window(struct x6_event_queue *q, uint wid)
 static int
 x6_event_queue_merge_expose(struct x6_event_queue *q, struct x6_event *evt)
 {
-  int idx;
-  int expose_idx;
-  int transition_after_expose;
+  int prev;
   struct x6_event *cur;
   int x0;
   int y0;
   int x1;
   int y1;
-  int guard;
 
   if(!q || !evt || evt->type != X6_EVENT_EXPOSE)
     return 0;
-
-  idx = q->head;
-  expose_idx = -1;
-  transition_after_expose = 0;
-  guard = 0;
-  while(idx != q->tail) {
-    struct x6_event *ev = &q->events[idx];
-    if(ev->wid == evt->wid) {
-      if(ev->type == X6_EVENT_EXPOSE) {
-        expose_idx = idx;
-        transition_after_expose = 0;
-      } else if(ev->type == X6_EVENT_MAP_NOTIFY || ev->type == X6_EVENT_CONFIGURE_NOTIFY) {
-        if(expose_idx >= 0)
-          transition_after_expose = 1;
-      }
-    }
-    idx = (idx + 1) % X6_MAX_EVENTS_PER_CLIENT;
-    if(++guard > X6_MAX_EVENTS_PER_CLIENT) {
-      x6trace_console(X6_TRACE_QUEUE, "x6:queue guard hit merge_expose head=%d tail=%d wid=%u", q->head, q->tail, evt->wid);
-      x6dbg("x6:queue guard hit merge_expose head=%d tail=%d wid=%u", q->head, q->tail, evt->wid);
-      break;
-    }
-  }
-
-  if(expose_idx < 0 || transition_after_expose)
+  if(q->head == q->tail)
     return 0;
 
-  cur = &q->events[expose_idx];
+  prev = (q->tail - 1 + X6_MAX_EVENTS_PER_CLIENT) % X6_MAX_EVENTS_PER_CLIENT;
+  cur = &q->events[prev];
+  if(cur->wid != evt->wid || cur->type != X6_EVENT_EXPOSE)
+    return 0;
+
   x0 = cur->x < evt->x ? cur->x : evt->x;
   y0 = cur->y < evt->y ? cur->y : evt->y;
   x1 = (cur->x + cur->w) > (evt->x + evt->w) ? (cur->x + cur->w) : (evt->x + evt->w);
@@ -2762,46 +2800,23 @@ x6_event_queue_merge_expose(struct x6_event_queue *q, struct x6_event *evt)
 static int
 x6_event_queue_merge_damage(struct x6_event_queue *q, struct x6_event *evt)
 {
-  int idx;
-  int damage_idx;
-  int transition_after_damage;
+  int prev;
   struct x6_event *cur;
   int x0;
   int y0;
   int x1;
   int y1;
-  int guard;
 
   if(!q || !evt || evt->type != X6_EVENT_DAMAGE_NOTIFY)
     return 0;
-
-  idx = q->head;
-  damage_idx = -1;
-  transition_after_damage = 0;
-  guard = 0;
-  while(idx != q->tail) {
-    struct x6_event *ev = &q->events[idx];
-    if(ev->wid == evt->wid) {
-      if(ev->type == X6_EVENT_DAMAGE_NOTIFY) {
-        damage_idx = idx;
-        transition_after_damage = 0;
-      } else if(ev->type == X6_EVENT_MAP_NOTIFY || ev->type == X6_EVENT_CONFIGURE_NOTIFY) {
-        if(damage_idx >= 0)
-          transition_after_damage = 1;
-      }
-    }
-    idx = (idx + 1) % X6_MAX_EVENTS_PER_CLIENT;
-    if(++guard > X6_MAX_EVENTS_PER_CLIENT) {
-      x6trace_console(X6_TRACE_QUEUE, "x6:queue guard hit merge_damage head=%d tail=%d wid=%u", q->head, q->tail, evt->wid);
-      x6dbg("x6:queue guard hit merge_damage head=%d tail=%d wid=%u", q->head, q->tail, evt->wid);
-      break;
-    }
-  }
-
-  if(damage_idx < 0 || transition_after_damage)
+  if(q->head == q->tail)
     return 0;
 
-  cur = &q->events[damage_idx];
+  prev = (q->tail - 1 + X6_MAX_EVENTS_PER_CLIENT) % X6_MAX_EVENTS_PER_CLIENT;
+  cur = &q->events[prev];
+  if(cur->wid != evt->wid || cur->type != X6_EVENT_DAMAGE_NOTIFY)
+    return 0;
+
   x0 = cur->x < evt->x ? cur->x : evt->x;
   y0 = cur->y < evt->y ? cur->y : evt->y;
   x1 = (cur->x + cur->w) > (evt->x + evt->w) ? (cur->x + cur->w) : (evt->x + evt->w);
@@ -2913,7 +2928,8 @@ handle_one_command(int cfd, char *cmd)
 
   if(strncmp(cmd, "QUIT", 4) == 0) {
     x6_send_line(cfd, "BYE\n");
-    keep_running = 0;
+    /* Do not allow arbitrary clients to terminate the display server. */
+    x6dbg("x6: ignoring global quit request from fd=%d", cfd);
     return;
   }
 
@@ -3520,6 +3536,8 @@ handle_one_command(int cfd, char *cmd)
       int i;
       int j;
 
+      x6_copy_cmd_count++;
+
       if(width == 0 || height == 0)
         return;
       if(width > 16384U || height > 16384U)
@@ -3538,6 +3556,137 @@ handle_one_command(int cfd, char *cmd)
         x6dbg("x6:copy_area dst=%u missing", dst_id);
         return;
       }
+
+      /* Large present storms (e.g. terminal full-frame blits) can flood the
+       * server. Drop repeated identical regions that arrive within 2 ticks. */
+      if((size_t)width * (size_t)height >= 300000U) {
+        uint now;
+
+        now = uptime();
+
+        if(dst_win && (uint)(now - x6_copy_last_large_present_tick) < 6U) {
+          x6_copy_drop_count++;
+          if((x6_copy_drop_count & 127U) == 1U)
+            x6dbg("x6:copy_area ratecap drops=%u wh=%u,%u dt=%u",
+                  x6_copy_drop_count, width, height,
+                  (uint)(now - x6_copy_last_large_present_tick));
+          return;
+        }
+
+        if(src_id == x6_copy_last_src &&
+           dst_id == x6_copy_last_dst &&
+           src_x == x6_copy_last_src_x &&
+           src_y == x6_copy_last_src_y &&
+           width == x6_copy_last_w &&
+           height == x6_copy_last_h &&
+           dest_x == x6_copy_last_dst_x &&
+           dest_y == x6_copy_last_dst_y &&
+           (uint)(now - x6_copy_last_tick) < 2U) {
+          x6_copy_drop_count++;
+          if((x6_copy_drop_count & 127U) == 1U)
+            x6dbg("x6:copy_area throttle drops=%u wh=%u,%u dt=%u",
+                  x6_copy_drop_count, width, height,
+                  (uint)(now - x6_copy_last_tick));
+          return;
+        }
+
+        x6_copy_last_src = src_id;
+        x6_copy_last_dst = dst_id;
+        x6_copy_last_src_x = src_x;
+        x6_copy_last_src_y = src_y;
+        x6_copy_last_w = width;
+        x6_copy_last_h = height;
+        x6_copy_last_dst_x = dest_x;
+        x6_copy_last_dst_y = dest_y;
+        x6_copy_last_tick = now;
+        if(dst_win)
+          x6_copy_last_large_present_tick = now;
+      }
+
+      /* Fast path for the dominant terminal present case: pixmap -> window
+       * into framebuffer shadow. Avoid staging through a temporary buffer and
+       * copy rows directly after clipping in source, destination, and fb space. */
+      if(src_pm && dst_win && x6_backend == X6_BACKEND_FB && x6_fb_shadow) {
+        int i0;
+        int i1;
+        int j0;
+        int j1;
+        int base_dx;
+        int base_dy;
+        int run;
+        int need_cursor_refresh;
+
+        i0 = 0;
+        i1 = (int)width;
+        j0 = 0;
+        j1 = (int)height;
+
+        if(src_x + i0 < 0)
+          i0 = -src_x;
+        if(src_x + i1 > src_pm->width)
+          i1 = src_pm->width - src_x;
+        if(src_y + j0 < 0)
+          j0 = -src_y;
+        if(src_y + j1 > src_pm->height)
+          j1 = src_pm->height - src_y;
+
+        if(dest_x + i0 < 0)
+          i0 = -dest_x;
+        if(dest_x + i1 > dst_win->w)
+          i1 = dst_win->w - dest_x;
+        if(dest_y + j0 < 0)
+          j0 = -dest_y;
+        if(dest_y + j1 > dst_win->h)
+          j1 = dst_win->h - dest_y;
+
+        base_dx = dst_win->x + dest_x;
+        base_dy = dst_win->y + dest_y;
+
+        if(base_dx + i0 < 0)
+          i0 = -base_dx;
+        if(base_dx + i1 > x6_fb_shadow_w)
+          i1 = x6_fb_shadow_w - base_dx;
+        if(base_dy + j0 < 0)
+          j0 = -base_dy;
+        if(base_dy + j1 > x6_fb_shadow_h)
+          j1 = x6_fb_shadow_h - base_dy;
+
+        run = i1 - i0;
+        if(run > 0 && j1 > j0) {
+          int j;
+
+          need_cursor_refresh = x6_cursor_overlaps_rect(base_dx + i0,
+                                                        base_dy + j0,
+                                                        run,
+                                                        j1 - j0);
+          if(need_cursor_refresh)
+            x6_cursor_hide();
+
+          for(j = j0; j < j1; j++) {
+            int sy;
+            int dy;
+            uint *src_row;
+            uint *dst_row;
+            int i;
+
+            sy = src_y + j;
+            dy = base_dy + j;
+            src_row = &src_pm->pixels[sy * src_pm->width + (src_x + i0)];
+            dst_row = &x6_fb_shadow[(size_t)dy * (size_t)x6_fb_shadow_w + (size_t)(base_dx + i0)];
+
+            for(i = 0; i < run; i++)
+              dst_row[i] = src_row[i] & 0x00ffffffU;
+          }
+
+          x6_fb_mark_dirty(base_dy + j0, base_dy + j1 - 1);
+          if(need_cursor_refresh)
+            x6_cursor_show();
+          x6_enqueue_damage_notify(dst_win, dest_x + i0, dest_y + j0, run, j1 - j0);
+          x6_copy_exec_count++;
+          return;
+        }
+      }
+
       /* Keep COPY_AREA semantics close to X11: clients may blit into a
        * window before the WM finishes mapping it. Dropping the blit here
        * leaves terminals blank until a later Expose-driven redraw. */
@@ -3607,6 +3756,7 @@ handle_one_command(int cfd, char *cmd)
             idx++;
           }
         }
+        x6_copy_exec_count++;
         return;
       }
 
@@ -3762,6 +3912,7 @@ handle_one_command(int cfd, char *cmd)
 
         /* COPY_AREA mutates pixels but should not generate Expose. */
         x6_enqueue_damage_notify(dst_win, dest_x, dest_y, (int)width, (int)height);
+        x6_copy_exec_count++;
       }
 
       return;
@@ -5247,6 +5398,10 @@ main(int argc, char **argv)
   sigaction(SIGTERM, &sa, 0);
   sigaction(SIGINT, &sa, 0);
 
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = SIG_IGN;
+  sigaction(SIGPIPE, &sa, 0);
+
   if(x6_claim_display() < 0) {
     dprintf(2, "x6: display claim failed via %s\n", X6_PROC_PATH);
     exit(1);
@@ -5366,6 +5521,8 @@ main(int argc, char **argv)
     pr = poll(pfds, (nfds_t)nfds, poll_timeout_ms);
     if(pr < 0)
       continue;
+    if(pr > 0)
+      x6_poll_wake_count++;
 
     did_work = 0;
 
@@ -5382,17 +5539,23 @@ main(int argc, char **argv)
       int cfd;
       cfd = accept(fd);
       if(cfd >= 0) {
-        int flags;
-        flags = fcntl(cfd, F_GETFL, 0);
-        if(flags >= 0)
-          fcntl(cfd, F_SETFL, flags | O_NONBLOCK);
         for(i = 0; i < X6_MAX_CLIENTS; i++) {
           if(!clients[i].in_use) {
+            int flags;
+
             memset(&clients[i], 0, sizeof(clients[i]));
             clients[i].in_use = 1;
             clients[i].fd = cfd;
             x6_event_queue_init(&clients[i].queue);
+            /* Keep startup handshake deterministic: emit READY while the
+             * socket is still in blocking mode, then switch to nonblocking
+             * for steady-state command/event pumping. */
             x6_send_line(cfd, "X6/1 READY\n");
+
+            flags = fcntl(cfd, F_GETFL, 0);
+            if(flags >= 0)
+              fcntl(cfd, F_SETFL, flags | O_NONBLOCK);
+
             cfd = -1;
             did_work = 1;
             break;
@@ -5410,6 +5573,7 @@ main(int argc, char **argv)
       struct x6_client *client;
       int idx;
       int should_detach;
+      int cmds_this_client;
 
       idx = client_index[i];
       if(idx < 0)
@@ -5426,9 +5590,14 @@ main(int argc, char **argv)
       }
 
       should_detach = 0;
-      while(client->in_use && x6_client_next_line(client->rxbuf, &client->rxlen, line, sizeof(line)) > 0) {
+      cmds_this_client = 0;
+      while(client->in_use &&
+            cmds_this_client < X6_MAX_CMDS_PER_CLIENT_TICK &&
+            x6_client_next_line(client->rxbuf, &client->rxlen, line, sizeof(line)) > 0) {
         if(line[0] == 0)
           continue;
+        x6_cmd_total_count++;
+        cmds_this_client++;
         if(!client->logged_first_cmd)
           client->logged_first_cmd = 1;
         if(strncmp(line, "HELLO x6/1", 10) == 0)
@@ -5456,8 +5625,50 @@ main(int argc, char **argv)
     /* Flush queued async events after ingesting commands so synchronous
      * request/response traffic is not delayed by event backlog. */
     for(i = 0; i < X6_MAX_CLIENTS; i++) {
-      if(x6_flush_client_events(&clients[i]) > 0)
+      int flushed;
+
+      flushed = x6_flush_client_events(&clients[i]);
+      if(flushed > 0) {
+        x6_event_flush_count += (uint)flushed;
         did_work = 1;
+      }
+    }
+
+    {
+      uint now;
+
+      now = uptime();
+      if(x6_hb_last_tick == 0)
+        x6_hb_last_tick = now;
+      if((uint)(now - x6_hb_last_tick) >= 200U) {
+        uint d_cmd;
+        uint d_copy_cmd;
+        uint d_copy_exec;
+        uint d_copy_drop;
+        uint d_event_flush;
+        uint d_poll;
+
+        d_cmd = x6_cmd_total_count - x6_hb_last_cmd_total;
+        d_copy_cmd = x6_copy_cmd_count - x6_hb_last_copy_cmd;
+        d_copy_exec = x6_copy_exec_count - x6_hb_last_copy_exec;
+        d_copy_drop = x6_copy_drop_count - x6_hb_last_copy_drop;
+        d_event_flush = x6_event_flush_count - x6_hb_last_event_flush;
+        d_poll = x6_poll_wake_count - x6_hb_last_poll_wake;
+
+        x6trace_console(X6_TRACE_QUEUE,
+            "x6:hb dt=%u cmd=%u copy_cmd=%u copy_exec=%u copy_drop=%u ev_flush=%u poll=%u defer=%d",
+            (uint)(now - x6_hb_last_tick),
+            d_cmd, d_copy_cmd, d_copy_exec, d_copy_drop,
+            d_event_flush, d_poll, x6_fb_defer_dirty);
+
+        x6_hb_last_tick = now;
+        x6_hb_last_cmd_total = x6_cmd_total_count;
+        x6_hb_last_copy_cmd = x6_copy_cmd_count;
+        x6_hb_last_copy_exec = x6_copy_exec_count;
+        x6_hb_last_copy_drop = x6_copy_drop_count;
+        x6_hb_last_event_flush = x6_event_flush_count;
+        x6_hb_last_poll_wake = x6_poll_wake_count;
+      }
     }
 
     /* Guard against noisy/spurious readiness causing a tight poll loop. */

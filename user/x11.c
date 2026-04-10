@@ -103,9 +103,21 @@ static int g_x11_dbg_count;
 static int g_x11_draw_tx_count;
 static int g_x11_draw_call_count;
 static int g_x11_draw_reply_seen;
+static Drawable g_copy_area_last_src;
+static Drawable g_copy_area_last_dest;
+static int g_copy_area_last_src_x;
+static int g_copy_area_last_src_y;
+static unsigned int g_copy_area_last_w;
+static unsigned int g_copy_area_last_h;
+static int g_copy_area_last_dest_x;
+static int g_copy_area_last_dest_y;
+static uint g_copy_area_last_tick;
+static uint g_copy_area_trace_seq;
+static uint g_copy_area_drop_seq;
 static unsigned long g_ext_event_serial = 1;
 static Time g_ext_event_time = 1;
 static unsigned long g_next_cursor_id = 0x10000;
+static int g_x11_sigpipe_ignored;
 
 static XEvent *
 x11_event_queue(Display *display)
@@ -114,6 +126,8 @@ x11_event_queue(Display *display)
     return 0;
   return (XEvent *)display->event_queue;
 }
+
+static void x11dbg(const char *fmt, ...);
 
 #define X11_XRM_MAX_ENTRIES 256
 
@@ -163,26 +177,53 @@ x11_flush_draw_batch(Display *dpy)
   size_t off;
   int newlines;
   int i;
+  int fd;
+  int flags;
+  int restore_flags;
+  int dropped;
 
   if (!dpy || dpy->draw_batch_len <= 0)
     return 0;
 
+  fd = dpy->fd;
+  restore_flags = 0;
+  dropped = 0;
+  flags = fcntl(fd, F_GETFL, 0);
+  if (flags >= 0 && (flags & O_NONBLOCK) == 0) {
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0)
+      restore_flags = 1;
+  }
+
   off = 0;
   while (off < (size_t)dpy->draw_batch_len) {
-    int n = send(dpy->fd, dpy->draw_batch_buf + off,
+    int n = send(fd, dpy->draw_batch_buf + off,
                  (size_t)dpy->draw_batch_len - off);
     if (n < 0) {
       if (errno == EINTR)
         continue;
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        dropped = dpy->draw_batch_len - (int)off;
+        break;
+      }
+      if (restore_flags)
+        fcntl(fd, F_SETFL, flags);
       dpy->draw_batch_len = 0;
       return -1;
     }
     if (n == 0) {
+      if (restore_flags)
+        fcntl(fd, F_SETFL, flags);
       dpy->draw_batch_len = 0;
       return -1;
     }
     off += (size_t)n;
   }
+
+  if (restore_flags)
+    fcntl(fd, F_SETFL, flags);
+
+  if (dropped > 0)
+    x11dbg("x11:draw-batch dropped bytes=%d queued=%d", dropped, dpy->draw_batch_len);
 
   /* Count commands (newlines) for debug accounting only.
    * Draw operations are now fire-and-forget and do not require replies. */
@@ -196,6 +237,8 @@ x11_flush_draw_batch(Display *dpy)
   (void)0; /* debug logging deliberately omitted: x11dbg not yet declared */
 
   dpy->draw_batch_len = 0;
+  dpy->draw_batch_last_copy_area_off = -1;
+  dpy->draw_batch_last_copy_area_len = 0;
   return 0;
 }
 
@@ -205,6 +248,7 @@ static int
 x11_batch_draw(Display *dpy, const char *cmd)
 {
   int len;
+  int is_copy_area;
 
   if (!dpy || !cmd)
     return -1;
@@ -212,6 +256,17 @@ x11_batch_draw(Display *dpy, const char *cmd)
     return -1;
 
   len = (int)strlen(cmd);
+  is_copy_area = (strncmp(cmd, "COPY_AREA ", 10) == 0);
+
+  /* Presentation blits are bursty under scroll storms. Keep only the latest
+   * tail COPY_AREA in the pending draw batch so stale presents don't backlog. */
+  if (is_copy_area &&
+      dpy->draw_batch_last_copy_area_off >= 0 &&
+      dpy->draw_batch_last_copy_area_off + dpy->draw_batch_last_copy_area_len == dpy->draw_batch_len) {
+    dpy->draw_batch_len = dpy->draw_batch_last_copy_area_off;
+    dpy->draw_batch_last_copy_area_off = -1;
+    dpy->draw_batch_last_copy_area_len = 0;
+  }
 
   /* Flush first if this command would overflow. */
   if (dpy->draw_batch_len + len >= dpy->draw_batch_cap - 16) {
@@ -220,6 +275,10 @@ x11_batch_draw(Display *dpy, const char *cmd)
   }
 
   memmove(dpy->draw_batch_buf + dpy->draw_batch_len, cmd, (size_t)len);
+  if (is_copy_area) {
+    dpy->draw_batch_last_copy_area_off = dpy->draw_batch_len;
+    dpy->draw_batch_last_copy_area_len = len;
+  }
   dpy->draw_batch_len += len;
   return 0;
 }
@@ -400,6 +459,11 @@ struct x11_damage_state {
   Damage id;
   Drawable drawable;
   int level;
+  int pending;
+  int pending_x;
+  int pending_y;
+  unsigned int pending_w;
+  unsigned int pending_h;
 };
 
 struct x11_composite_redirect_state {
@@ -847,6 +911,42 @@ x11_damage_count_for_drawable(Drawable drawable)
 }
 
 static void
+x11_damage_update_queued_event(Display *display,
+                               Damage damage,
+                               Drawable drawable,
+                               int x0, int y0, int x1, int y1,
+                               int ww, int wh)
+{
+  XEvent *events;
+  int i;
+
+  if (!display)
+    return;
+  events = x11_event_queue(display);
+  if (!events)
+    return;
+
+  for (i = display->event_count - 1; i >= 0; i--) {
+    XDamageNotifyEvent *dev;
+
+    if (events[i].type != X11_EXT_EVENT_BASE_DAMAGE + XDamageNotify)
+      continue;
+    dev = (XDamageNotifyEvent *)&events[i];
+    if (dev->damage != damage || dev->drawable != drawable)
+      continue;
+    dev->area.x = x0;
+    dev->area.y = y0;
+    dev->area.width = (unsigned short)((x1 > x0) ? (x1 - x0) : 0);
+    dev->area.height = (unsigned short)((y1 > y0) ? (y1 - y0) : 0);
+    dev->geometry.x = 0;
+    dev->geometry.y = 0;
+    dev->geometry.width = (unsigned short)((ww > 0) ? ww : 0);
+    dev->geometry.height = (unsigned short)((wh > 0) ? wh : 0);
+    return;
+  }
+}
+
+static void
 x11_damage_select_input(Display *display, Drawable drawable, int enable)
 {
   char cmd[96];
@@ -1242,6 +1342,10 @@ x11_notify_drawable_damage_region(Display *display, Drawable d,
   int y0;
   int x1;
   int y1;
+  int px0;
+  int py0;
+  int px1;
+  int py1;
 
   if (!display)
     return;
@@ -1300,6 +1404,41 @@ x11_notify_drawable_damage_region(Display *display, Drawable d,
     dev->geometry.y = 0;
     dev->geometry.width = (unsigned short)((ww > 0) ? ww : 0);
     dev->geometry.height = (unsigned short)((wh > 0) ? wh : 0);
+
+    if (g_damages[i].pending) {
+      px0 = g_damages[i].pending_x;
+      py0 = g_damages[i].pending_y;
+      px1 = g_damages[i].pending_x + (int)g_damages[i].pending_w;
+      py1 = g_damages[i].pending_y + (int)g_damages[i].pending_h;
+      if (x0 < px0)
+        px0 = x0;
+      if (y0 < py0)
+        py0 = y0;
+      if (x1 > px1)
+        px1 = x1;
+      if (y1 > py1)
+        py1 = y1;
+      g_damages[i].pending_x = px0;
+      g_damages[i].pending_y = py0;
+      g_damages[i].pending_w = (unsigned int)((px1 > px0) ? (px1 - px0) : 0);
+      g_damages[i].pending_h = (unsigned int)((py1 > py0) ? (py1 - py0) : 0);
+      x11_damage_update_queued_event(display,
+                                     g_damages[i].id,
+                                     d,
+                                     px0,
+                                     py0,
+                                     px1,
+                                     py1,
+                                     ww,
+                                     wh);
+      continue;
+    }
+
+    g_damages[i].pending = 1;
+    g_damages[i].pending_x = x0;
+    g_damages[i].pending_y = y0;
+    g_damages[i].pending_w = (unsigned int)((x1 > x0) ? (x1 - x0) : 0);
+    g_damages[i].pending_h = (unsigned int)((y1 > y0) ? (y1 - y0) : 0);
     x11_stamp_synthetic_event(&ev);
     x11_event_push_back(display, &ev);
   }
@@ -1532,6 +1671,9 @@ static int
 x11_event_push_back(Display *display, const XEvent *ev)
 {
   XEvent *events;
+  XEvent *last;
+  Window ev_win;
+  Window last_win;
 
   if (!display)
     return -1;
@@ -1540,9 +1682,23 @@ x11_event_push_back(Display *display, const XEvent *ev)
     return -1;
   if (!ev)
     return -1;
+  if (ev->type == MotionNotify && display->event_count > 0) {
+    last = &events[display->event_count - 1];
+    if (last->type == MotionNotify) {
+      ev_win = x11_event_window(ev);
+      last_win = x11_event_window(last);
+      if (ev_win != 0 && ev_win == last_win) {
+        *last = *ev;
+        return 0;
+      }
+    }
+  }
   if (display->event_count >= X11_MAX_EVENTS) {
-    memmove(&events[0], &events[1], (size_t)(X11_MAX_EVENTS - 1) * sizeof(XEvent));
-    display->event_count = X11_MAX_EVENTS - 1;
+    /* Drop oldest-preserve order behavior here was O(N) via memmove and can
+     * dominate CPU under event storms. Keep queue length fixed and overwrite
+     * the newest slot with the latest event instead. */
+    events[X11_MAX_EVENTS - 1] = *ev;
+    return 0;
   }
   events[display->event_count++] = *ev;
   if (ev->type == KeyPress || ev->type == KeyRelease) {
@@ -2208,6 +2364,35 @@ x11_read_event_from_wire(Display *display, XEvent *event)
   }
 }
 
+/* Nonblocking variant used by XPending: drain any unsolicited lines without
+ * ever stalling waiting for a true EVENT line. */
+static int
+x11_read_event_from_wire_nonblocking(Display *display, XEvent *event)
+{
+  int fd;
+  int flags;
+  int changed;
+  int rc;
+
+  if (!display || !event)
+    return -1;
+
+  fd = display->fd;
+  changed = 0;
+  flags = fcntl(fd, F_GETFL, 0);
+  if (flags >= 0 && (flags & O_NONBLOCK) == 0) {
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0)
+      changed = 1;
+  }
+
+  rc = x11_read_event_from_wire(display, event);
+
+  if (changed)
+    fcntl(fd, F_SETFL, flags);
+
+  return rc;
+}
+
 static int
 x11_read_event(Display *display, XEvent *event)
 {
@@ -2379,6 +2564,11 @@ XOpenDisplay(char *display_name)
   Display *dpy;
   (void)display_name;
 
+  if (!g_x11_sigpipe_ignored) {
+    signal(SIGPIPE, SIG_IGN);
+    g_x11_sigpipe_ignored = 1;
+  }
+
   if (g_display)
     return g_display;
 
@@ -2430,6 +2620,8 @@ XOpenDisplay(char *display_name)
   if (!dpy->draw_batch_buf)
     goto fail;
   dpy->draw_batch_len = 0;
+  dpy->draw_batch_last_copy_area_off = -1;
+  dpy->draw_batch_last_copy_area_len = 0;
   g_x11_dbg_count = 0;
   x11dbg("x11:open ready fd=%d root=%lu size=%dx%d", dpy->fd, dpy->root, dpy->width, dpy->height);
   g_display = dpy;
@@ -5287,15 +5479,59 @@ int XClearWindow(Display *display, Window w) {
 int XCopyArea(Display *display, Drawable src, Drawable dest, GC gc, int src_x, int src_y, unsigned int width, unsigned int height, int dest_x, int dest_y) {
   struct x11_gc_state *gs;
   char cmd[256];
+  unsigned long area;
+  uint now;
   int trace_console;
-  
-  (void)display;
-  
+
+  if (!display)
+    return -1;
+
   gs = x11_find_gc(gc);
   if (!gs)
     return 0;
 
-  trace_console = !((uint)dest == 2U && dest_y == 0 && height <= 32U);
+  area = (unsigned long)width * (unsigned long)height;
+  now = (uint)uptime();
+
+  /* Drop redundant large presents that arrive too quickly with identical
+   * geometry. This keeps text flood workloads from saturating x6. */
+  if (area >= 300000UL &&
+      src == g_copy_area_last_src &&
+      dest == g_copy_area_last_dest &&
+      src_x == g_copy_area_last_src_x &&
+      src_y == g_copy_area_last_src_y &&
+      width == g_copy_area_last_w &&
+      height == g_copy_area_last_h &&
+      dest_x == g_copy_area_last_dest_x &&
+      dest_y == g_copy_area_last_dest_y &&
+      (now - g_copy_area_last_tick) < 2U) {
+    g_copy_area_drop_seq++;
+    if ((g_copy_area_drop_seq & 127U) == 1U) {
+      x11dbg("x11:copy-area throttle drops=%u wh=%u,%u dt=%u",
+             g_copy_area_drop_seq, width, height, (uint)(now - g_copy_area_last_tick));
+    }
+    return 0;
+  }
+
+  g_copy_area_last_src = src;
+  g_copy_area_last_dest = dest;
+  g_copy_area_last_src_x = src_x;
+  g_copy_area_last_src_y = src_y;
+  g_copy_area_last_w = width;
+  g_copy_area_last_h = height;
+  g_copy_area_last_dest_x = dest_x;
+  g_copy_area_last_dest_y = dest_y;
+  g_copy_area_last_tick = now;
+
+  trace_console = 0;
+  if ((uint)dest != 2U || dest_y != 0 || height > 32U) {
+    if (area >= 300000UL) {
+      if ((g_copy_area_trace_seq++ & 127U) == 0U)
+        trace_console = 1;
+    } else {
+      trace_console = 1;
+    }
+  }
   
   /* Send COPY_AREA command to x6 server
    * Format: COPY_AREA <src> <dest> <src_x> <src_y> <width> <height> <dest_x> <dest_y>
@@ -5306,8 +5542,10 @@ int XCopyArea(Display *display, Drawable src, Drawable dest, GC gc, int src_x, i
     x11consolecrit("x11:copy-area src=%u dst=%u src_xy=%d,%d wh=%u,%u dst_xy=%d,%d",
                    (uint)src, (uint)dest, src_x, src_y, width, height, dest_x, dest_y);
   }
-  x11dbg("x11:copy-area src=%lu dst=%lu src_xy=%d,%d wh=%u,%u dst_xy=%d,%d",
-         src, dest, src_x, src_y, width, height, dest_x, dest_y);
+  if (area < 300000UL || (g_copy_area_trace_seq & 127U) == 1U) {
+    x11dbg("x11:copy-area src=%lu dst=%lu src_xy=%d,%d wh=%u,%u dst_xy=%d,%d",
+           src, dest, src_x, src_y, width, height, dest_x, dest_y);
+  }
 
   if (!display)
     return -1;
@@ -5581,7 +5819,7 @@ XPending(Display *display)
   /* Check if we already have bytes buffered from a previous recv */
   if (display->rxlen > 0) {
     XEvent ev;
-    if (x11_read_event_from_wire(display, &ev) == 0)
+    if (x11_read_event_from_wire_nonblocking(display, &ev) == 0)
       x11_event_push_back(display, &ev);
     x11dbg("x11:pending rxbuf-hit queued=%d", display->event_count);
     return display->event_count > 0 ? 1 : 0;
@@ -5596,7 +5834,7 @@ XPending(Display *display)
     return 0;
   {
     XEvent ev;
-    if (x11_read_event_from_wire(display, &ev) == 0)
+    if (x11_read_event_from_wire_nonblocking(display, &ev) == 0)
       x11_event_push_back(display, &ev);
   }
   x11dbg("x11:pending poll-hit queued=%d revents=%d", display->event_count, pfd.revents);
@@ -7003,7 +7241,11 @@ void XDamageSubtract(Display *display, Damage damage,
   dmg = x11_find_damage(damage);
   if (!dmg)
     return;
-  x11_notify_drawable_damage(display, dmg->drawable);
+  dmg->pending = 0;
+  dmg->pending_x = 0;
+  dmg->pending_y = 0;
+  dmg->pending_w = 0;
+  dmg->pending_h = 0;
 }
 
 Status XRRQueryExtension(Display *display, int *event_base_return,

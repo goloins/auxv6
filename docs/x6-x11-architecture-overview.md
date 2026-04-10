@@ -88,6 +88,33 @@ xinit (user/xinit.c)
   └─ xinit waits for both processes
 ```
 
+### Intermittent Startup Probe Failure (2026-04-10)
+
+Observed occasional startup failure during `startx` probe:
+
+```
+xinit: probe connected fd=3 port=6006
+xinit: probe recv failed state=0 n=-2
+```
+
+Interpretation:
+- Probe connected, but did not receive `X6/1 READY` within the probe timeout.
+- Failure occurs before HELLO round-trip completes (`state=0`), so this is a pre-handshake readiness path issue.
+
+Race fixed in `user/x6.c`:
+- On accept, x6 now sends `X6/1 READY` before flipping client socket to `O_NONBLOCK`.
+- Control-plane send path (`x6_send_line`) now has a temporary blocking fallback for prolonged `EAGAIN` on non-event replies, then restores original socket flags.
+
+If this reappears, capture these lines first:
+- `xinit: probe connected ...`
+- `xinit: probe recv failed state=... n=...`
+- `x6: send retry timeout ...` (if present)
+
+Quick triage mapping:
+- `state=0`: READY was not observed by probe (accept/send readiness path)
+- `state=1`: HELLO reply missing/delayed
+- `state=2`: DETACH reply missing/delayed
+
 ---
 
 ## Key Data Structures
@@ -145,7 +172,7 @@ struct x6_event {
 };
 
 struct x6_event_queue {
-  struct x6_event events[X6_MAX_EVENTS_PER_CLIENT];  // Ring buffer (64 events)
+  struct x6_event events[X6_MAX_EVENTS_PER_CLIENT];  // Ring buffer (128 events)
   int head, tail;                                      // Circular pointers
 };
 

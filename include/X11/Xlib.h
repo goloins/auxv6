@@ -387,6 +387,8 @@ typedef struct _XDisplay {
   char *draw_batch_buf;
   int draw_batch_len;
   int draw_batch_cap;
+  int draw_batch_last_copy_area_off;
+  int draw_batch_last_copy_area_len;
 } _XDisplay;
 
 typedef struct {

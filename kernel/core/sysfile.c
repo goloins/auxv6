@@ -1037,11 +1037,6 @@ sys_write(void)
   if(p == 0 || p->pgdir == 0)
     return -1;
 
-  /* Debug: log write() calls from shell process to PTY */
-  if(f && f->pty_side == PTY_SIDE_SLAVE && n > 0) {
-    cprintf("shell:sys_write fd=1 n=%d (SHELL TRYING TO WRITE %d BYTES)\n", n, n);
-  }
-
   uaddr = (uint)addr;
   use_heap = (n > (int)sizeof(kbuf_small));
   if(use_heap){

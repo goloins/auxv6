@@ -54,6 +54,7 @@ This document holds the detailed 2026-04 change history that was moved out of `d
 - Allocator incident documentation landed for `lsblk`-triggered kernel trap-14 during NVMe/Btrfs bring-up: see `docs/historic/kalloc-page-fault-investigation-2026-04-06.md` for symbolication, fault-path analysis, and debug plan.
 - Post-incident stabilization/perf tranche landed: canonical kernel-PDE sync corrected to ignore volatile HW bits, first-fault VM attribution/logging expanded, kernel-stack robustness upgraded (8KB contiguous + reuse cache), and `kallocstress` slope-reduction optimizations shipped across pipe/file/fd/sys_write hot paths (chunked pipe I/O, transition wakeups, object caches, fd hinting, small-write stack fast path) with new per-syscall diagnostics for residual `pipe-page-churn` drift.
 - Perf attribution follow-on landed: `/proc/schedstat` + `kallocstress` now report wakeup/wait scan diagnostics (plus wake-channel class counters), an unsafe tick-wakeup gating experiment was rolled back after runlevel regression, and a safe global tick-sleeper model (tracked in generic `sleep()`) now gates timer `wakeup(&ticks)` without excluding non-`sys_sleep` tick waiters.
+- x6/xinit startup reliability hardening landed for intermittent probe failure (`probe recv failed state=0 n=-2`): x6 now emits initial `X6/1 READY` before setting accepted client sockets nonblocking, and control-plane sends gained a temporary blocking fallback after prolonged `EAGAIN` to avoid dropping handshake replies.
 
 ## Past Changes (2026-03-30 to 2026-04-03)
 
