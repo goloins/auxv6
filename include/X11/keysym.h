@@ -6,6 +6,7 @@
 #define XK_Return 0xff0d
 #define XK_Escape 0xff1b
 #define XK_Delete 0xffff
+#define XK_bracketleft 0x005b
 #define XK_space 0x0020
 #define XK_comma 0x002c
 #define XK_period 0x002e
@@ -21,19 +22,31 @@
 #define XK_8 0x0038
 #define XK_9 0x0039
 
+#define XK_G 0x0047
+#define XK_J 0x004a
+#define XK_M 0x004d
+#define XK_Y 0x0059
+
+#define XK_a 0x0061
 #define XK_b 0x0062
 #define XK_c 0x0063
 #define XK_d 0x0064
+#define XK_e 0x0065
 #define XK_f 0x0066
+#define XK_g 0x0067
 #define XK_h 0x0068
 #define XK_i 0x0069
 #define XK_j 0x006a
 #define XK_k 0x006b
 #define XK_l 0x006c
 #define XK_m 0x006d
+#define XK_n 0x006e
 #define XK_p 0x0070
 #define XK_q 0x0071
 #define XK_t 0x0074
+#define XK_u 0x0075
+#define XK_w 0x0077
+#define XK_y 0x0079
 
 #define XK_Num_Lock 0xff7f
 

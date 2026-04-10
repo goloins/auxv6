@@ -1,0 +1,140 @@
+# Makefile.auxv6 - dmenu 5.4 build for auxv6/x6
+#
+# This is kept separate from upstream Makefile so auxv6-specific include paths,
+# linker inputs, and helper staging do not require editing the vendored port.
+
+ROOT ?= $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST))))../..)
+DMENU_DIR := $(ROOT)/ports/dmenu-5.4
+BUILD_DIR := $(ROOT)/user/.stage/dmenu-5.4
+DMENU_OUT := $(DMENU_DIR)/_dmenu
+STEST_OUT := $(DMENU_DIR)/_stest
+
+VERSION = 5.4
+
+# Toolchain detection mirrors the repo root Makefile style.
+CROSS_ROOT ?= /opt/cross
+CROSS_BINDIR ?= $(CROSS_ROOT)/bin
+
+ifndef TOOLPREFIX
+TOOLPREFIX := $(shell \
+  if i386-jos-elf-objdump -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
+  then echo 'i386-jos-elf-'; \
+  elif test -x '$(CROSS_BINDIR)/i386-jos-elf-objdump' && \
+       '$(CROSS_BINDIR)/i386-jos-elf-objdump' -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
+  then echo '$(CROSS_BINDIR)/i386-jos-elf-'; \
+  elif test -x '$(CROSS_BINDIR)/i386-elf-objdump' && \
+       '$(CROSS_BINDIR)/i386-elf-objdump' -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
+  then echo '$(CROSS_BINDIR)/i386-elf-'; \
+  elif test -x '$(CROSS_BINDIR)/i686-elf-objdump' && \
+       '$(CROSS_BINDIR)/i686-elf-objdump' -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
+  then echo '$(CROSS_BINDIR)/i686-elf-'; \
+  elif objdump -i 2>&1 | grep 'elf32-i386' >/dev/null 2>&1; \
+  then echo ''; \
+  else echo "ERROR: no i386 cross-toolchain found" >&2; exit 1; fi)
+endif
+
+CC := $(TOOLPREFIX)gcc
+LD := $(TOOLPREFIX)ld
+OBJDUMP := $(TOOLPREFIX)objdump
+LIBGCC := $(shell $(CC) -m32 -print-libgcc-file-name 2>/dev/null)
+
+X11INC ?= $(ROOT)/include
+
+INCS := -I$(BUILD_DIR) -I$(DMENU_DIR) -I$(ROOT)/include/posix -I$(ROOT)/include/posix/sys -I$(X11INC)
+CPPFLAGS := -D_DEFAULT_SOURCE -D_BSD_SOURCE -D_XOPEN_SOURCE=700L -D_POSIX_C_SOURCE=200809L \
+	-DVERSION=\"$(VERSION)\" -DXINERAMA -DAUXV6
+CFLAGS := -fno-pic -static -fno-builtin -fno-strict-aliasing -O2 -Wall -MD -ggdb -m32 \
+	-fno-omit-frame-pointer -nostdinc -fno-stack-protector -Wno-error \
+	-std=c99 -pedantic -Wno-deprecated-declarations \
+	$(INCS) $(CPPFLAGS)
+LDFLAGS := -N -e _start -Ttext 0 -m $(shell $(LD) -V 2>/dev/null | grep elf_i386 | head -1)
+
+COMMON_RUNTIME_OBJS := \
+	$(ROOT)/user/user_font.o \
+	$(ROOT)/user/ulib.o \
+	$(ROOT)/user/string.o \
+	$(ROOT)/user/errstr.o \
+	$(ROOT)/user/umalloc.o \
+	$(ROOT)/user/tty.o \
+	$(ROOT)/user/inet.o \
+	$(ROOT)/user/fmt.o \
+	$(ROOT)/user/dirent.o \
+	$(ROOT)/user/fnmatch.o \
+	$(ROOT)/user/glob.o \
+	$(ROOT)/user/ftw.o \
+	$(ROOT)/user/fts.o \
+	$(ROOT)/user/locale.o \
+	$(ROOT)/user/pwdgrp.o \
+	$(ROOT)/user/env.o \
+	$(ROOT)/user/conf.o \
+	$(ROOT)/user/path.o \
+	$(ROOT)/user/tempfile.o \
+	$(ROOT)/user/timecore.o \
+	$(ROOT)/user/resource.o \
+	$(ROOT)/user/netdb.o \
+	$(ROOT)/user/stdlib.o \
+	$(ROOT)/user/posix_fs.o \
+	$(ROOT)/user/posix.o \
+	$(ROOT)/user/stdio.o \
+	$(ROOT)/user/regex.o \
+	$(ROOT)/user/calloc.o \
+	$(ROOT)/user/libterm.o \
+	$(ROOT)/user/checksum.o \
+	$(ROOT)/user/gzip.o \
+	$(ROOT)/user/crt0.o \
+	$(ROOT)/user/usys.o \
+	$(ROOT)/user/printf.o \
+	$(ROOT)/user/resolve.o
+
+DMENU_RUNTIME_OBJS := $(ROOT)/user/x11.o $(COMMON_RUNTIME_OBJS)
+STEST_RUNTIME_OBJS := $(COMMON_RUNTIME_OBJS)
+
+DMENU_CONFIG := $(BUILD_DIR)/config.h
+DMENU_OBJ := $(BUILD_DIR)/dmenu.o $(BUILD_DIR)/drw.o $(BUILD_DIR)/util.o
+STEST_OBJ := $(BUILD_DIR)/stest.o $(BUILD_DIR)/util.o
+DMENU_ELF := $(BUILD_DIR)/dmenu
+STEST_ELF := $(BUILD_DIR)/stest
+
+.PHONY: all clean toolchain-check config-check
+
+all: toolchain-check config-check $(DMENU_OUT) $(STEST_OUT)
+
+toolchain-check:
+	@$(CC) -m32 -dM -E -x c /dev/null | grep -q '__i386__' || \
+		(echo "ERROR: $(CC) is not producing i386 output with -m32" >&2; exit 1)
+
+config-check:
+	@test -f $(DMENU_DIR)/config.def.h || \
+		(echo "ERROR: $(DMENU_DIR)/config.def.h is missing." >&2; exit 1)
+
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+$(DMENU_CONFIG): $(DMENU_DIR)/config.def.h | $(BUILD_DIR)
+	cp $< $@
+
+$(BUILD_DIR)/%.o: $(DMENU_DIR)/%.c $(DMENU_CONFIG) | $(BUILD_DIR)
+	$(CC) -c $(CFLAGS) -o $@ $<
+
+$(COMMON_RUNTIME_OBJS) $(ROOT)/user/x11.o:
+	$(MAKE) -C $(ROOT) $(patsubst $(ROOT)/%,%,$@)
+
+$(DMENU_ELF): $(DMENU_OBJ) $(DMENU_RUNTIME_OBJS)
+	$(LD) $(LDFLAGS) -o $@ $(DMENU_RUNTIME_OBJS) $(DMENU_OBJ) $(LIBGCC)
+	$(OBJDUMP) -S $@ > $(BUILD_DIR)/dmenu.asm || true
+	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(BUILD_DIR)/dmenu.sym || true
+
+$(STEST_ELF): $(STEST_OBJ) $(STEST_RUNTIME_OBJS)
+	$(LD) $(LDFLAGS) -o $@ $(STEST_RUNTIME_OBJS) $(STEST_OBJ) $(LIBGCC)
+	$(OBJDUMP) -S $@ > $(BUILD_DIR)/stest.asm || true
+	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(BUILD_DIR)/stest.sym || true
+
+$(DMENU_OUT): $(DMENU_ELF)
+	cp $< $@
+
+$(STEST_OUT): $(STEST_ELF)
+	cp $< $@
+
+clean:
+	rm -f $(DMENU_OUT) $(STEST_OUT)
+	rm -rf $(BUILD_DIR)

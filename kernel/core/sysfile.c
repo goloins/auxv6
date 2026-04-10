@@ -725,7 +725,7 @@ fd_ready_events(struct file *f)
       events |= POLLIN;
     if(f->writable && wr)
       events |= POLLOUT;
-    if(f->readable && !rd)
+    if(f->readable && !pipe_writeopen(f->pipe))
       events |= POLLHUP;
     break;
   case FD_SOCKET:

@@ -2054,20 +2054,7 @@ run(void)
 			      dbg_loop_count, ttyfd, xfd, effective_timeout);
 		}
 
-#if defined(AUXV6_ST_HACK_NOPTY)
-		if (dbg_loop_count < 128) {
-			struct timeval tv0;
-			tv0.tv_sec = 0;
-			tv0.tv_usec = 0;
-			selret = select(MAX(xfd, ttyfd)+1, &rfd, NULL, NULL, &tv0);
-			if (selret == 0)
-				usleep(50000);
-		} else {
-			selret = pselect(MAX(xfd, ttyfd)+1, &rfd, NULL, NULL, tv, NULL);
-		}
-#else
 		selret = pselect(MAX(xfd, ttyfd)+1, &rfd, NULL, NULL, tv, NULL);
-#endif
 		if (selret < 0) {
 			if (errno == EINTR)
 				continue;

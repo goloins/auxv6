@@ -4,9 +4,9 @@ This document tracks the USB host-controller bring-up work that moved from early
 
 ## Current Snapshot
 
-- Status: 65% (see roadmap)
-- Scope landed: controller discovery, lifecycle control, root-hub port scan, post-scan port service/reset, candidate-device synthesis, and backend speed decoding
-- Not yet landed: transfer scheduling, endpoint-0 control transfers, address assignment, descriptor parsing, class drivers
+- Status: 72% (see roadmap)
+- Scope landed: controller discovery, lifecycle control, root-hub port scan, post-scan port service/reset, candidate-device synthesis, backend speed decoding, and USB address reservation scaffolding
+- Not yet landed: transfer scheduling, endpoint-0 control transfers, descriptor parsing, class drivers
 
 ## Tranche History
 
@@ -55,6 +55,15 @@ This document tracks the USB host-controller bring-up work that moved from early
   - xHCI: Port Speed ID -> low/full/high/super
 - Candidate rows now report decoded speed instead of always unknown
 
+11. Address assignment scaffold
+- Added per-controller USB address allocator state with reserved address range `1..127`
+- Candidate rows now persist an assigned `addr` when the port is both present and enabled
+- `/proc/usb` now exports allocator counters:
+  - `usb_addr_assigned`
+  - `usb_addr_conflict`
+  - `usb_addr_exhausted`
+- Added per-port generation tracking so reconnect/change epochs can be carried forward into later descriptor and attach work
+
 ## Procfs Surface (Current)
 
 `/proc/usb` now exports:
@@ -67,7 +76,8 @@ This document tracks the USB host-controller bring-up work that moved from early
   - `rh_low`, `rh_full`, `rh_high`, `rh_super`
 - Candidate-device table:
   - `usb_dev_count`
-  - `devN` rows with `addr_ready` handoff signal
+  - `usb_addr_assigned`, `usb_addr_conflict`, `usb_addr_exhausted`
+  - `devN` rows with `addr`, `addr_ready`, and `gen`
 
 ## Implementation Notes
 
@@ -78,15 +88,13 @@ This document tracks the USB host-controller bring-up work that moved from early
 
 ## Next Recommended Tranches
 
-1. Address assignment scaffold
-- Reserve unique USB addresses (`1..127`) for `addr_ready` candidates
-- Persist assigned address in candidate/device records
-- Export allocator counters (`assigned`, `conflict`, `exhausted`) in `/proc/usb`
-
-2. EHCI endpoint-0 control transfer MVP
+1. EHCI endpoint-0 control transfer MVP
 - Minimal QH/qTD setup for `GET_DESCRIPTOR(Device)`
 - Read first 18 bytes and publish `vid/pid/class/subclass/protocol`
 
-3. Stable device identity model
-- Add generation key `(hc, port, connect-change epoch)`
-- Prevent stale candidate reuse across disconnect/reconnect transitions
+2. Stable device identity follow-through
+- Preserve candidate rows across rescan cycles instead of rebuilding a boot-only snapshot
+- Retire stale rows on disconnect/reconnect transitions using the per-port generation key
+
+3. Class-driver handoff
+- Route descriptor-identified devices into family attach hooks such as `rtl815x_usb_attach()`

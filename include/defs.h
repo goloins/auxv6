@@ -490,6 +490,7 @@ int             piperead(struct pipe*, char*, int);
 int             pipewrite(struct pipe*, char*, int);
 int             pipe_readable(struct pipe*);
 int             pipe_writable(struct pipe*);
+int             pipe_writeopen(struct pipe*);
 void            pipe_get_stats(uint *read_sleeps, uint *write_sleeps,
 							   uint *wake_readers, uint *wake_writers);
 
@@ -771,8 +772,11 @@ int             modem_register_stub_probe(const char *family, struct pci_dev *de
 int             modem_procfs_dump(char *buf, uint max);
 void            firewire_init(void);
 int             firewire_procfs_dump(char *buf, uint max);
+void            rtl815x_init(void);
 void            usb_init(void);
 int             usb_procfs_dump(char *buf, uint max);
+int             rtl815x_procfs_dump(char *buf, uint max);
+int             rtl815x_usb_attach(ushort vendor, ushort product);
 int             nforce_procfs_dump(char *buf, uint max);
 void            wifi_init(void);
 int             wifi_procfs_dump(char *buf, uint max);

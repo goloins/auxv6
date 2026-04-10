@@ -30,6 +30,7 @@ main(void)
   firewire_init(); // firewire/IEEE1394 PCI probe stubs
   wifi_init();     // 802.11 Wi-Fi PCI probe scaffold
   ieee802154_init(); // 802.15.4 WPAN scaffold (backburner; USB attach pending)
+  rtl815x_init();  // Realtek RTL8152/RTL8153 USB Ethernet scaffold
   usb_init();      // usb host-controller discovery scaffold
   virtio_gpu_init(); // virtio-gpu subsystem
   intel_gfx_init();  // intel display-class PCI probe stub

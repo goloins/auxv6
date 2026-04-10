@@ -99,14 +99,17 @@ wallpaper_try_x6_color(uint rgb)
   w = wallpaper_parse_dim(line, "width=", 1024);
   h = wallpaper_parse_dim(line, "height=", 768);
   snprintf(line, sizeof(line), "DRAW_RECT 1 0 0 %d %d %u\n", w, h, rgb & 0x00ffffffU);
-  send(fd, line, strlen(line));
-  if(wallpaper_read_line(fd, line, sizeof(line)) < 0) {
+  if(send(fd, line, strlen(line)) < 0) {
     close(fd);
     return -1;
   }
+
+  /* Draw requests are fire-and-forget on current x6. Older servers replied
+   * with "OK draw"; we no longer block waiting for that ack so startup scripts
+   * cannot stall between wallpaper and WM launch. */
   send(fd, "DETACH\n", 7);
   close(fd);
-  return (strncmp(line, "OK draw", 7) == 0) ? 0 : -1;
+  return 0;
 }
 
 static int

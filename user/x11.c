@@ -8,6 +8,7 @@
 #include "sys/select.h"
 #include "signal.h"
 #include "time.h"
+#include "errno.h"
 #include <stdarg.h>
 #include <fcntl.h>
 #include "X11/Xlib.h"
@@ -141,13 +142,86 @@ static char *g_xrm_root_string;
 static struct x11_context_entry g_context_entries[X11_MAX_CONTEXT_ENTRIES];
 static XContext g_next_context_id = 1;
 
+#define X11_DRAW_BATCH_CAP 65536
+
 static int
 x11_is_chatty_draw_cmd(const char *cmd)
 {
   if (!cmd)
     return 0;
   return strncmp(cmd, "DRAW_TEXT ", 10) == 0 ||
-         strncmp(cmd, "DRAW_RECT ", 10) == 0;
+         strncmp(cmd, "DRAW_RECT ", 10) == 0 ||
+         strncmp(cmd, "DRAW_LINE ", 10) == 0 ||
+         strncmp(cmd, "COPY_AREA ", 10) == 0;
+}
+
+/* Flush all buffered draw commands to the server in one send() call.
+ * Called from x11_cmd (before any synchronous request) and from XFlush. */
+static int
+x11_flush_draw_batch(Display *dpy)
+{
+  size_t off;
+  int newlines;
+  int i;
+
+  if (!dpy || dpy->draw_batch_len <= 0)
+    return 0;
+
+  off = 0;
+  while (off < (size_t)dpy->draw_batch_len) {
+    int n = send(dpy->fd, dpy->draw_batch_buf + off,
+                 (size_t)dpy->draw_batch_len - off);
+    if (n < 0) {
+      if (errno == EINTR)
+        continue;
+      dpy->draw_batch_len = 0;
+      return -1;
+    }
+    if (n == 0) {
+      dpy->draw_batch_len = 0;
+      return -1;
+    }
+    off += (size_t)n;
+  }
+
+  /* Count commands (newlines) for debug accounting only.
+   * Draw operations are now fire-and-forget and do not require replies. */
+  newlines = 0;
+  for (i = 0; i < dpy->draw_batch_len; i++)
+    if (dpy->draw_batch_buf[i] == '\n')
+      newlines++;
+
+  g_x11_draw_tx_count += newlines;
+
+  (void)0; /* debug logging deliberately omitted: x11dbg not yet declared */
+
+  dpy->draw_batch_len = 0;
+  return 0;
+}
+
+/* Append a draw command (already formatted with trailing '\n') to the client-
+ * side batch buffer.  Flushes automatically when the buffer nears capacity. */
+static int
+x11_batch_draw(Display *dpy, const char *cmd)
+{
+  int len;
+
+  if (!dpy || !cmd)
+    return -1;
+  if (dpy->fd < 0)
+    return -1;
+
+  len = (int)strlen(cmd);
+
+  /* Flush first if this command would overflow. */
+  if (dpy->draw_batch_len + len >= dpy->draw_batch_cap - 16) {
+    if (x11_flush_draw_batch(dpy) < 0)
+      return -1;
+  }
+
+  memmove(dpy->draw_batch_buf + dpy->draw_batch_len, cmd, (size_t)len);
+  dpy->draw_batch_len += len;
+  return 0;
 }
 
 static Time
@@ -224,6 +298,35 @@ x11crit(const char *fmt, ...)
   line[n] = '\0';
 
   fd = open("/tmp/x11-debug.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+  if (fd >= 0) {
+    write(fd, line, (size_t)n);
+    close(fd);
+  }
+}
+
+static void
+x11consolecrit(const char *fmt, ...)
+{
+  char msg[280];
+  char line[320];
+  int n;
+  int fd;
+  va_list ap;
+
+  va_start(ap, fmt);
+  n = vsnprintf(msg, sizeof(msg), fmt, ap);
+  va_end(ap);
+  if (n < 0)
+    return;
+  n = snprintf(line, sizeof(line), "x11trace: pid=%d %s", getpid(), msg);
+  if (n < 0)
+    return;
+  if ((size_t)n >= sizeof(line))
+    n = (int)sizeof(line) - 1;
+  line[n++] = '\n';
+  line[n] = '\0';
+
+  fd = open("/dev/console", O_WRONLY);
   if (fd >= 0) {
     write(fd, line, (size_t)n);
     close(fd);
@@ -1592,9 +1695,11 @@ x11_handle_unsolicited_line(Display *display, const char *line)
     return 1;
   }
 
-  if ((strncmp(line, "OK draw", 7) == 0 || strncmp(line, "OK text", 7) == 0) &&
-      display->pending_draw_replies > 0) {
-    display->pending_draw_replies--;
+    if (strncmp(line, "OK draw", 7) == 0 ||
+      strncmp(line, "OK text", 7) == 0 ||
+      strncmp(line, "OK copy_area", 12) == 0) {
+    if (display->pending_draw_replies > 0)
+      display->pending_draw_replies--;
     g_x11_draw_reply_seen++;
     if ((g_x11_draw_reply_seen % 256) == 0 || display->pending_draw_replies == 0) {
       x11dbg("x11:draw-reply seen=%d pending=%d", g_x11_draw_reply_seen, display->pending_draw_replies);
@@ -1614,27 +1719,24 @@ x11_handle_unsolicited_line(Display *display, const char *line)
   return 0;
 }
 
-static int
+/* x11_drain_draw_replies is no longer called: draw commands are fire-and-
+ * forget, and pending replies are consumed lazily by x11_handle_unsolicited_line
+ * in the x11_cmd response loop.  Kept as a dead stub in case external callers
+ * exist in the translation unit. */
+static int __attribute__((unused))
 x11_drain_draw_replies(Display *display)
 {
   char line[X6_BUF_SIZE];
-  int before;
 
   if (!display)
     return -1;
 
-  before = display->pending_draw_replies;
   while (display->pending_draw_replies > 0) {
     if (x11_read_line(display, line, sizeof(line)) < 0)
       return -1;
     if (!x11_handle_unsolicited_line(display, line))
       return -1;
   }
-
-  if (before > 0) {
-    x11dbg("x11:drain-draw complete drained=%d", before);
-  }
-
   return 0;
 }
 
@@ -2070,8 +2172,11 @@ x11_read_event_from_wire(Display *display, XEvent *event)
   while (1) {
     if (x11_read_line(display, line, sizeof(line)) < 0)
       return -1;
-    if (x11_handle_unsolicited_line(display, line))
+    if (x11_handle_unsolicited_line(display, line)) {
+      if (x11_event_pop_front(display, event) == 0)
+        return 0;
       continue;
+    }
     if (x11_parse_event_line(display, line, event) == 0)
       return 0;
   }
@@ -2123,6 +2228,8 @@ x11_read_line(Display *display, char *line, int maxlen)
 
     {
       int n = recv(fd, display->rxbuf + display->rxlen, (size_t)(X11_RXBUF_SIZE - display->rxlen));
+      if (n < 0 && errno == EINTR)
+        continue;
       if (n <= 0)
         return -1;
       display->rxlen += n;
@@ -2133,6 +2240,9 @@ x11_read_line(Display *display, char *line, int maxlen)
 static int
 x11_send(int fd, const char *cmd)
 {
+  size_t len;
+  size_t off;
+
   if (!cmd)
     return -1;
   if (x11_is_chatty_draw_cmd(cmd)) {
@@ -2141,7 +2251,21 @@ x11_send(int fd, const char *cmd)
   } else {
     x11dbg("x11:wire:tx '%s'", cmd);
   }
-  return send(fd, cmd, strlen(cmd)) < 0 ? -1 : 0;
+
+  len = strlen(cmd);
+  off = 0;
+  while (off < len) {
+    int n = send(fd, cmd + off, len - off);
+    if (n < 0) {
+      if (errno == EINTR)
+        continue;
+      return -1;
+    }
+    if (n == 0)
+      return -1;
+    off += (size_t)n;
+  }
+  return 0;
 }
 
 static int
@@ -2151,7 +2275,11 @@ x11_cmd(Display *dpy, const char *cmd, char *resp, int maxlen)
   if (!dpy || dpy->fd < 0)
     return -1;
   x11dbg("x11:cmd:begin '%s'", cmd ? cmd : "(null)");
-  if (x11_drain_draw_replies(dpy) < 0)
+  /* Flush any buffered draw commands before sending a synchronous request.
+   * We do NOT drain pending_draw_replies here — the response loop below will
+   * consume 'OK draw'/'OK text'/'OK copy_area' lines via
+   * x11_handle_unsolicited_line, eliminating head-of-line blocking. */
+  if (x11_flush_draw_batch(dpy) < 0)
     return -1;
   if (x11_send(dpy->fd, cmd) < 0)
     return -1;
@@ -2271,6 +2399,11 @@ XOpenDisplay(char *display_name)
   dpy->event_count = 0;
   dpy->rxlen = 0;
   dpy->pending_draw_replies = 0;
+  dpy->draw_batch_cap = X11_DRAW_BATCH_CAP;
+  dpy->draw_batch_buf = malloc((size_t)dpy->draw_batch_cap);
+  if (!dpy->draw_batch_buf)
+    goto fail;
+  dpy->draw_batch_len = 0;
   g_x11_dbg_count = 0;
   x11dbg("x11:open ready fd=%d root=%lu size=%dx%d", dpy->fd, dpy->root, dpy->width, dpy->height);
   g_display = dpy;
@@ -2283,6 +2416,8 @@ fail:
     free(dpy->event_queue);
   if (dpy->rxbuf)
     free(dpy->rxbuf);
+  if (dpy->draw_batch_buf)
+    free(dpy->draw_batch_buf);
   free(dpy);
   return 0;
 }
@@ -2321,8 +2456,9 @@ XSync(Display *display, Bool discard)
 int
 XFlush(Display *display)
 {
-  (void)display;
-  return 0;
+  if (!display)
+    return 0;
+  return x11_flush_draw_batch(display) < 0 ? -1 : 0;
 }
 
 Window
@@ -3208,6 +3344,14 @@ XGetWindowProperty(Display *display, Window w, Atom property,
   unsigned long copy_bytes;
   char *space;
   const char *name = atom_to_name(property);
+  int track_title_prop;
+
+  track_title_prop = (property == XInternAtom(display, "WM_CLASS", False) ||
+                      property == XInternAtom(display, "WM_NAME", False) ||
+                      property == XInternAtom(display, "_NET_WM_NAME", False));
+
+  if (track_title_prop)
+    x11consolecrit("x11:getprop begin wid=%u name=%s req_type=%lu", (uint)w, name, (unsigned long)req_type);
 
   if (!display || !prop_return)
     return -1;
@@ -3215,6 +3359,9 @@ XGetWindowProperty(Display *display, Window w, Atom property,
   snprintf(cmd, sizeof(cmd), "GET_PROPERTY %u %s\n", (uint)w, name);
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return -1;
+
+  if (track_title_prop)
+    x11consolecrit("x11:getprop resp wid=%u line='%s'", (uint)w, line);
 
   if (strncmp(line, "ERR no-such-property", 20) == 0) {
     *prop_return = 0;
@@ -3237,6 +3384,10 @@ XGetWindowProperty(Display *display, Window w, Atom property,
   all_format = 8;
   if (x11_prop_unpack(space, &all_type, &all_format, &all_nitems, &all_bytes) < 0)
     return -1;
+
+  if (track_title_prop)
+    x11consolecrit("x11:getprop unpack wid=%u type=%lu fmt=%d nitems=%lu", (uint)w,
+                   (unsigned long)all_type, all_format, all_nitems);
 
   if (req_type != 0 && req_type != all_type) {
     if (actual_type_return) *actual_type_return = all_type;
@@ -3267,11 +3418,26 @@ XGetWindowProperty(Display *display, Window w, Atom property,
   copy_items = want_items;
   copy_bytes = copy_items * (unsigned long)unit;
 
+  if (!del && start_item == 0 && copy_items == all_nitems) {
+    *prop_return = all_bytes;
+    if (actual_type_return) *actual_type_return = all_type;
+    if (actual_format_return) *actual_format_return = all_format;
+    if (nitems_return) *nitems_return = copy_items;
+    if (bytes_after_return) *bytes_after_return = 0;
+    if (track_title_prop)
+      x11consolecrit("x11:getprop fast-return wid=%u bytes=%lu ptr=%p", (uint)w,
+                     copy_bytes, *prop_return);
+    return Success;
+  }
+
   *prop_return = (unsigned char *)malloc((size_t)copy_bytes + 1);
   if (!*prop_return) {
     XFree(all_bytes);
     return -1;
   }
+  if (track_title_prop)
+    x11consolecrit("x11:getprop copy-return wid=%u bytes=%lu src=%p dst=%p", (uint)w,
+                   copy_bytes, all_bytes, *prop_return);
   if (copy_bytes > 0)
     memmove(*prop_return, all_bytes + start_item * (unsigned long)unit, (size_t)copy_bytes);
   (*prop_return)[copy_bytes] = '\0';
@@ -3284,6 +3450,9 @@ XGetWindowProperty(Display *display, Window w, Atom property,
 
   if (del && (all_nitems - (start_item + copy_items) == 0))
     XDeleteProperty(display, w, property);
+  if (track_title_prop)
+    x11consolecrit("x11:getprop return wid=%u bytes=%lu ptr=%p", (uint)w,
+                   copy_bytes, *prop_return);
   XFree(all_bytes);
   return Success;
 }
@@ -3683,6 +3852,8 @@ Pixmap XCreatePixmap(Display *display, Drawable d, unsigned int width, unsigned 
   }
 
   pm->id = (Pixmap)pmid;
+  x11consolecrit("x11:create-pixmap drawable=%u server_id=%u size=%ux%u depth=%u",
+                 (uint)d, pmid, width, height, depth);
   x11dbg("x11:create-pixmap ok local->server id=%u size=%ux%u depth=%u", pmid, width, height, depth);
   
   return pm->id;
@@ -3696,6 +3867,9 @@ int XFreePixmap(Display *display, Pixmap pixmap) {
   pm = x11_find_pixmap(pixmap);
   if (!pm)
     return 0;
+
+  x11consolecrit("x11:free-pixmap id=%u size=%ux%u", (uint)pixmap,
+                 pm->width, pm->height);
   
   /* Send DESTROY_PIXMAP command to x6 server */
   snprintf(cmd, sizeof(cmd), "DESTROY_PIXMAP %u\n", pixmap);
@@ -4508,12 +4682,7 @@ int XFillRectangle(Display *display, Drawable d, GC gc, int x, int y, unsigned i
   gs = x11_find_gc(gc);
   color = (unsigned int)(gs ? (gs->fg & 0x00ffffffUL) : 0x00ffffffU);
   snprintf(cmd, sizeof(cmd), "DRAW_RECT %u %d %d %u %u %u\n", (uint)d, x, y, width, height, color);
-  if (x11_send(display->fd, cmd) < 0)
-    return -1;
-  display->pending_draw_replies++;
-  x11dbg("x11:draw-rect d=%u x=%d y=%d w=%u h=%u color=%u pending=%d",
-         (uint)d, x, y, width, height, color, display->pending_draw_replies);
-  return 0;
+  return x11_batch_draw(display, cmd);
 }
 int XDrawRectangle(Display *display, Drawable d, GC gc, int x, int y, unsigned int width, unsigned int height) {
   if (width == 0 || height == 0)
@@ -4549,49 +4718,22 @@ int XDrawString(Display *display, Drawable d, GC gc, int x, int y, const char *s
   gs = x11_find_gc(gc);
   color = (unsigned int)(gs ? (gs->fg & 0x00ffffffUL) : 0x00ffffffU);
   snprintf(cmd, sizeof(cmd), "DRAW_TEXT %u %d %d %u %d %.*s\n", (uint)d, x, y, color, n, n, string);
-  if (x11_send(display->fd, cmd) < 0)
-    return -1;
-  display->pending_draw_replies++;
-  if ((g_x11_draw_call_count++ % 256) == 0) {
-    x11dbg("x11:draw-text(sampled) d=%u x=%d y=%d len=%d color=%u pending=%d",
-           (uint)d, x, y, n, color, display->pending_draw_replies);
-  }
-  return 0;
+  g_x11_draw_call_count++;
+  return x11_batch_draw(display, cmd);
 }
 
 int XDrawLine(Display *display, Drawable d, GC gc, int x1, int y1, int x2, int y2) {
-  int dx;
-  int sx;
-  int dy;
-  int sy;
-  int err;
+  char cmd[X6_BUF_SIZE];
+  struct x11_gc_state *gs;
+  unsigned int color;
 
-  dx = x2 - x1;
-  sx = dx >= 0 ? 1 : -1;
-  dx = dx >= 0 ? dx : -dx;
-
-  dy = y2 - y1;
-  sy = dy >= 0 ? 1 : -1;
-  dy = dy >= 0 ? dy : -dy;
-
-  err = dx - dy;
-  while (1) {
-    XFillRectangle(display, d, gc, x1, y1, 1, 1);
-    if (x1 == x2 && y1 == y2)
-      break;
-    {
-      int e2 = err << 1;
-      if (e2 > -dy) {
-        err -= dy;
-        x1 += sx;
-      }
-      if (e2 < dx) {
-        err += dx;
-        y1 += sy;
-      }
-    }
-  }
-  return 0;
+  if (!display)
+    return -1;
+  gs = x11_find_gc(gc);
+  color = (unsigned int)(gs ? (gs->fg & 0x00ffffffUL) : 0x00ffffffU);
+  snprintf(cmd, sizeof(cmd), "DRAW_LINE %u %d %d %d %d %u\n",
+           (uint)d, x1, y1, x2, y2, color);
+  return x11_batch_draw(display, cmd);
 }
 
 int XDrawLines(Display *display, Drawable d, GC gc, XPoint *points, int npoints, int mode) {
@@ -5090,10 +5232,7 @@ int XClearArea(Display *display, Window w, int x, int y,
     return 0;
 
   snprintf(cmd, sizeof(cmd), "DRAW_RECT %u %d %d %u %u %u\n", (uint)w, x, y, width, height, 0x000000U);
-  if (x11_send(display->fd, cmd) < 0)
-    return -1;
-  display->pending_draw_replies++;
-  return 0;
+  return x11_batch_draw(display, cmd);
 }
 
 int XClearWindow(Display *display, Window w) {
@@ -5103,27 +5242,36 @@ int XClearWindow(Display *display, Window w) {
 int XCopyArea(Display *display, Drawable src, Drawable dest, GC gc, int src_x, int src_y, unsigned int width, unsigned int height, int dest_x, int dest_y) {
   struct x11_gc_state *gs;
   char cmd[256];
-  char response[32];
-  int ret;
+  int trace_console;
   
   (void)display;
   
   gs = x11_find_gc(gc);
   if (!gs)
     return 0;
+
+  trace_console = !((uint)dest == 2U && dest_y == 0 && height <= 32U);
   
   /* Send COPY_AREA command to x6 server
    * Format: COPY_AREA <src> <dest> <src_x> <src_y> <width> <height> <dest_x> <dest_y>
    */
   snprintf(cmd, sizeof(cmd), "COPY_AREA %lu %lu %d %d %u %u %d %d\n",
            src, dest, src_x, src_y, width, height, dest_x, dest_y);
+  if (trace_console) {
+    x11consolecrit("x11:copy-area src=%u dst=%u src_xy=%d,%d wh=%u,%u dst_xy=%d,%d",
+                   (uint)src, (uint)dest, src_x, src_y, width, height, dest_x, dest_y);
+  }
   x11dbg("x11:copy-area src=%lu dst=%lu src_xy=%d,%d wh=%u,%u dst_xy=%d,%d",
          src, dest, src_x, src_y, width, height, dest_x, dest_y);
-  
-  response[0] = '\0';
-  ret = x11_cmd(display, cmd, response, sizeof(response));
-  x11dbg("x11:copy-area resp ret=%d line='%s'", ret, response);
-  return ret < 0 ? -1 : 0;
+
+  if (!display)
+    return -1;
+  if (x11_batch_draw(display, cmd) < 0) {
+    x11consolecrit("x11:copy-area resp src=%u dst=%u ret=-1 line='send-failed'",
+                   (uint)src, (uint)dest);
+    return -1;
+  }
+  return 0;
 }
 
 int XCopyPlane(Display *display, Drawable src, Drawable dest, GC gc,
@@ -5563,12 +5711,16 @@ int XSetWMNormalHints(Display *display, Window w, XSizeHints *hints) {
   if (!display || !hints)
     return 0;
   n = snprintf(buf, sizeof(buf),
-               "flags=%d min=%dx%d max=%dx%d base=%dx%d inc=%dx%d",
+               "flags=%ld size=%dx%d min=%dx%d max=%dx%d base=%dx%d inc=%dx%d pos=%d,%d gravity=%d aspect=%d/%d:%d/%d",
                hints->flags,
+               hints->width, hints->height,
                hints->min_width, hints->min_height,
                hints->max_width, hints->max_height,
                hints->base_width, hints->base_height,
-               hints->width_inc, hints->height_inc);
+               hints->width_inc, hints->height_inc,
+               hints->x, hints->y, hints->win_gravity,
+               hints->min_aspect.x, hints->min_aspect.y,
+               hints->max_aspect.x, hints->max_aspect.y);
   if (n < 0)
     return 0;
   return XChangeProperty(display, w, XA_WM_NORMAL_HINTS, XA_STRING, 8,
@@ -5593,26 +5745,54 @@ int XGetClassHint(Display *display, Window w, XClassHint *class_hint_return) {
   unsigned long nitems = 0;
   Atom actual = 0;
   int fmt = 0;
-  char *sep;
+  const char *raw;
+  unsigned long name_len;
+  unsigned long class_len;
+  unsigned long i;
   if (!class_hint_return) return 0;
   class_hint_return->res_name = 0;
   class_hint_return->res_class = 0;
+  x11consolecrit("x11:getclasshint enter wid=%u", (uint)w);
   if (!display)
     return 1;
   if (XGetWindowProperty(display, w, XInternAtom(display, "WM_CLASS", False),
                          0, 256, False, XA_STRING, &actual, &fmt, &nitems, 0, &prop) != Success)
     return 1;
+  x11consolecrit("x11:getclasshint fetched wid=%u actual=%lu fmt=%d nitems=%lu prop=%p",
+                 (uint)w, (unsigned long)actual, fmt, nitems, prop);
   if (!prop)
     return 1;
-  sep = strchr((char *)prop, ',');
-  if (sep) {
-    *sep = '\0';
-    class_hint_return->res_name = strdup((char *)prop);
-    class_hint_return->res_class = strdup(sep + 1);
-  } else {
-    class_hint_return->res_name = strdup((char *)prop);
-    class_hint_return->res_class = 0;
+
+  raw = (const char *)prop;
+  name_len = 0;
+  class_len = 0;
+
+  /* Support both auxv6's comma-separated form and ICCCM's NUL-separated form. */
+  for (i = 0; i < nitems; i++) {
+    if (raw[i] == '\0' || raw[i] == ',')
+      break;
   }
+  name_len = i;
+  x11consolecrit("x11:getclasshint split wid=%u name_len=%lu", (uint)w, name_len);
+
+  if (i < nitems) {
+    unsigned long class_start = i + 1;
+    while (class_start < nitems && raw[class_start] == '\0')
+      class_start++;
+    if (class_start < nitems)
+      class_len = nitems - class_start;
+    x11consolecrit("x11:getclasshint class-range wid=%u class_start=%lu class_len=%lu", (uint)w,
+                   class_start, class_len);
+    if (class_len > 0)
+      class_hint_return->res_class = strndup(raw + class_start, class_len);
+  }
+
+  if (name_len > 0)
+    class_hint_return->res_name = strndup(raw, name_len);
+
+  x11consolecrit("x11:getclasshint done wid=%u name=%p class=%p", (uint)w,
+                 class_hint_return->res_name, class_hint_return->res_class);
+
   XFree(prop);
   return 1;
 }
@@ -5622,24 +5802,32 @@ int XGetTextProperty(Display *display, Window w, XTextProperty *text_prop_return
   Atom actual = 0;
   int fmt = 0;
   if (!text_prop_return) return 0;
+  x11consolecrit("x11:gettextprop enter wid=%u atom=%lu", (uint)w, (unsigned long)property);
   if (XGetWindowProperty(display, w, property, 0, 1024, False, 0, &actual, &fmt, &nitems, 0, &prop) != Success)
     return 0;
+  if (!prop) {
+    x11consolecrit("x11:gettextprop empty wid=%u atom=%lu", (uint)w, (unsigned long)property);
+    return 0;
+  }
   text_prop_return->value = (char *)prop;
   text_prop_return->encoding = actual;
   text_prop_return->format = fmt;
   text_prop_return->nitems = nitems;
+  x11consolecrit("x11:gettextprop done wid=%u atom=%lu actual=%lu fmt=%d nitems=%lu value=%p",
+                 (uint)w, (unsigned long)property, (unsigned long)actual, fmt, nitems, prop);
   return 1;
 }
 int XmbTextPropertyToTextList(Display *display, XTextProperty *text_prop, char ***list_return, int *count_return) {
   (void)display;
   if (!text_prop || !list_return || !count_return || !text_prop->value) return 0;
-  *list_return = malloc(sizeof(char *));
+  *list_return = calloc(2, sizeof(char *));
   if (!*list_return) return 0;
   (*list_return)[0] = strdup(text_prop->value);
   if (!(*list_return)[0]) {
     free(*list_return);
     return 0;
   }
+  (*list_return)[1] = 0;
   *count_return = 1;
   return Success;
 }
@@ -5978,6 +6166,8 @@ int XGetWMProtocols(Display *display, Window w, Atom **protocols_return, int *co
 }
 XWMHints *XGetWMHints(Display *display, Window w) {
   XWMHints *h = malloc(sizeof(*h));
+  char cmd[X6_BUF_SIZE];
+  char line[X6_BUF_SIZE];
   unsigned char *prop = 0;
   unsigned long nitems = 0;
   Atom actual = 0;
@@ -5987,8 +6177,13 @@ XWMHints *XGetWMHints(Display *display, Window w) {
   h->input = 1;
   if (!display)
     return h;
-  if (XGetWindowProperty(display, w, XA_WM_HINTS, 0, 128, False, XA_STRING,
-                         &actual, &fmt, &nitems, 0, &prop) == Success && prop) {
+  snprintf(cmd, sizeof(cmd), "GET_PROPERTY %u %s\n", (uint)w, atom_to_name(XA_WM_HINTS));
+  if (x11_cmd(display, cmd, line, sizeof(line)) == 0 && strncmp(line, "VALUE ", 6) == 0) {
+    char *space = strchr(line + 6, ' ');
+    if (space)
+      x11_prop_unpack(space + 1, &actual, &fmt, &nitems, &prop);
+  }
+  if (prop) {
     long flags = 0;
     int input = 1;
     int istate = 0;
@@ -6011,27 +6206,60 @@ int XSetWMHints(Display *display, Window w, XWMHints *wmhints) {
                          PropModeReplace, (unsigned char *)buf, (int)strlen(buf));
 }
 int XGetWMNormalHints(Display *display, Window w, XSizeHints *hints_return, long *supplied_return) {
+  char cmd[X6_BUF_SIZE];
+  char line[X6_BUF_SIZE];
   unsigned char *prop = 0;
   unsigned long nitems = 0;
   Atom actual = 0;
   int fmt = 0;
+  long flags = 0;
+  int matched;
   if (hints_return) memset(hints_return, 0, sizeof(*hints_return));
-  if (!display)
-    return 1;
-  if (hints_return &&
-      XGetWindowProperty(display, w, XA_WM_NORMAL_HINTS, 0, 256, False, XA_STRING,
-                         &actual, &fmt, &nitems, 0, &prop) == Success && prop) {
-    sscanf((char *)prop,
-           "flags=%d min=%dx%d max=%dx%d base=%dx%d inc=%dx%d",
-           &hints_return->flags,
+  if (!display || !hints_return)
+    return 0;
+  x11consolecrit("x11:getwmnormalhints enter wid=%u", (uint)w);
+  snprintf(cmd, sizeof(cmd), "GET_PROPERTY %u %s\n", (uint)w, atom_to_name(XA_WM_NORMAL_HINTS));
+  if (x11_cmd(display, cmd, line, sizeof(line)) == 0 && strncmp(line, "VALUE ", 6) == 0) {
+    char *space = strchr(line + 6, ' ');
+    if (space)
+      x11_prop_unpack(space + 1, &actual, &fmt, &nitems, &prop);
+  }
+  if (prop) {
+    matched = sscanf((char *)prop,
+           "flags=%ld size=%dx%d min=%dx%d max=%dx%d base=%dx%d inc=%dx%d pos=%d,%d gravity=%d aspect=%d/%d:%d/%d",
+           &flags,
+           &hints_return->width, &hints_return->height,
            &hints_return->min_width, &hints_return->min_height,
            &hints_return->max_width, &hints_return->max_height,
            &hints_return->base_width, &hints_return->base_height,
-           &hints_return->width_inc, &hints_return->height_inc);
+           &hints_return->width_inc, &hints_return->height_inc,
+           &hints_return->x, &hints_return->y,
+           &hints_return->win_gravity,
+           &hints_return->min_aspect.x, &hints_return->min_aspect.y,
+           &hints_return->max_aspect.x, &hints_return->max_aspect.y);
+    if (matched < 9) {
+      matched = sscanf((char *)prop,
+             "flags=%ld min=%dx%d max=%dx%d base=%dx%d inc=%dx%d",
+             &flags,
+             &hints_return->min_width, &hints_return->min_height,
+             &hints_return->max_width, &hints_return->max_height,
+             &hints_return->base_width, &hints_return->base_height,
+             &hints_return->width_inc, &hints_return->height_inc);
+    }
+    hints_return->flags = flags;
+    x11consolecrit("x11:getwmnormalhints done wid=%u matched=%d flags=%ld min=%dx%d max=%dx%d base=%dx%d inc=%dx%d",
+                   (uint)w, matched, hints_return->flags,
+                   hints_return->min_width, hints_return->min_height,
+                   hints_return->max_width, hints_return->max_height,
+                   hints_return->base_width, hints_return->base_height,
+                   hints_return->width_inc, hints_return->height_inc);
     XFree(prop);
+    if (supplied_return) *supplied_return = hints_return->flags;
+    return matched >= 9 ? 1 : 0;
   }
+  x11consolecrit("x11:getwmnormalhints empty wid=%u", (uint)w);
   if (supplied_return) *supplied_return = 0;
-  return 1;
+  return 0;
 }
 int XSetClassHint(Display *display, Window w, XClassHint *class_hints) {
   char buf[256];
@@ -6152,6 +6380,13 @@ void XftDrawSetClip(XftDraw *draw, void *clip) {
 void XftDrawGlyphFontSpec(XftDraw *draw, XftColor *color, XftGlyphFontSpec *glyphs, int nglyphs) {
   GC gc;
   int i;
+  int run_start;
+  int run_len;
+  int run_y;
+  int run_x;
+  int run_advance;
+  XftFont *run_font;
+  char textbuf[512];
 
   if (!draw || !draw->display || !glyphs || nglyphs <= 0)
     return;
@@ -6161,18 +6396,62 @@ void XftDrawGlyphFontSpec(XftDraw *draw, XftColor *color, XftGlyphFontSpec *glyp
     return;
   XSetForeground(draw->display, gc, color ? color->pixel : 0x00ffffffUL);
 
+  run_start = -1;
+  run_len = 0;
+  run_y = 0;
+  run_x = 0;
+  run_advance = 0;
+  run_font = 0;
+
   for (i = 0; i < nglyphs; i++) {
     char ch;
     unsigned int g = glyphs[i].glyph;
+    int glyph_advance;
+    int contiguous;
+
     if (!x11_point_in_clip(draw, glyphs[i].x, glyphs[i].y))
-      continue;
+      contiguous = 0;
+    else
+      contiguous = 1;
+
     if (g >= 32 && g < 127)
       ch = (char)g;
     else
       ch = '?';
-    XDrawString(draw->display, draw->drawable, gc,
-                glyphs[i].x, glyphs[i].y, &ch, 1);
+
+    glyph_advance = (glyphs[i].font && glyphs[i].font->max_advance_width > 0)
+                    ? glyphs[i].font->max_advance_width
+                    : 8;
+
+    if (run_start >= 0 && contiguous) {
+      int expected_x = run_x + run_len * run_advance;
+      if (glyphs[i].y != run_y || glyphs[i].x != expected_x ||
+          glyphs[i].font != run_font || glyph_advance != run_advance ||
+          run_len >= (int)(sizeof(textbuf) - 1)) {
+        XDrawString(draw->display, draw->drawable, gc,
+                    run_x, run_y, textbuf, run_len);
+        run_start = -1;
+        run_len = 0;
+      }
+    }
+
+    if (!contiguous)
+      continue;
+
+    if (run_start < 0) {
+      run_start = i;
+      run_len = 0;
+      run_x = glyphs[i].x;
+      run_y = glyphs[i].y;
+      run_font = glyphs[i].font;
+      run_advance = glyph_advance;
+    }
+
+    textbuf[run_len++] = ch;
   }
+
+  if (run_start >= 0 && run_len > 0)
+    XDrawString(draw->display, draw->drawable, gc, run_x, run_y, textbuf, run_len);
 }
 
 int XftColorAllocValue(Display *display, Visual *visual, Colormap colormap, XRenderColor *color, XftColor *result) {

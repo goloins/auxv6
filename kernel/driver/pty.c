@@ -487,6 +487,7 @@ pty_filewrite(struct file *f, char *src, int n)
   } else {
     out = &pty->to_master;
     peer_refs = pty->master_refs;
+    cprintf("pty:filewrite SLAVE→to_master n=%d pid=%d w=%u r=%u\n", n, pcur ? pcur->pid : -1, out->w, out->r);
   }
   if(peer_refs == 0){
     release(&ptys.lock);
@@ -562,8 +563,14 @@ pty_poll_events(struct file *f, int *rd, int *wr, int *err)
     peer_refs = pty->master_refs;
   }
 
-  if(rd && (in->w != in->r || peer_refs == 0))
+  if(rd && (in->w != in->r || peer_refs == 0)) {
     *rd = 1;
+    /* Debug: trace when PTY data becomes readable. */
+    if(in->w != in->r && f->pty_side == PTY_SIDE_MASTER) {
+      int dbg_avail = (int)(in->w - in->r);
+      cprintf("pty:poll_events:master rd=1 avail=%d w=%u r=%u\n", dbg_avail, in->w, in->r);
+    }
+  }
   if(wr && out->w - out->r < PTY_BUF && peer_refs > 0)
     *wr = 1;
   if(err && peer_refs == 0)
@@ -591,10 +598,12 @@ pty_open(struct file *f, int minor)
       pty->master_refs = 1;
       f->pty_side = PTY_SIDE_MASTER;
       f->pty_index = i;
+      cprintf("pty:open:master SUCCESS ptmx i=%d\n", i);
       release(&ptys.lock);
       return 0;
     }
     release(&ptys.lock);
+    cprintf("pty:open:master FAIL no free slots\n");
     return -1;
   }
 
@@ -607,12 +616,15 @@ pty_open(struct file *f, int minor)
   pty = &ptys.pair[i];
   if(!pty->allocated || pty->master_refs <= 0){
     release(&ptys.lock);
+    cprintf("pty:open:slave FAIL not allocated or no master refs. minor=%d i=%d allocated=%d master_refs=%d\n", 
+      minor, i, pty->allocated, pty->master_refs);
     return -1;
   }
 
   pty->slave_refs++;
   f->pty_side = PTY_SIDE_SLAVE;
   f->pty_index = i;
+  cprintf("pty:open:slave SUCCESS minor=%d i=%d slave_refs=%d\n", minor, i, pty->slave_refs);
   release(&ptys.lock);
   return 0;
 }

@@ -1,6 +1,6 @@
 # auxv6 Man Pages
 
-Generated: 2026-04-06
+Generated: 2026-04-09
 
 ## Scope
 - Enriched all utility man pages using source-derived usage and option extraction from user/*.c.
@@ -36,6 +36,7 @@ Generated: 2026-04-06
 | devman | targetfs/usr/share/man/devman.md | 2026-04-02 | user/devman.c | source-derived usage/options |
 | df | targetfs/usr/share/man/df.md | 2026-04-01 | user/df.c | source-derived usage/options |
 | dmesg | targetfs/usr/share/man/dmesg.md | 2026-04-01 | user/dmesg.c | source-derived usage/options |
+| dmenu | targetfs/usr/share/man/dmenu.md | 2026-04-09 | ports/dmenu-5.4/dmenu.c | first-class auxv6 build of the vendored X11 menu; `/usr/bin/dmenu_run` and `/usr/bin/dmenu_path` are staged alongside it |
 | echo | targetfs/usr/share/man/echo.md | 2026-04-01 | user/echo.c | source-derived usage/options |
 | find | targetfs/usr/share/man/find.md | 2026-04-06 | user/find.c | recursive file-tree walker with `-name/-path/-type/-mindepth/-maxdepth/-print` |
 | fatregress | targetfs/usr/share/man/fatregress.md | 2026-04-01 | user/fatregress.c | source-derived usage/options |
@@ -94,6 +95,7 @@ Generated: 2026-04-06
 | sgrep | targetfs/usr/share/man/sgrep.md | 2026-04-01 | ports/sbase/grep.c | upstream sbase port via auxv6 Makefile |
 | startx | targetfs/usr/share/man/startx.md | 2026-04-07 | user/startx.c | compiled wrapper that execs /bin/xinit; staged in /bin and /usr/bin |
 | stressfs | targetfs/usr/share/man/stressfs.md | 2026-04-01 | user/stressfs.c | source-derived usage/options |
+| stest | targetfs/usr/share/man/stest.md | 2026-04-09 | ports/dmenu-5.4/stest.c | dmenu helper utility used by `dmenu_path` to enumerate executable candidates |
 | su | targetfs/usr/share/man/su.md | 2026-04-01 | user/su.c | source-derived usage/options |
 | symlinktest | targetfs/usr/share/man/symlinktest.md | 2026-04-01 | user/symlinktest.c | source-derived usage/options |
 | tail | targetfs/usr/share/man/tail.md | 2026-04-01 | user/tail.c | source-derived usage/options |

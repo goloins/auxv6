@@ -214,13 +214,21 @@ static int x6_draw_rx_count;
 static int x6_draw_reply_tx_count;
 static uint x6_trace_mask;
 
+/* Deferred framebuffer dirty-rect: updated only in shadow RAM during a burst
+ * of small draw ops, then flushed to /dev/fb0 in one sequential write pass. */
+static int x6_fb_defer_dirty;
+static int x6_fb_defer_y0;
+static int x6_fb_defer_y1;
+
 static int
 x6_is_chatty_draw_cmd(const char *cmd)
 {
   if(!cmd)
     return 0;
   return strncmp(cmd, "DRAW_TEXT ", 10) == 0 ||
-         strncmp(cmd, "DRAW_RECT ", 10) == 0;
+         strncmp(cmd, "DRAW_RECT ", 10) == 0 ||
+         strncmp(cmd, "DRAW_LINE ", 10) == 0 ||
+         strncmp(cmd, "COPY_AREA ", 10) == 0;
 }
 
 static void
@@ -272,6 +280,47 @@ x6trace_console(uint trace_flag, const char *fmt, ...)
   line[n++] = '\n';
   line[n] = '\0';
   write(1, line, (size_t)n);
+}
+
+static void
+x6consolecrit(const char *fmt, ...)
+{
+  char line[320];
+  int n;
+  va_list ap;
+
+  va_start(ap, fmt);
+  n = vsnprintf(line, sizeof(line), fmt, ap);
+  va_end(ap);
+  if(n < 0)
+    return;
+  if((size_t)n >= sizeof(line))
+    n = (int)sizeof(line) - 1;
+  line[n++] = '\n';
+  line[n] = '\0';
+  write(1, line, (size_t)n);
+}
+
+static uint
+x6_pixmap_sample_nonzero(struct x6_pixmap *pm)
+{
+  int i;
+  int step;
+  uint seen;
+
+  if(!pm || !pm->pixels || pm->pixels_size <= 0)
+    return 0;
+
+  step = pm->pixels_size / 64;
+  if(step < 1)
+    step = 1;
+
+  seen = 0;
+  for(i = 0; i < pm->pixels_size; i += step) {
+    if((pm->pixels[i] & 0x00ffffffU) != 0)
+      seen++;
+  }
+  return seen;
 }
 
 // WM state (Phase 2.1b: SubstructureRedirect semantics)
@@ -713,6 +762,57 @@ x6_cursor_refresh(void)
   x6_cursor_show();
 }
 
+/* Flush any pending deferred dirty framebuffer rows to /dev/fb0 in one
+ * sequential write pass.  Called once per command burst (end of poll
+ * iteration) so that batched small draws (e.g. Bresenham lines) don't
+ * each incur a separate seek+write syscall per pixel.
+ *
+ * This function is a no-op when there is no shadow buffer, no pending
+ * dirty region, or when we're not in FB mode. */
+static void
+x6_fb_flush_deferred(void)
+{
+  int y0;
+  int y1;
+  int r;
+  uint64_t off;
+  int was_drawn;
+
+  if(!x6_fb_defer_dirty)
+    return;
+  if(!x6_fb_shadow || x6_fb.fd < 0 || x6_backend != X6_BACKEND_FB) {
+    x6_fb_defer_dirty = 0;
+    return;
+  }
+
+  y0 = x6_fb_defer_y0;
+  y1 = x6_fb_defer_y1;
+  x6_fb_defer_dirty = 0;
+
+  if(y0 < 0) y0 = 0;
+  if(y1 >= x6_fb.height) y1 = x6_fb.height - 1;
+  if(y0 > y1)
+    return;
+
+  /* Remove cursor overlay so the blit uses clean shadow content, then
+   * re-draw it afterwards so it stays visible. */
+  was_drawn = x6_cursor.drawn;
+  if(was_drawn)
+    x6_cursor_hide();
+
+  off = (uint64_t)y0 * (uint64_t)x6_fb.stride;
+  if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) >= 0) {
+    for(r = y0; r <= y1; r++) {
+      size_t row_base = (size_t)r * (size_t)x6_fb_shadow_w;
+      write(x6_fb.fd, x6_fb_shadow + row_base,
+            (size_t)x6_fb.width * sizeof(uint));
+    }
+  }
+
+  if(was_drawn)
+    x6_cursor_show();
+}
+
 static int
 x6_parse_backend(const char *s)
 {
@@ -726,6 +826,33 @@ x6_parse_backend(const char *s)
     return X6_BACKEND_FB;
   return -1;
 }
+
+  /* Write a contiguous band of full-width shadow rows to /dev/fb0 in a single
+   * lseek + write pair.  Requires shadow buffer and no row-stride padding.
+   * Returns 0 on success, -1 if the write was skipped or failed. */
+  static int
+  x6_fb_shadow_flush_rows(int y0, int y1)
+  {
+    uint64_t off;
+    size_t nbytes;
+
+    if(!x6_fb_shadow || x6_fb.fd < 0 || x6_backend != X6_BACKEND_FB)
+      return -1;
+    if(x6_fb.stride != x6_fb.width * 4)
+      return -1;
+    if(y0 < 0) y0 = 0;
+    if(y1 >= x6_fb.height) y1 = x6_fb.height - 1;
+    if(y0 > y1)
+      return 0;
+
+    off = (uint64_t)y0 * (uint64_t)x6_fb.stride;
+    nbytes = (size_t)(y1 - y0 + 1) * (size_t)x6_fb.width * sizeof(uint);
+    if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) < 0)
+      return -1;
+    if(write(x6_fb.fd, x6_fb_shadow + (size_t)y0 * (size_t)x6_fb_shadow_w, nbytes) < 0)
+      return -1;
+    return 0;
+  }
 
 static int
 x6_clamp_int(int v, int lo, int hi)
@@ -1257,8 +1384,6 @@ x6_canvas_fill_pixels(int x, int y, int w, int h, uint pixel)
   c1 = x6_clamp_int(c1, 0, X6_CANVAS_COLS);
   r0 = x6_clamp_int(r0, 0, X6_CANVAS_ROWS);
   r1 = x6_clamp_int(r1, 0, X6_CANVAS_ROWS);
-  if(c1 <= c0 || r1 <= r0)
-    return;
 
   for(r = r0; r < r1; r++)
     for(c = c0; c < c1; c++)
@@ -1289,116 +1414,126 @@ x6_draw_text_pixels(int x, int baseline_y, uint color, const char *text, int len
     if(need_cursor_refresh)
       x6_cursor_hide();
     
-    // Use row-batched rendering: accumulate pixels per row, single syscall per row
-    cx = x;
-    for(i = 0; i < len; i++) {
-      const struct user_glyph *g;
-      int gx;
-      int gy;
-      int r;
+    /*
+     * Shadow-accumulate path: composite all glyphs directly into shadow RAM,
+     * then flush the entire dirty row band in a single lseek+write pair.
+     * For an 80-char line at 13px font height, the old per-glyph-per-row code
+     * issued ~1040 (lseek+write) pairs; this reduces it to 1 lseek + 1 write.
+     */
+    if(x6_fb_shadow && x6_fb.stride == x6_fb.width * 4) {
+      int dirty_y0 = x6_fb.height;
+      int dirty_y1 = -1;
+      uint p = color & 0x00ffffffU;
 
-      g = user_font_get_glyph(font, (uint)(uchar)text[i]);
-      if(!g)
-        continue;
-      gx = cx + g->bearing_x;
-      gy = baseline_y - g->bearing_y;
+      cx = x;
+      for(i = 0; i < len; i++) {
+        const struct user_glyph *g;
+        int gx, gy, r;
 
-      // Process each row of the glyph
-      for(r = 0; r < g->height; r++) {
-        int c;
-        int py;
-        int row_min_x;
-        int row_max_x;
-        uchar rowbits;
-        uint p;
-        uint64_t off;
+        g = user_font_get_glyph(font, (uint)(uchar)text[i]);
+        if(!g) { cx += font->size / 2; continue; }
+        gx = cx + g->bearing_x;
+        gy = baseline_y - g->bearing_y;
 
-        py = gy + r;
-        if(py < 0 || py >= x6_fb.height)
-          continue;
-        
-        rowbits = g->bitmap ? g->bitmap[r] : 0;
-        if(rowbits == 0)
-          continue;  // Skip empty rows
-        
-        // Find min/max x for this row
-        row_min_x = gx;
-        row_max_x = gx;
-        for(c = 0; c < g->width && c < 8; c++) {
-          if((rowbits & (1U << (7 - c))) != 0) {
-            int px = gx + c;
-            if(px < row_min_x) row_min_x = px;
-            if(px > row_max_x) row_max_x = px;
+        for(r = 0; r < g->height; r++) {
+          int c, py;
+          uchar rowbits;
+
+          py = gy + r;
+          if(py < 0 || py >= x6_fb.height) continue;
+          rowbits = g->bitmap ? g->bitmap[r] : 0;
+          if(rowbits == 0) continue;
+
+          for(c = 0; c < g->width && c < 8; c++) {
+            int px;
+            if((rowbits & (1U << (7 - c))) == 0) continue;
+            px = gx + c;
+            if(px < 0 || px >= x6_fb.width) continue;
+            x6_fb_shadow[(size_t)py * (size_t)x6_fb_shadow_w + (size_t)px] = p;
           }
+          if(py < dirty_y0) dirty_y0 = py;
+          if(py > dirty_y1) dirty_y1 = py;
         }
-        
-        // Clamp to screen bounds
-        if(row_min_x < 0) row_min_x = 0;
-        if(row_max_x >= x6_fb.width) row_max_x = x6_fb.width - 1;
-        if(row_min_x > row_max_x)
-          continue;
-        
-        // Fill row buffer with background then glyph pixels
-        int row_width = row_max_x - row_min_x + 1;
-        
-        // Ensure row buffer is large enough
-        if(row_width > x6_fb.rowcap) {
-          uint *nbuf = (uint *)malloc((size_t)row_width * sizeof(uint));
-          if(!nbuf)
-            goto text_fallback;
-          if(x6_fb.rowbuf)
-            free(x6_fb.rowbuf);
-          x6_fb.rowbuf = nbuf;
-          x6_fb.rowcap = row_width;
-        }
-        
-        // Prefill from the shadow framebuffer. Do not read back from /dev/fb0
-        // here: the device is not a reliable read source, and text compositing
-        // must treat the maintained shadow buffer as the source of truth.
-        if(x6_fb_shadow) {
-          int j;
-          size_t base = (size_t)py * (size_t)x6_fb_shadow_w + (size_t)row_min_x;
-          for(j = 0; j < row_width; j++)
-            x6_fb.rowbuf[j] = x6_fb_shadow[base + j];
-        } else {
-          // No shadow buffer; fill with black background
-          memset(x6_fb.rowbuf, 0, (size_t)row_width * sizeof(uint));
-        }
-        
-        // Overlay glyph pixels on the buffer
-        p = color & 0x00ffffffU;
-        for(c = 0; c < g->width && c < 8; c++) {
-          int px = gx + c;
-          if(px >= 0 && px < x6_fb.width && (rowbits & (1U << (7 - c))) != 0) {
-            x6_fb.rowbuf[px - row_min_x] = p;
-          }
-        }
-        
-        // Write back entire row in single syscall
-        off = (uint64_t)py * (uint64_t)x6_fb.stride + (uint64_t)row_min_x * 4ULL;
-        if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) < 0)
-          goto text_fallback;
-        if(write(x6_fb.fd, x6_fb.rowbuf, row_width * (int)sizeof(uint)) < 0)
-          goto text_fallback;
-        
-        // Update shadow buffer
-        if(x6_fb_shadow) {
-          int j;
-          size_t base = (size_t)py * (size_t)x6_fb_shadow_w + (size_t)row_min_x;
-          for(j = 0; j < row_width; j++)
-            x6_fb_shadow[base + j] = x6_fb.rowbuf[j];
-        }
+        cx += g->advance_x > 0 ? g->advance_x : g->width;
       }
 
-      cx += g->advance_x > 0 ? g->advance_x : g->width;
+      if(dirty_y0 <= dirty_y1)
+        x6_fb_shadow_flush_rows(dirty_y0, dirty_y1);
+
+    } else {
+      /* Fallback: per-glyph-row lseek+write (no shadow or padded stride). */
+      cx = x;
+      for(i = 0; i < len; i++) {
+        const struct user_glyph *g;
+        int gx, gy, r;
+
+        g = user_font_get_glyph(font, (uint)(uchar)text[i]);
+        if(!g) { cx += font->size / 2; continue; }
+        gx = cx + g->bearing_x;
+        gy = baseline_y - g->bearing_y;
+
+        for(r = 0; r < g->height; r++) {
+          int c, py, row_min_x, row_max_x, row_width, j;
+          uchar rowbits;
+          uint p2;
+          uint64_t off;
+          size_t base;
+
+          py = gy + r;
+          if(py < 0 || py >= x6_fb.height) continue;
+          rowbits = g->bitmap ? g->bitmap[r] : 0;
+          if(rowbits == 0) continue;
+
+          row_min_x = gx; row_max_x = gx;
+          for(c = 0; c < g->width && c < 8; c++) {
+            if((rowbits & (1U << (7 - c))) != 0) {
+              int px = gx + c;
+              if(px < row_min_x) row_min_x = px;
+              if(px > row_max_x) row_max_x = px;
+            }
+          }
+          if(row_min_x < 0) row_min_x = 0;
+          if(row_max_x >= x6_fb.width) row_max_x = x6_fb.width - 1;
+          if(row_min_x > row_max_x) continue;
+          row_width = row_max_x - row_min_x + 1;
+
+          if(row_width > x6_fb.rowcap) {
+            uint *nbuf = (uint *)malloc((size_t)row_width * sizeof(uint));
+            if(!nbuf) goto text_fallback;
+            if(x6_fb.rowbuf) free(x6_fb.rowbuf);
+            x6_fb.rowbuf = nbuf;
+            x6_fb.rowcap = row_width;
+          }
+
+          base = (size_t)py * (size_t)x6_fb_shadow_w + (size_t)row_min_x;
+          for(j = 0; j < row_width; j++)
+            x6_fb.rowbuf[j] = x6_fb_shadow ? x6_fb_shadow[base + j] : 0U;
+
+          p2 = color & 0x00ffffffU;
+          for(c = 0; c < g->width && c < 8; c++) {
+            int px = gx + c;
+            if(px >= 0 && px < x6_fb.width && (rowbits & (1U << (7 - c))) != 0)
+              x6_fb.rowbuf[px - row_min_x] = p2;
+          }
+
+          off = (uint64_t)py * (uint64_t)x6_fb.stride + (uint64_t)row_min_x * 4ULL;
+          if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) < 0) goto text_fallback;
+          if(write(x6_fb.fd, x6_fb.rowbuf, row_width * (int)sizeof(uint)) < 0)
+            goto text_fallback;
+          if(x6_fb_shadow) {
+            for(j = 0; j < row_width; j++)
+              x6_fb_shadow[base + j] = x6_fb.rowbuf[j];
+          }
+        }
+        cx += g->advance_x > 0 ? g->advance_x : g->width;
+      }
     }
-    
+
     if(need_cursor_refresh)
       x6_cursor_show();
     return;
-    
+
 text_fallback:
-    // Fallback to ANSI if row-batched rendering fails
     if(need_cursor_refresh)
       x6_cursor_show();
     goto ansi_fallback;
@@ -3076,6 +3211,7 @@ handle_one_command(int cfd, char *cmd)
       x6_send_line(cfd, "ERR no-slots\n");
       return;
     }
+    x6consolecrit("x6:pixmap create id=%u size=%dx%d depth=%d", pm->id, w, h, x);
     {
       char out[64];
       snprintf(out, sizeof(out), "OK create_pixmap pmid=%u\n", pm->id);
@@ -3085,6 +3221,7 @@ handle_one_command(int cfd, char *cmd)
   }
 
   if(sscanf(cmd, "DESTROY_PIXMAP %u", &id) == 1) {
+    x6consolecrit("x6:pixmap destroy id=%u", id);
     destroy_pixmap(id);
     x6_send_line(cfd, "OK destroy_pixmap\n");
     return;
@@ -3099,10 +3236,8 @@ handle_one_command(int cfd, char *cmd)
     if(strncmp(cmd, "DRAW_DRAW_RECT ", 15) == 0)
       x6dbg("x6:compat accepted malformed cmd='%s'", cmd);
     
-    if(uw == 0 || uh == 0 || uw > 4096U || uh > 4096U) {
-      x6_send_line(cfd, "OK draw\n");
+    if(uw == 0 || uh == 0 || uw > 4096U || uh > 4096U)
       return;
-    }
     w = (int)uw;
     h = (int)uh;
     
@@ -3120,21 +3255,16 @@ handle_one_command(int cfd, char *cmd)
             pm->pixels[py * pm->width + px] = color;
         }
       }
-      x6_send_line(cfd, "OK draw\n");
       return;
     }
     
     /* Otherwise, treat as window */
     if(id != (uint)wm_redirect_root) {
       win = find_window(id);
-      if(win == 0) {
-        x6_send_line(cfd, "ERR not-found\n");
+      if(win == 0)
         return;
-      }
-      if(!win->mapped) {
-        x6_send_line(cfd, "OK draw\n");
+      if(!win->mapped)
         return;
-      }
       ox = win->x;
       oy = win->y;
       x6dbg("x6:draw_rect win=%u mapped=%d local=%d,%d wh=%dx%d abs=%d,%d color=%u",
@@ -3145,8 +3275,105 @@ handle_one_command(int cfd, char *cmd)
       x6_enqueue_expose_notify(win, x, y, w, h);
       x6_enqueue_damage_notify(win, x, y, w, h);
     }
-    x6_send_line(cfd, "OK draw\n");
     return;
+  }
+
+  /* DRAW_LINE: Bresenham line rendered entirely on the server side.
+   * Format: DRAW_LINE <wid> <x1> <y1> <x2> <y2> <color>
+   * Pixels are accumulated directly in the shadow buffer and flushed to the
+   * framebuffer in a single sequential write pass, avoiding one lseek+write
+   * per pixel that the old per-pixel DRAW_RECT approach caused. */
+  {
+    int x1, y1, x2, y2;
+    int ox, oy;
+    int dx_l, dy_l, sx_l, sy_l, err_l;
+    uint p;
+    int dirty_y0, dirty_y1;
+    int need_cursor;
+
+    if(sscanf(cmd, "DRAW_LINE %u %d %d %d %d %u",
+              &id, &x1, &y1, &x2, &y2, &color) == 6) {
+      ox = 0; oy = 0;
+      win = 0;
+      if(id != (uint)wm_redirect_root) {
+        win = find_window(id);
+        if(!win) return;
+        if(!win->mapped) return;
+        ox = win->x; oy = win->y;
+      }
+
+      p = color & 0x00ffffffU;
+
+      if(x6_backend == X6_BACKEND_FB && x6_fb_shadow) {
+        /* Fast path: accumulate pixels in shadow, do one sequential FB flush */
+        dirty_y0 = x6_fb.height;
+        dirty_y1 = -1;
+
+        /* Pre-hide cursor for the bounding box of this line */
+        {
+          int bx = (x1 < x2 ? x1 : x2);
+          int by = (y1 < y2 ? y1 : y2);
+          int bw = (x1 < x2 ? x2 - x1 : x1 - x2) + 1;
+          int bh = (y1 < y2 ? y2 - y1 : y1 - y2) + 1;
+          need_cursor = x6_cursor_overlaps_rect(ox + bx, oy + by, bw, bh);
+        }
+        if(need_cursor)
+          x6_cursor_hide();
+
+        dx_l = x2 - x1; sx_l = dx_l >= 0 ? 1 : -1;
+        dx_l = dx_l >= 0 ? dx_l : -dx_l;
+        dy_l = y2 - y1; sy_l = dy_l >= 0 ? 1 : -1;
+        dy_l = dy_l >= 0 ? dy_l : -dy_l;
+        err_l = dx_l - dy_l;
+        while(1) {
+          int absx = ox + x1;
+          int absy = oy + y1;
+          if(absx >= 0 && absx < x6_fb.width &&
+             absy >= 0 && absy < x6_fb.height) {
+            x6_fb_shadow[(size_t)absy * (size_t)x6_fb_shadow_w + (size_t)absx] = p;
+            if(absy < dirty_y0) dirty_y0 = absy;
+            if(absy > dirty_y1) dirty_y1 = absy;
+          }
+          if(x1 == x2 && y1 == y2) break;
+          { int e2 = err_l << 1;
+            if(e2 > -dy_l) { err_l -= dy_l; x1 += sx_l; }
+            if(e2 < dx_l)  { err_l += dx_l; y1 += sy_l; }
+          }
+        }
+
+        /* Flush dirty rows sequentially: 1 lseek + N writes */
+        if(dirty_y0 <= dirty_y1) {
+          uint64_t off = (uint64_t)dirty_y0 * (uint64_t)x6_fb.stride;
+          if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) >= 0) {
+            int r;
+            for(r = dirty_y0; r <= dirty_y1; r++) {
+              size_t row_base = (size_t)r * (size_t)x6_fb_shadow_w;
+              write(x6_fb.fd, x6_fb_shadow + row_base,
+                    (size_t)x6_fb.width * sizeof(uint));
+            }
+          }
+        }
+
+        if(need_cursor)
+          x6_cursor_show();
+      } else {
+        /* Fallback: per-pixel canvas fill */
+        dx_l = x2 - x1; sx_l = dx_l >= 0 ? 1 : -1;
+        dx_l = dx_l >= 0 ? dx_l : -dx_l;
+        dy_l = y2 - y1; sy_l = dy_l >= 0 ? 1 : -1;
+        dy_l = dy_l >= 0 ? dy_l : -dy_l;
+        err_l = dx_l - dy_l;
+        while(1) {
+          x6_canvas_fill_pixels(ox + x1, oy + y1, 1, 1, color);
+          if(x1 == x2 && y1 == y2) break;
+          { int e2 = err_l << 1;
+            if(e2 > -dy_l) { err_l -= dy_l; x1 += sx_l; }
+            if(e2 < dx_l)  { err_l += dx_l; y1 += sy_l; }
+          }
+        }
+      }
+      return;
+    }
   }
 
   {
@@ -3163,7 +3390,6 @@ handle_one_command(int cfd, char *cmd)
         if(tlen > 0 || (x % 64) == 0)
           x6dbg("x6:draw_text pixmap=%u x=%d y=%d len=%d color=%u", id, x, y, tlen, color);
         x6_draw_text_pixmap(pm, x, y, color, text, tlen);
-        x6_send_line(cfd, "OK text\n");
         return;
       }
 
@@ -3171,14 +3397,10 @@ handle_one_command(int cfd, char *cmd)
       oy = 0;
       if(id != (uint)wm_redirect_root) {
         win = find_window(id);
-        if(win == 0) {
-          x6_send_line(cfd, "ERR not-found\n");
+        if(win == 0)
           return;
-        }
-        if(!win->mapped) {
-          x6_send_line(cfd, "OK text\n");
+        if(!win->mapped)
           return;
-        }
         ox = win->x;
         oy = win->y;
       }
@@ -3196,7 +3418,6 @@ handle_one_command(int cfd, char *cmd)
         x6_enqueue_expose_notify(win, x, y - X6_CELL_H, tlen * X6_CELL_W, X6_CELL_H);
         x6_enqueue_damage_notify(win, x, y - X6_CELL_H, tlen * X6_CELL_W, X6_CELL_H);
       }
-      x6_send_line(cfd, "OK text\n");
       return;
     }
   }
@@ -3218,13 +3439,13 @@ handle_one_command(int cfd, char *cmd)
     struct x6_pixmap *src_pm = 0;
     struct x6_window *dest_win = 0;
     int i, j;
+    int trace_console;
     uint pixel;
     
     /* Source should be a pixmap */
     src_pm = find_pixmap(src_id);
     if(!src_pm) {
       x6dbg("x6:copy_area src=%u missing", src_id);
-      x6_send_line(cfd, "ERR source-not-found\n");
       return;
     }
     
@@ -3232,7 +3453,6 @@ handle_one_command(int cfd, char *cmd)
     dest_win = find_window(dst_id);
     if(!dest_win) {
       x6dbg("x6:copy_area dst=%u missing", dst_id);
-      x6_send_line(cfd, "ERR dest-not-found\n");
       return;
     }
 
@@ -3241,10 +3461,17 @@ handle_one_command(int cfd, char *cmd)
           dst_id, dest_win->mapped,
           src_x, src_y, width, height, dest_x, dest_y,
           dest_win->x + dest_x, dest_win->y + dest_y);
+        trace_console = !(dst_id == 2U && dest_y == 0 && height <= 32U);
+        if(trace_console) {
+      x6consolecrit("x6:copy_area src=%u dst=%u mapped=%d wh=%u,%u src_nonzero=%u first=%06x mid=%06x",
+          src_id, dst_id, dest_win->mapped, width, height,
+          x6_pixmap_sample_nonzero(src_pm),
+          src_pm->pixels_size > 0 ? (src_pm->pixels[0] & 0x00ffffffU) : 0,
+          src_pm->pixels_size > 0 ? (src_pm->pixels[src_pm->pixels_size / 2] & 0x00ffffffU) : 0);
+        }
     
     if(!dest_win->mapped) {
-      /* Silently succeed even if dest not mapped (happens in redraw) */
-      x6_send_line(cfd, "OK copy_area\n");
+      /* Silently drop when destination is not mapped. */
       return;
     }
     
@@ -3258,71 +3485,90 @@ handle_one_command(int cfd, char *cmd)
       if(need_cursor_refresh)
         x6_cursor_hide();
 
-      for(j = 0; j < (int)height; j++) {
-        int sy;
-        int dy;
-        int sx0;
-        int dx0;
-        int copy_w;
-        uint64_t off;
-        int k;
+      /*
+       * Fast path: if the shadow buffer is available and stride is packed,
+       * composite all pixmap rows into shadow (no per-row FB writes), then
+       * flush the entire dirty band with a single lseek + write.  This
+       * converts N_rows lseek+write pairs into 2 syscalls total.
+       */
+      if(x6_fb_shadow && x6_fb.stride == x6_fb.width * 4) {
+        int first_dy = x6_fb.height;
+        int last_dy  = -1;
 
-        sy = src_y + j;
-        dy = dest_win->y + dest_y + j;
-        if(sy < 0 || sy >= src_pm->height)
-          continue;
-        if(dy < 0 || dy >= x6_fb.height)
-          continue;
-
-        sx0 = src_x;
-        dx0 = dest_win->x + dest_x;
-        copy_w = (int)width;
-
-        if(sx0 < 0) {
-          dx0 -= sx0;
-          copy_w += sx0;
-          sx0 = 0;
-        }
-        if(dx0 < 0) {
-          sx0 -= dx0;
-          copy_w += dx0;
-          dx0 = 0;
-        }
-        if(sx0 + copy_w > src_pm->width)
-          copy_w = src_pm->width - sx0;
-        if(dx0 + copy_w > x6_fb.width)
-          copy_w = x6_fb.width - dx0;
-        if(copy_w <= 0)
-          continue;
-
-        if(copy_w > x6_fb.rowcap) {
-          uint *nbuf;
-          nbuf = (uint *)malloc((size_t)copy_w * sizeof(uint));
-          if(!nbuf)
-            continue;
-          if(x6_fb.rowbuf)
-            free(x6_fb.rowbuf);
-          x6_fb.rowbuf = nbuf;
-          x6_fb.rowcap = copy_w;
-        }
-
-        for(k = 0; k < copy_w; k++) {
-          pixel = src_pm->pixels[sy * src_pm->width + (sx0 + k)] & 0x00ffffffU;
-          x6_fb.rowbuf[k] = pixel;
-        }
-
-        off = (uint64_t)dy * (uint64_t)x6_fb.stride + (uint64_t)dx0 * 4ULL;
-        if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) >= 0)
-          write(x6_fb.fd, x6_fb.rowbuf, copy_w * (int)sizeof(uint));
-
-        if(x6_fb_shadow) {
+        for(j = 0; j < (int)height; j++) {
+          int sy = src_y + j;
+          int dy = dest_win->y + dest_y + j;
+          int sx0, dx0, copy_w, k;
           size_t base;
+
+          if(sy < 0 || sy >= src_pm->height) continue;
+          if(dy < 0 || dy >= x6_fb.height)   continue;
+
+          sx0    = src_x;
+          dx0    = dest_win->x + dest_x;
+          copy_w = (int)width;
+
+          if(sx0 < 0)             { dx0 -= sx0; copy_w += sx0; sx0 = 0; }
+          if(dx0 < 0)             { sx0 -= dx0; copy_w += dx0; dx0 = 0; }
+          if(sx0 + copy_w > src_pm->width) copy_w = src_pm->width - sx0;
+          if(dx0 + copy_w > x6_fb.width)  copy_w = x6_fb.width   - dx0;
+          if(copy_w <= 0) continue;
+
           base = (size_t)dy * (size_t)x6_fb_shadow_w + (size_t)dx0;
           for(k = 0; k < copy_w; k++)
-            x6_fb_shadow[base + (size_t)k] = x6_fb.rowbuf[k];
+            x6_fb_shadow[base + (size_t)k] =
+              src_pm->pixels[sy * src_pm->width + sx0 + k] & 0x00ffffffU;
+
+          if(dy < first_dy) first_dy = dy;
+          if(dy > last_dy)  last_dy  = dy;
+        }
+
+        /* Single lseek + single write for the entire dirty band. */
+        if(first_dy <= last_dy)
+          x6_fb_shadow_flush_rows(first_dy, last_dy);
+
+      } else {
+        /* Fallback: per-row lseek+write (no shadow buffer or padded stride). */
+        for(j = 0; j < (int)height; j++) {
+          int sy = src_y + j;
+          int dy = dest_win->y + dest_y + j;
+          int sx0, dx0, copy_w, k;
+          uint64_t off;
+
+          if(sy < 0 || sy >= src_pm->height) continue;
+          if(dy < 0 || dy >= x6_fb.height)   continue;
+
+          sx0    = src_x;
+          dx0    = dest_win->x + dest_x;
+          copy_w = (int)width;
+
+          if(sx0 < 0)             { dx0 -= sx0; copy_w += sx0; sx0 = 0; }
+          if(dx0 < 0)             { sx0 -= dx0; copy_w += dx0; dx0 = 0; }
+          if(sx0 + copy_w > src_pm->width) copy_w = src_pm->width - sx0;
+          if(dx0 + copy_w > x6_fb.width)  copy_w = x6_fb.width   - dx0;
+          if(copy_w <= 0) continue;
+
+          if(copy_w > x6_fb.rowcap) {
+            uint *nbuf = (uint *)malloc((size_t)copy_w * sizeof(uint));
+            if(!nbuf) continue;
+            if(x6_fb.rowbuf) free(x6_fb.rowbuf);
+            x6_fb.rowbuf = nbuf;
+            x6_fb.rowcap = copy_w;
+          }
+          for(k = 0; k < copy_w; k++)
+            x6_fb.rowbuf[k] =
+              src_pm->pixels[sy * src_pm->width + sx0 + k] & 0x00ffffffU;
+
+          off = (uint64_t)dy * (uint64_t)x6_fb.stride + (uint64_t)dx0 * 4ULL;
+          if(lseek(x6_fb.fd, (off_t)off, SEEK_SET) >= 0)
+            write(x6_fb.fd, x6_fb.rowbuf, copy_w * (int)sizeof(uint));
+          if(x6_fb_shadow) {
+            size_t base = (size_t)dy * (size_t)x6_fb_shadow_w + (size_t)dx0;
+            for(k = 0; k < copy_w; k++)
+              x6_fb_shadow[base + (size_t)k] = x6_fb.rowbuf[k];
+          }
         }
       }
-
       if(need_cursor_refresh)
         x6_cursor_show();
     } else {
@@ -3369,7 +3615,6 @@ handle_one_command(int cfd, char *cmd)
     x6_enqueue_expose_notify(dest_win, dest_x, dest_y, (int)width, (int)height);
     x6_enqueue_damage_notify(dest_win, dest_x, dest_y, (int)width, (int)height);
     
-    x6_send_line(cfd, "OK copy_area\n");
     return;
   }
   }
@@ -4993,6 +5238,11 @@ main(int argc, char **argv)
       if(should_detach)
         x6_disconnect_client(client);
     }
+
+    /* Flush any deferred framebuffer dirty rows accumulated during the command
+     * burst above.  Must happen before event flush so clients get expose
+     * notifications only after pixels are visibly updated. */
+    x6_fb_flush_deferred();
 
     /* Flush queued async events after ingesting commands so synchronous
      * request/response traffic is not delayed by event backlog. */

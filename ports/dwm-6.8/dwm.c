@@ -324,10 +324,17 @@ applyrules(Client *c)
 	Monitor *m;
 	XClassHint ch = { NULL, NULL };
 
+	dwmdbg("dwm:applyrules enter win=%lu mon=%p name='%s'",
+		(unsigned long)(c ? c->win : 0), c ? c->mon : NULL,
+		(c && c->name[0]) ? c->name : "");
 	/* rule matching */
 	c->isfloating = 0;
 	c->tags = 0;
 	XGetClassHint(dpy, c->win, &ch);
+	dwmdbg("dwm:applyrules classhint win=%lu class='%s' instance='%s'",
+		(unsigned long)c->win,
+		ch.res_class ? ch.res_class : "(null)",
+		ch.res_name ? ch.res_name : "(null)");
 	class    = ch.res_class ? ch.res_class : broken;
 	instance = ch.res_name  ? ch.res_name  : broken;
 
@@ -348,7 +355,14 @@ applyrules(Client *c)
 		XFree(ch.res_class);
 	if (ch.res_name)
 		XFree(ch.res_name);
+	if (!c->mon) {
+		dwmdbg("dwm:applyrules no-monitor win=%lu leaving tags=0x%x",
+			(unsigned long)c->win, c->tags);
+		return;
+	}
 	c->tags = c->tags & TAGMASK ? c->tags & TAGMASK : c->mon->tagset[c->mon->seltags];
+	dwmdbg("dwm:applyrules complete win=%lu tags=0x%x floating=%d mon=%p",
+		(unsigned long)c->win, c->tags, c->isfloating, c->mon);
 }
 
 int
@@ -956,8 +970,13 @@ gettextprop(Window w, Atom atom, char *text, unsigned int size)
 	if (!text || size == 0)
 		return 0;
 	text[0] = '\0';
+	dwmdbg("dwm:gettextprop enter win=%lu atom=%lu size=%u", (unsigned long)w,
+		(unsigned long)atom, size);
 	if (!XGetTextProperty(dpy, w, &name, atom) || !name.nitems)
 		return 0;
+	dwmdbg("dwm:gettextprop fetched win=%lu atom=%lu encoding=%lu format=%d nitems=%lu value=%p",
+		(unsigned long)w, (unsigned long)atom, (unsigned long)name.encoding,
+		name.format, name.nitems, name.value);
 	if (name.encoding == XA_STRING) {
 		strncpy(text, (char *)name.value, size - 1);
 	} else if (XmbTextPropertyToTextList(dpy, &name, &list, &n) >= Success && n > 0 && *list) {
@@ -1082,7 +1101,17 @@ manage(Window w, XWindowAttributes *wa)
 	Client *c, *t = NULL;
 	Window trans = None;
 	XWindowChanges wc;
+	int hastrans;
 
+	dwmdbg("dwm:manage enter win=%lu attr={x=%d y=%d w=%d h=%d bw=%d override=%d map=%d}",
+		(unsigned long)w,
+		wa ? wa->x : -1,
+		wa ? wa->y : -1,
+		wa ? wa->width : -1,
+		wa ? wa->height : -1,
+		wa ? wa->border_width : -1,
+		wa ? wa->override_redirect : -1,
+		wa ? wa->map_state : -1);
 	c = ecalloc(1, sizeof(Client));
 	c->win = w;
 	/* geometry */
@@ -1093,12 +1122,29 @@ manage(Window w, XWindowAttributes *wa)
 	c->oldbw = wa->border_width;
 
 	updatetitle(c);
-	if (XGetTransientForHint(dpy, w, &trans) && (t = wintoclient(trans))) {
+	dwmdbg("dwm:manage title win=%lu name='%s'",
+		(unsigned long)w, c->name);
+	dwmdbg("dwm:manage step transient-query win=%lu", (unsigned long)w);
+	hastrans = XGetTransientForHint(dpy, w, &trans);
+	dwmdbg("dwm:manage transient-query win=%lu has=%d trans=%lu",
+		(unsigned long)w, hastrans, (unsigned long)trans);
+	if (hastrans && (t = wintoclient(trans))) {
 		c->mon = t->mon;
 		c->tags = t->tags;
+		dwmdbg("dwm:manage transient win=%lu trans=%lu client=%p mon=%p tags=0x%x",
+			(unsigned long)w, (unsigned long)trans, t, c->mon, c->tags);
 	} else {
+		dwmdbg("dwm:manage step applyrules win=%lu selmon=%p", (unsigned long)w, selmon);
 		c->mon = selmon;
 		applyrules(c);
+		dwmdbg("dwm:manage rules win=%lu selmon=%p mon=%p tags=0x%x floating=%d",
+			(unsigned long)w, selmon, c->mon, c->tags, c->isfloating);
+	}
+	if (!c->mon) {
+		dwmdbg("dwm:manage abort win=%lu no-monitor selmon=%p mons=%p",
+			(unsigned long)w, selmon, mons);
+		free(c);
+		return;
 	}
 
 	if (c->x + WIDTH(c) > c->mon->wx + c->mon->ww)
@@ -1108,32 +1154,55 @@ manage(Window w, XWindowAttributes *wa)
 	c->x = MAX(c->x, c->mon->wx);
 	c->y = MAX(c->y, c->mon->wy);
 	c->bw = borderpx;
+	dwmdbg("dwm:manage geom win=%lu mon={wx=%d wy=%d ww=%d wh=%d} client={x=%d y=%d w=%d h=%d bw=%d}",
+		(unsigned long)w, c->mon->wx, c->mon->wy, c->mon->ww, c->mon->wh,
+		c->x, c->y, c->w, c->h, c->bw);
 
 	wc.border_width = c->bw;
+	dwmdbg("dwm:manage step configure-border win=%lu", (unsigned long)w);
 	XConfigureWindow(dpy, w, CWBorderWidth, &wc);
+	dwmdbg("dwm:manage step set-border win=%lu", (unsigned long)w);
 	XSetWindowBorder(dpy, w, scheme[SchemeNorm][ColBorder].pixel);
+	dwmdbg("dwm:manage step configure win=%lu", (unsigned long)w);
 	configure(c); /* propagates border_width, if size doesn't change */
+	dwmdbg("dwm:manage step updatewindowtype win=%lu", (unsigned long)w);
 	updatewindowtype(c);
+	dwmdbg("dwm:manage step updatesizehints win=%lu", (unsigned long)w);
 	updatesizehints(c);
+	dwmdbg("dwm:manage step updatewmhints win=%lu", (unsigned long)w);
 	updatewmhints(c);
+	dwmdbg("dwm:manage step selectinput win=%lu", (unsigned long)w);
 	XSelectInput(dpy, w, EnterWindowMask|FocusChangeMask|PropertyChangeMask|StructureNotifyMask);
+	dwmdbg("dwm:manage step grabbuttons win=%lu", (unsigned long)w);
 	grabbuttons(c, 0);
 	if (!c->isfloating)
 		c->isfloating = c->oldstate = trans != None || c->isfixed;
-	if (c->isfloating)
+	if (c->isfloating) {
+		dwmdbg("dwm:manage step raise-floating win=%lu", (unsigned long)w);
 		XRaiseWindow(dpy, c->win);
+	}
+	dwmdbg("dwm:manage step attach win=%lu", (unsigned long)w);
 	attach(c);
 	attachstack(c);
+	dwmdbg("dwm:manage step clientlist-append win=%lu root=%lu atom=%lu", (unsigned long)w,
+		(unsigned long)root, (unsigned long)netatom[NetClientList]);
 	XChangeProperty(dpy, root, netatom[NetClientList], XA_WINDOW, 32, PropModeAppend,
 		(unsigned char *) &(c->win), 1);
+	dwmdbg("dwm:manage step moveresize win=%lu x=%d y=%d w=%d h=%d", (unsigned long)w,
+		c->x + 2 * sw, c->y, c->w, c->h);
 	XMoveResizeWindow(dpy, c->win, c->x + 2 * sw, c->y, c->w, c->h); /* some windows require this */
+	dwmdbg("dwm:manage step setclientstate win=%lu", (unsigned long)w);
 	setclientstate(c, NormalState);
 	if (c->mon == selmon)
 		unfocus(selmon->sel, 0);
 	c->mon->sel = c;
+	dwmdbg("dwm:manage step arrange win=%lu", (unsigned long)w);
 	arrange(c->mon);
+	dwmdbg("dwm:manage step map win=%lu", (unsigned long)w);
 	XMapWindow(dpy, c->win);
+	dwmdbg("dwm:manage step focus win=%lu", (unsigned long)w);
 	focus(NULL);
+	dwmdbg("dwm:manage complete win=%lu", (unsigned long)w);
 }
 
 void
@@ -1152,10 +1221,24 @@ maprequest(XEvent *e)
 	static XWindowAttributes wa;
 	XMapRequestEvent *ev = &e->xmaprequest;
 
+	dwmdbg("dwm:maprequest enter win=%lu", (unsigned long)ev->window);
 	if (!XGetWindowAttributes(dpy, ev->window, &wa) || wa.override_redirect)
+	{
+		dwmdbg("dwm:maprequest drop win=%lu attr-ok=%d override=%d",
+			(unsigned long)ev->window,
+			XGetWindowAttributes(dpy, ev->window, &wa),
+			wa.override_redirect);
 		return;
-	if (!wintoclient(ev->window))
+	}
+	dwmdbg("dwm:maprequest attrs win=%lu x=%d y=%d w=%d h=%d bw=%d map=%d",
+		(unsigned long)ev->window, wa.x, wa.y, wa.width, wa.height,
+		wa.border_width, wa.map_state);
+	if (!wintoclient(ev->window)) {
+		dwmdbg("dwm:maprequest managing new win=%lu", (unsigned long)ev->window);
 		manage(ev->window, &wa);
+	} else {
+		dwmdbg("dwm:maprequest known-client win=%lu", (unsigned long)ev->window);
+	}
 }
 
 void
@@ -2026,9 +2109,16 @@ updatesizehints(Client *c)
 	long msize;
 	XSizeHints size;
 
+	dwmdbg("dwm:updatesizehints enter win=%lu", (unsigned long)c->win);
 	if (!XGetWMNormalHints(dpy, c->win, &size, &msize))
 		/* size is uninitialized, ensure that size.flags aren't used */
 		size.flags = PSize;
+	dwmdbg("dwm:updatesizehints fetched win=%lu flags=%ld min=%dx%d max=%dx%d base=%dx%d inc=%dx%d",
+		(unsigned long)c->win, size.flags,
+		size.min_width, size.min_height,
+		size.max_width, size.max_height,
+		size.base_width, size.base_height,
+		size.width_inc, size.height_inc);
 	if (size.flags & PBaseSize) {
 		c->basew = size.base_width;
 		c->baseh = size.base_height;
@@ -2062,6 +2152,13 @@ updatesizehints(Client *c)
 		c->maxa = c->mina = 0.0;
 	c->isfixed = (c->maxw && c->maxh && c->maxw == c->minw && c->maxh == c->minh);
 	c->hintsvalid = 1;
+	dwmdbg("dwm:updatesizehints complete win=%lu base=%dx%d min=%dx%d max=%dx%d inc=%dx%d fixed=%d",
+		(unsigned long)c->win,
+		c->basew, c->baseh,
+		c->minw, c->minh,
+		c->maxw, c->maxh,
+		c->incw, c->inch,
+		c->isfixed);
 }
 
 void
@@ -2075,10 +2172,15 @@ updatestatus(void)
 void
 updatetitle(Client *c)
 {
+	dwmdbg("dwm:updatetitle enter win=%lu", (unsigned long)c->win);
 	if (!gettextprop(c->win, netatom[NetWMName], c->name, sizeof c->name))
+	{
+		dwmdbg("dwm:updatetitle fallback-xa-wm-name win=%lu", (unsigned long)c->win);
 		gettextprop(c->win, XA_WM_NAME, c->name, sizeof c->name);
+	}
 	if (c->name[0] == '\0') /* hack to mark broken clients */
 		strcpy(c->name, broken);
+	dwmdbg("dwm:updatetitle complete win=%lu name='%s'", (unsigned long)c->win, c->name);
 }
 
 void

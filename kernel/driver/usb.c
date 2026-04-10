@@ -25,6 +25,10 @@ static uint usb_hc_count;
 #define USB_DEV_SPEED_FULL    2
 #define USB_DEV_SPEED_HIGH    3
 #define USB_DEV_SPEED_SUPER   4
+#define USB_DEV_ADDR_NONE     0
+#define USB_DEV_ADDR_MIN      1
+#define USB_DEV_ADDR_MAX      127
+#define USB_ROOT_PORT_MAX     32
 
 struct usb_dev_candidate {
   uchar hc_index;
@@ -33,10 +37,24 @@ struct usb_dev_candidate {
   uchar present;
   uchar enabled;
   uchar speed;
+  uchar address;
+  uchar addr_ready;
+  uint generation;
 };
 
 static struct usb_dev_candidate usb_dev[USB_DEV_CAND_MAX];
 static uint usb_dev_count;
+
+struct usb_bus_state {
+  uint addr_bits[4];
+  uchar port_address[USB_ROOT_PORT_MAX];
+  uint port_generation[USB_ROOT_PORT_MAX];
+  uint addr_assigned;
+  uint addr_conflicts;
+  uint addr_exhausted;
+};
+
+static struct usb_bus_state usb_bus[USB_HC_MAX];
 
 static const struct usb_hc_ops usb_hc_ops_unknown = {
   .name = "unknown",
@@ -254,22 +272,200 @@ usb_dev_speed_name(uchar speed)
   }
 }
 
+static struct usb_bus_state*
+usb_get_bus_state(uint hc_index)
+{
+  if(hc_index >= USB_HC_MAX)
+    return 0;
+  return &usb_bus[hc_index];
+}
+
+static int
+usb_addr_is_marked(struct usb_bus_state *bus, uchar address)
+{
+  uint word;
+  uint bit;
+
+  if(!bus || address < USB_DEV_ADDR_MIN || address > USB_DEV_ADDR_MAX)
+    return 0;
+
+  word = address >> 5;
+  bit = 1U << (address & 31);
+  return (bus->addr_bits[word] & bit) ? 1 : 0;
+}
+
+static void
+usb_addr_mark(struct usb_bus_state *bus, uchar address)
+{
+  uint word;
+  uint bit;
+
+  if(!bus || address < USB_DEV_ADDR_MIN || address > USB_DEV_ADDR_MAX)
+    return;
+
+  word = address >> 5;
+  bit = 1U << (address & 31);
+  bus->addr_bits[word] |= bit;
+}
+
+static void
+usb_addr_unmark(struct usb_bus_state *bus, uchar address)
+{
+  uint word;
+  uint bit;
+
+  if(!bus || address < USB_DEV_ADDR_MIN || address > USB_DEV_ADDR_MAX)
+    return;
+
+  word = address >> 5;
+  bit = 1U << (address & 31);
+  bus->addr_bits[word] &= ~bit;
+}
+
+static void
+usb_release_port_address(struct usb_bus_state *bus, uint port_index)
+{
+  uchar address;
+
+  if(!bus || port_index >= USB_ROOT_PORT_MAX)
+    return;
+
+  address = bus->port_address[port_index];
+  if(address != USB_DEV_ADDR_NONE){
+    if(!usb_addr_is_marked(bus, address))
+      bus->addr_conflicts++;
+    usb_addr_unmark(bus, address);
+  }
+  bus->port_address[port_index] = USB_DEV_ADDR_NONE;
+}
+
+static uchar
+usb_alloc_address(struct usb_bus_state *bus)
+{
+  uchar address;
+
+  if(!bus)
+    return USB_DEV_ADDR_NONE;
+
+  for(address = USB_DEV_ADDR_MIN; address <= USB_DEV_ADDR_MAX; address++){
+    if(usb_addr_is_marked(bus, address))
+      continue;
+    usb_addr_mark(bus, address);
+    bus->addr_assigned++;
+    return address;
+  }
+
+  bus->addr_exhausted++;
+  return USB_DEV_ADDR_NONE;
+}
+
+static uint
+usb_port_generation(struct usb_bus_state *bus, uint port_index, int changed)
+{
+  uint generation;
+
+  if(!bus || port_index >= USB_ROOT_PORT_MAX)
+    return 0;
+
+  generation = bus->port_generation[port_index];
+  if(generation == 0 || changed){
+    generation++;
+    if(generation == 0)
+      generation = 1;
+    bus->port_generation[port_index] = generation;
+  }
+
+  return bus->port_generation[port_index];
+}
+
+static void
+usb_assign_candidate_address(uint hc_index, struct usb_dev_candidate *dc)
+{
+  struct usb_bus_state *bus;
+  uint port_index;
+  uchar address;
+
+  if(!dc || dc->port == 0)
+    return;
+
+  bus = usb_get_bus_state(hc_index);
+  if(!bus)
+    return;
+
+  port_index = dc->port - 1;
+  if(port_index >= USB_ROOT_PORT_MAX)
+    return;
+
+  dc->address = USB_DEV_ADDR_NONE;
+  dc->addr_ready = 0;
+
+  if(!dc->present || !dc->enabled){
+    usb_release_port_address(bus, port_index);
+    return;
+  }
+
+  address = bus->port_address[port_index];
+  if(address != USB_DEV_ADDR_NONE &&
+     bus->port_generation[port_index] == dc->generation){
+    if(!usb_addr_is_marked(bus, address)){
+      bus->addr_conflicts++;
+      usb_addr_mark(bus, address);
+    }
+    dc->address = address;
+    dc->addr_ready = 1;
+    return;
+  }
+
+  if(address != USB_DEV_ADDR_NONE)
+    usb_release_port_address(bus, port_index);
+
+  address = usb_alloc_address(bus);
+  if(address == USB_DEV_ADDR_NONE)
+    return;
+
+  bus->port_address[port_index] = address;
+  bus->port_generation[port_index] = dc->generation;
+  dc->address = address;
+  dc->addr_ready = 1;
+}
+
+static void
+usb_scrub_inactive_ports(uint hc_index, uint active_mask)
+{
+  struct usb_bus_state *bus;
+  uint port_index;
+
+  bus = usb_get_bus_state(hc_index);
+  if(!bus)
+    return;
+
+  for(port_index = 0; port_index < USB_ROOT_PORT_MAX; port_index++){
+    if(active_mask & (1U << port_index))
+      continue;
+    usb_release_port_address(bus, port_index);
+  }
+}
+
 static void
 usb_collect_candidates(uint hc_index, struct usb_hc_probe *sc)
 {
+  struct usb_bus_state *bus;
+  uint active_mask;
   uint n;
 
   if(!sc || !sc->rh_present)
     return;
 
+  bus = usb_get_bus_state(hc_index);
+  if(!bus)
+    return;
+
+  active_mask = 0;
+
   for(n = 0; n < sc->rh_ports && n < 32; n++){
-    struct usb_dev_candidate *dc;
     uint mask;
     uint present;
     uint enabled;
-
-    if(usb_dev_count >= USB_DEV_CAND_MAX)
-      break;
 
     mask = (1U << n);
     present = (sc->rh_connect_bits & mask) ? 1 : 0;
@@ -277,24 +473,44 @@ usb_collect_candidates(uint hc_index, struct usb_hc_probe *sc)
     if(!present && !enabled)
       continue;
 
-    dc = &usb_dev[usb_dev_count++];
-    memset(dc, 0, sizeof(*dc));
-    dc->hc_index = (uchar)hc_index;
-    dc->kind = sc->kind;
-    dc->port = (uchar)(n + 1);
-    dc->present = (uchar)present;
-    dc->enabled = (uchar)enabled;
-    if(sc->rh_super_bits & mask)
-      dc->speed = USB_DEV_SPEED_SUPER;
-    else if(sc->rh_high_bits & mask)
-      dc->speed = USB_DEV_SPEED_HIGH;
-    else if(sc->rh_full_bits & mask)
-      dc->speed = USB_DEV_SPEED_FULL;
-    else if(sc->rh_low_bits & mask)
-      dc->speed = USB_DEV_SPEED_LOW;
-    else
-      dc->speed = USB_DEV_SPEED_UNKNOWN;
+    active_mask |= mask;
+
+    if(usb_dev_count >= USB_DEV_CAND_MAX){
+      if(!present || !enabled)
+        usb_release_port_address(bus, n);
+      else
+        usb_port_generation(bus, n, (sc->rh_change_bits & mask) ? 1 : 0);
+      continue;
+    }
+
+    {
+      struct usb_dev_candidate *dc;
+
+      dc = &usb_dev[usb_dev_count++];
+      memset(dc, 0, sizeof(*dc));
+      dc->hc_index = (uchar)hc_index;
+      dc->kind = sc->kind;
+      dc->port = (uchar)(n + 1);
+      dc->present = (uchar)present;
+      dc->enabled = (uchar)enabled;
+      dc->generation = usb_port_generation(bus, n,
+                                           (sc->rh_change_bits & mask) ? 1 : 0);
+      if(sc->rh_super_bits & mask)
+        dc->speed = USB_DEV_SPEED_SUPER;
+      else if(sc->rh_high_bits & mask)
+        dc->speed = USB_DEV_SPEED_HIGH;
+      else if(sc->rh_full_bits & mask)
+        dc->speed = USB_DEV_SPEED_FULL;
+      else if(sc->rh_low_bits & mask)
+        dc->speed = USB_DEV_SPEED_LOW;
+      else
+        dc->speed = USB_DEV_SPEED_UNKNOWN;
+
+      usb_assign_candidate_address(hc_index, dc);
+    }
   }
+
+  usb_scrub_inactive_ports(hc_index, active_mask);
 }
 
 static const char*
@@ -358,6 +574,7 @@ usb_init(void)
   acquire(&usb_lock);
   memset(usb_hc, 0, sizeof(usb_hc));
   memset(usb_dev, 0, sizeof(usb_dev));
+  memset(usb_bus, 0, sizeof(usb_bus));
   usb_hc_count = 0;
   usb_dev_count = 0;
 
@@ -478,6 +695,9 @@ usb_procfs_dump(char *buf, uint max)
   uint unknown;
   uint ready;
   uint degraded;
+  uint addr_assigned;
+  uint addr_conflicts;
+  uint addr_exhausted;
 
   if(!buf || max == 0)
     return -1;
@@ -492,6 +712,9 @@ usb_procfs_dump(char *buf, uint max)
   unknown = 0;
   ready = 0;
   degraded = 0;
+  addr_assigned = 0;
+  addr_conflicts = 0;
+  addr_exhausted = 0;
 
   for(i = 0; i < usb_hc_count; i++){
     switch(usb_hc[i].kind){
@@ -515,6 +738,10 @@ usb_procfs_dump(char *buf, uint max)
       ready++;
     else if(usb_hc[i].phase == USB_HC_PHASE_DEGRADED)
       degraded++;
+
+    addr_assigned += usb_bus[i].addr_assigned;
+    addr_conflicts += usb_bus[i].addr_conflicts;
+    addr_exhausted += usb_bus[i].addr_exhausted;
   }
 
   if(usb_buf_puts(buf, max, &len, "usb_hc_count ") < 0) goto out;
@@ -553,8 +780,21 @@ usb_procfs_dump(char *buf, uint max)
   if(usb_buf_putu(buf, max, &len, usb_dev_count) < 0) goto out;
   if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
 
+  if(usb_buf_puts(buf, max, &len, "usb_addr_assigned ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, addr_assigned) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_addr_conflict ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, addr_conflicts) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_addr_exhausted ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, addr_exhausted) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
   for(i = 0; i < usb_hc_count; i++){
     struct usb_hc_probe *sc = &usb_hc[i];
+    struct usb_bus_state *bus = &usb_bus[i];
 
     if(usb_buf_puts(buf, max, &len, "hc") < 0) goto out;
     if(usb_buf_putu(buf, max, &len, i) < 0) goto out;
@@ -655,6 +895,12 @@ usb_procfs_dump(char *buf, uint max)
     if(usb_buf_puthex32(buf, max, &len, sc->rh_super_bits) < 0) goto out;
     if(usb_buf_puts(buf, max, &len, " failures=") < 0) goto out;
     if(usb_buf_putu(buf, max, &len, sc->init_failures) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " addr=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, bus->addr_assigned) < 0) goto out;
+    if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, bus->addr_conflicts) < 0) goto out;
+    if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, bus->addr_exhausted) < 0) goto out;
 
     if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
   }
@@ -676,8 +922,16 @@ usb_procfs_dump(char *buf, uint max)
     if(usb_buf_putu(buf, max, &len, dc->enabled) < 0) goto out;
     if(usb_buf_puts(buf, max, &len, " speed=") < 0) goto out;
     if(usb_buf_puts(buf, max, &len, usb_dev_speed_name(dc->speed)) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " addr=") < 0) goto out;
+    if(dc->address != USB_DEV_ADDR_NONE){
+      if(usb_buf_putu(buf, max, &len, dc->address) < 0) goto out;
+    } else {
+      if(usb_buf_puts(buf, max, &len, "none") < 0) goto out;
+    }
     if(usb_buf_puts(buf, max, &len, " addr_ready=") < 0) goto out;
-    if(usb_buf_putu(buf, max, &len, (dc->present && dc->enabled) ? 1 : 0) < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, dc->addr_ready) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " gen=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, dc->generation) < 0) goto out;
     if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
   }
 

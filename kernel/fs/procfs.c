@@ -49,6 +49,7 @@
 #define PROCFS_NFORCE_INO     31   /* /proc/nforce — nForce driver counters */
 #define PROCFS_WIFI_INO       32   /* /proc/wifi — discovered 802.11 controllers */
 #define PROCFS_WPAN_INO       33   /* /proc/wpan — discovered 802.15.4 coordinators */
+#define PROCFS_R815X_INO      34   /* /proc/r815x — discovered RTL8152/RTL8153 USB NICs */
 #define PROCFS_VERSION_STR  "a/ux86 aux86 i686\n"
 
 struct procfs_inode {
@@ -90,6 +91,7 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_NFORCE_INO, "nforce", 2048 },
   { PROCFS_WIFI_INO, "wifi", 2048 },
   { PROCFS_WPAN_INO, "wpan", 1024 },
+  { PROCFS_R815X_INO, "r815x", 2048 },
   { 0, 0, 0 }
 };
 
@@ -1167,6 +1169,12 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
   }
   if(ip->inum == PROCFS_WPAN_INO){
     int r = ieee802154_procfs_dump(buf, sizeof(buf));
+    if(r < 0)
+      return -1;
+    return procfs_copy_data(dst, off, n, buf, (uint)r);
+  }
+  if(ip->inum == PROCFS_R815X_INO){
+    int r = rtl815x_procfs_dump(buf, sizeof(buf));
     if(r < 0)
       return -1;
     return procfs_copy_data(dst, off, n, buf, (uint)r);

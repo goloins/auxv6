@@ -71,6 +71,8 @@ targetfs/tmp/test.iso
 targetfs/usr/bin/st
 targetfs/bin/st
 ports/st-0.9.3/_st
+ports/dmenu-5.4/_dmenu
+ports/dmenu-5.4/_stest
 user/mv
 user/umount
 user/uname

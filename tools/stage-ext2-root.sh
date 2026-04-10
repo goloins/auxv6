@@ -124,6 +124,14 @@ for src in "$@"; do
       install -d -m 0755 "$rootdir/usr/bin"
       install -m 0755 "$src" "$rootdir/usr/bin/dwm"
       ;;
+    _dmenu)
+      install -d -m 0755 "$rootdir/usr/bin"
+      install -m 0755 "$src" "$rootdir/usr/bin/dmenu"
+      ;;
+    _stest)
+      install -d -m 0755 "$rootdir/usr/bin"
+      install -m 0755 "$src" "$rootdir/usr/bin/stest"
+      ;;
     _st)
       install -d -m 0755 "$rootdir/usr/bin"
       install -m 0755 "$src" "$rootdir/usr/bin/st"
@@ -193,6 +201,14 @@ for src in "$@"; do
       install -m 0755 "$src" "$rootdir/usr/bin/startx"
       install -m 0755 "$src" "$rootdir/bin/startx"
       chmod 0755 "$rootdir/usr/bin/startx" "$rootdir/bin/startx"
+      ;;
+    usr/bin/dmenu_run)
+      install -d -m 0755 "$rootdir/usr/bin"
+      install -m 0755 "$src" "$rootdir/usr/bin/dmenu_run"
+      ;;
+    usr/bin/dmenu_path)
+      install -d -m 0755 "$rootdir/usr/bin"
+      install -m 0755 "$src" "$rootdir/usr/bin/dmenu_path"
       ;;
     */*)
       dest="$rootdir/$rel"

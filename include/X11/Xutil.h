@@ -4,7 +4,7 @@
 #include <X11/Xlib.h>
 
 typedef struct {
-  int flags;
+  long flags;
   int x, y;
   int width, height;
   int min_width, min_height;

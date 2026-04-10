@@ -45,14 +45,14 @@ X11INC ?= $(ROOT)/include
 X11LIB ?= $(ROOT)/user
 
 INCS := -I$(ST_DIR)/compat -I$(X11INC) -I$(ROOT)/include -I$(ROOT)/include/posix -I$(ROOT)/include/posix/sys
-CPPFLAGS := -DVERSION=\"$(VERSION)\" -D_XOPEN_SOURCE=600 -D_DEFAULT_SOURCE -DAUXV6 -DAUXV6_ST_HACK_NOPTY
+CPPFLAGS := -DVERSION=\"$(VERSION)\" -D_XOPEN_SOURCE=600 -D_DEFAULT_SOURCE -DAUXV6
 CFLAGS := -fno-pic -static -fno-builtin -fno-strict-aliasing -O2 -Wall -MD -ggdb -m32 \
           -fno-omit-frame-pointer -nostdinc -fno-stack-protector -Wno-error \
           -std=c99 -pedantic -Wno-deprecated-declarations \
           $(INCS) $(CPPFLAGS)
 LDFLAGS := -N -e _start -Ttext 0 -m $(shell $(LD) -V 2>/dev/null | grep elf_i386 | head -1)
 
-SRC := $(ST_DIR)/st.c $(ST_DIR)/x.c $(ST_DIR)/compat/wchar.c $(ST_DIR)/compat/stubs.c
+SRC := $(ST_DIR)/st.c $(ST_DIR)/x.c $(ST_DIR)/compat/wchar.c
 OBJ := $(SRC:.c=.o)
 
 RUNTIME_OBJS := \

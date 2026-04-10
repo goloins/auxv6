@@ -308,3 +308,14 @@ pipe_writable(struct pipe *p)
   release(&p->lock);
   return ready;
 }
+
+int
+pipe_writeopen(struct pipe *p)
+{
+  int open;
+
+  acquire(&p->lock);
+  open = p->writeopen;
+  release(&p->lock);
+  return open;
+}

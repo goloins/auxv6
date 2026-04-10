@@ -22,6 +22,14 @@ typedef unsigned long GC;
 /* Input method enumeration */
 typedef int XICCEncodingStyle;
 
+typedef enum {
+  XBufferOverflow = -1,
+  XLookupNone = 1,
+  XLookupChars = 2,
+  XLookupKeySym = 3,
+  XLookupBoth = 4
+} XLookupStatus;
+
 typedef int Bool;
 typedef int Status;
 
@@ -171,6 +179,7 @@ struct _XImage {
 #define XK_Tab 0xff09
 #define XK_Return 0xff0d
 #define XK_Escape 0xff1b
+#define XK_bracketleft 0x005b
 #define XK_Home 0xff50
 #define XK_Left 0xff51
 #define XK_Up 0xff52
@@ -184,11 +193,11 @@ struct _XImage {
 #define XK_Break 0xff6b
 #define XK_KP_Home 0xff95
 #define XK_KP_Up 0xff97
-#define XK_KP_Prior 0xff99
+#define XK_KP_Prior 0xff9a
 #define XK_KP_Down 0xff99
 #define XK_KP_Begin 0xff9d
 #define XK_KP_End 0xff9c
-#define XK_KP_Next 0xff9a
+#define XK_KP_Next 0xff9b
 #define XK_KP_Insert 0xff9e
 #define XK_KP_Delete 0xff9f
 #define XK_KP_Left 0xff96
@@ -229,7 +238,28 @@ struct _XImage {
 #define XK_F34 0xffdf
 #define XK_F35 0xffe0
 #define XK_Num_Lock 0xff7f
-#define XK_Y 0x0079
+#define XK_G 0x0047
+#define XK_J 0x004a
+#define XK_M 0x004d
+#define XK_Y 0x0059
+#define XK_a 0x0061
+#define XK_b 0x0062
+#define XK_c 0x0063
+#define XK_d 0x0064
+#define XK_e 0x0065
+#define XK_f 0x0066
+#define XK_g 0x0067
+#define XK_h 0x0068
+#define XK_i 0x0069
+#define XK_j 0x006a
+#define XK_k 0x006b
+#define XK_l 0x006c
+#define XK_m 0x006d
+#define XK_n 0x006e
+#define XK_p 0x0070
+#define XK_u 0x0075
+#define XK_w 0x0077
+#define XK_y 0x0079
 #define XK_NO_MOD 0
 #define XK_SWITCH_MOD Mod5Mask
 /* Additional keysyms for config shortcuts */
@@ -322,6 +352,7 @@ struct _XImage {
 #define XNDestroyCallback "destroyCallback"
 #define XNSpotLocation "spotLocation"
 #define XNInputStyle "inputStyle"
+#define XNFocusWindow "focusWindow"
 #define XIMPreeditNothing 0
 #define XIMStatusNothing 0
 
@@ -347,6 +378,15 @@ typedef struct _XDisplay {
   char *rxbuf;
   int rxlen;
   int pending_draw_replies;
+  /* Client-side draw command batch buffer.  Draw commands (DRAW_RECT,
+   * DRAW_TEXT, DRAW_LINE, COPY_AREA) are accumulated here and flushed
+   * together in one send() call on XFlush / XSync / or when x11_cmd needs
+   * to send a synchronous request.  This reduces per-primitive syscall
+   * overhead from O(N) to O(1) and eliminates head-of-line blocking in
+   * x11_cmd. */
+  char *draw_batch_buf;
+  int draw_batch_len;
+  int draw_batch_cap;
 } _XDisplay;
 
 typedef struct {
@@ -759,6 +799,7 @@ typedef struct {
 #define CurrentTime 0L
 #define RevertToNone 0
 #define RevertToPointerRoot 1
+#define RevertToParent 2
 #define PointerRoot 1
 
 #define Above 0

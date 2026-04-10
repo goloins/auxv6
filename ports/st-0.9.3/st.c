@@ -24,15 +24,7 @@
 #include "st.h"
 #include "win.h"
 
-#if !defined(AUXV6_ST_HACK_NOPTY)
-#if   defined(__linux)
- #include <pty.h>
-#elif defined(__OpenBSD__) || defined(__NetBSD__) || defined(__APPLE__)
- #include <util.h>
-#elif defined(__FreeBSD__) || defined(__DragonFly__)
- #include <libutil.h>
-#endif
-#endif
+#include <pty.h>
 
 /* Arbitrary sizes */
 #define UTF_INVALID   0xFFFD
@@ -264,11 +256,6 @@ static CSIEscape csiescseq;
 static STREscape strescseq;
 static int iofd = 1;
 static int cmdfd;
-#if defined(AUXV6_ST_HACK_NOPTY)
-/* AUXV6_ST_HACK: pipe-based fallback until kernel/user PTY support lands. */
-static int cmdfd_r = -1;
-static int cmdfd_w = -1;
-#endif
 static pid_t pid;
 
 static const uchar utfbyte[UTF_SIZ + 1] = {0x80,    0, 0xC0, 0xE0, 0xF0};
@@ -839,9 +826,7 @@ stty(char **args)
 int
 ttynew(const char *line, char *cmd, const char *out, char **args)
 {
-#if !defined(AUXV6_ST_HACK_NOPTY)
 	int m, s;
-#endif
 	stdbg2("st:ttynew:enter line=%s cmd=%s out=%s",
 	       line ? line : "(null)",
 	       cmd ? cmd : "(null)",
@@ -861,58 +846,11 @@ ttynew(const char *line, char *cmd, const char *out, char **args)
 		if ((cmdfd = open(line, O_RDWR)) < 0)
 			die("open line '%s' failed: %s\n",
 			    line, strerror(errno));
-#if defined(AUXV6_ST_HACK_NOPTY)
-		cmdfd_r = cmdfd;
-		cmdfd_w = cmdfd;
-#endif
 		dup2(cmdfd, 0);
 		stty(args);
 		return cmdfd;
 	}
 
-#if defined(AUXV6_ST_HACK_NOPTY)
-	{
-		int pin[2];
-		int pout[2];
-
-		/* AUXV6_ST_HACK: no PTY yet; emulate terminal child I/O with pipes. */
-		if (pipe(pin) < 0 || pipe(pout) < 0)
-			die("pipe failed: %s\n", strerror(errno));
-		stdbg2("st:ttynew:nopty pipes ok pin={%d,%d} pout={%d,%d}",
-		       pin[0], pin[1], pout[0], pout[1]);
-
-		switch (pid = fork()) {
-		case -1:
-			die("fork failed: %s\n", strerror(errno));
-			break;
-		case 0:
-			stdbg2("st:ttynew:child fork ok pid=%d", (int)getpid());
-			close(iofd);
-			close(pin[1]);
-			close(pout[0]);
-			dup2(pin[0], 0);
-			dup2(pout[1], 1);
-			dup2(pout[1], 2);
-			if (pin[0] > 2)
-				close(pin[0]);
-			if (pout[1] > 2)
-				close(pout[1]);
-			execsh(cmd, args);
-			break;
-		default:
-			stdbg2("st:ttynew:parent fork ok child=%d", (int)pid);
-			close(pin[0]);
-			close(pout[1]);
-			cmdfd_w = pin[1];
-			cmdfd_r = pout[0];
-			cmdfd = cmdfd_r;
-			stdbg2("st:ttynew:nopty cmdfd_r=%d cmdfd_w=%d", cmdfd_r, cmdfd_w);
-			signal(SIGCHLD, sigchld);
-			break;
-		}
-		return cmdfd;
-	}
-#else
 	/* seems to work fine on linux, openbsd and freebsd */
 	if (openpty(&m, &s, NULL, NULL, NULL) < 0)
 		die("openpty failed: %s\n", strerror(errno));
@@ -932,24 +870,15 @@ ttynew(const char *line, char *cmd, const char *out, char **args)
 			die("ioctl TIOCSCTTY failed: %s\n", strerror(errno));
 		if (s > 2)
 			close(s);
-#ifdef __OpenBSD__
-		if (pledge("stdio getpw proc exec", NULL) == -1)
-			die("pledge\n");
-#endif
 		execsh(cmd, args);
 		break;
 	default:
-#ifdef __OpenBSD__
-		if (pledge("stdio rpath tty proc", NULL) == -1)
-			die("pledge\n");
-#endif
 		close(s);
 		cmdfd = m;
 		signal(SIGCHLD, sigchld);
 		break;
 	}
 	return cmdfd;
-#endif
 }
 
 size_t
@@ -961,11 +890,7 @@ ttyread(void)
 	int ret, written;
 
 	/* append read bytes to unprocessed bytes */
-#if defined(AUXV6_ST_HACK_NOPTY)
-	ret = read(cmdfd_r >= 0 ? cmdfd_r : cmdfd, buf+buflen, LEN(buf)-buflen);
-#else
 	ret = read(cmdfd, buf+buflen, LEN(buf)-buflen);
-#endif
 
 	switch (ret) {
 	case 0:
@@ -1018,23 +943,6 @@ ttywrite(const char *s, size_t n, int may_echo)
 void
 ttywriteraw(const char *s, size_t n)
 {
-#if defined(AUXV6_ST_HACK_NOPTY)
-	ssize_t r;
-	int wfd;
-
-	/* AUXV6_ST_HACK: write directly to child stdin pipe while no PTY exists. */
-	wfd = (cmdfd_w >= 0) ? cmdfd_w : cmdfd;
-	while (n > 0) {
-		r = write(wfd, s, n);
-		if (r < 0) {
-			if (errno == EINTR)
-				continue;
-			die("write error on tty: %s\n", strerror(errno));
-		}
-		n -= (size_t)r;
-		s += r;
-	}
-#else
 	fd_set wfd, rfd;
 	ssize_t r;
 	size_t lim = 256;
@@ -1087,7 +995,6 @@ ttywriteraw(const char *s, size_t n)
 
 write_error:
 	die("write error on tty: %s\n", strerror(errno));
-#endif
 }
 
 void
@@ -1099,13 +1006,8 @@ ttyresize(int tw, int th)
 	w.ws_col = term.col;
 	w.ws_xpixel = tw;
 	w.ws_ypixel = th;
-#if defined(AUXV6_ST_HACK_NOPTY)
-	/* AUXV6_ST_HACK: no PTY to resize yet; keep terminal core dimensions only. */
-	(void)w;
-#else
 	if (ioctl(cmdfd, TIOCSWINSZ, &w) < 0)
 		fprintf(stderr, "Couldn't set window size: %s\n", strerror(errno));
-#endif
 }
 
 void

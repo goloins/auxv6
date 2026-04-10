@@ -305,3 +305,12 @@ unlockpt(int fd)
 {
   return grantpt(fd);
 }
+
+int
+tcsendbreak(int fd, int duration)
+{
+  (void)fd;
+  (void)duration;
+  /* Break is not meaningful on a PTY or virtual console; nothing to do. */
+  return 0;
+}

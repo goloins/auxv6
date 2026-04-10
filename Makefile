@@ -42,6 +42,7 @@ OBJS = \
 	kernel/driver/firewire.o\
 	kernel/driver/wifi.o\
 	kernel/driver/ieee802154.o\
+	kernel/driver/rtl815x.o\
 	kernel/driver/usb.o\
 	kernel/driver/usb_uhci.o\
 	kernel/driver/usb_ohci.o\
@@ -353,7 +354,7 @@ PORTS ?= 1
 PORTS_MANIFEST ?= ports/ports.list
 PORTS_SYNC_SCRIPT ?= tools/sync-ports.sh
 PORTS_BUILD_LOG ?= ports/ports-build.log
-PORTS_SKIP_LIST ?= dash dwm st
+PORTS_SKIP_LIST ?= dash dwm st dmenu
 
 # sh is close to xv6 MAXFILE; compile with -Os to keep the binary under limit.
 user/sh.o: user/sh.c
@@ -824,6 +825,14 @@ _st: ports/st-0.9.3/Makefile.auxv6 $(ULIB) user/x11.o
 	$(MAKE) -f ports/st-0.9.3/Makefile.auxv6 all
 	cp ports/st-0.9.3/_st _st
 
+_dmenu: ports/dmenu-5.4/Makefile.auxv6 $(ULIB) user/x11.o
+	$(MAKE) -f ports/dmenu-5.4/Makefile.auxv6 all
+	cp ports/dmenu-5.4/_dmenu _dmenu
+
+_stest: ports/dmenu-5.4/Makefile.auxv6 $(ULIB)
+	$(MAKE) -f ports/dmenu-5.4/Makefile.auxv6 all
+	cp ports/dmenu-5.4/_stest _stest
+
 _symlinktest: user/symlinktest
 	cp user/symlinktest _symlinktest
 
@@ -1065,6 +1074,8 @@ UPROGS=\
 	_dash\
 	_dwm\
 	_st\
+	_dmenu\
+	_stest\
 	_symlinktest\
 	_nftwtest\
 	_ftwtest\
