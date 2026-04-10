@@ -953,6 +953,8 @@ sys_setrlimit(void)
     case 0x5417:  /* TIOCMBIC */
     case 0x5418:  /* TIOCMSET */
     case 0x80045430: /* TIOCGPTN */
+    case 0x80045439: /* TIOCGPTLCK */
+    case 0x40045431: /* TIOCSPTLCK */
       if(argint(2, &arg_raw) < 0)
         return -1;
       arg_u = (uint)arg_raw;

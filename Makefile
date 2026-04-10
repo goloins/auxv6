@@ -2,6 +2,7 @@ OBJS = \
 	kernel/core/blockdev.o\
 	kernel/fs/bio.o\
 	kernel/driver/console.o\
+	kernel/driver/tty_ldisc.o\
 	kernel/driver/pty.o\
 	kernel/driver/tuntap.o\
 	kernel/audio/audio_core.o\

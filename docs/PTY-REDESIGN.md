@@ -9,6 +9,55 @@ The current PTY implementation has fundamental architectural issues that prevent
 - Provides proper signal delivery (SIGWINCH, SIGHUP, etc)
 - Is future-proof for at least 6 months of OS development
 
+## Scaffolded Files (Now In Tree)
+
+The following files were created as the first implementation slice of the rewrite:
+
+- `include/tty.h`
+   - Purpose: Shared kernel TTY constants and sizing knobs for the new line discipline.
+   - Current contents: `TTY_LDISC_CANON_BUFSZ`, `TTY_LDISC_SCRATCH_BUFSZ`.
+
+- `kernel/driver/tty_ldisc.h`
+   - Purpose: Public interface for kernel line discipline processing.
+   - Current contents: `struct tty_ldisc_state`, init/reset functions, input/output processing APIs.
+
+- `kernel/driver/tty_ldisc.c`
+   - Purpose: New line discipline engine inspired by BSD `tty.c` patterns.
+   - Current contents:
+      - Canonical input buffering (`ICANON`)
+      - Echo handling (`ECHO`, `ECHOE`, `ECHOK`, `ECHONL`)
+      - Input translation (`IGNCR`, `ICRNL`, `INLCR`)
+      - Output post-processing (`OPOST`, `ONLCR`, `OCRNL`, `ONOCR`, `ONLRET`)
+      - Basic software flow control state (`IXON` start/stop tracking)
+
+Files updated for integration:
+
+- `Makefile`
+   - Added `kernel/driver/tty_ldisc.o` to `OBJS`.
+
+- `include/defs.h`
+   - Added prototypes for the new line discipline APIs.
+
+- `kernel/driver/pty.c`
+   - Added `tty_ldisc` state into each PTY pair.
+   - Wired write-path processing through the new line discipline.
+   - Removed noisy debug logging from poll/open paths to restore runtime responsiveness.
+
+## OpenBSD/NetBSD Design Notes Applied
+
+Patterns already adopted:
+
+- Keep PTY transport and line discipline as separate responsibilities (BSD split model).
+- Keep line discipline state per terminal endpoint (canonical queue + output column tracking).
+- Treat termios flags as kernel-enforced behavior, not shell-enforced behavior.
+- Keep processing hooks explicit and testable (`process_input`, `process_output`).
+
+Patterns queued next:
+
+- Job-control signal behavior parity with BSD tty semantics (`SIGTTIN`, `SIGTTOU`, `SIGHUP`).
+- Better peer-closure semantics tied to actual file lifetime.
+- Optional packet/remote modes (`TIOCPKT`/`TIOCREMOTE`-style) if needed by userland.
+
 ## Current Problems
 
 1. **Double Ref-Counting**: `master_refs`/`slave_refs` desync from `file->ref` across fork
@@ -39,7 +88,7 @@ Implement kernel-side processing of:
 
 ### Signal Delivery
 - **SIGWINCH**: On window size change (TIOCSWINSZ)
-- **SIGHUP**: On slave close while data pending (job control)
+- **SIGHUP**: On final master close while slave endpoints still exist (job control)
 - **SIGTTOU/SIGTTIN**: Job control signals (background process writes/reads)
 
 ### Termios/Winsize Storage
@@ -125,7 +174,7 @@ struct pty_pair {
 - [ ] Implement fg_pgid tracking
 - [ ] SIGWINCH on TIOCSWINSZ
 - [ ] SIGTTIN/SIGTTOU job control
-- [ ] SIGHUP on master close
+- [x] SIGHUP on master close
 
 ### Phase 4: Console/Supporting Infrastructure
 - [ ] Audit console.c for PTY compatibility
@@ -208,3 +257,25 @@ user/tty.c                   ← May need updates for new APIs
 3. Rewrite pty.c from scratch (don't patch old code)
 4. Test incrementally: raw passthrough → ICANON → full ldisc
 5. Validate against POSIX test suite
+
+## Implementation Status Update (2026-04-10, Pass 2)
+
+This section records concrete implementation deltas completed after scaffolding.
+
+- PTY peer-liveness decisions now use live fdtable scans (`pty_side_is_open`) in read/write blocking, poll readiness, open validation, and final pair recycle decisions.
+- Blocking channel helpers were hardened to re-check peer openness while sleeping, so blocked readers/writers do not wait forever after peer shutdown.
+- Input line-discipline path now emits signal intents from control characters when `ISIG` is enabled (`VINTR`, `VQUIT`, `VSUSP`), and PTY write path forwards those to the foreground process group.
+- `NOFLSH` behavior is now honored for signal-generating control characters during ldisc input processing.
+- Legacy side counters (`master_refs`, `slave_refs`) were removed from PTY runtime behavior and struct storage; side-open truth is now derived from live open files.
+- Final master-close now triggers hangup signaling (`SIGHUP`, then `SIGCONT`) for the foreground process group when slaves are still present.
+- Canonical edit behavior was extended with `VWERASE` (word erase) and `VREPRINT` (reprint current cooked input line) under `IEXTEN`, plus PTY defaults for those control characters.
+- Added Linux-compatible slave lock ioctls (`TIOCSPTLCK`, `TIOCGPTLCK`) with default locked slave state after `ptmx` allocation; slave opens are denied until unlocked from master side.
+- Updated libc `unlockpt` to actively clear kernel slave lock and updated `openpty` to perform `grantpt`/`unlockpt` before opening the slave.
+- Fixed syscall dispatch regression for PTY lock ioctls by routing `TIOCSPTLCK`/`TIOCGPTLCK` through `sys_ioctl` tty dispatch, restoring `openpty` success in `st` + `dash` startup.
+- Fixed `dup2` close ordering to clear fdtable slots before `fileclose`, matching `sys_close` semantics and preventing PTY side-open accounting skew during stdio reassignment (`dup2` + `close`) in terminal child setup.
+
+Open items for the next pass:
+
+- Expand canonical edit behavior toward BSD parity (`VWERASE`, `VREPRINT`, and richer echo-control semantics).
+- Complete hangup/read-write edge semantics under partial-buffer and close races.
+- Add focused PTY regression tests for EOF/HUP/SIG behavior and document expected outcomes.

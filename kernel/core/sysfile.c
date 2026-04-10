@@ -2776,8 +2776,10 @@ sys_dup2(void)
 
   // If newfd is already open, close it first
   if(curproc->fdtable->entries[newfd] != 0){
-    fileclose(curproc->fdtable->entries[newfd]);
-    curproc->fdtable->entries[newfd] = 0;
+    struct file *oldf;
+    oldf = curproc->fdtable->entries[newfd];
+    fd_clear(newfd);
+    fileclose(oldf);
   }
 
   // Duplicate the file reference; new descriptor does not inherit FD_CLOEXEC

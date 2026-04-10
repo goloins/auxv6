@@ -168,6 +168,27 @@ int             pty_fileread(struct file *f, char *dst, int n);
 int             pty_filewrite(struct file *f, char *src, int n);
 void            pty_poll_events(struct file *f, int *rd, int *wr, int *err);
 
+// tty_ldisc.c
+struct tty_ldisc_state;
+void            tty_ldisc_init(struct tty_ldisc_state *ld);
+void            tty_ldisc_reset(struct tty_ldisc_state *ld);
+int             tty_ldisc_process_input(const struct termios *tp,
+										struct tty_ldisc_state *ld,
+										const char *in,
+										int in_len,
+										char *slave_out,
+										int slave_cap,
+										char *echo_out,
+										int echo_cap,
+										int *echo_len,
+										int *sig_out);
+int             tty_ldisc_process_output(const struct termios *tp,
+										 struct tty_ldisc_state *ld,
+										 const char *in,
+										 int in_len,
+										 char *master_out,
+										 int master_cap);
+
 // audio_core.c
 void            audio_init(void);
 void            audio_pci_probe_init(void);
@@ -526,6 +547,7 @@ int             proc_tcsetattr(int fd, int optional_actions, uint termios_addr);
 void            proc_apply_pending_signals(struct proc *p);
 void            proc_maybe_stop_current(void);
 void            proc_check_alarms(uint current_ticks);
+int             pty_side_is_open(int pty_index, int side);
 void            proc_set_alarm(struct proc *p, uint deadline_ticks);
 int             proc_try_grow_stack(struct proc *p, uint fault_addr);
 void            proc_tick_loadavg(void);

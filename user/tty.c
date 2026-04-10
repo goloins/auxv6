@@ -9,6 +9,9 @@
 #include "auxv6/user.h"
 #include "sys/ioctl.h"
 
+int grantpt(int fd);
+int unlockpt(int fd);
+
 char*
 gets(char *buf, int max)
 {
@@ -230,6 +233,11 @@ openpty(int *amaster, int *aslave, char *name,
     return -1;
   }
 
+  if(grantpt(mfd) < 0 || unlockpt(mfd) < 0) {
+    close(mfd);
+    return -1;
+  }
+
   if(ptsname_r(mfd, slave_name, sizeof(slave_name)) < 0) {
     close(mfd);
     errno = ENOENT;
@@ -303,7 +311,21 @@ grantpt(int fd)
 int
 unlockpt(int fd)
 {
-  return grantpt(fd);
+  int ptn;
+  int lock;
+
+  if(ioctl(fd, TIOCGPTN, &ptn) < 0) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  lock = 0;
+  if(ioctl(fd, TIOCSPTLCK, &lock) < 0) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  return 0;
 }
 
 int

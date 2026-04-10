@@ -48,6 +48,8 @@
 
 #define TIOCISATTY  0x54A3
 #define TIOCGPTN    0x80045430
+#define TIOCSPTLCK  0x40045431
+#define TIOCGPTLCK  0x80045439
 
 #define TCFLSH      0x540B
 

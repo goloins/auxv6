@@ -12,6 +12,7 @@
 #include "stat.h"
 #include "termios.h"
 #include "signal.h"
+#include "tty_ldisc.h"
 
 #define NPTY PTY_MAX_UNITS
 #define PTY_BUF 512
@@ -24,8 +25,7 @@ struct pty_chan {
 
 struct pty_pair {
   int allocated;
-  int master_refs;
-  int slave_refs;
+  int slave_locked;
   int ctty_set;
   int ctty_sid;
   struct termios termios;
@@ -33,6 +33,7 @@ struct pty_pair {
   int fg_pgid;
   struct pty_chan to_master;
   struct pty_chan to_slave;
+  struct tty_ldisc_state ldisc;
 };
 
 static struct {
@@ -67,11 +68,16 @@ pty_pair_init_defaults(struct pty_pair *pty)
   pty->termios.c_cc[VSTART] = 17;
   pty->termios.c_cc[VSTOP] = 19;
   pty->termios.c_cc[VSUSP] = 26;
+  pty->termios.c_cc[VREPRINT] = 18;
+  pty->termios.c_cc[VWERASE] = 23;
+  pty->termios.c_cc[VLNEXT] = 22;
   pty->winsize.ws_row = 24;
   pty->winsize.ws_col = 80;
+  pty->slave_locked = 1;
   pty->ctty_set = 0;
   pty->ctty_sid = -1;
   pty->fg_pgid = 1;
+  tty_ldisc_init(&pty->ldisc);
 }
 
 static int
@@ -91,13 +97,19 @@ pty_lookup_file(struct file *f, struct pty_pair **out_pair)
 }
 
 static int
-pty_chan_read(struct pty_chan *ch, char *dst, int n)
+pty_chan_read_peer_locked(struct pty_chan *ch,
+                          int pty_index,
+                          int peer_side,
+                          char *dst,
+                          int n)
 {
   int got;
 
   got = 0;
   while(got < n) {
     while(ch->r == ch->w) {
+      if(!pty_side_is_open(pty_index, peer_side))
+        return got;
       if(myproc()->killed)
         return got > 0 ? got : -1;
       if(got > 0)
@@ -113,13 +125,19 @@ pty_chan_read(struct pty_chan *ch, char *dst, int n)
 }
 
 static int
-pty_chan_write(struct pty_chan *ch, char *src, int n)
+pty_chan_write_peer_locked(struct pty_chan *ch,
+                           int pty_index,
+                           int peer_side,
+                           char *src,
+                           int n)
 {
   int put;
 
   put = 0;
   while(put < n) {
     while(ch->w - ch->r >= PTY_BUF) {
+      if(!pty_side_is_open(pty_index, peer_side))
+        return put > 0 ? put : -1;
       if(myproc()->killed)
         return put > 0 ? put : -1;
       sleep(&ch->w, &ptys.lock);
@@ -173,8 +191,10 @@ pty_set_termios_file(struct file *f, const struct termios *tp, int optional_acti
     return -1;
   }
   pty->termios = *tp;
-  if(optional_actions == TCSAFLUSH)
+  if(optional_actions == TCSAFLUSH) {
     pty->to_slave.r = pty->to_slave.w;
+    tty_ldisc_reset(&pty->ldisc);
+  }
   release(&ptys.lock);
   return 0;
 }
@@ -277,6 +297,36 @@ pty_ioctl_file(struct file *f, int request, uint arg)
     *intp = ptn;
     return 0;
 
+  case 0x80045439:  /* TIOCGPTLCK */
+    if(arg == 0)
+      return -1;
+    if(f->pty_side != PTY_SIDE_MASTER)
+      return -1;
+    intp = (int*)arg;
+    acquire(&ptys.lock);
+    if(!pty->allocated){
+      release(&ptys.lock);
+      return -1;
+    }
+    *intp = pty->slave_locked ? 1 : 0;
+    release(&ptys.lock);
+    return 0;
+
+  case 0x40045431:  /* TIOCSPTLCK */
+    if(arg == 0)
+      return -1;
+    if(f->pty_side != PTY_SIDE_MASTER)
+      return -1;
+    intp = (int*)arg;
+    acquire(&ptys.lock);
+    if(!pty->allocated){
+      release(&ptys.lock);
+      return -1;
+    }
+    pty->slave_locked = (*intp != 0) ? 1 : 0;
+    release(&ptys.lock);
+    return 0;
+
   case 0x541B:  /* FIONREAD / TIOCINQ */
     if(arg == 0)
       return -1;
@@ -354,11 +404,12 @@ pty_fileread(struct file *f, char *dst, int n)
 {
   struct pty_pair *pty;
   struct pty_chan *in;
-  int peer_refs;
+  int peer_open;
   int rc;
   int send_ttin;
   int user_dst;
   struct proc *pcur;
+  int peer_side;
 
   user_dst = ((uint)dst < KERNBASE);
   pcur = user_dst ? myproc() : 0;
@@ -391,19 +442,16 @@ pty_fileread(struct file *f, char *dst, int n)
 
   if(f->pty_side == PTY_SIDE_MASTER) {
     in = &pty->to_master;
-    peer_refs = pty->slave_refs;
+    peer_side = PTY_SIDE_SLAVE;
+    peer_open = pty_side_is_open(f->pty_index, PTY_SIDE_SLAVE);
   } else {
     in = &pty->to_slave;
-    peer_refs = pty->master_refs;
+    peer_side = PTY_SIDE_MASTER;
+    peer_open = pty_side_is_open(f->pty_index, PTY_SIDE_MASTER);
   }
-
-  /* Don't return EOF just because peer_refs is 0. That's a symptom of the ref-counting
-     bug (fork doesn't increment master/slave_refs). Shell should block waiting for input,
-     not get EOF. Only return EOF if we have data and then peer truly disappears. */
-  if(in->r == in->w && peer_refs == 0){
-    /* Buffer empty and peer closed: this IS legitimate EOF.
-       But due to our ref-counting bug, peer_refs can be 0 while peer is still open.
-       For now, don't return 0 (EOF) — let the caller block on pty_chan_read instead. */
+  if(in->r == in->w && !peer_open){
+    release(&ptys.lock);
+    return 0;
   }
 
   if(user_dst){
@@ -417,7 +465,7 @@ pty_fileread(struct file *f, char *dst, int n)
       want = n - total;
       if(want > (int)sizeof(kbuf))
         want = sizeof(kbuf);
-      rc = pty_chan_read(in, kbuf, want);
+      rc = pty_chan_read_peer_locked(in, f->pty_index, peer_side, kbuf, want);
       if(rc <= 0)
         break;
 
@@ -439,16 +487,92 @@ pty_fileread(struct file *f, char *dst, int n)
     return rc;
   }
 
-  rc = pty_chan_read(in, dst, n);
+  rc = pty_chan_read_peer_locked(in, f->pty_index, peer_side, dst, n);
   release(&ptys.lock);
   return rc;
+}
+
+static int
+pty_write_chunk_locked(struct pty_pair *pp, int side, const char *buf, int len)
+{
+  char data_out[TTY_LDISC_SCRATCH_BUFSZ * 2];
+  char echo_out[TTY_LDISC_SCRATCH_BUFSZ * 2];
+  int data_len;
+  int echo_len;
+  int sig;
+  int wrc;
+  int pty_index;
+
+  pty_index = (int)(pp - ptys.pair);
+
+  if(side == PTY_SIDE_MASTER) {
+    data_len = tty_ldisc_process_input(&pp->termios,
+                                       &pp->ldisc,
+                                       buf,
+                                       len,
+                                       data_out,
+                                       sizeof(data_out),
+                                       echo_out,
+                                       sizeof(echo_out),
+                                       &echo_len,
+                                       &sig);
+    if(data_len < 0)
+      return -1;
+    if(sig != 0) {
+      int pgid;
+      pgid = pp->fg_pgid;
+      if(!(pp->termios.c_lflag & NOFLSH)) {
+        pp->to_slave.r = pp->to_slave.w;
+        pp->to_master.r = pp->to_master.w;
+      }
+      if(pgid > 0)
+        proc_signal_pgid(pgid, sig);
+    }
+    if(data_len > 0) {
+      wrc = pty_chan_write_peer_locked(&pp->to_slave,
+                                       pty_index,
+                                       PTY_SIDE_SLAVE,
+                                       data_out,
+                                       data_len);
+      if(wrc <= 0)
+        return wrc;
+    }
+    if(echo_len > 0) {
+      wrc = pty_chan_write_peer_locked(&pp->to_master,
+                                       pty_index,
+                                       PTY_SIDE_MASTER,
+                                       echo_out,
+                                       echo_len);
+      if(wrc <= 0)
+        return wrc;
+    }
+    return len;
+  }
+
+  data_len = tty_ldisc_process_output(&pp->termios,
+                                      &pp->ldisc,
+                                      buf,
+                                      len,
+                                      data_out,
+                                      sizeof(data_out));
+  if(data_len < 0)
+    return -1;
+  if(data_len == 0)
+    return len;
+  wrc = pty_chan_write_peer_locked(&pp->to_master,
+                                   pty_index,
+                                   PTY_SIDE_MASTER,
+                                   data_out,
+                                   data_len);
+  if(wrc <= 0)
+    return wrc;
+  return len;
 }
 
 int
 pty_filewrite(struct file *f, char *src, int n)
 {
   struct pty_pair *pty;
-  struct pty_chan *out;
   int rc;
   int send_ttou;
   int user_src;
@@ -484,17 +608,8 @@ pty_filewrite(struct file *f, char *src, int n)
     return -1;
   }
 
-  if(f->pty_side == PTY_SIDE_MASTER) {
-    out = &pty->to_slave;
-  } else {
-    out = &pty->to_master;
-  }
-  
-  /* Note: Don't block writes just because peer is closed. Writes should succeed,
-     data goes to buffer (may be discarded). Only reads EOF when no peer. */
-
   if(user_src){
-    char kbuf[256];
+    char kbuf[TTY_LDISC_SCRATCH_BUFSZ];
     int total;
 
     total = 0;
@@ -508,7 +623,7 @@ pty_filewrite(struct file *f, char *src, int n)
         release(&ptys.lock);
         return (total > 0) ? total : -1;
       }
-      rc = pty_chan_write(out, kbuf, want);
+      rc = pty_write_chunk_locked(pty, f->pty_side, kbuf, want);
       if(rc <= 0)
         break;
       total += rc;
@@ -521,7 +636,7 @@ pty_filewrite(struct file *f, char *src, int n)
     return rc;
   }
 
-  rc = pty_chan_write(out, src, n);
+  rc = pty_write_chunk_locked(pty, f->pty_side, src, n);
   release(&ptys.lock);
   return rc;
 }
@@ -532,7 +647,7 @@ pty_poll_events(struct file *f, int *rd, int *wr, int *err)
   struct pty_pair *pty;
   struct pty_chan *in;
   struct pty_chan *out;
-  int peer_refs;
+  int peer_open;
 
   if(rd)
     *rd = 0;
@@ -555,24 +670,19 @@ pty_poll_events(struct file *f, int *rd, int *wr, int *err)
   if(f->pty_side == PTY_SIDE_MASTER) {
     in = &pty->to_master;
     out = &pty->to_slave;
-    peer_refs = pty->slave_refs;
+    peer_open = pty_side_is_open(f->pty_index, PTY_SIDE_SLAVE);
   } else {
     in = &pty->to_slave;
     out = &pty->to_master;
-    peer_refs = pty->master_refs;
+    peer_open = pty_side_is_open(f->pty_index, PTY_SIDE_MASTER);
   }
 
-  if(rd && (in->w != in->r || peer_refs == 0)) {
+  if(rd && (in->w != in->r || !peer_open)) {
     *rd = 1;
-    /* Debug: trace when PTY data becomes readable. */
-    if(in->w != in->r && f->pty_side == PTY_SIDE_MASTER) {
-      int dbg_avail = (int)(in->w - in->r);
-      cprintf("pty:poll_events:master rd=1 avail=%d w=%u r=%u\n", dbg_avail, in->w, in->r);
-    }
   }
-  if(wr && out->w - out->r < PTY_BUF && peer_refs > 0)
+  if(wr && out->w - out->r < PTY_BUF)
     *wr = 1;
-  if(err && peer_refs == 0)
+  if(err && !peer_open)
     *err = 1;
 
   release(&ptys.lock);
@@ -594,15 +704,12 @@ pty_open(struct file *f, int minor)
       if(pty->allocated)
         continue;
       pty_pair_init_defaults(pty);
-      pty->master_refs = 1;
       f->pty_side = PTY_SIDE_MASTER;
       f->pty_index = i;
-      cprintf("pty:open:master i=%d master_refs=1 slave_refs=0\n", i);
       release(&ptys.lock);
       return 0;
     }
     release(&ptys.lock);
-    cprintf("pty:open:master FAIL no free slots\n");
     return -1;
   }
 
@@ -613,15 +720,13 @@ pty_open(struct file *f, int minor)
   }
 
   pty = &ptys.pair[i];
-  if(!pty->allocated || pty->master_refs <= 0){
+  if(!pty->allocated || !pty_side_is_open(i, PTY_SIDE_MASTER) || pty->slave_locked){
     release(&ptys.lock);
     return -1;
   }
 
-  pty->slave_refs++;
   f->pty_side = PTY_SIDE_SLAVE;
   f->pty_index = i;
-  cprintf("pty:open:slave i=%d master_refs=%d slave_refs=%d\n", i, pty->master_refs, pty->slave_refs);
   release(&ptys.lock);
   return 0;
 }
@@ -630,9 +735,16 @@ void
 pty_close(struct file *f)
 {
   struct pty_pair *pty;
+  int send_hup;
+  int hup_pgid;
+  int index;
 
   if(pty_lookup_file(f, &pty) < 0)
     return;
+
+  send_hup = 0;
+  hup_pgid = 0;
+  index = f->pty_index;
 
   acquire(&ptys.lock);
   if(!pty->allocated){
@@ -640,12 +752,11 @@ pty_close(struct file *f)
     return;
   }
 
-  if(f->pty_side == PTY_SIDE_MASTER){
-    if(pty->master_refs > 0)
-      pty->master_refs--;
-  } else if(f->pty_side == PTY_SIDE_SLAVE){
-    if(pty->slave_refs > 0)
-      pty->slave_refs--;
+  if(f->pty_side == PTY_SIDE_MASTER &&
+     !pty_side_is_open(index, PTY_SIDE_MASTER) &&
+     pty_side_is_open(index, PTY_SIDE_SLAVE)) {
+    send_hup = 1;
+    hup_pgid = pty->fg_pgid;
   }
 
   wakeup(&pty->to_master.r);
@@ -653,10 +764,16 @@ pty_close(struct file *f)
   wakeup(&pty->to_slave.r);
   wakeup(&pty->to_slave.w);
 
-  if(pty->master_refs == 0 && pty->slave_refs == 0)
+  if(!pty_side_is_open(index, PTY_SIDE_MASTER) &&
+     !pty_side_is_open(index, PTY_SIDE_SLAVE))
     memset(pty, 0, sizeof(*pty));
 
   release(&ptys.lock);
+
+  if(send_hup && hup_pgid > 0) {
+    proc_signal_pgid(hup_pgid, SIGHUP);
+    proc_signal_pgid(hup_pgid, SIGCONT);
+  }
 
   f->pty_side = PTY_SIDE_NONE;
   f->pty_index = -1;
