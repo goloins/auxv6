@@ -26,6 +26,8 @@ struct ip_hdr;
 struct timespec;
 struct superblock;
 struct termios;
+struct address_space;
+struct vaddr_range;
 struct bdevsw;
 struct pci_dev;
 struct vfs;
@@ -461,6 +463,7 @@ int             loop_find_free(void);
 
 // kalloc.c
 char*           kalloc(void);
+char*           kalloc_legacy_page(void);
 void            kfree(char*);
 void            kinit1(void*, void*);
 void            kinit2(void*, void*);
@@ -485,6 +488,7 @@ void            pagedb_mark_allocated_pa(uint pa);
 extern struct page_descriptor *pg_array;
 extern uint     pg_count;
 struct page_descriptor* pgfn_descriptor(uint pfn);
+int             pgfn_from_descriptor(struct page_descriptor *pg, uint *pfn_out);
 int             pgfn_refcount(uint pfn);
 void            pgfn_incref(uint pfn);
 void            pgfn_decref(uint pfn);
@@ -494,10 +498,24 @@ uint            pgfn_flags(uint pfn);
 // buddy.c / pagealloc.c
 void            buddy_init(void);
 void            pagealloc_init(void);
+int             pagealloc_ready(void);
 struct page_descriptor* alloc_pages_order(int order, int flags);
 void            free_pages_order(struct page_descriptor *pg, int order);
 struct page_descriptor* alloc_single_page(int flags);
 void            free_single_page(struct page_descriptor *pg);
+void            buddy_stats(uint *alloc_order0, uint *free_order0,
+							uint *bad_order_requests);
+void            buddy_stats_order(uint order, uint *allocs, uint *frees);
+uint            buddy_free_estimate(uint order);
+void            buddy_stats_all(uint *allocs8, uint *frees8,
+                                uint *est_free8, uint *bad_order_requests);
+void            buddy_invariant_stats(uint *ok, uint *bad_free_not_managed,
+									  uint *bad_free_refcount_nonzero,
+									  uint *bad_reserved_free);
+void            buddy_error_stats(uint *alloc_fail8,
+								  uint *free_invalid_order,
+								  uint *free_invalid_desc,
+								  uint *free_double_free);
 
 // kbd.c
 int             kbdgetc(void);
@@ -762,6 +780,17 @@ void            pte_mark_writable(uint *pte);
 void            pte_mark_user(uint *pte, int enabled);
 int             uvm_release_pte(uint *pte);
 int             cow_fault(pde_t *pgdir, uint va);
+
+// vma.c
+struct address_space* address_space_create(void);
+struct address_space* address_space_dup_cow(struct address_space *src);
+void            address_space_release(struct address_space *as);
+void            address_space_destroy(struct address_space *as);
+int             vma_expand(struct address_space *as, uint new_size);
+int             vma_shrink(struct address_space *as, uint new_size);
+struct vaddr_range* vma_find(struct address_space *as, uint va);
+int             vma_insert(struct address_space *as, const struct vaddr_range *vma);
+void            vma_remove(struct address_space *as, struct vaddr_range *vma);
 
 // socket.c
 void            socket_init(void);

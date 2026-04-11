@@ -440,7 +440,7 @@ kfree(char *v)
 // Returns a pointer that the kernel can use.
 // Returns 0 if the memory cannot be allocated.
 char*
-kalloc(void)
+kalloc_legacy_page(void)
 {
   struct run *r;
   struct cpu *c;
@@ -525,6 +525,23 @@ kalloc(void)
 }
 
 char*
+kalloc(void)
+{
+  struct page_descriptor *pg;
+  uint pfn;
+
+  if(!pagealloc_ready())
+    return kalloc_legacy_page();
+
+  pg = alloc_single_page(0);
+  if(pg == 0)
+    return 0;
+  if(pgfn_from_descriptor(pg, &pfn) < 0)
+    return 0;
+  return P2V(pfn * PGSIZE);
+}
+
+char*
 kalloc_contiguous(uint npages)
 {
   struct run *r;
@@ -547,7 +564,7 @@ kalloc_contiguous(uint npages)
     return 0;
 
   if(npages == 1)
-    return kalloc();
+    return kalloc_legacy_page();
 
   kmem.alloc_calls++;
 

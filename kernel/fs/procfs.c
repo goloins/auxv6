@@ -809,6 +809,24 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     uint pipe_write_sleeps;
     uint pipe_wake_readers;
     uint pipe_wake_writers;
+    uint buddy_alloc_order0;
+    uint buddy_free_order0;
+    uint buddy_bad_order;
+    uint buddy_alloc_order[8];
+    uint buddy_free_order[8];
+    uint buddy_est_free_order[8];
+    uint buddy_alloc_fail_order[8];
+    uint buddy_invariant_ok;
+    uint buddy_bad_free_not_managed;
+    uint buddy_bad_free_refcount_nonzero;
+    uint buddy_bad_reserved_free;
+    uint buddy_free_invalid_order;
+    uint buddy_free_invalid_desc;
+    uint buddy_free_double_free;
+    uint cache_hits;
+    uint cache_misses;
+    uint cache_total;
+    uint cache_hit_permille;
 
     kalloc_stats(&kstats);
     pagedb_stats(&pg_desc_pages, &pg_desc_bytes, &pg_desc_backing_pages,
@@ -819,6 +837,22 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
                       &vm_pde_repairs, &vm_master_repairs, &vm_bad_pte_drops);
     pipe_get_stats(&pipe_read_sleeps, &pipe_write_sleeps,
                    &pipe_wake_readers, &pipe_wake_writers);
+    buddy_stats_all(buddy_alloc_order, buddy_free_order,
+            buddy_est_free_order, &buddy_bad_order);
+    buddy_invariant_stats(&buddy_invariant_ok,
+                &buddy_bad_free_not_managed,
+                &buddy_bad_free_refcount_nonzero,
+                &buddy_bad_reserved_free);
+    buddy_error_stats(buddy_alloc_fail_order,
+              &buddy_free_invalid_order,
+              &buddy_free_invalid_desc,
+              &buddy_free_double_free);
+    cache_hits = kstats.cache_alloc_hits;
+    cache_misses = kstats.cache_alloc_misses;
+    cache_total = cache_hits + cache_misses;
+    cache_hit_permille = (cache_total > 0) ? (cache_hits * 1000U) / cache_total : 0;
+    buddy_alloc_order0 = buddy_alloc_order[0];
+    buddy_free_order0 = buddy_free_order[0];
 
     len = 0;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "pages_total ", kstats.total_pages) < 0)
@@ -846,6 +880,18 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "global_drain_batches ", kstats.global_drain_batches) < 0)
       return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "global_drain_pages ", kstats.global_drain_pages) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "cache_hit_permille ", cache_hit_permille) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "kalloc_pcpu_low_water ", KALLOC_PCPU_LOW_WATER) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "kalloc_pcpu_high_water ", KALLOC_PCPU_HIGH_WATER) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "kalloc_pcpu_refill_trigger ", KALLOC_PCPU_REFILL_TRIGGER) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "kalloc_refill_batch ", KALLOC_REFILL_BATCH) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "kalloc_drain_batch ", KALLOC_DRAIN_BATCH) < 0)
       return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "ref_increments ", kstats.ref_increments) < 0)
       return -1;
@@ -886,6 +932,118 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "pipe_wake_readers ", pipe_wake_readers) < 0)
       return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "pipe_wake_writers ", pipe_wake_writers) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_alloc_order0 ", buddy_alloc_order0) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_alloc_order1 ", buddy_alloc_order[1]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_alloc_order2 ", buddy_alloc_order[2]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_alloc_order3 ", buddy_alloc_order[3]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_alloc_order4 ", buddy_alloc_order[4]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_alloc_order5 ", buddy_alloc_order[5]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_alloc_order6 ", buddy_alloc_order[6]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_alloc_order7 ", buddy_alloc_order[7]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_free_order0 ", buddy_free_order0) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_free_order1 ", buddy_free_order[1]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_free_order2 ", buddy_free_order[2]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_free_order3 ", buddy_free_order[3]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_free_order4 ", buddy_free_order[4]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_free_order5 ", buddy_free_order[5]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_free_order6 ", buddy_free_order[6]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_free_order7 ", buddy_free_order[7]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_bad_order_requests ", buddy_bad_order) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_invariant_ok ", buddy_invariant_ok) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_bad_free_not_managed ", buddy_bad_free_not_managed) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_bad_free_refcount_nonzero ", buddy_bad_free_refcount_nonzero) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_bad_reserved_free ", buddy_bad_reserved_free) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_alloc_fail_order0 ", buddy_alloc_fail_order[0]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_alloc_fail_order1 ", buddy_alloc_fail_order[1]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_alloc_fail_order2 ", buddy_alloc_fail_order[2]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_alloc_fail_order3 ", buddy_alloc_fail_order[3]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_alloc_fail_order4 ", buddy_alloc_fail_order[4]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_alloc_fail_order5 ", buddy_alloc_fail_order[5]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_alloc_fail_order6 ", buddy_alloc_fail_order[6]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_alloc_fail_order7 ", buddy_alloc_fail_order[7]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_free_invalid_order ", buddy_free_invalid_order) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_free_invalid_desc ", buddy_free_invalid_desc) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_free_double_free ", buddy_free_double_free) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_est_free_order0 ", buddy_est_free_order[0]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_est_free_order1 ", buddy_est_free_order[1]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_est_free_order2 ", buddy_est_free_order[2]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_est_free_order3 ", buddy_est_free_order[3]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_est_free_order4 ", buddy_est_free_order[4]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_est_free_order5 ", buddy_est_free_order[5]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_est_free_order6 ", buddy_est_free_order[6]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "buddy_est_free_order7 ", buddy_est_free_order[7]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "alloc_order_0 ", buddy_alloc_order[0]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "alloc_order_1 ", buddy_alloc_order[1]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "alloc_order_2 ", buddy_alloc_order[2]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "alloc_order_3 ", buddy_alloc_order[3]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "alloc_order_4 ", buddy_alloc_order[4]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "alloc_order_5 ", buddy_alloc_order[5]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "alloc_order_6 ", buddy_alloc_order[6]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "alloc_order_7 ", buddy_alloc_order[7]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "free_order_0 ", buddy_free_order[0]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "free_order_1 ", buddy_free_order[1]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "free_order_2 ", buddy_free_order[2]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "free_order_3 ", buddy_free_order[3]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "free_order_4 ", buddy_free_order[4]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "free_order_5 ", buddy_free_order[5]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "free_order_6 ", buddy_free_order[6]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "free_order_7 ", buddy_free_order[7]) < 0)
       return -1;
     return procfs_copy_data(dst, off, n, buf, len);
   }

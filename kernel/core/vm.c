@@ -6,6 +6,7 @@
 #include "mmu.h"
 #include "proc.h"
 #include "elf.h"
+#include "vma.h"
 #include "fs.h"
 #include "vfs.h"
 
@@ -435,16 +436,20 @@ void
 switchuvm(struct proc *p)
 {
   struct cpu *c;
+  pde_t *pgdir;
 
   if(p == 0)
     panic("switchuvm: no process");
   if(p->kstack == 0)
     panic("switchuvm: no kstack");
-  if(p->pgdir == 0)
+  pgdir = p->pgdir;
+  if(p->addrsp && p->addrsp->pgdir)
+    pgdir = p->addrsp->pgdir;
+  if(pgdir == 0)
     panic("switchuvm: no pgdir");
 
   // Repair any drift in shared kernel-half PDEs before loading CR3.
-  vm_sync_kernel_pdes(p->pgdir);
+  vm_sync_kernel_pdes(pgdir);
 
   pushcli();
   c = mycpu();
@@ -457,7 +462,7 @@ switchuvm(struct proc *p)
   // forbids I/O instructions (e.g., inb and outb) from user space
   c->ts.iomb = (ushort)0xFFFF;
   ltr(SEG_TSS << 3);
-  lcr3(V2P(p->pgdir));  // switch to process's address space
+  lcr3(V2P(pgdir));  // switch to process's address space
   popcli();
 }
 

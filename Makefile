@@ -94,6 +94,7 @@ OBJS = \
 	kernel/core/pagedb.o\
 	kernel/vm/buddy.o\
 	kernel/vm/pagealloc.o\
+	kernel/vm/vma.o\
 	kernel/core/kmalloc.o\
 	kernel/driver/kbd.o\
 	kernel/driver/mouse.o\

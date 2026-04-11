@@ -557,10 +557,26 @@ Each phase is self-contained, testable, and can be reverted independently. Estim
 **Tasks**:
 - [ ] Implement `alloc_pages_order(order)` using buddy algorithm
 - [ ] Implement free-list merging and splitting
-- [ ] Create `alloc_single_page()` and `free_single_page()` wrappers
-- [ ] Have `kalloc()` call `alloc_single_page()` internally
-- [ ] Add invariant checks: free-list sanity, no double-free, refcount bounds
-- [ ] Export buddy state to /proc/vmstat (alloc_order_0...7, free_order_0...7)
+- [x] Create `alloc_single_page()` and `free_single_page()` wrappers
+- [x] Have `kalloc()` call `alloc_single_page()` internally
+- [x] Add invariant checks: free-list sanity, no double-free, refcount bounds
+- [x] Export buddy state to /proc/vmstat (alloc_order_0...7, free_order_0...7)
+
+**Phase 2 Progress (2026-04-10)**:
+- [x] Added compile-linked scaffold units: `kernel/vm/buddy.c`, `kernel/vm/pagealloc.c`
+- [x] Added exported allocator interface prototypes in `include/defs.h`
+- [x] Implemented behavior-neutral order-0 bridge (`alloc_pages_order(0)`/`free_pages_order(0)`) via existing `kalloc`/`kfree`
+- [x] Added buddy bridge counters to `/proc/vmstat` (`buddy_alloc_order0`, `buddy_free_order0`, `buddy_bad_order_requests`)
+- [x] Extended bridge to accept orders 1..7 via contiguous allocator fallback (behavior-neutral, non-buddy internals)
+- [x] Added per-order bridge telemetry in `/proc/vmstat` for alloc/free orders 0..7
+- [x] Wired `pagealloc_init()` in boot path after `pagedb_init()`
+- [x] Added buddy-style free-block estimation by order (0..7) from pagedb flags and exported in `/proc/vmstat`
+- [x] Added consolidated per-order buddy stats API (`buddy_stats_all`) for cleaner allocator observability wiring
+- [x] Exported canonical `alloc_order_0..7` and `free_order_0..7` keys in `/proc/vmstat`
+- [x] Added buddy invariant counters in `/proc/vmstat` (`buddy_invariant_ok`, free/refcount/reserved violations)
+- [x] Added buddy bridge error telemetry (`buddy_alloc_fail_order*`, invalid/double-free counters)
+- [x] Routed public `kalloc()` through `alloc_single_page()` after `pagealloc_init()`, with a non-recursive legacy backend path
+- [ ] Replace stubs with real zone/order free lists and split/merge logic
 
 **Files Modified**:
 - `kernel/vm/buddy.c` (NEW)
@@ -583,13 +599,19 @@ Each phase is self-contained, testable, and can be reverted independently. Estim
 **Goal**: Add per-CPU fast paths; batched refill/drain; reduce global lock contention
 
 **Tasks**:
-- [ ] Allocate per-CPU cache structure (one per online CPU)
-- [ ] Implement `refill_local_cache(order)`: take batch from buddy → local cache
-- [ ] Implement `drain_local_cache(order)`: overflow → buddy
-- [ ] Add watermark thresholds (KALLOC_PCPU_LOW, KALLOC_PCPU_HIGH in include/param.h)
-- [ ] Trigger refill when allocating and local count < watermark
-- [ ] Trigger drain when freeing and local count > watermark
-- [ ] Export hit/miss and batch counts to /proc/vmstat
+- [x] Allocate per-CPU cache structure (one per online CPU)
+- [x] Implement `refill_local_cache(order)`: take batch from global allocator → local cache
+- [x] Implement `drain_local_cache(order)`: overflow → global allocator
+- [x] Add watermark thresholds (`KALLOC_PCPU_LOW_WATER`, `KALLOC_PCPU_HIGH_WATER` in `include/param.h`)
+- [x] Trigger refill when allocating and local count < watermark
+- [x] Trigger drain when freeing and local count > watermark
+- [x] Export hit/miss and batch counts to /proc/vmstat
+
+**Phase 3 Progress (2026-04-10)**:
+- [x] Per-CPU page caches are active in `kernel/core/kalloc.c` with refill/drain batching and reserve-aware global interactions
+- [x] Watermark and batch tunables are defined in `include/param.h` (`KALLOC_PCPU_LOW_WATER`, `KALLOC_PCPU_HIGH_WATER`, `KALLOC_REFILL_BATCH`, `KALLOC_DRAIN_BATCH`)
+- [x] `/proc/vmstat` exports per-CPU cache telemetry (`cache_alloc_hits`, `cache_alloc_misses`, refill/drain batches/pages)
+- [x] Added derived hit-rate and policy observability in `/proc/vmstat` (`cache_hit_permille`, `kalloc_pcpu_*`, batch keys)
 
 **Files Modified**:
 - `kernel/vm/pagealloc.c` (add per-CPU layers)
@@ -611,15 +633,23 @@ Each phase is self-contained, testable, and can be reverted independently. Estim
 **Goal**: Replace raw `pde_t *pgdir` with explicit `struct address_space` containing VMA tree
 
 **Tasks**:
-- [ ] Define `struct address_space` and `struct vaddr_range` in kernel/vm/vma.h
-- [ ] Implement VMA operations: find, insert, remove, expand, shrink
+- [x] Define `struct address_space` and `struct vaddr_range` in `include/vma.h`
+- [x] Implement VMA operations: find, insert, remove, expand, shrink
 - [ ] Rewrite `setupkvm()` to allocate and initialize address_space
 - [ ] Rewrite `allocuvm()` → `vma_expand()`: add VMA entry, allocate pages
 - [ ] Rewrite `deallocuvm()` → `vma_shrink()`: trim VMAs, drop page refs
 - [ ] Rewrite `inituvm()` to use address_space; initialize child image
 - [ ] Modify `struct proc` to hold `address_space *addrsp` instead of raw pgdir
-- [ ] Update `switchuvm()` to use `p->addrsp->pgdir`
+- [x] Update `switchuvm()` to use `p->addrsp->pgdir` (with legacy `pgdir` fallback during transition)
 - [ ] Update VM traversal (`copyout`, `copyin`, `uva2ka`) to use address_space
+
+**Phase 4 Progress (2026-04-10)**:
+- [x] Added compile-linked Phase 4 scaffold unit `kernel/vm/vma.c`
+- [x] Added public VMA/address-space type definitions in `include/vma.h`
+- [x] Added exported address-space/VMA APIs in `include/defs.h`
+- [x] Added `proc.addrsp` scaffold field in `include/proc.h` (legacy `pgdir` remains authoritative)
+- [x] Made `switchuvm()` address-space aware in `kernel/core/vm.c` with behavior-neutral fallback
+- [ ] Wire VM core paths (`setupkvm`/`allocuvm`/`deallocuvm`/`switchuvm`) to `address_space`
 
 **Files Modified**:
 - `kernel/vm/vma.c` (NEW)

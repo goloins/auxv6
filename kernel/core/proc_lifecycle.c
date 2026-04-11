@@ -126,6 +126,7 @@ found:
     p->pid = candidate;
   }
   p->ppid = 0;
+    p->addrsp = 0;
   p->pgid = p->pid;
   p->sid = p->pid;
   p->tty = -1;

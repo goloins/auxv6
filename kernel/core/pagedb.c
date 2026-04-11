@@ -203,6 +203,21 @@ pgfn_descriptor(uint pfn)
 }
 
 int
+pgfn_from_descriptor(struct page_descriptor *pg, uint *pfn_out)
+{
+  uint pfn;
+
+  if(!pg_ready || pg == 0 || pfn_out == 0)
+    return -1;
+  if(pg < pg_array || pg >= (pg_array + pg_count))
+    return -1;
+
+  pfn = (uint)(pg - pg_array);
+  *pfn_out = pfn;
+  return 0;
+}
+
+int
 pgfn_refcount(uint pfn)
 {
   if(pg_ready && pfn < pg_count)
