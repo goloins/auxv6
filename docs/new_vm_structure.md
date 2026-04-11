@@ -421,6 +421,39 @@ kernel/vm/
 | `include/proc.h` | Add address_space, child-list fields to struct proc | ~20 lines |
 | `include/mmu.h` | Define page table flag discipline (PTE_COW, etc.) | ~30 lines |
 
+### Core Decomposition Plan (xv6 holdover cleanup)
+
+Before semantic VM changes, split monolithic core files into smaller units with
+strictly no behavioral changes. This mirrors Linux/FreeBSD organization and
+reduces merge risk during VM bring-up.
+
+#### Trap and IRQ split
+
+| New/Existing File | Responsibility |
+|-------------------|----------------|
+| `kernel/core/trap.c` | Thin trap entry glue + IDT setup + top-level dispatch |
+| `kernel/core/irq.c` | Dynamic IRQ registry (`irq_register`, `irq_unregister`, dispatch chain) |
+| `kernel/core/trap_fault.c` | Fault classification and VM handoff (`vm_handle_fault`) |
+| `kernel/core/trap_diag.c` | Emergency fatal trap diagnostics/reporting |
+
+#### Proc split
+
+| New/Existing File | Responsibility |
+|-------------------|----------------|
+| `kernel/core/proc.c` | Thin compatibility front + shared globals only |
+| `kernel/core/proc_lifecycle.c` | `allocproc`, `fork`, `exit`, `wait`, `waitpid`, reparenting |
+| `kernel/core/proc_sched.c` | scheduler core, `sleep`/`wakeup`, run-state transitions |
+| `kernel/core/proc_signal.c` | process signal delivery/stop/continue mechanics |
+| `kernel/core/proc_stats.c` | loadavg, wake/wait scan counters, scheduler stats APIs |
+| `kernel/core/proc_fdscan.c` | fd-table/process scan helpers (device-open checks, PTY checks) |
+
+#### Constraints for decomposition commits
+
+- No semantic or locking changes in split commits
+- No signature changes unless required for static visibility
+- Build after each step using host-side `sudo make aux.kern`
+- Keep each split commit bisectable and revertable
+
 ### Filesystem Layer Updates
 
 | File | Change | Reason |
@@ -449,6 +482,9 @@ Each phase is self-contained, testable, and can be reverted independently. Estim
 **Goal**: Lock in baselines; document invariants; plan rollback strategy
 
 **Tasks**:
+- [ ] Perform no-semantic decomposition of trap/proc units (see Core Decomposition Plan above)
+- [ ] Add/adjust headers for split units (`include/defs.h`, internal static declarations)
+- [ ] Build each decomposition step with `sudo make aux.kern` and preserve bisectability
 - [ ] Run baseline benchmarks: `kallocstress -n 10`, `schedperf -n 10`, `fsperf -n 10`, `stackgrowtest -n 10`
 - [ ] Reserve on-disk measurement database (docs/measurements-2026-04.md)
 - [ ] Design page descriptor layout; PFN array sizing math
@@ -456,6 +492,7 @@ Each phase is self-contained, testable, and can be reverted independently. Estim
 - [ ] Create rollback checklist and decision gates
 
 **Validation**:
+- [ ] Decomposition commits are behavior-neutral and compile-clean in sequence
 - [ ] All benchmarks baseline-locked
 - [ ] Invariant doc reviewed and agreed
 
