@@ -5,6 +5,7 @@
 #include "mmu.h"
 #include "x86.h"
 #include "proc.h"
+#include "vma.h"
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "wait.h"
@@ -172,59 +173,6 @@ proc_check_alarms(uint current_ticks)
 //     growth allocates/maps the next page on demand.
 //   - After changing PTE flags, the TLB for this process is invalidated via
 //     switchuvm() so the next user instruction sees the updated mapping.
-int
-proc_try_grow_stack(struct proc *p, uint fault_addr)
-{
-  uint stack_guard;
-  uint pages_used;
-  int pst;
-
-  if(p->stack_top == 0 || p->stack_bot == 0)
-    return 0;
-  if(p->stack_bot >= p->stack_top)
-    return 0;
-
-  stack_guard = p->stack_bot - PGSIZE;
-
-  // The fault must land in the current single-page guard zone.
-  if(fault_addr < stack_guard || fault_addr >= p->stack_bot)
-    return 0;
-
-  pages_used = (p->stack_top - p->stack_bot) / PGSIZE;
-  if(pages_used >= USER_STACK_MAX_PAGES) {
-    STACKDBG("stack: pid %d tried to grow beyond max (%d pages)\n",
-             p->pid, USER_STACK_MAX_PAGES);
-    return 0;  // Hard ceiling: deliver SIGSEGV
-  }
-
-  pst = user_page_state(proc_pgdir(p), (char*)stack_guard);
-  if(pst == 1){
-    // Pre-mapped but inaccessible reserve page.
-    setpteu(proc_pgdir(p), (char*)stack_guard);
-  } else if(pst == 0){
-    // Sparse child mapping: allocate one stack page on demand.
-    if(p->addrsp){
-      if(allocuvm_as(p->addrsp, stack_guard, stack_guard + PGSIZE) == 0)
-        return 0;
-    } else {
-      if(allocuvm(proc_pgdir(p), stack_guard, stack_guard + PGSIZE) == 0)
-        return 0;
-    }
-  } else {
-    // Already user-accessible: not a growth fault candidate.
-    return 0;
-  }
-
-  p->stack_bot = stack_guard;
-
-  STACKDBG("stack: pid %d grew stack to 0x%x (%d/%d pages used)\n",
-           p->pid, p->stack_bot, pages_used + 1, USER_STACK_MAX_PAGES);
-
-  // Flush the TLB so the newly writable page is visible to userspace.
-  switchuvm(p);
-  return 1;
-}
-
 void
 proc_apply_pending_signals(struct proc *p)
 {
@@ -465,8 +413,10 @@ growproc(int n)
   pgdir = proc_pgdir(curproc);
   if(n > 0){
     if(curproc->addrsp){
-      if((sz = allocuvm_as(curproc->addrsp, sz, sz + n)) == 0)
+      if(vma_expand_flags(curproc->addrsp, sz + n,
+                          VMA_READ | VMA_WRITE | VMA_LAZY) < 0)
         return -1;
+      sz = sz + n;
     } else {
       if(pgdir == 0 || (sz = allocuvm(pgdir, sz, sz + n)) == 0)
         return -1;

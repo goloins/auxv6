@@ -372,6 +372,7 @@ struct inode*   namei(char*);
 struct inode*   nameiparent(char*, char*);
 int             readi(struct inode*, char*, uint64_t, uint);
 int             procfs_readi(struct inode*, char*, uint64_t, uint);
+void            procfs_revalidate_inode(struct inode*);
 void            stati(struct inode*, struct stat*);
 int             writei(struct inode*, char*, uint64_t, uint);
 void            vfs_init(void);
@@ -768,6 +769,7 @@ int             allocuvm(pde_t*, uint, uint);
 int             deallocuvm(pde_t*, uint, uint);
 int             allocuvm_as(struct address_space *as, uint oldsz, uint newsz);
 int             deallocuvm_as(struct address_space *as, uint oldsz, uint newsz);
+int             vma_expand_flags(struct address_space *as, uint new_size, uint flags);
 void            freevm(pde_t*);
 pde_t*          copyuvm_as(struct address_space *as, uint sz);
 void            inituvm_as(struct address_space *as, char *init, uint sz);
@@ -786,12 +788,17 @@ int             pte_is_user(uint pte);
 void            pte_mark_cow(uint *pte);
 void            pte_mark_writable(uint *pte);
 void            pte_mark_user(uint *pte, int enabled);
+uint*           vm_lookup_pte(pde_t *pgdir, uint va);
+int             vm_map_user_page(pde_t *pgdir, uint va, uint pa, int perm);
+void            vm_tlb_flush(pde_t *pgdir);
 int             uvm_release_pte(uint *pte);
 int             cow_fault(pde_t *pgdir, uint va);
 void            vm_get_cow_stats(uint *mappings_created);
 int             vm_handle_fault(struct trapframe *tf, uint fault_addr);
+int             vm_resolve_user_page(pde_t *pgdir, uint va, int write_access);
 void            vm_get_fault_stats(uint *dispatches, uint *cow_resolved,
-								   uint *stack_growth, uint *sigsegv);
+								   uint *stack_growth, uint *demand_zero,
+								   uint *sigsegv);
 
 // vma.c
 struct address_space* address_space_create(void);

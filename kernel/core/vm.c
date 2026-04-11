@@ -31,6 +31,7 @@ static int vm_kernel_pde_ref_ready;
 static uchar vm_kernel_pde_master_reported[NPDENTRIES];
 
 static pde_t vm_pde_stable(pde_t pde);
+static int mappages(pde_t *pgdir, void *va, uint size, uint pa, int perm);
 
 static int
 vm_proc_state_requires_addrspace(struct proc *p)
@@ -459,6 +460,33 @@ pte_assert_sane(uint pte)
   // Forward-compat invariant: present mappings cannot be both writable and COW.
   if((pte & PTE_P) && pte_is_cow(pte) && pte_is_writable(pte))
     panic("pte sane");
+}
+
+uint*
+vm_lookup_pte(pde_t *pgdir, uint va)
+{
+  pte_t *pte;
+
+  pte = walkpgdir(pgdir, (char*)PGROUNDDOWN(va), 0);
+  if(pte && ((*pte & PTE_P) != 0))
+    pte_assert_sane(*pte);
+  return (uint*)pte;
+}
+
+int
+vm_map_user_page(pde_t *pgdir, uint va, uint pa, int perm)
+{
+  if(pgdir == 0)
+    return -1;
+  return mappages(pgdir, (void*)PGROUNDDOWN(va), PGSIZE, pa, perm);
+}
+
+void
+vm_tlb_flush(pde_t *pgdir)
+{
+  if(pgdir == 0)
+    panic("vm_tlb_flush");
+  lcr3(V2P(pgdir));
 }
 
 static int
@@ -1027,46 +1055,6 @@ uvm_release_pte(uint *pte)
 }
 
 int
-cow_fault(pde_t *pgdir, uint va)
-{
-  pte_t *pte;
-  uint pa;
-  uint flags;
-  char *mem;
-
-  va = PGROUNDDOWN(va);
-  pte = walkpgdir(pgdir, (char*)va, 0);
-  if(pte == 0 || ((*pte & PTE_P) == 0))
-    return -1;
-  pte_assert_sane(*pte);
-  if(!pte_is_cow(*pte))
-    return -1;
-
-  pa = PTE_ADDR(*pte);
-  if(pa == 0)
-    return -1;
-  flags = PTE_FLAGS(*pte);
-
-  if(kpage_refcount(pa) > 1){
-    mem = kalloc();
-    if(mem == 0)
-      return -1;
-    memmove(mem, (char*)P2V(pa), PGSIZE);
-    if(uvm_release_pte((uint*)pte) < 0){
-      kfree(mem);
-      return -1;
-    }
-    flags = (flags & ~PTE_COW) | PTE_W;
-    *pte = V2P(mem) | flags | PTE_P;
-  } else {
-    pte_mark_writable((uint*)pte);
-  }
-
-  lcr3(V2P(pgdir));
-  return 0;
-}
-
-static int
 install_cow_mapping(uint pa, pde_t *child_pgdir, uint va, uint flags)
 {
   uint cow_flags;
@@ -1199,8 +1187,13 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
     if(!vm_addrspace_allows_user_va(pgdir, va0))
       return -1;
     pte = walkpgdir(pgdir, (char*)va0, 0);
-    if(pte == 0 || ((*pte & PTE_P) == 0))
-      return -1;
+    if(pte == 0 || ((*pte & PTE_P) == 0)){
+      if(vm_resolve_user_page(pgdir, va0, 1) < 0)
+        return -1;
+      pte = walkpgdir(pgdir, (char*)va0, 0);
+      if(pte == 0 || ((*pte & PTE_P) == 0))
+        return -1;
+    }
     pte_assert_sane(*pte);
     if(!pte_is_user(*pte))
       return -1;
@@ -1208,20 +1201,16 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
       return -1;
 
     if(!pte_is_writable(*pte)){
-      if(pte_is_cow(*pte)){
-        if(cow_fault(pgdir, va0) < 0)
-          return -1;
-        pte = walkpgdir(pgdir, (char*)va0, 0);
-        if(pte == 0 || ((*pte & PTE_P) == 0))
-          return -1;
-        pte_assert_sane(*pte);
-        if(!pte_is_user(*pte) || !pte_is_writable(*pte))
-          return -1;
-        if(!pte_pa_valid(*pte))
-          return -1;
-      } else {
+      if(vm_resolve_user_page(pgdir, va0, 1) < 0)
         return -1;
-      }
+      pte = walkpgdir(pgdir, (char*)va0, 0);
+      if(pte == 0 || ((*pte & PTE_P) == 0))
+        return -1;
+      pte_assert_sane(*pte);
+      if(!pte_is_user(*pte) || !pte_is_writable(*pte))
+        return -1;
+      if(!pte_pa_valid(*pte))
+        return -1;
     }
 
     pa0 = (char*)P2V(PTE_ADDR(*pte));
@@ -1254,8 +1243,13 @@ copyin(pde_t *pgdir, void *p, uint va, uint len)
     if(!vm_addrspace_allows_user_va(pgdir, va0))
       return -1;
     pa0 = uva2ka(pgdir, (char*)va0);
-    if(pa0 == 0)
-      return -1;
+    if(pa0 == 0){
+      if(vm_resolve_user_page(pgdir, va0, 0) < 0)
+        return -1;
+      pa0 = uva2ka(pgdir, (char*)va0);
+      if(pa0 == 0)
+        return -1;
+    }
     n = PGSIZE - (va - va0);
     if(n > len)
       n = len;

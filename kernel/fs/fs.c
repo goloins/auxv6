@@ -378,6 +378,10 @@ ilock(struct inode *ip)
   acquiresleep(&ip->lock);
 
   if(ip->valid == 0){
+    if(ip->dev == PROCFSDEV){
+      procfs_revalidate_inode(ip);
+      return;
+    }
     bp = fs_bread_checked(ip->dev, IBLOCK(ip->inum, sb));
     dip = (struct dinode*)bp->data + ip->inum%IPB;
     ip->type = dip->type;

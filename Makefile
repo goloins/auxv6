@@ -652,6 +652,9 @@ _cowtest: user/cowtest
 _cowexectest: user/cowexectest
 	cp user/cowexectest _cowexectest
 
+_demandzerotest: user/demandzerotest
+	cp user/demandzerotest _demandzerotest
+
 _kmemstress: user/kmemstress
 	cp user/kmemstress _kmemstress
 
@@ -1057,6 +1060,7 @@ UPROGS=\
 	_vmguardtest\
 	_cowtest\
 	_cowexectest\
+	_demandzerotest\
 	_kmemstress\
 	_bcachestress\
 	_sigtest\

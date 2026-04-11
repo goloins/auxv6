@@ -107,6 +107,18 @@ static char procfs_net_outbuf[4096];
 static int procfs_writei(struct inode *ip, char *src, uint off, uint n);
 static uint procfs_write_uint(char *buf, uint value);
 
+static struct procfs_inode*
+procfs_lookup_meta(uint inum)
+{
+  int i;
+
+  for(i = 0; procfs_inodes[i].name; i++){
+    if(procfs_inodes[i].inum == inum)
+      return &procfs_inodes[i];
+  }
+  return 0;
+}
+
 static uint
 procfs_root_dir_size(void)
 {
@@ -285,9 +297,10 @@ procfs_copy_data(char *dst, uint off, uint n, char *src, uint len)
 }
 
 static void
-procfs_fill_inode(struct inode *ip, uint inum)
+procfs_populate_inode_locked(struct inode *ip, uint inum)
 {
-  acquiresleep(&ip->lock);
+  struct procfs_inode *meta;
+
   ip->dev = PROCFSDEV;
   ip->inum = inum;
   ip->valid = 1;
@@ -302,109 +315,38 @@ procfs_fill_inode(struct inode *ip, uint inum)
     ip->type = T_DIR;
     ip->mode = M_IRUSR | M_IWUSR | M_IXUSR | M_IRGRP | M_IXGRP | M_IROTH | M_IXOTH;
     ip->size = procfs_root_dir_size();
-  } else if(inum == PROCFS_UPTIME_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
-    ip->size = 16;
-  } else if(inum == PROCFS_PCI_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
-    ip->size = 2048;  /* Dynamic content */
-  } else if(inum == PROCFS_VBLK_FLUSH_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IWUSR | M_IRGRP | M_IROTH;
-    ip->size = 16;
-  } else if(inum == PROCFS_AHCI_TUNE_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IWUSR | M_IRGRP | M_IROTH;
-    ip->size = 2048;
-  } else if(inum == PROCFS_MEMINFO_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
-    ip->size = 256;
-  } else if(inum == PROCFS_LOGO_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IWUSR | M_IRGRP | M_IROTH;
-    ip->size = 16;
-  } else if(inum == PROCFS_GFXSTATS_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
-    ip->size = 256;
-  } else if(inum == PROCFS_LSOF_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
-    ip->size = 2048;
-  } else if(inum == PROCFS_NVME_TUNE_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IWUSR | M_IRGRP | M_IROTH;
-    ip->size = 2048;
-  } else if(inum == PROCFS_SERVER7_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IWUSR | M_IRGRP | M_IROTH;
-    ip->size = 256;
-  } else if(inum == PROCFS_LOADAVG_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
-    ip->size = 64;
-  } else if(inum == PROCFS_BDEV_TABLE_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
-    ip->size = 4096;
-  } else if(inum == PROCFS_SCHEDSTAT_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
-    ip->size = 256;
-  } else if(inum == PROCFS_VMSTAT_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
-    ip->size = 512;
-  } else if(inum == PROCFS_FDLIMITS_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
-    ip->size = 2048;
-  } else if(inum == PROCFS_AUDIO_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
-    ip->size = 512;
-  } else if(inum == PROCFS_AUDIO_STATS_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
-    ip->size = 512;
-  } else if(inum == PROCFS_AUDIO_CLIENTS_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
-    ip->size = 2048;
-  } else if(inum == PROCFS_SERIAL_TTY_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
-    ip->size = 512;
-  } else if(inum == PROCFS_MODEMS_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
-    ip->size = 2048;
-  } else if(inum == PROCFS_BCACHE_HEALTH_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
-    ip->size = 512;
-  } else if(inum == PROCFS_FIREWIRE_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
-    ip->size = 2048;
-  } else if(inum == PROCFS_USB_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
-    ip->size = 2048;
-  } else if(inum == PROCFS_NFORCE_INO){
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
-    ip->size = 2048;
-  } else {
-    ip->type = T_FILE;
-    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
-    ip->size = sizeof(PROCFS_VERSION_STR) - 1;
+    return;
   }
 
+  meta = procfs_lookup_meta(inum);
+  ip->type = T_FILE;
+  ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
+  ip->size = meta ? meta->size : (sizeof(PROCFS_VERSION_STR) - 1);
+
+  if(inum == PROCFS_VBLK_FLUSH_INO ||
+     inum == PROCFS_AHCI_TUNE_INO ||
+     inum == PROCFS_NVME_TUNE_INO ||
+     inum == PROCFS_SERVER7_INO ||
+     inum == PROCFS_LOGO_INO)
+    ip->mode = M_IRUSR | M_IWUSR | M_IRGRP | M_IROTH;
+}
+
+static void
+procfs_fill_inode(struct inode *ip, uint inum)
+{
+  acquiresleep(&ip->lock);
+  procfs_populate_inode_locked(ip, inum);
   releasesleep(&ip->lock);
+}
+
+void
+procfs_revalidate_inode(struct inode *ip)
+{
+  if(ip == 0 || ip->dev != PROCFSDEV)
+    return;
+  if(!holdingsleep(&ip->lock))
+    panic("procfs_revalidate_inode");
+  procfs_populate_inode_locked(ip, ip->inum);
 }
 
 static struct inode*
@@ -838,6 +780,7 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     uint vm_fault_dispatches;
     uint vm_fault_cow_resolved;
     uint vm_fault_stack_growth;
+    uint vm_fault_demand_zero;
     uint vm_fault_sigsegv;
 
     kalloc_stats(&kstats);
@@ -849,7 +792,8 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
                       &vm_pde_repairs, &vm_master_repairs, &vm_bad_pte_drops);
     vm_get_cow_stats(&cow_mappings);
     vm_get_fault_stats(&vm_fault_dispatches, &vm_fault_cow_resolved,
-               &vm_fault_stack_growth, &vm_fault_sigsegv);
+           &vm_fault_stack_growth, &vm_fault_demand_zero,
+           &vm_fault_sigsegv);
     vm_get_addrspace_guard_stats(&as_guard_checks, &as_guard_allows,
                    &as_guard_denies, &as_guard_bypass_no_as,
                    &as_guard_bypass_vm_size);
@@ -950,6 +894,8 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_fault_cow_resolved ", vm_fault_cow_resolved) < 0)
       return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_fault_stack_growth ", vm_fault_stack_growth) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_fault_demand_zero ", vm_fault_demand_zero) < 0)
       return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_fault_sigsegv ", vm_fault_sigsegv) < 0)
       return -1;

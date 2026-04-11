@@ -725,6 +725,7 @@ Each phase is self-contained, testable, and can be reverted independently. Estim
 - [x] Added `cowtest` userland correctness coverage to verify two-sided parent/child write isolation across data, heap, and stack after `fork()`
 - [x] Guest-side `cowtest` now passes both the default 8-round run and an extended 32-round run, confirming repeated parent/child write isolation across data, heap, and stack after `fork()`
 - [x] Added `cowexectest` userland correctness coverage to validate the fork-to-exec address-space handoff and parent isolation across data, heap, and stack
+- [x] Guest-side `cowexectest -r 24` now passes 24/24 rounds, confirming the parent remains isolated while the child tears down the old image and runs a fresh exec image
 - [ ] Split remaining fault-time behaviors into an explicit dispatcher in Phase 6 instead of the current in-place path
 
 **Files Modified**:
@@ -733,12 +734,12 @@ Each phase is self-contained, testable, and can be reverted independently. Estim
 
 **Validation**:
 - [x] Kernel builds
-- [ ] Fork succeeds; parent + child see same memory initially
+- [x] Fork succeeds; parent + child see same memory initially before divergence (`cowtest` and `cowexectest` both validate inherited pre-write contents)
 - [x] Parent and child writes resolve through the COW fault path without cross-corruption (`cowtest`: 8/8 rounds pass; `cowtest -r 32`: 32/32 rounds pass)
 - [x] /proc/vmstat shows `cow_mappings` > 0 on fork (`cow_mappings 233`, `vm_as_guard_denies 0` in guest sample)
 - [x] `vmguardtest` passes in guest with zero `vm_as_guard_denies`, zero `vm_as_guard_bypass_no_as`, and zero `vm_as_guard_bypass_vm_size` deltas across procfs, pipe, and forked-child phases
 - [x] `cowtest` passes in guest across repeated parent/child write-isolation rounds for data, heap, and stack
-- [ ] `cowexectest` passes in guest across repeated fork-plus-exec handoff rounds
+- [x] `cowexectest` passes in guest across repeated fork-plus-exec handoff rounds (`cowexectest -r 24`: 24/24 rounds pass)
 - [ ] `schedperf -n 3` fork count improves >30% (less copying)
 - [ ] `kallocstress -n 3` fork count improves >20%
 
@@ -766,21 +767,35 @@ Each phase is self-contained, testable, and can be reverted independently. Estim
 - [x] Added `kernel/vm/fault.c` as the first dedicated VM fault-dispatch unit
 - [x] Routed user page faults in `trap.c` through `vm_handle_fault()` instead of open-coding COW and stack-growth decisions in the trap handler
 - [x] Added global `/proc/vmstat` fault telemetry (`vm_fault_dispatches`, `vm_fault_cow_resolved`, `vm_fault_stack_growth`, `vm_fault_sigsegv`) so the dispatcher split is immediately observable
-- [ ] Split `cow_fault()` into a dedicated `fault_cow_resolve()` helper owned by the dispatcher layer
-- [ ] Move stack-growth policy behind a `fault_stack_growth()` wrapper owned by the dispatcher layer
+- [x] Guest-side validation shows the dispatcher counters moving as expected: after `cowexectest -r 24`, `/proc/vmstat` reported `vm_fault_dispatches 773`, `vm_fault_cow_resolved 772`, `vm_fault_stack_growth 1`, `vm_fault_sigsegv 0`
+- [x] Guest-side `stackgrowtest` still passes after the dispatcher split, and the follow-up `/proc/vmstat` sample showed the expected counter movement (`vm_fault_dispatches 962`, `vm_fault_cow_resolved 900`, `vm_fault_stack_growth 61`, `vm_fault_sigsegv 1`)
+- [x] Split `cow_fault()` behind a dispatcher-owned `fault_cow_resolve()` wrapper in `kernel/vm/fault.c`
+- [x] Moved stack-growth policy behind a dispatcher-owned `fault_stack_growth()` wrapper in `kernel/vm/fault.c`
+- [x] Moved the actual `cow_fault()` implementation from `kernel/core/vm.c` into `kernel/vm/fault.c`
+- [x] Moved the actual `proc_try_grow_stack()` implementation from `kernel/core/proc.c` into `kernel/vm/fault.c`
+- [x] Re-collapsed raw page-table internals behind VM-owned helpers by replacing exported `walkpgdir()`/`pte_assert_sane()` access with `vm_lookup_pte()` and `vm_tlb_flush()` for the fault layer
+- [x] Added explicit fault classification in `vm_handle_fault()` so COW, stack-growth, and demand-zero paths are selected by policy instead of ordered fallthrough
+- [x] Added lazy heap growth via `VMA_LAZY` and `vma_expand_flags()`, making `sbrk()` growth for address-space-backed processes demand-zero instead of eager page allocation
+- [x] Added `fault_demand_zero()` and `vm_resolve_user_page()` so both direct user faults and kernel `copyin()`/`copyout()` can materialize untouched lazy pages safely
+- [x] Exported `vm_fault_demand_zero` in `/proc/vmstat` and added `demandzerotest` to validate direct page touches plus pipe I/O against lazy heap pages
 
 **Files Modified**:
 - `kernel/vm/fault.c` (NEW)
 - `kernel/core/trap.c` (route page-fault to vm_handle_fault)
-- `kernel/core/vm.c` (current COW resolver still used by dispatcher)
+- `kernel/core/vm.c` (COW install and copyout paths now call the fault-layer-owned resolver)
+- `kernel/core/proc.c` (stack-growth implementation moved into the fault layer)
 - `kernel/fs/procfs.c` (add global dispatcher fault counters)
+- `kernel/vm/vma.c` (flag-aware VMA expansion for lazy heap ranges)
+- `include/vma.h` / `include/defs.h` (lazy VMA flag and fault-layer helper prototypes)
+- `user/demandzerotest.c` (lazy demand-zero regression coverage)
 
 **Validation**:
-- [ ] Kernel builds
-- [ ] Forked processes can write to their data; parent unaffected (COW works)
-- [ ] `stackgrowtest` passes (stack growth via faults)
-- [ ] `cowexectest` passes (fork-to-exec handoff keeps parent isolated and new image stable)
-- [ ] `/proc/vmstat` shows dispatcher fault counters moving under COW and stack-growth workloads
+- [x] Kernel builds
+- [x] Forked processes can write to their data; parent unaffected (COW works)
+- [x] `stackgrowtest` passes (stack growth via faults)
+- [x] `cowexectest` passes (fork-to-exec handoff keeps parent isolated and new image stable)
+- [x] `/proc/vmstat` shows dispatcher fault counters moving under COW and stack-growth workloads
+- [ ] `demandzerotest` passes and `vm_fault_demand_zero` moves without `vm_fault_sigsegv` drift
 - [ ] `kallocstress -n 3` still passes
 
 **Risk**: Medium-High (fault path is hot; COW refcount accuracy critical)
