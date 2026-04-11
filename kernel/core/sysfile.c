@@ -1116,7 +1116,8 @@ sys_fstat(void)
 int
 sys_stat(void)
 {
-  char *path;
+  int path_addr;
+  char path[256];
   const struct vnode_ops *ops;
   int rc;
   struct stat st;
@@ -1124,7 +1125,9 @@ sys_stat(void)
   struct proc *p;
   struct inode *ip;
 
-  if(argstr(0, &path) < 0 || argint(1, &staddr) < 0)
+  if(argint(0, &path_addr) < 0 || argint(1, &staddr) < 0)
+    return -1;
+  if(copyinstr_user((uint)path_addr, path, sizeof(path)) < 0)
     return -1;
 //big win here
   begin_op();
@@ -1157,11 +1160,15 @@ sys_stat(void)
 int
 sys_link(void)
 {
+  int old_addr, new_addr;
   const struct vnode_ops *ops;
-  char name[DIRSIZ], *new, *old;
+  char name[DIRSIZ], old[256], new[256];
   struct inode *dp, *ip;
 
-  if(argstr(0, &old) < 0 || argstr(1, &new) < 0)
+  if(argint(0, &old_addr) < 0 || argint(1, &new_addr) < 0)
+    return -1;
+  if(copyinstr_user((uint)old_addr, old, sizeof(old)) < 0 ||
+     copyinstr_user((uint)new_addr, new, sizeof(new)) < 0)
     return -1;
 
   begin_op();
@@ -1232,13 +1239,17 @@ bad_locked:
 int
 sys_rename(void)
 {
+  int old_addr, new_addr;
   const struct vnode_ops *ops;
-  char oldname[DIRSIZ], newname[DIRSIZ], *old, *new;
+  char oldname[DIRSIZ], newname[DIRSIZ], old[256], new[256];
   struct inode *olddp, *newdp;
   struct inode *first, *second;
   int rc;
 
-  if(argstr(0, &old) < 0 || argstr(1, &new) < 0)
+  if(argint(0, &old_addr) < 0 || argint(1, &new_addr) < 0)
+    return -1;
+  if(copyinstr_user((uint)old_addr, old, sizeof(old)) < 0 ||
+     copyinstr_user((uint)new_addr, new, sizeof(new)) < 0)
     return -1;
   if(strlen(old) == strlen(new) && strncmp(old, new, strlen(old)) == 0)
     return 0;
@@ -1411,9 +1422,12 @@ bad_dp:
 int
 sys_unlink(void)
 {
-  char *path;
+  int path_addr;
+  char path[256];
 
-  if(argstr(0, &path) < 0)
+  if(argint(0, &path_addr) < 0)
+    return -1;
+  if(copyinstr_user((uint)path_addr, path, sizeof(path)) < 0)
     return -1;
   return remove_path(path, 0);
 }
@@ -1421,9 +1435,12 @@ sys_unlink(void)
 int
 sys_rmdir(void)
 {
-  char *path;
+  int path_addr;
+  char path[256];
 
-  if(argstr(0, &path) < 0)
+  if(argint(0, &path_addr) < 0)
+    return -1;
+  if(copyinstr_user((uint)path_addr, path, sizeof(path)) < 0)
     return -1;
   return remove_path(path, 1);
 }
@@ -1524,7 +1541,8 @@ create(char *path, short type, short major, short minor, int mode)
 int
 sys_open(void)
 {
-  char *path;
+  int path_addr;
+  char path[256];
   int fd, omode;
   int must_write;
   uint64_t startoff;  /* O_APPEND: set to ip->size; otherwise 0 */
@@ -1532,7 +1550,9 @@ sys_open(void)
   struct inode *ip;
   const struct vnode_ops *ops;
 
-  if(argstr(0, &path) < 0 || argint(1, &omode) < 0)
+  if(argint(0, &path_addr) < 0 || argint(1, &omode) < 0)
+    return -1;
+  if(copyinstr_user((uint)path_addr, path, sizeof(path)) < 0)
     return -1;
 
   begin_op();
@@ -1672,11 +1692,16 @@ sys_open(void)
 int
 sys_mkdir(void)
 {
-  char *path;
+  int path_addr;
+  char path[256];
   struct inode *ip;
 
+  if(argint(0, &path_addr) < 0)
+    return -1;
+  if(copyinstr_user((uint)path_addr, path, sizeof(path)) < 0)
+    return -1;
   begin_op();
-  if(argstr(0, &path) < 0 || (ip = create(path, T_DIR, 0, 0, 0)) == 0){
+  if((ip = create(path, T_DIR, 0, 0, 0)) == 0){
     end_op();
     return -1;
   }
@@ -1688,18 +1713,23 @@ sys_mkdir(void)
 int
 sys_mknod(void)
 {
+  int path_addr;
   struct inode *ip;
-  char *path;
-    int mode;
+  char path[256];
+  int mode;
   int major, minor;
 
-  begin_op();
-  if((argstr(0, &path)) < 0 ||
+  if(argint(0, &path_addr) < 0 ||
       argint(1, &mode) < 0 ||
       argint(2, &major) < 0 ||
-      argint(3, &minor) < 0 ||
-      ((mode & M_IFMT) != M_IFCHR && (mode & M_IFMT) != M_IFBLK) ||
-      (ip = create(path, T_DEV, major, minor, mode)) == 0){
+      argint(3, &minor) < 0)
+    return -1;
+  if(copyinstr_user((uint)path_addr, path, sizeof(path)) < 0)
+    return -1;
+  if(((mode & M_IFMT) != M_IFCHR && (mode & M_IFMT) != M_IFBLK))
+    return -1;
+  begin_op();
+  if((ip = create(path, T_DEV, major, minor, mode)) == 0){
     end_op();
     return -1;
   }
@@ -1711,12 +1741,17 @@ sys_mknod(void)
 int
 sys_chdir(void)
 {
-  char *path;
+  int path_addr;
+  char path[256];
   struct inode *ip;
   struct proc *curproc = myproc();
   
+  if(argint(0, &path_addr) < 0)
+    return -1;
+  if(copyinstr_user((uint)path_addr, path, sizeof(path)) < 0)
+    return -1;
   begin_op();
-  if(argstr(0, &path) < 0 || (ip = vfs_resolve(path)) == 0){
+  if((ip = vfs_resolve(path)) == 0){
     end_op();
     return -1;
   }
@@ -1767,12 +1802,15 @@ sys_getcwd(void)
 int
 sys_chmod(void)
 {
-  char *path;
+  int path_addr;
+  char path[256];
   int mode;
   struct inode *ip;
   const struct vnode_ops *ops;
 
-  if(argstr(0, &path) < 0 || argint(1, &mode) < 0)
+  if(argint(0, &path_addr) < 0 || argint(1, &mode) < 0)
+    return -1;
+  if(copyinstr_user((uint)path_addr, path, sizeof(path)) < 0)
     return -1;
 
   begin_op();
@@ -1805,13 +1843,16 @@ sys_chmod(void)
 int
 sys_chown(void)
 {
-  char *path;
+  int path_addr;
+  char path[256];
   int uid;
   int gid;
   struct inode *ip;
   const struct vnode_ops *ops;
 
-  if(argstr(0, &path) < 0 || argint(1, &uid) < 0 || argint(2, &gid) < 0)
+  if(argint(0, &path_addr) < 0 || argint(1, &uid) < 0 || argint(2, &gid) < 0)
+    return -1;
+  if(copyinstr_user((uint)path_addr, path, sizeof(path)) < 0)
     return -1;
 
   begin_op();
@@ -2167,27 +2208,57 @@ sys_umount(void)
 int
 sys_exec(void)
 {
-  char *path, *argv[EXEC_ARGC_MAX];
+  int path_addr;
+  char path[256];
+  char *argv[EXEC_ARGC_MAX];
+  // argv_bufs[EXEC_ARGC_MAX][256] would be 32 KB on the kernel stack — instant
+  // stack overflow on a 2-page (8 KB) kernel stack.  Instead, allocate one
+  // kalloc page (4 KB) and pack all strings into it consecutively.
+  // exec() already enforces EXEC_ARG_BYTES_MAX <= 4096, so one page is always
+  // sufficient to hold copies of every argument string.
+  char *argbuf;
+  uint argoff;
   int i;
   int j;
   int bad;
+  int rc;
   uint uargv, uarg;
 
-  if(argstr(0, &path) < 0 || argint(1, (int*)&uargv) < 0){
+  if(argint(0, &path_addr) < 0 || argint(1, (int*)&uargv) < 0)
     return -1;
-  }
+  if(copyinstr_user((uint)path_addr, path, sizeof(path)) < 0)
+    return -1;
+
+  argbuf = (char*)kalloc();
+  if(argbuf == 0)
+    return -1;
+
   memset(argv, 0, sizeof(argv));
+  argoff = 0;
   for(i=0;; i++){
-    if(i >= NELEM(argv))
+    if(i >= NELEM(argv)){
+      kfree(argbuf);
       return -1;
-    if(fetchint(uargv+4*i, (int*)&uarg) < 0)
+    }
+    if(fetchint(uargv+4*i, (int*)&uarg) < 0){
+      kfree(argbuf);
       return -1;
+    }
     if(uarg == 0){
       argv[i] = 0;
       break;
     }
-    if(fetchstr(uarg, &argv[i]) < 0)
+    // Guard against writing past the end of argbuf.
+    if(argoff >= PGSIZE){
+      kfree(argbuf);
       return -1;
+    }
+    if(fetchstr_copyin(uarg, argbuf + argoff, PGSIZE - argoff) < 0){
+      kfree(argbuf);
+      return -1;
+    }
+    argv[i] = argbuf + argoff;
+    argoff += strlen(argbuf + argoff) + 1;
   }
 
   // Intermittent init/runlevel corruption triage:
@@ -2210,7 +2281,9 @@ sys_exec(void)
     }
   }
 
-  return exec(path, argv);
+  rc = exec(path, argv);
+  kfree(argbuf);
+  return rc;
 }
 
 int
@@ -2647,13 +2720,16 @@ sys_lseek(void)
 int
 sys_truncate(void)
 {
-  char *path;
+  int path_addr;
+  char path[256];
   int len_lo, len_hi;
   int64_t len;
   struct inode *ip;
   const struct vnode_ops *ops;
 
-  if(argstr(0, &path) < 0 || argint(1, &len_lo) < 0 || argint(2, &len_hi) < 0)
+  if(argint(0, &path_addr) < 0 || argint(1, &len_lo) < 0 || argint(2, &len_hi) < 0)
+    return -1;
+  if(copyinstr_user((uint)path_addr, path, sizeof(path)) < 0)
     return -1;
 
   len = ((int64_t)(uint)len_hi << 32) | (uint)len_lo;
@@ -2950,12 +3026,16 @@ sys_fcntl(void)
 int
 sys_symlink(void)
 {
-  char *target, *linkpath;
+  int target_addr, linkpath_addr;
+  char target[256], linkpath[256];
   const struct vnode_ops *ops;
   struct inode *dp;
   char name[DIRSIZ];
 
-  if(argstr(0, &target) < 0 || argstr(1, &linkpath) < 0)
+  if(argint(0, &target_addr) < 0 || argint(1, &linkpath_addr) < 0)
+    return -1;
+  if(copyinstr_user((uint)target_addr, target, sizeof(target)) < 0 ||
+     copyinstr_user((uint)linkpath_addr, linkpath, sizeof(linkpath)) < 0)
     return -1;
 
   begin_op();
@@ -2989,7 +3069,8 @@ sys_symlink(void)
 int
 sys_readlink(void)
 {
-  char *path;
+  int path_addr;
+  char path[256];
   int bufaddr;
   char *kbuf;
   int bufsiz;
@@ -2998,7 +3079,9 @@ sys_readlink(void)
   int n;
   struct proc *p;
 
-  if(argstr(0, &path) < 0 || argint(2, &bufsiz) < 0)
+  if(argint(0, &path_addr) < 0 || argint(2, &bufsiz) < 0)
+    return -1;
+  if(copyinstr_user((uint)path_addr, path, sizeof(path)) < 0)
     return -1;
   if(bufsiz < 0)
     return -1;
@@ -3061,7 +3144,8 @@ sys_readlink(void)
 int
 sys_lstat(void)
 {
-  char *path;
+  int path_addr;
+  char path[256];
   const struct vnode_ops *ops;
   int rc;
   struct stat st;
@@ -3069,7 +3153,9 @@ sys_lstat(void)
   struct proc *p;
   struct inode *ip;
 
-  if(argstr(0, &path) < 0 || argint(1, &staddr) < 0)
+  if(argint(0, &path_addr) < 0 || argint(1, &staddr) < 0)
+    return -1;
+  if(copyinstr_user((uint)path_addr, path, sizeof(path)) < 0)
     return -1;
 
   begin_op();
@@ -3103,14 +3189,17 @@ int
 sys_loopsetup(void)
 {
   int loopnum;
-  char *path;
+  int path_addr;
+  char path[256];
   int offset;
   int nblocks;
   struct inode *ip;
 
   if(argint(0, &loopnum) < 0)
     return -1;
-  if(argstr(1, &path) < 0)
+  if(argint(1, &path_addr) < 0)
+    return -1;
+  if(copyinstr_user((uint)path_addr, path, sizeof(path)) < 0)
     return -1;
   if(argint(2, &offset) < 0)
     return -1;

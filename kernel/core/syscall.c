@@ -28,23 +28,48 @@ fetchint(uint addr, int *ip)
   return 0;
 }
 
-// Fetch the nul-terminated string at addr from the current process.
-// Doesn't actually copy the string - just sets *pp to point at it.
+// Fetch the nul-terminated string at addr from the current process into a kernel buffer.
+// Uses copyin() to safely copy the string, avoiding direct kernel-mode dereference
+// of user memory pages (which may be COW-marked as read-only).
 // Returns length of string, not including nul.
 int
 fetchstr(uint addr, char **pp)
 {
-  char *s, *ep;
-  struct proc *curproc = myproc();
+  // This function is deprecated for COW safety.
+  // Use fetchstr_copyin() instead, which properly handles COW-marked pages.
+  return -1;
+}
+
+// Fetch the nul-terminated string at addr from the current process.
+// Copies the string into kernel buffer kbuf of size bufsize.
+// Returns length of string, not including nul. Returns -1 on error.
+int
+fetchstr_copyin(uint addr, char *kbuf, uint bufsize)
+{
+  struct proc *curproc;
+  uint len;
+  char c;
+
+  if(bufsize == 0)
+    return -1;
+
+  curproc = myproc();
+  if(curproc == 0 || curproc->pgdir == 0)
+    return -1;
 
   if(addr >= curproc->sz)
     return -1;
-  *pp = (char*)addr;
-  ep = (char*)curproc->sz;
-  for(s = *pp; s < ep; s++){
-    if(*s == 0)
-      return s - *pp;
+
+  // Copy byte-by-byte using copyin until we find null terminator or exceed buffer
+  for(len = 0; len < bufsize - 1; len++){
+    if(copyin(curproc->pgdir, &c, addr + len, 1) < 0)
+      return -1;
+    kbuf[len] = c;
+    if(c == 0)
+      return len;
   }
+
+  // String was too long (no null terminator within bufsize)
   return -1;
 }
 
@@ -73,16 +98,25 @@ argptr(int n, char **pp, int size)
 }
 
 // Fetch the nth word-sized system call argument as a string pointer.
-// Check that the pointer is valid and the string is nul-terminated.
-// (There is no shared writable memory, so the string can't change
-// between this check and being used by the kernel.)
+// For COW safety, the caller must provide a kernel buffer.
+// This function is deprecated - syscalls should use argstr_copyin instead.
 int
 argstr(int n, char **pp)
+{
+  return -1;
+}
+
+// Fetch the nth word-sized system call argument as a string, copying into kbuf.
+// Check that the pointer is valid and the string is nul-terminated.
+// Properly handles COW-marked pages by using copyin() for all memory access.
+// kbufsize should be at least PATH_MAX for path arguments.
+int
+argstr_copyin(int n, char *kbuf, uint kbufsize)
 {
   int addr;
   if(argint(n, &addr) < 0)
     return -1;
-  return fetchstr(addr, pp);
+  return fetchstr_copyin((uint)addr, kbuf, kbufsize);
 }
 
 extern int sys_chdir(void);

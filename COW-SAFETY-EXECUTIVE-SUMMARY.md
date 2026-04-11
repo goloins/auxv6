@@ -273,3 +273,103 @@ FATAL trap 14: page fault err=0x00000003
 
 Direct pointer dereference of user VA is unsafe under COW and will panic the system when user pages are marked read-only (as happens automatically after fork).
 
+---
+
+## Implementation Log (April 10 2026)
+
+### Phase 1 — COMPLETE ✅
+
+All path-based syscalls in `kernel/core/sysfile.c` and the core string-fetch
+infrastructure in `kernel/core/syscall.c` have been converted to the COW-safe
+pattern.
+
+#### Infrastructure Changes
+
+**`kernel/core/syscall.c`**
+- Deprecated `fetchstr()` (now returns -1 unconditionally).
+- Added `fetchstr_copyin(uint addr, char *kbuf, uint bufsize)` — copies a
+  user-space string into a kernel buffer using byte-wise `copyin()`.
+- Added `argstr_copyin(int n, char *kbuf, uint kbufsize)` — wrapper that
+  extracts syscall argument n as an address then calls `fetchstr_copyin()`.
+- Declarations added to `include/defs.h`.
+
+**Pattern applied to every path-receiving syscall:**
+```c
+// Before: UNSAFE — directly dereferences user VA (panics under COW)
+char *path;
+if(argstr(0, &path) < 0) return -1;
+// .. use path ..
+
+// After: SAFE — copies string into kernel stack buffer first
+int path_addr;
+char path[256];
+if(argint(0, &path_addr) < 0) return -1;
+if(copyinstr_user((uint)path_addr, path, sizeof(path)) < 0) return -1;
+// .. use path — always in kernel memory, never a user VA ..
+```
+
+#### Syscalls Fixed (sysfile.c)
+
+| Syscall | Args Changed | Notes |
+|---|---|---|
+| `sys_open()` | path | single string |
+| `sys_stat()` | path | single string |
+| `sys_lstat()` | path | single string |
+| `sys_link()` | old, new | two strings |
+| `sys_rename()` | old, new | two strings |
+| `sys_unlink()` | path | single string |
+| `sys_rmdir()` | path | single string |
+| `sys_mkdir()` | path | single string |
+| `sys_mknod()` | path | path + mode |
+| `sys_chdir()` | path | single string |
+| `sys_chown()` | path | path + uid + gid |
+| `sys_truncate()` | path | path + 64-bit length |
+| `sys_symlink()` | target, linkpath | two strings |
+| `sys_readlink()` | path | path + output userspace buffer |
+| `sys_exec()` | path, argv | see critical fix below |
+| `sys_loopsetup()` | path | single string |
+
+**Total: 16 syscalls patched. Zero remaining `argstr()` calls in sysfile.c.**
+
+#### Critical Regression Fix — sys_exec() Stack Overflow
+
+The initial COW fix for `sys_exec()` introduced a secondary regression:
+
+```c
+// WRONG — was committed but then fixed:
+char argv_bufs[EXEC_ARGC_MAX][256];  // 128 × 256 = 32,768 bytes on kernel stack!
+// KSTACKSIZE = 8192; this overflows the kernel stack by 4×
+```
+
+**Symptom:** Triple fault → reboot loop after every exec (including `rc.S`
+startup). Manifested as:
+```
+kalloc_refill_local: poison next run=9fba4000 next=2 drops=1
+```
+The stack overflow corrupted memory adjacent to the kernel stack; upon the
+next `kalloc()` the allocator detected the poisoned free-list pointer and
+dropped the run. The garbled `next=2` is a classic stack-stomped freelist node.
+
+**Fix:** Replaced the 32 KB stack array with a single `kalloc()` page (4 KB):
+```c
+char *argbuf = (char*)kalloc();  // one page — exactly EXEC_ARG_BYTES_MAX
+// pack all copied argument strings consecutively into argbuf
+argv[i] = argbuf + argoff;
+argoff += strlen(argbuf + argoff) + 1;
+// ...
+int rc = exec(path, argv);
+kfree(argbuf);   // always freed; exec copies args to user stack before returning
+return rc;
+```
+`EXEC_ARG_BYTES_MAX = 4096` (one page) ensures argbuf is always large enough.
+
+### Phase 2 — NOT STARTED
+
+- Audio ioctl nested pointer write (`kernel/audio/audio_core.c` line 950)
+- TTY ioctl raw pointer dereferences (`pty.c` 17, `serial.c` 12, `console.c` 6)
+
+### Phase 3 — NOT STARTED
+
+- Socket TOCTOU documentation + hardening
+- `argptr()` deprecation and removal
+
