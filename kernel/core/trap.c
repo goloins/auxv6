@@ -186,6 +186,11 @@ static void
 trap_emergency_report(struct trapframe *tf, const char *reason)
 {
   uchar apicid;
+  struct proc *p;
+  uint kbase;
+  uint ktop;
+  uint ebp;
+  uint ret;
 
   apicid = cpu_apicid_cpuid();
   trap_uart_puts("\nFATAL trap: ");
@@ -200,12 +205,36 @@ trap_emergency_report(struct trapframe *tf, const char *reason)
   trap_uart_put_hex((uint)tf->eip);
   trap_uart_puts(" cs=");
   trap_uart_put_hex((uint)tf->cs);
+  trap_uart_puts(" esp=");
+  trap_uart_put_hex((uint)tf->esp);
+  trap_uart_puts(" ebp=");
+  trap_uart_put_hex((uint)tf->ebp);
   trap_uart_puts(" cr3=");
   trap_uart_put_hex(rcr3());
   trap_uart_puts(" lapic=");
   trap_uart_put_hex((uint)lapic);
   trap_uart_puts(" cr2=");
   trap_uart_put_hex(rcr2());
+
+  p = myproc();
+  if(p && p->kstack){
+    kbase = (uint)p->kstack;
+    ktop = kbase + KSTACKSIZE;
+    trap_uart_puts(" kstack=");
+    trap_uart_put_hex(kbase);
+    trap_uart_puts("..");
+    trap_uart_put_hex(ktop);
+
+    /* When faulting inside memmove, ebp+4 is the return/caller address. */
+    if((uint)tf->eip >= (uint)memmove && (uint)tf->eip < (uint)memmove + 0x100){
+      ebp = (uint)tf->ebp;
+      if(ebp >= kbase && ebp + 8 <= ktop){
+        ret = *(uint*)(ebp + 4);
+        trap_uart_puts(" memmove_ret=");
+        trap_uart_put_hex(ret);
+      }
+    }
+  }
   trap_uart_puts("\n");
 }
 

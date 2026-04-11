@@ -306,6 +306,21 @@ pte_assert_sane(uint pte)
     panic("pte sane");
 }
 
+static int
+pte_pa_valid(uint pte)
+{
+  uint pa;
+
+  pa = PTE_ADDR(pte);
+  if(pa == 0)
+    return 0;
+  if(pa >= PHYSTOP)
+    return 0;
+  if(pa >= KERNBASE)
+    return 0;
+  return 1;
+}
+
 // Create PTEs for virtual addresses starting at va that refer to
 // physical addresses starting at pa. va and size might not
 // be page-aligned.
@@ -476,7 +491,12 @@ loaduvm(pde_t *pgdir, char *addr, struct inode *ip, uint offset, uint sz)
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walkpgdir(pgdir, addr+i, 0)) == 0)
       panic("loaduvm: address should exist");
+    if((*pte & PTE_P) == 0)
+      panic("loaduvm: pte not present");
+    pte_assert_sane(*pte);
     pa = PTE_ADDR(*pte);
+    if(!pte_pa_valid(*pte))
+      panic("loaduvm: bad pa");
     if(sz - i < PGSIZE)
       n = sz - i;
     else
@@ -901,6 +921,8 @@ uva2ka(pde_t *pgdir, char *uva)
     return 0;
   if(!pte_is_user(*pte))
     return 0;
+  if(!pte_pa_valid(*pte))
+    return 0;
   return (char*)P2V(PTE_ADDR(*pte));
 }
 
@@ -923,6 +945,8 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
     pte_assert_sane(*pte);
     if(!pte_is_user(*pte))
       return -1;
+    if(!pte_pa_valid(*pte))
+      return -1;
 
     if(!pte_is_writable(*pte)){
       if(pte_is_cow(*pte)){
@@ -933,6 +957,8 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
           return -1;
         pte_assert_sane(*pte);
         if(!pte_is_user(*pte) || !pte_is_writable(*pte))
+          return -1;
+        if(!pte_pa_valid(*pte))
           return -1;
       } else {
         return -1;

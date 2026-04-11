@@ -293,6 +293,8 @@ fd_ensure_slot(struct proc *p, int fd)
 }
 
 #define SELECT_BITS_PER_WORD (8 * sizeof(uint))
+/* Must match userland fd_set capacity in include/sys/types.h. */
+#define SELECT_FD_SETSIZE 64
 
 #define POLLIN   0x0001
 #define POLLPRI  0x0002
@@ -2375,7 +2377,7 @@ sys_select(void)
   uint start;
   uint now;
   int ready;
-  struct ktimeval *tv;
+  struct ktimeval tv;
   struct proc *curproc;
 
   if(argint(0, &nfds) < 0 || argint(1, &read_addr) < 0 || argint(2, &write_addr) < 0 ||
@@ -2383,7 +2385,9 @@ sys_select(void)
     return -1;
 
   curproc = myproc();
-  if(nfds < 0 || curproc == 0 || nfds > proc_fd_limit(curproc))
+  if(nfds < 0 || curproc == 0 ||
+     nfds > proc_fd_limit(curproc) ||
+     nfds > SELECT_FD_SETSIZE)
     return -1;
 
   words = (nfds + SELECT_BITS_PER_WORD - 1) / SELECT_BITS_PER_WORD;
@@ -2412,47 +2416,64 @@ sys_select(void)
   }
 
   if(read_addr){
-    if((uint)read_addr >= myproc()->sz || (uint)read_addr + bytes > myproc()->sz){
+    uint read_u = (uint)read_addr;
+    if(read_u >= curproc->sz || (uint)bytes > curproc->sz - read_u){
       if(buf)
         kmalloc_free(buf);
       return -1;
     }
-    if(bytes > 0)
-      memmove(in_read, (void*)read_addr, bytes);
+    if(bytes > 0 && copyin(curproc->pgdir, in_read, (uint)read_addr, bytes) < 0){
+      if(buf)
+        kmalloc_free(buf);
+      return -1;
+    }
   }
   if(write_addr){
-    if((uint)write_addr >= myproc()->sz || (uint)write_addr + bytes > myproc()->sz){
+    uint write_u = (uint)write_addr;
+    if(write_u >= curproc->sz || (uint)bytes > curproc->sz - write_u){
       if(buf)
         kmalloc_free(buf);
       return -1;
     }
-    if(bytes > 0)
-      memmove(in_write, (void*)write_addr, bytes);
+    if(bytes > 0 && copyin(curproc->pgdir, in_write, (uint)write_addr, bytes) < 0){
+      if(buf)
+        kmalloc_free(buf);
+      return -1;
+    }
   }
   if(except_addr){
-    if((uint)except_addr >= myproc()->sz || (uint)except_addr + bytes > myproc()->sz){
+    uint except_u = (uint)except_addr;
+    if(except_u >= curproc->sz || (uint)bytes > curproc->sz - except_u){
       if(buf)
         kmalloc_free(buf);
       return -1;
     }
-    if(bytes > 0)
-      memmove(in_except, (void*)except_addr, bytes);
+    if(bytes > 0 && copyin(curproc->pgdir, in_except, (uint)except_addr, bytes) < 0){
+      if(buf)
+        kmalloc_free(buf);
+      return -1;
+    }
   }
 
   timeout_ticks = -1;
   if(timeout_addr){
-    if((uint)timeout_addr >= myproc()->sz || (uint)timeout_addr + sizeof(*tv) > myproc()->sz){
+    uint timeout_u = (uint)timeout_addr;
+    if(timeout_u >= curproc->sz || sizeof(tv) > curproc->sz - timeout_u){
       if(buf)
         kmalloc_free(buf);
       return -1;
     }
-    tv = (struct ktimeval*)timeout_addr;
-    if(tv->tv_sec < 0 || tv->tv_usec < 0 || tv->tv_usec >= 1000000){
+    if(copyin(curproc->pgdir, &tv, (uint)timeout_addr, sizeof(tv)) < 0){
       if(buf)
         kmalloc_free(buf);
       return -1;
     }
-    timeout_ms = tv->tv_sec * 1000 + (tv->tv_usec + 999) / 1000;
+    if(tv.tv_sec < 0 || tv.tv_usec < 0 || tv.tv_usec >= 1000000){
+      if(buf)
+        kmalloc_free(buf);
+      return -1;
+    }
+    timeout_ms = tv.tv_sec * 1000 + (tv.tv_usec + 999) / 1000;
     timeout_ticks = timeout_ms_to_ticks(timeout_ms);
   }
 
@@ -2470,24 +2491,48 @@ sys_select(void)
                         out_except,
                         words);
     if(ready > 0){
-      if(read_addr && bytes > 0)
-        memmove((void*)read_addr, out_read, bytes);
-      if(write_addr && bytes > 0)
-        memmove((void*)write_addr, out_write, bytes);
-      if(except_addr && bytes > 0)
-        memmove((void*)except_addr, out_except, bytes);
+      if(read_addr && bytes > 0 && copyout(curproc->pgdir, (uint)read_addr, out_read, bytes) < 0){
+        if(buf)
+          kmalloc_free(buf);
+        return -1;
+      }
+      if(write_addr && bytes > 0 && copyout(curproc->pgdir, (uint)write_addr, out_write, bytes) < 0){
+        if(buf)
+          kmalloc_free(buf);
+        return -1;
+      }
+      if(except_addr && bytes > 0 && copyout(curproc->pgdir, (uint)except_addr, out_except, bytes) < 0){
+        if(buf)
+          kmalloc_free(buf);
+        return -1;
+      }
       if(buf)
         kmalloc_free(buf);
       return ready;
     }
 
     if(timeout_addr && timeout_ticks == 0){
-      if(read_addr && bytes > 0)
-        memset((void*)read_addr, 0, bytes);
-      if(write_addr && bytes > 0)
-        memset((void*)write_addr, 0, bytes);
-      if(except_addr && bytes > 0)
-        memset((void*)except_addr, 0, bytes);
+      if(bytes > 0)
+        memset(out_read, 0, bytes);
+      if(read_addr && bytes > 0 && copyout(curproc->pgdir, (uint)read_addr, out_read, bytes) < 0){
+        if(buf)
+          kmalloc_free(buf);
+        return -1;
+      }
+      if(bytes > 0)
+        memset(out_write, 0, bytes);
+      if(write_addr && bytes > 0 && copyout(curproc->pgdir, (uint)write_addr, out_write, bytes) < 0){
+        if(buf)
+          kmalloc_free(buf);
+        return -1;
+      }
+      if(bytes > 0)
+        memset(out_except, 0, bytes);
+      if(except_addr && bytes > 0 && copyout(curproc->pgdir, (uint)except_addr, out_except, bytes) < 0){
+        if(buf)
+          kmalloc_free(buf);
+        return -1;
+      }
       if(buf)
         kmalloc_free(buf);
       return 0;
@@ -2504,12 +2549,27 @@ sys_select(void)
       now = ticks;
       if(now - start >= (uint)timeout_ticks){
         release(&tickslock);
-        if(read_addr && bytes > 0)
-          memset((void*)read_addr, 0, bytes);
-        if(write_addr && bytes > 0)
-          memset((void*)write_addr, 0, bytes);
-        if(except_addr && bytes > 0)
-          memset((void*)except_addr, 0, bytes);
+        if(bytes > 0)
+          memset(out_read, 0, bytes);
+        if(read_addr && bytes > 0 && copyout(curproc->pgdir, (uint)read_addr, out_read, bytes) < 0){
+          if(buf)
+            kmalloc_free(buf);
+          return -1;
+        }
+        if(bytes > 0)
+          memset(out_write, 0, bytes);
+        if(write_addr && bytes > 0 && copyout(curproc->pgdir, (uint)write_addr, out_write, bytes) < 0){
+          if(buf)
+            kmalloc_free(buf);
+          return -1;
+        }
+        if(bytes > 0)
+          memset(out_except, 0, bytes);
+        if(except_addr && bytes > 0 && copyout(curproc->pgdir, (uint)except_addr, out_except, bytes) < 0){
+          if(buf)
+            kmalloc_free(buf);
+          return -1;
+        }
         if(buf)
           kmalloc_free(buf);
         return 0;
