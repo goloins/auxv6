@@ -102,8 +102,7 @@ struct procfdlimitinfo_k {
 // Per-process state
 struct proc {
   uint sz;                     // Size of process memory (bytes)
-  pde_t* pgdir;                // Page table
-  struct address_space *addrsp; // Phase 4 scaffold (pgdir remains authoritative for now)
+  struct address_space *addrsp; // Authoritative address-space state when present
   char *kstack;                // Bottom of kernel stack for this process
   enum procstate state;        // Process state
   int pid;                     // Process ID

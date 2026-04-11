@@ -126,7 +126,7 @@ found:
     p->pid = candidate;
   }
   p->ppid = 0;
-    p->addrsp = 0;
+  proc_clear_addrspace(p);
   p->pgid = p->pid;
   p->sid = p->pid;
   p->tty = -1;
@@ -182,15 +182,18 @@ found:
 void
 userinit(void)
 {
+  struct address_space *initas;
   struct proc *p;
 
   p = allocproc();
   initproc = p;
-  if((p->pgdir = setupkvm()) == 0)
+  initas = address_space_create();
+  proc_bind_addrspace(p, initas);
+  if(initas == 0)
     panic("userinit: out of memory?");
-  if((p->sz = allocuvm(p->pgdir, 0, PGSIZE)) == 0)
+  if((p->sz = allocuvm_as(p->addrsp, 0, PGSIZE)) == 0)
     panic("userinit: allocuvm");
-  clearpteu(p->pgdir, (char*)(p->sz - PGSIZE));
+  clearpteu(proc_pgdir(p), (char*)(p->sz - PGSIZE));
 
   memset(p->tf, 0, sizeof(*p->tf));
   p->tf->cs = (SEG_UCODE << 3) | DPL_USER;
@@ -227,14 +230,22 @@ fork(void)
   int pid;
   struct proc *np;
   struct proc *curproc = myproc();
+  struct address_space *newas;
+  struct address_space *srcas;
 
   if((np = allocproc()) == 0)
     return -1;
 
-  if((np->pgdir = copyuvm(curproc->pgdir, curproc->sz)) == 0){
+  srcas = curproc->addrsp;
+  if(srcas == 0)
+    panic("fork: no addrspace");
+
+  newas = address_space_dup_cow(srcas);
+  if(newas == 0){
     np->state = UNUSED;
     return -1;
   }
+  proc_bind_addrspace(np, newas);
   switchuvm(curproc);
   np->sz = curproc->sz;
   np->stack_top = curproc->stack_top;
@@ -266,8 +277,9 @@ fork(void)
   if(fdtable_dup(curproc->fdtable, np->fdtable) < 0){
     fdtable_free(np->fdtable);
     np->fdtable = 0;
-    freevm(np->pgdir);
-    np->pgdir = 0;
+    if(newas)
+      address_space_destroy(newas);
+    proc_clear_addrspace(np);
     np->state = UNUSED;
     return -1;
   }
@@ -382,7 +394,12 @@ proc_waitpid(int pid, int *status, int options)
       if(p->state == ZOMBIE){
         foundpid = p->pid;
         st = p->xstatus;
-        freevm(p->pgdir);
+        if(p->addrsp){
+          address_space_destroy(p->addrsp);
+        } else if(proc_pgdir(p)){
+          freevm(proc_pgdir(p));
+        }
+        proc_clear_addrspace(p);
         p->pid = 0;
         p->ppid = 0;
         p->pgid = 0;

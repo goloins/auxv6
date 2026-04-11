@@ -159,10 +159,12 @@ pipewrite(struct pipe *p, char *addr, int n)
   uint off;
   uint until_wrap;
   struct proc *curproc = myproc();
+  pde_t *pgdir;
   int user_src;
 
   user_src = ((uint)addr < KERNBASE);
-  if(user_src && (curproc == 0 || curproc->pgdir == 0))
+  pgdir = user_src ? proc_pgdir(curproc) : 0;
+  if(user_src && (curproc == 0 || pgdir == 0))
     return -1;
 
   acquire(&p->lock);
@@ -202,7 +204,7 @@ pipewrite(struct pipe *p, char *addr, int n)
       chunk = (int)until_wrap;
 
     if(user_src){
-      if(copyin(curproc->pgdir, &p->data[off], (uint)(addr + i), chunk) < 0){
+      if(copyin(pgdir, &p->data[off], (uint)(addr + i), chunk) < 0){
         release(&p->lock);
         return (i > 0) ? i : -1;
       }
@@ -234,10 +236,12 @@ piperead(struct pipe *p, char *addr, int n)
   uint until_wrap;
   int user_dst;
   struct proc *curproc;
+  pde_t *pgdir;
 
   user_dst = ((uint)addr < KERNBASE);
   curproc = user_dst ? myproc() : 0;
-  if(user_dst && (curproc == 0 || curproc->pgdir == 0))
+  pgdir = user_dst ? proc_pgdir(curproc) : 0;
+  if(user_dst && (curproc == 0 || pgdir == 0))
     return -1;
 
   acquire(&p->lock);
@@ -268,7 +272,7 @@ piperead(struct pipe *p, char *addr, int n)
 
     if(user_dst){
       release(&p->lock);
-      if(copyout(curproc->pgdir, (uint)(addr + i), &p->data[off], chunk) < 0)
+      if(copyout(pgdir, (uint)(addr + i), &p->data[off], chunk) < 0)
         return (i > 0) ? i : -1;
       acquire(&p->lock);
     } else {

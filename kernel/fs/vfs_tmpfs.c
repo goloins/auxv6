@@ -309,6 +309,7 @@ tmpfs_read_pages(struct tmpfs_node *node, char *dst, uint off, uint n)
   uint done;
   int user_dst;
   struct proc *p;
+  pde_t *pgdir;
 
   if(node == 0 || dst == 0)
     return -1;
@@ -319,7 +320,8 @@ tmpfs_read_pages(struct tmpfs_node *node, char *dst, uint off, uint n)
 
   user_dst = ((uint)dst < KERNBASE);
   p = user_dst ? myproc() : 0;
-  if(user_dst && (p == 0 || p->pgdir == 0))
+  pgdir = p ? proc_pgdir(p) : 0;
+  if(user_dst && pgdir == 0)
     return -1;
 
   done = 0;
@@ -341,7 +343,7 @@ tmpfs_read_pages(struct tmpfs_node *node, char *dst, uint off, uint n)
       src = (page == 0 || page->data == 0)
           ? tmpfs_zero_page
           : (page->data + page_off);
-      if(copyout(p->pgdir, (uint)(dst + done), src, chunk) < 0)
+      if(copyout(pgdir, (uint)(dst + done), src, chunk) < 0)
         return -1;
     } else {
       if(page == 0 || page->data == 0)
@@ -363,6 +365,7 @@ tmpfs_write_pages(struct tmpfs_mount_data *md, struct tmpfs_node *node,
   uint done;
   int user_src;
   struct proc *p;
+  pde_t *pgdir;
 
   if(md == 0 || node == 0 || src == 0)
     return -1;
@@ -377,7 +380,8 @@ tmpfs_write_pages(struct tmpfs_mount_data *md, struct tmpfs_node *node,
 
   user_src = ((uint)src < KERNBASE);
   p = user_src ? myproc() : 0;
-  if(user_src && (p == 0 || p->pgdir == 0))
+  pgdir = p ? proc_pgdir(p) : 0;
+  if(user_src && pgdir == 0)
     return -1;
 
   done = 0;
@@ -395,7 +399,7 @@ tmpfs_write_pages(struct tmpfs_mount_data *md, struct tmpfs_node *node,
     if(tmpfs_page_get(node, page_index, &page) < 0)
       return -1;
     if(user_src){
-      if(copyin(p->pgdir, page->data + page_off, (uint)(src + done), chunk) < 0)
+      if(copyin(pgdir, page->data + page_off, (uint)(src + done), chunk) < 0)
         return -1;
     } else {
       memmove(page->data + page_off, src + done, chunk);
@@ -669,6 +673,7 @@ tmpfs_read(struct inode *ip, char *dst, uint64_t off, uint n)
   struct tmpfs_dirent *cur;
   uint idx;
   struct proc *p;
+  pde_t *pgdir;
 
   if(ip == 0 || dst == 0)
     return -1;
@@ -696,7 +701,8 @@ tmpfs_read(struct inode *ip, char *dst, uint64_t off, uint n)
     safestrcpy(de.name, cur->name, sizeof(de.name));
     if((uint)dst < KERNBASE){
       p = myproc();
-      if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)dst, &de, sizeof(de)) < 0)
+      pgdir = p ? proc_pgdir(p) : 0;
+      if(pgdir == 0 || copyout(pgdir, (uint)dst, &de, sizeof(de)) < 0)
         return -1;
     } else {
       memmove(dst, &de, sizeof(de));

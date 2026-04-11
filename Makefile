@@ -94,6 +94,7 @@ OBJS = \
 	kernel/core/pagedb.o\
 	kernel/vm/buddy.o\
 	kernel/vm/pagealloc.o\
+	kernel/vm/fault.o\
 	kernel/vm/vma.o\
 	kernel/core/kmalloc.o\
 	kernel/driver/kbd.o\
@@ -212,6 +213,7 @@ endif
 CC = $(TOOLPREFIX)gcc
 AS = $(TOOLPREFIX)gas
 LD = $(TOOLPREFIX)ld
+STRIP = $(TOOLPREFIX)strip
 OBJCOPY = $(TOOLPREFIX)objcopy
 OBJDUMP = $(TOOLPREFIX)objdump
 CFLAGS = -fno-pic -static -fno-builtin -fno-strict-aliasing -O2 -Wall -MD -ggdb -m32 -Werror -fno-omit-frame-pointer -Iinclude
@@ -641,6 +643,15 @@ _kernperf: user/kernperf
 _vmprobe: user/vmprobe
 	cp user/vmprobe _vmprobe
 
+_vmguardtest: user/vmguardtest
+	cp user/vmguardtest _vmguardtest
+
+_cowtest: user/cowtest
+	cp user/cowtest _cowtest
+
+_cowexectest: user/cowexectest
+	cp user/cowexectest _cowexectest
+
 _kmemstress: user/kmemstress
 	cp user/kmemstress _kmemstress
 
@@ -867,6 +878,23 @@ userprogs-oldinit:
 	+$(MAKE) ports-progs PORTS=$(PORTS)
 	+$(MAKE) -j$(USER_PROG_JOBS) $(UPROGS_OLDINIT)
 
+.PHONY: strip-uprogs strip-uprogs-oldinit
+strip-uprogs: userprogs
+	@set -e; \
+	for p in $(UPROGS); do \
+		if [ -f "$$p" ] && [ ! -L "$$p" ]; then \
+			$(STRIP) -g "$$p"; \
+		fi; \
+	done
+
+strip-uprogs-oldinit: userprogs-oldinit
+	@set -e; \
+	for p in $(UPROGS_OLDINIT); do \
+		if [ -f "$$p" ] && [ ! -L "$$p" ]; then \
+			$(STRIP) -g "$$p"; \
+		fi; \
+	done
+
 .PHONY: ports-sync ports-progs
 ports-sync:
 	$(PORTS_SYNC_SCRIPT) $(PORTS_MANIFEST)
@@ -1026,6 +1054,9 @@ UPROGS=\
 	_kallocstress\
 	_kernperf\
 	_vmprobe\
+	_vmguardtest\
+	_cowtest\
+	_cowexectest\
 	_kmemstress\
 	_bcachestress\
 	_sigtest\
@@ -1126,7 +1157,7 @@ qemu-nox-gdb-ext2root: .gdbinit
 # Single-image GRUB boot targets.
 # Build this target with ROOTFS_DEV set to /dev/hda1 (HD_PART_DEV(0,1)).
 auxv6.img: ROOTFS_DEV_VALUE=4
-auxv6.img: tools/build-auxv6-img.sh tools/stage-ext2-root.sh aux.kern userprogs \
+auxv6.img: tools/build-auxv6-img.sh tools/stage-ext2-root.sh aux.kern strip-uprogs \
 		$(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) \
 		$(ROOTFS_TARGETFS_FILES)
 	sh tools/stage-ext2-root.sh .auxv6root .auxv6-part.img \
@@ -1288,13 +1319,13 @@ $(TARGETFS_DIR)/tmp/test.iso:
 	fi
 	rm -rf .isoroot
 #nice
-test_ext2.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) userprogs
+test_ext2.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) strip-uprogs
 	sh tools/stage-ext2-root.sh .ext2root $(EXT2IMG) $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) $(UPROGS)
 
-test_ext2_server7.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES_SERVER7) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) userprogs
+test_ext2_server7.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES_SERVER7) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) strip-uprogs
 	sh tools/stage-ext2-root.sh .ext2root-server7 test_ext2_server7.img $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES_SERVER7) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) $(UPROGS)
 
-test_ext2_oldinit.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) userprogs-oldinit
+test_ext2_oldinit.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) strip-uprogs-oldinit
 	sh tools/stage-ext2-root.sh .ext2root-oldinit test_ext2_oldinit.img $(ROOTFS_COMMON_FILES) $(UPROGS_OLDINIT)
 
 test_fat.img: tools/stage-fat-root.sh

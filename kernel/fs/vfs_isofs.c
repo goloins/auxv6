@@ -178,6 +178,7 @@ isofs_read_bytes(struct isofs_mount_data *mp, uint lba, uint offset, void *buf, 
     uint done;
     struct proc *p;
     int user_dst;
+    pde_t *pgdir;
     
     /* Calculate absolute offset from LBA */
     uint abs_offset = lba * ISO_SECTOR_SIZE + offset;
@@ -190,7 +191,8 @@ isofs_read_bytes(struct isofs_mount_data *mp, uint lba, uint offset, void *buf, 
 
     user_dst = ((uint)buf < KERNBASE);
     p = user_dst ? myproc() : 0;
-    if(user_dst && (p == 0 || p->pgdir == 0)){
+    pgdir = p ? proc_pgdir(p) : 0;
+    if(user_dst && pgdir == 0){
         kfree(sector_buf);
         return -1;
     }
@@ -214,7 +216,7 @@ isofs_read_bytes(struct isofs_mount_data *mp, uint lba, uint offset, void *buf, 
             to_read = avail;
         
         if(user_dst){
-            if(copyout(p->pgdir, (uint)((char*)buf + done), sector_buf + copy_start, to_read) < 0){
+            if(copyout(pgdir, (uint)((char*)buf + done), sector_buf + copy_start, to_read) < 0){
                 kfree(sector_buf);
                 return -1;
             }
@@ -416,7 +418,8 @@ isofs_read(struct inode *ip, char *dst, uint64_t off, uint n)
                 
                 if((uint)(dst + written) < KERNBASE){
                     struct proc *p = myproc();
-                    if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)(dst + written), &de, sizeof(de)) < 0){
+                    pde_t *pgdir = p ? proc_pgdir(p) : 0;
+                    if(pgdir == 0 || copyout(pgdir, (uint)(dst + written), &de, sizeof(de)) < 0){
                         kfree(sector_buf);
                         return (written > 0) ? (int)written : -1;
                     }

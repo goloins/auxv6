@@ -88,6 +88,7 @@ sys_waitpid(void)
   int st;
   int ret;
   struct proc *p;
+  pde_t *pgdir;
 
   if(argint(0, &pid) < 0 || argint(1, &staddr) < 0 || argint(2, &options) < 0)
     return -1;
@@ -96,11 +97,12 @@ sys_waitpid(void)
     return proc_waitpid(pid, 0, options);
 
   p = myproc();
-  if(p == 0 || p->pgdir == 0)
+  pgdir = proc_pgdir(p);
+  if(p == 0 || pgdir == 0)
     return -1;
 
   ret = proc_waitpid(pid, &st, options);
-  if(ret > 0 && copyout(p->pgdir, (uint)staddr, &st, sizeof(st)) < 0)
+  if(ret > 0 && copyout(pgdir, (uint)staddr, &st, sizeof(st)) < 0)
     return -1;
 
   return ret;
@@ -116,6 +118,7 @@ sys_wait4(void)
   int st;
   int ret;
   struct proc *p;
+  pde_t *pgdir;
 
   if(argint(0, &pid) < 0 || argint(1, &staddr) < 0 ||
      argint(2, &options) < 0 || argint(3, &ruaddr) < 0)
@@ -125,11 +128,12 @@ sys_wait4(void)
     return proc_wait4(pid, 0, options, (uint)ruaddr);
 
   p = myproc();
-  if(p == 0 || p->pgdir == 0)
+  pgdir = proc_pgdir(p);
+  if(p == 0 || pgdir == 0)
     return -1;
 
   ret = proc_wait4(pid, &st, options, (uint)ruaddr);
-  if(ret > 0 && copyout(p->pgdir, (uint)staddr, &st, sizeof(st)) < 0)
+  if(ret > 0 && copyout(pgdir, (uint)staddr, &st, sizeof(st)) < 0)
     return -1;
 
   return ret;
@@ -145,6 +149,7 @@ sys_waitid(void)
   int info[4];
   int ret;
   struct proc *p;
+  pde_t *pgdir;
 
   if(argint(0, &idtype) < 0 || argint(1, &id) < 0 ||
      argint(2, &infoaddr) < 0 || argint(3, &options) < 0)
@@ -154,11 +159,12 @@ sys_waitid(void)
     return proc_waitid(idtype, id, 0, options);
 
   p = myproc();
-  if(p == 0 || p->pgdir == 0)
+  pgdir = proc_pgdir(p);
+  if(p == 0 || pgdir == 0)
     return -1;
 
   ret = proc_waitid(idtype, id, info, options);
-  if(ret == 0 && copyout(p->pgdir, (uint)infoaddr, info, sizeof(info)) < 0)
+  if(ret == 0 && copyout(pgdir, (uint)infoaddr, info, sizeof(info)) < 0)
     return -1;
 
   return ret;
@@ -268,7 +274,7 @@ sys_sigreturn(void)
   sp = tf->esp - sizeof(uint);
 
   // Copy sigframe from user stack
-  if(copyin(p->pgdir, &sf, sp, sizeof(sf)) < 0) {
+  if(copyin(proc_pgdir(p), &sf, sp, sizeof(sf)) < 0) {
     cprintf("pid %d: sigreturn copyin failed\n", p->pid);
     return -1;
   }
@@ -341,6 +347,7 @@ sys_kmsgread(void)
   char *kbuf;
   int n;
   struct proc *p;
+  pde_t *pgdir;
 
   if(argint(0, &uaddr) < 0 || argint(1, &max) < 0)
     return -1;
@@ -361,7 +368,8 @@ sys_kmsgread(void)
   }
 
   p = myproc();
-  if(copyout(p->pgdir, (uint)uaddr, kbuf, (uint)n) < 0) {
+  pgdir = proc_pgdir(p);
+  if(p == 0 || pgdir == 0 || copyout(pgdir, (uint)uaddr, kbuf, (uint)n) < 0) {
     kfree(kbuf);
     return -1;
   }
@@ -555,14 +563,16 @@ sys_date(void)
   int raddr;
   struct rtcdate r;
   struct proc *p;
+  pde_t *pgdir;
 
   if(argint(0, &raddr) < 0)
     return -1;
   cmostime(&r);
   p = myproc();
-  if(p == 0 || p->pgdir == 0)
+  pgdir = proc_pgdir(p);
+  if(p == 0 || pgdir == 0)
     return -1;
-  if(copyout(p->pgdir, (uint)raddr, &r, sizeof(r)) < 0)
+  if(copyout(pgdir, (uint)raddr, &r, sizeof(r)) < 0)
     return -1;
   return 0;
 }
@@ -574,6 +584,7 @@ sys_clock_gettime(void)
   int tpaddr;
   struct timespec tp;
   struct proc *p;
+  pde_t *pgdir;
 
   if(argint(0, &clock_id) < 0)
     return -1;
@@ -581,7 +592,8 @@ sys_clock_gettime(void)
     return -1;
 
   p = myproc();
-  if(p == 0 || p->pgdir == 0)
+  pgdir = proc_pgdir(p);
+  if(p == 0 || pgdir == 0)
     return -1;
 
   if(clock_id == KTIME_CLOCK_MONOTONIC) {
@@ -592,7 +604,7 @@ sys_clock_gettime(void)
     return -1;
   }
 
-  if(copyout(p->pgdir, (uint)tpaddr, &tp, sizeof(tp)) < 0)
+  if(copyout(pgdir, (uint)tpaddr, &tp, sizeof(tp)) < 0)
     return -1;
   return 0;
 }
@@ -604,6 +616,7 @@ sys_clock_settime(void)
   int tpaddr;
   struct timespec tp;
   struct proc *p;
+  pde_t *pgdir;
 
   if(argint(0, &clock_id) < 0)
     return -1;
@@ -614,9 +627,10 @@ sys_clock_settime(void)
   if(proc_getuid() != 0)
     return -1;
   p = myproc();
-  if(p == 0 || p->pgdir == 0)
+  pgdir = proc_pgdir(p);
+  if(p == 0 || pgdir == 0)
     return -1;
-  if(copyin(p->pgdir, &tp, (uint)tpaddr, sizeof(tp)) < 0)
+  if(copyin(pgdir, &tp, (uint)tpaddr, sizeof(tp)) < 0)
     return -1;
   return ktime_set_realtime(&tp);
 }
@@ -627,6 +641,7 @@ sys_uname(void)
   int bufaddr;
   int size;
   struct proc *p;
+  pde_t *pgdir;
   char kbuf[64];
 
   if(argint(1, &size) < 0)
@@ -637,11 +652,12 @@ sys_uname(void)
     return -1;
 
   p = myproc();
-  if(p == 0 || p->pgdir == 0)
+  pgdir = proc_pgdir(p);
+  if(p == 0 || pgdir == 0)
     return -1;
 
   safestrcpy(kbuf, "a/ux86 aux86 i686", sizeof(kbuf));
-  if(copyout(p->pgdir, (uint)bufaddr, kbuf,
+  if(copyout(pgdir, (uint)bufaddr, kbuf,
              (uint)(size < (int)sizeof(kbuf) ? size : (int)sizeof(kbuf))) < 0)
     return -1;
   return 0;
@@ -654,6 +670,7 @@ sys_getrlimit(void)
   int rlpaddr;
   struct rlimit krl;
   struct proc *p;
+  pde_t *pgdir;
   rlim_t fixed_stack;
 
   if(argint(0, &resource) < 0)
@@ -662,7 +679,8 @@ sys_getrlimit(void)
     return -1;
 
   p = myproc();
-  if(p == 0 || p->pgdir == 0)
+  pgdir = proc_pgdir(p);
+  if(p == 0 || pgdir == 0)
     return -1;
   fixed_stack = (rlim_t)(USER_STACK_PAGES * PGSIZE);
 
@@ -688,7 +706,7 @@ sys_getrlimit(void)
     return -1;
   }
 
-  if(copyout(p->pgdir, (uint)rlpaddr, &krl, sizeof(krl)) < 0)
+  if(copyout(pgdir, (uint)rlpaddr, &krl, sizeof(krl)) < 0)
     return -1;
   return 0;
 }
@@ -700,16 +718,18 @@ sys_setrlimit(void)
   int rlpaddr;
   struct rlimit rlp;
   struct proc *p;
+  pde_t *pgdir;
   rlim_t fixed_stack;
 
   if(argint(0, &resource) < 0)
     return -1;
   p = myproc();
-  if(p == 0 || p->pgdir == 0)
+  pgdir = proc_pgdir(p);
+  if(p == 0 || pgdir == 0)
     return -1;
   if(argint(1, &rlpaddr) < 0)
     return -1;
-  if(copyin(p->pgdir, &rlp, (uint)rlpaddr, sizeof(rlp)) < 0)
+  if(copyin(pgdir, &rlp, (uint)rlpaddr, sizeof(rlp)) < 0)
     return -1;
   if(rlp.rlim_cur > rlp.rlim_max)
     return -1;
@@ -745,9 +765,12 @@ sys_setrlimit(void)
     int tty_major;
     struct file *f;
     struct proc *p;
+    pde_t *pgdir;
 
     if(argint(0, &fd) < 0 || argint(1, &request) < 0)
       return -1;
+
+    pgdir = 0;
 
     if(myproc()->fdtable == 0 || fd < 0 || fd >= myproc()->fdtable->nfds)
       return -1;
@@ -765,17 +788,18 @@ sys_setrlimit(void)
         return -1;
       arg_u = (uint)arg_raw;
       p = myproc();
-      if(p == 0 || p->pgdir == 0)
+      pgdir = proc_pgdir(p);
+      if(p == 0 || pgdir == 0)
         return -1;
       karg = (char*)kmalloc((uint)arg_size);
       if(karg == 0)
         return -1;
-      if(copyin(p->pgdir, karg, arg_u, (uint)arg_size) < 0){
+      if(copyin(pgdir, karg, arg_u, (uint)arg_size) < 0){
         kmalloc_free(karg);
         return -1;
       }
       arg_int = audio_ioctl_file(f, request, (uint)karg);
-      if(arg_int >= 0 && copyout(p->pgdir, arg_u, karg, (uint)arg_size) < 0)
+      if(arg_int >= 0 && copyout(pgdir, arg_u, karg, (uint)arg_size) < 0)
         arg_int = -1;
       kmalloc_free(karg);
       return arg_int;
@@ -797,17 +821,18 @@ sys_setrlimit(void)
         return -1;
       arg_u = (uint)arg_raw;
       p = myproc();
-      if(p == 0 || p->pgdir == 0)
+      pgdir = proc_pgdir(p);
+      if(p == 0 || pgdir == 0)
         return -1;
       karg = (char*)kmalloc((uint)arg_size);
       if(karg == 0)
         return -1;
-      if(copyin(p->pgdir, karg, arg_u, (uint)arg_size) < 0){
+      if(copyin(pgdir, karg, arg_u, (uint)arg_size) < 0){
         kmalloc_free(karg);
         return -1;
       }
       arg_int = tuntap_ioctl_file(f, request, (uint)karg);
-      if(arg_int >= 0 && copyout(p->pgdir, arg_u, karg, (uint)arg_size) < 0)
+      if(arg_int >= 0 && copyout(pgdir, arg_u, karg, (uint)arg_size) < 0)
         arg_int = -1;
       kmalloc_free(karg);
       return arg_int;
@@ -829,17 +854,18 @@ sys_setrlimit(void)
         return -1;
       arg_u = (uint)arg_raw;
       p = myproc();
-      if(p == 0 || p->pgdir == 0)
+      pgdir = proc_pgdir(p);
+      if(p == 0 || pgdir == 0)
         return -1;
       karg = (char*)kmalloc(sizeof(struct termios));
       if(karg == 0)
         return -1;
-      if(copyin(p->pgdir, karg, arg_u, sizeof(struct termios)) < 0){
+      if(copyin(pgdir, karg, arg_u, sizeof(struct termios)) < 0){
         kmalloc_free(karg);
         return -1;
       }
       arg_int = tty_ioctl_dispatch(f, fd, tty_major, request, (uint)karg);
-      if(arg_int >= 0 && copyout(p->pgdir, arg_u, karg, sizeof(struct termios)) < 0)
+      if(arg_int >= 0 && copyout(pgdir, arg_u, karg, sizeof(struct termios)) < 0)
         arg_int = -1;
       kmalloc_free(karg);
       return arg_int;
@@ -849,17 +875,18 @@ sys_setrlimit(void)
         return -1;
       arg_u = (uint)arg_raw;
       p = myproc();
-      if(p == 0 || p->pgdir == 0)
+      pgdir = proc_pgdir(p);
+      if(p == 0 || pgdir == 0)
         return -1;
       karg = (char*)kmalloc(sizeof(struct winsize));
       if(karg == 0)
         return -1;
-      if(copyin(p->pgdir, karg, arg_u, sizeof(struct winsize)) < 0){
+      if(copyin(pgdir, karg, arg_u, sizeof(struct winsize)) < 0){
         kmalloc_free(karg);
         return -1;
       }
       arg_int = tty_ioctl_dispatch(f, fd, tty_major, request, (uint)karg);
-      if(arg_int >= 0 && copyout(p->pgdir, arg_u, karg, sizeof(struct winsize)) < 0)
+      if(arg_int >= 0 && copyout(pgdir, arg_u, karg, sizeof(struct winsize)) < 0)
         arg_int = -1;
       kmalloc_free(karg);
       return arg_int;
@@ -869,17 +896,18 @@ sys_setrlimit(void)
         return -1;
       arg_u = (uint)arg_raw;
       p = myproc();
-      if(p == 0 || p->pgdir == 0)
+      pgdir = proc_pgdir(p);
+      if(p == 0 || pgdir == 0)
         return -1;
       karg = (char*)kmalloc(sizeof(struct winsize));
       if(karg == 0)
         return -1;
-      if(copyin(p->pgdir, karg, arg_u, sizeof(struct winsize)) < 0){
+      if(copyin(pgdir, karg, arg_u, sizeof(struct winsize)) < 0){
         kmalloc_free(karg);
         return -1;
       }
       arg_int = tty_ioctl_dispatch(f, fd, tty_major, request, (uint)karg);
-      if(arg_int >= 0 && copyout(p->pgdir, arg_u, karg, sizeof(struct winsize)) < 0)
+      if(arg_int >= 0 && copyout(pgdir, arg_u, karg, sizeof(struct winsize)) < 0)
         arg_int = -1;
       kmalloc_free(karg);
       return arg_int;
@@ -889,17 +917,18 @@ sys_setrlimit(void)
         return -1;
       arg_u = (uint)arg_raw;
       p = myproc();
-      if(p == 0 || p->pgdir == 0)
+      pgdir = proc_pgdir(p);
+      if(p == 0 || pgdir == 0)
         return -1;
       karg = (char*)kmalloc(sizeof(int));
       if(karg == 0)
         return -1;
-      if(copyin(p->pgdir, karg, arg_u, sizeof(int)) < 0){
+      if(copyin(pgdir, karg, arg_u, sizeof(int)) < 0){
         kmalloc_free(karg);
         return -1;
       }
       arg_int = tty_ioctl_dispatch(f, fd, tty_major, request, (uint)karg);
-      if(arg_int >= 0 && copyout(p->pgdir, arg_u, karg, sizeof(int)) < 0)
+      if(arg_int >= 0 && copyout(pgdir, arg_u, karg, sizeof(int)) < 0)
         arg_int = -1;
       kmalloc_free(karg);
       return arg_int;
@@ -909,17 +938,18 @@ sys_setrlimit(void)
         return -1;
       arg_u = (uint)arg_raw;
       p = myproc();
-      if(p == 0 || p->pgdir == 0)
+      pgdir = proc_pgdir(p);
+      if(p == 0 || pgdir == 0)
         return -1;
       karg = (char*)kmalloc(sizeof(int));
       if(karg == 0)
         return -1;
-      if(copyin(p->pgdir, karg, arg_u, sizeof(int)) < 0){
+      if(copyin(pgdir, karg, arg_u, sizeof(int)) < 0){
         kmalloc_free(karg);
         return -1;
       }
       arg_int = tty_ioctl_dispatch(f, fd, tty_major, request, (uint)karg);
-      if(arg_int >= 0 && copyout(p->pgdir, arg_u, karg, sizeof(int)) < 0)
+      if(arg_int >= 0 && copyout(pgdir, arg_u, karg, sizeof(int)) < 0)
         arg_int = -1;
       kmalloc_free(karg);
       return arg_int;
@@ -959,17 +989,18 @@ sys_setrlimit(void)
         return -1;
       arg_u = (uint)arg_raw;
       p = myproc();
-      if(p == 0 || p->pgdir == 0)
+      pgdir = proc_pgdir(p);
+      if(p == 0 || pgdir == 0)
         return -1;
       karg = (char*)kmalloc(sizeof(int));
       if(karg == 0)
         return -1;
-      if(copyin(p->pgdir, karg, arg_u, sizeof(int)) < 0){
+      if(copyin(pgdir, karg, arg_u, sizeof(int)) < 0){
         kmalloc_free(karg);
         return -1;
       }
       arg_int = tty_ioctl_dispatch(f, fd, tty_major, request, (uint)karg);
-      if(arg_int >= 0 && copyout(p->pgdir, arg_u, karg, sizeof(int)) < 0)
+      if(arg_int >= 0 && copyout(pgdir, arg_u, karg, sizeof(int)) < 0)
         arg_int = -1;
       kmalloc_free(karg);
       return arg_int;
@@ -988,17 +1019,18 @@ sys_setrlimit(void)
         return -1;
       arg_u = (uint)arg_raw;
       p = myproc();
-      if(p == 0 || p->pgdir == 0)
+      pgdir = proc_pgdir(p);
+      if(p == 0 || pgdir == 0)
         return -1;
       karg = (char*)kmalloc(sizeof(int));
       if(karg == 0)
         return -1;
-      if(copyin(p->pgdir, karg, arg_u, sizeof(int)) < 0){
+      if(copyin(pgdir, karg, arg_u, sizeof(int)) < 0){
         kmalloc_free(karg);
         return -1;
       }
       arg_int = tty_ioctl_dispatch(f, fd, tty_major, request, (uint)karg);
-      if(arg_int >= 0 && copyout(p->pgdir, arg_u, karg, sizeof(int)) < 0)
+      if(arg_int >= 0 && copyout(pgdir, arg_u, karg, sizeof(int)) < 0)
         arg_int = -1;
       kmalloc_free(karg);
       return arg_int;
@@ -1019,17 +1051,18 @@ sys_setrlimit(void)
         return -1;
       arg_u = (uint)arg_raw;
       p = myproc();
-      if(p == 0 || p->pgdir == 0)
+      pgdir = proc_pgdir(p);
+      if(p == 0 || pgdir == 0)
         return -1;
       karg = (char*)kmalloc(sizeof(int));
       if(karg == 0)
         return -1;
-      if(copyin(p->pgdir, karg, arg_u, sizeof(int)) < 0){
+      if(copyin(pgdir, karg, arg_u, sizeof(int)) < 0){
         kmalloc_free(karg);
         return -1;
       }
       arg_int = tty_ioctl_dispatch(f, fd, tty_major, request, (uint)karg);
-      if(arg_int >= 0 && copyout(p->pgdir, arg_u, karg, sizeof(int)) < 0)
+      if(arg_int >= 0 && copyout(pgdir, arg_u, karg, sizeof(int)) < 0)
         arg_int = -1;
       kmalloc_free(karg);
       return arg_int;
@@ -1042,7 +1075,8 @@ sys_setrlimit(void)
         return -1;
       arg_u = (uint)arg_raw;
       p = myproc();
-      if(p == 0 || p->pgdir == 0)
+      pgdir = proc_pgdir(p);
+      if(p == 0 || pgdir == 0)
         return -1;
       if(request == 0x4600)
         arg_size = sizeof(struct fb_var_screeninfo);
@@ -1052,7 +1086,7 @@ sys_setrlimit(void)
       if(karg == 0)
         return -1;
       arg_int = console_ioctl(fd, request, (uint)karg);
-      if(arg_int >= 0 && copyout(p->pgdir, arg_u, karg, (uint)arg_size) < 0)
+      if(arg_int >= 0 && copyout(pgdir, arg_u, karg, (uint)arg_size) < 0)
         arg_int = -1;
       kmalloc_free(karg);
       return arg_int;

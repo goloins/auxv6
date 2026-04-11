@@ -245,7 +245,8 @@ fileread(struct file *f, char *addr, int n)
           de.name[0] = '.';
           if((uint)addr < KERNBASE){
             struct proc *p = myproc();
-            if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)addr, &de, sizeof(de)) < 0){
+            pde_t *pgdir = p ? proc_pgdir(p) : 0;
+            if(pgdir == 0 || copyout(pgdir, (uint)addr, &de, sizeof(de)) < 0){
               iput(mountpoint);
               iunlock(f->ip);
               return -1;
@@ -271,7 +272,8 @@ fileread(struct file *f, char *addr, int n)
           de.name[1] = '.';
           if((uint)addr < KERNBASE){
             struct proc *p = myproc();
-            if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)addr, &de, sizeof(de)) < 0){
+            pde_t *pgdir = p ? proc_pgdir(p) : 0;
+            if(pgdir == 0 || copyout(pgdir, (uint)addr, &de, sizeof(de)) < 0){
               iput(mountpoint);
               iunlock(f->ip);
               return -1;

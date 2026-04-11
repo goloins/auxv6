@@ -664,6 +664,7 @@ readi(struct inode *ip, char *dst, uint64_t off, uint n)
   uint tot, m;
   struct buf *bp;
   struct proc *p;
+  pde_t *pgdir;
   char *kbuf;
   int r;
   int want;
@@ -678,7 +679,8 @@ readi(struct inode *ip, char *dst, uint64_t off, uint n)
       return devsw[ip->major].read(ip, dst, off, n);
 
     p = myproc();
-    if(p == 0 || p->pgdir == 0)
+    pgdir = p ? proc_pgdir(p) : 0;
+    if(pgdir == 0)
       return -1;
 
     if(n == 0)
@@ -696,7 +698,7 @@ readi(struct inode *ip, char *dst, uint64_t off, uint n)
       r = devsw[ip->major].read(ip, kbuf, off + tot, want);
       if(r <= 0)
         break;
-      if(copyout(p->pgdir, (uint)(dst + tot), kbuf, (uint)r) < 0){
+      if(copyout(pgdir, (uint)(dst + tot), kbuf, (uint)r) < 0){
         kmalloc_free(kbuf);
         return (tot > 0) ? (int)tot : -1;
       }
@@ -717,12 +719,13 @@ readi(struct inode *ip, char *dst, uint64_t off, uint n)
     n = ip->size - off;
 
   p = myproc();
+  pgdir = p ? proc_pgdir(p) : 0;
 
   for(tot=0; tot<n; tot+=m, off+=m, dst+=m){
     bp = fs_bread_checked(ip->dev, bmap(ip, off/BSIZE));
     m = min(n - tot, BSIZE - off%BSIZE);
     if((uint)dst < KERNBASE){
-      if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)dst, bp->data + off%BSIZE, m) < 0){
+      if(pgdir == 0 || copyout(pgdir, (uint)dst, bp->data + off%BSIZE, m) < 0){
         brelse(bp);
         return -1;
       }
@@ -743,6 +746,7 @@ writei(struct inode *ip, char *src, uint64_t off, uint n)
   uint tot, m;
   struct buf *bp;
   struct proc *p;
+  pde_t *pgdir;
   char *kbuf;
   int r;
   int want;
@@ -757,7 +761,8 @@ writei(struct inode *ip, char *src, uint64_t off, uint n)
       return devsw[ip->major].write(ip, src, off, n);
 
     p = myproc();
-    if(p == 0 || p->pgdir == 0)
+    pgdir = p ? proc_pgdir(p) : 0;
+    if(pgdir == 0)
       return -1;
 
     if(n == 0)
@@ -772,7 +777,7 @@ writei(struct inode *ip, char *src, uint64_t off, uint n)
       want = (int)(n - tot);
       if(want > PGSIZE)
         want = PGSIZE;
-      if(copyin(p->pgdir, kbuf, (uint)(src + tot), (uint)want) < 0){
+      if(copyin(pgdir, kbuf, (uint)(src + tot), (uint)want) < 0){
         kmalloc_free(kbuf);
         return (tot > 0) ? (int)tot : -1;
       }
@@ -796,12 +801,13 @@ writei(struct inode *ip, char *src, uint64_t off, uint n)
     return -1;
 
   p = myproc();
+  pgdir = p ? proc_pgdir(p) : 0;
 
   for(tot=0; tot<n; tot+=m, off+=m, src+=m){
     bp = fs_bread_checked(ip->dev, bmap(ip, off/BSIZE));
     m = min(n - tot, BSIZE - off%BSIZE);
     if((uint)src < KERNBASE){
-      if(p == 0 || p->pgdir == 0 || copyin(p->pgdir, bp->data + off%BSIZE, (uint)src, m) < 0){
+      if(pgdir == 0 || copyin(pgdir, bp->data + off%BSIZE, (uint)src, m) < 0){
         brelse(bp);
         return -1;
       }

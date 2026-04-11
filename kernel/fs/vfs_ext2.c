@@ -284,9 +284,11 @@ static int
 ext2_dev_read(uint dev, uint off, char *dst, uint n)
 {
   struct proc *p;
+  pde_t *pgdir;
   uint done;
 
   p = myproc();
+  pgdir = p ? proc_pgdir(p) : 0;
 
   done = 0;
   while(done < n){
@@ -304,7 +306,7 @@ ext2_dev_read(uint dev, uint off, char *dst, uint n)
     if(bread_ok(dev, blockno, &b) < 0)
       return -1;
     if((uint)(dst + done) < KERNBASE){
-      if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)(dst + done), (char*)b->data + boff, take) < 0){
+      if(pgdir == 0 || copyout(pgdir, (uint)(dst + done), (char*)b->data + boff, take) < 0){
         brelse(b);
         return -1;
       }
@@ -323,9 +325,11 @@ static int
 ext2_dev_write(uint dev, uint off, char *src, uint n)
 {
   struct proc *p;
+  pde_t *pgdir;
   uint done;
 
   p = myproc();
+  pgdir = p ? proc_pgdir(p) : 0;
 
   done = 0;
   while(done < n){
@@ -343,7 +347,7 @@ ext2_dev_write(uint dev, uint off, char *src, uint n)
     if(bread_ok(dev, blockno, &b) < 0)
       return -1;
     if((uint)(src + done) < KERNBASE){
-      if(p == 0 || p->pgdir == 0 || copyin(p->pgdir, (char*)b->data + boff, (uint)(src + done), take) < 0){
+      if(pgdir == 0 || copyin(pgdir, (char*)b->data + boff, (uint)(src + done), take) < 0){
         brelse(b);
         return -1;
       }
@@ -1448,7 +1452,8 @@ ext2_read_data(struct ext2_mount_data *data, struct ext2_inode *dip,
       // Sparse hole: ext2 semantics are zero-filled reads, not early EOF.
       if((uint)(dst + done) < KERNBASE){
         static char zpg[4096];
-        if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)(dst + done), zpg, chunk) < 0)
+        pde_t *pgdir = p ? proc_pgdir(p) : 0;
+        if(pgdir == 0 || copyout(pgdir, (uint)(dst + done), zpg, chunk) < 0)
           return (done == 0) ? -1 : (int)done;
       } else {
         memset(dst + done, 0, chunk);
@@ -1528,7 +1533,8 @@ ext2_read_dirents(struct ext2_mount_data *data, struct ext2_inode *dip,
         memmove(de.name, nm, cpy);
         if((uint)(dst + produced) < KERNBASE){
           struct proc *p = myproc();
-          if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)(dst + produced), &de, sizeof(de)) < 0)
+          pde_t *pgdir = p ? proc_pgdir(p) : 0;
+          if(pgdir == 0 || copyout(pgdir, (uint)(dst + produced), &de, sizeof(de)) < 0)
             return (produced == 0) ? -1 : (int)produced;
         } else {
           memmove(dst + produced, &de, sizeof(de));

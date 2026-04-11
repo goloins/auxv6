@@ -76,6 +76,9 @@ int             bcache_health_check(char *out, int max);
 void            vm_get_sync_stats(uint *sync_calls, uint *sync_full_calls,
 								  uint *sync_entries, uint *pgdir_repairs,
 								  uint *master_repairs, uint *bad_pte_drops);
+void            vm_get_addrspace_guard_stats(uint *checks, uint *allows,
+                                             uint *denies, uint *bypass_no_as,
+                                             uint *bypass_vm_size);
 void            bdevinit(void);
 int             bdev_register(uint dev, const struct bdevsw *ops);
 int             bdev_register_part(uint dev, uint parent, uint start, uint nblocks);
@@ -756,14 +759,19 @@ int             serial_procfs_dump(char *buf, uint max);
 void            seginit(void);
 void            segreload(void);
 void            kvmalloc(void);
-pde_t*          setupkvm(void);
+int             setupkvm_as(struct address_space *as);
+pde_t*          proc_pgdir(struct proc *p);
+void            proc_bind_addrspace(struct proc *p, struct address_space *as);
+void            proc_clear_addrspace(struct proc *p);
 char*           uva2ka(pde_t*, char*);
 int             allocuvm(pde_t*, uint, uint);
 int             deallocuvm(pde_t*, uint, uint);
+int             allocuvm_as(struct address_space *as, uint oldsz, uint newsz);
+int             deallocuvm_as(struct address_space *as, uint oldsz, uint newsz);
 void            freevm(pde_t*);
-void            inituvm(pde_t*, char*, uint);
+pde_t*          copyuvm_as(struct address_space *as, uint sz);
+void            inituvm_as(struct address_space *as, char *init, uint sz);
 int             loaduvm(pde_t*, char*, struct inode*, uint, uint);
-pde_t*          copyuvm(pde_t*, uint);
 void            switchuvm(struct proc*);
 void            switchkvm(void);
 int             copyout(pde_t*, uint, void*, uint);
@@ -780,10 +788,15 @@ void            pte_mark_writable(uint *pte);
 void            pte_mark_user(uint *pte, int enabled);
 int             uvm_release_pte(uint *pte);
 int             cow_fault(pde_t *pgdir, uint va);
+void            vm_get_cow_stats(uint *mappings_created);
+int             vm_handle_fault(struct trapframe *tf, uint fault_addr);
+void            vm_get_fault_stats(uint *dispatches, uint *cow_resolved,
+								   uint *stack_growth, uint *sigsegv);
 
 // vma.c
 struct address_space* address_space_create(void);
 struct address_space* address_space_dup_cow(struct address_space *src);
+pde_t*          address_space_pgdir(struct address_space *as);
 void            address_space_release(struct address_space *as);
 void            address_space_destroy(struct address_space *as);
 int             vma_expand(struct address_space *as, uint new_size);

@@ -713,7 +713,8 @@ tuntap_fileread(struct file *f, char *dst, int n)
   if(r > 0){
     if((uint)dst < KERNBASE){
       struct proc *p = myproc();
-      if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)dst, u->rxq[idx].data, (uint)r) < 0){
+      pde_t *pgdir = p ? proc_pgdir(p) : 0;
+      if(pgdir == 0 || copyout(pgdir, (uint)dst, u->rxq[idx].data, (uint)r) < 0){
         release(&tuntap_state.lock);
         return -1;
       }
@@ -770,7 +771,8 @@ tuntap_filewrite(struct file *f, char *src, int n)
   if(n > 0){
     if((uint)src < KERNBASE){
       struct proc *p = myproc();
-      if(p == 0 || p->pgdir == 0 || copyin(p->pgdir, m->data, (uint)src, (uint)n) < 0){
+      pde_t *pgdir = p ? proc_pgdir(p) : 0;
+      if(pgdir == 0 || copyin(pgdir, m->data, (uint)src, (uint)n) < 0){
         mbuf_free(m);
         return -1;
       }

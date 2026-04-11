@@ -126,9 +126,11 @@ static int
 ufs2_dev_read(uint dev, uint off, char *dst, uint n)
 {
   struct proc *p;
+  pde_t *pgdir;
   uint done;
 
   p = myproc();
+  pgdir = p ? proc_pgdir(p) : 0;
 
   done = 0;
   while(done < n){
@@ -146,7 +148,7 @@ ufs2_dev_read(uint dev, uint off, char *dst, uint n)
     if(bread_ok(dev, blockno, &b) < 0)
       return -1;
     if((uint)(dst + done) < KERNBASE){
-      if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)(dst + done), (char*)b->data + boff, take) < 0){
+      if(pgdir == 0 || copyout(pgdir, (uint)(dst + done), (char*)b->data + boff, take) < 0){
         brelse(b);
         return -1;
       }
@@ -252,6 +254,7 @@ ufs2_read_data(struct ufs2_mount_data *md, struct ufs2_dinode *dip,
                char *dst, uint off, uint n)
 {
   struct proc *p;
+  pde_t *pgdir;
   uint done;
 
   if(md == 0 || dip == 0 || dst == 0)
@@ -260,6 +263,7 @@ ufs2_read_data(struct ufs2_mount_data *md, struct ufs2_dinode *dip,
     return 0;
 
   p = myproc();
+  pgdir = p ? proc_pgdir(p) : 0;
 
   done = 0;
   while(done < n){
@@ -280,7 +284,7 @@ ufs2_read_data(struct ufs2_mount_data *md, struct ufs2_dinode *dip,
     if(blkno == 0){
       if((uint)(dst + done) < KERNBASE){
         static char zpg[4096];
-        if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)(dst + done), zpg, take) < 0)
+        if(pgdir == 0 || copyout(pgdir, (uint)(dst + done), zpg, take) < 0)
           return (done > 0) ? (int)done : -1;
       } else {
         memset(dst + done, 0, take);
@@ -517,7 +521,8 @@ ufs2_read(struct inode *ip, char *dst, uint64_t off, uint n)
             out.name[i] = 0;
             if((uint)(dst + emitted) < KERNBASE){
               struct proc *p = myproc();
-              if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)(dst + emitted), &out, sizeof(out)) < 0){
+              pde_t *pgdir = p ? proc_pgdir(p) : 0;
+              if(pgdir == 0 || copyout(pgdir, (uint)(dst + emitted), &out, sizeof(out)) < 0){
                 kfree(dirbuf);
                 return (emitted > 0) ? (int)emitted : -1;
               }

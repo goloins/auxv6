@@ -114,6 +114,9 @@ user/gfxperf
 user/kallocstress
 user/kernperf
 user/vmprobe
+user/vmguardtest
+user/cowtest
+user/cowexectest
 user/kmemstress
 user/wc
 user/zombie

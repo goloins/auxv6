@@ -91,7 +91,8 @@ exec_internal(char *path, char **argv, int depth)
   char interp[EXEC_SHEBANG_LINE_MAX];
   char interp_arg[EXEC_SHEBANG_LINE_MAX];
   char *script_argv[EXEC_ARGC_MAX+3];
-  pde_t *pgdir, *oldpgdir;
+  pde_t *pgdir;
+  struct address_space *newaddrsp, *oldaddrsp;
   struct proc *curproc = myproc();
 
 #if ((3 + EXEC_ARGC_MAX + 1) * 4 > PGSIZE)
@@ -113,6 +114,7 @@ exec_internal(char *path, char **argv, int depth)
   if(ops && ops->access)
     access_fn = ops->access;
   pgdir = 0;
+  newaddrsp = 0;
   ustack = 0;
 
   if(access_fn(ip, IACC_EXEC) < 0)
@@ -156,8 +158,10 @@ exec_internal(char *path, char **argv, int depth)
     return exec_internal(interp, script_argv, depth + 1);
   }
 
-  if((pgdir = setupkvm()) == 0)
+  newaddrsp = address_space_create();
+  if(newaddrsp == 0)
     goto bad;
+  pgdir = address_space_pgdir(newaddrsp);
 
   // Load program into memory.
   sz = 0;
@@ -170,7 +174,7 @@ exec_internal(char *path, char **argv, int depth)
       goto bad;
     if(ph.vaddr + ph.memsz < ph.vaddr)
       goto bad;
-    if((sz = allocuvm(pgdir, sz, ph.vaddr + ph.memsz)) == 0)
+    if((sz = allocuvm_as(newaddrsp, sz, ph.vaddr + ph.memsz)) == 0)
       goto bad;
     if(ph.vaddr % PGSIZE != 0)
       goto bad;
@@ -192,7 +196,7 @@ exec_internal(char *path, char **argv, int depth)
     int g;
 
     sz = PGROUNDUP(sz);
-    if((sz = allocuvm(pgdir, sz, sz + stack_total)) == 0)
+    if((sz = allocuvm_as(newaddrsp, sz, sz + stack_total)) == 0)
       goto bad;
 
     stack_base = sz - stack_total;
@@ -250,15 +254,19 @@ exec_internal(char *path, char **argv, int depth)
   safestrcpy(curproc->name, last, sizeof(curproc->name));
 
   // Commit to the user image.
-  oldpgdir = curproc->pgdir;
-  curproc->pgdir = pgdir;
+  oldaddrsp = curproc->addrsp;
+  if(oldaddrsp == 0)
+    panic("exec: no old addrspace");
+  proc_bind_addrspace(curproc, newaddrsp);
   curproc->sz = sz;
   curproc->stack_top = sz;
   curproc->stack_bot = sz - USER_STACK_PAGES * PGSIZE;
   curproc->tf->eip = elf.entry;  // main
   curproc->tf->esp = sp;
   switchuvm(curproc);
-  freevm(oldpgdir);
+  address_space_destroy(oldaddrsp);
+  newaddrsp = 0;
+  pgdir = 0;
 
   // Close any file descriptors marked FD_CLOEXEC (POSIX exec semantics).
   if(curproc->fdtable){
@@ -281,6 +289,10 @@ exec_internal(char *path, char **argv, int depth)
  bad:
   if(ustack)
     kfree((char*)ustack);
+  if(newaddrsp){
+    address_space_destroy(newaddrsp);
+    pgdir = 0;
+  }
   if(pgdir)
     freevm(pgdir);
   if(ip){

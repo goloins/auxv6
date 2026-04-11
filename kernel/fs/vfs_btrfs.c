@@ -1341,7 +1341,8 @@ btrfs_read(struct inode *ip, char *dst, uint64_t off, uint n)
 
     if((uint)(dst + written) < KERNBASE){
       struct proc *p = myproc();
-      if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)(dst + written), &de, sizeof(de)) < 0)
+      pde_t *pgdir = p ? proc_pgdir(p) : 0;
+      if(pgdir == 0 || copyout(pgdir, (uint)(dst + written), &de, sizeof(de)) < 0)
         return (written > 0) ? (int)written : -1;
     } else {
       memmove(dst + written, &de, sizeof(de));

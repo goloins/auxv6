@@ -114,19 +114,11 @@ trap(struct trapframe *tf)
   //PAGEBREAK: 13
   case T_PGFLT:
     // Page fault: before delivering SIGSEGV, try to grow the user stack.
-    // The faulting virtual address is in CR2.
+    // The VM fault dispatcher resolves COW and stack-growth cases.
     if(myproc() && (tf->cs & 3) == DPL_USER){
       uint fa = rcr2();
-      // Phase 4 correctness: only resolve COW on user write-protection faults
-      // (present=1, write=1 in x86 page-fault error code).
-      if((tf->err & 0x3) == 0x3){
-        if(cow_fault(myproc()->pgdir, fa) == 0)
-          break;
-      }
-      if(proc_try_grow_stack(myproc(), fa))
-        break;  // Stack grown; resume user instruction
-      // Not a growable stack fault — fall through to signal delivery.
-      myproc()->sig_pending |= SIGBIT(SIGSEGV);
+      if(vm_handle_fault(tf, fa) == 0)
+        break;
     } else {
       // Kernel-mode page fault: always fatal.
       trap_kernel_fatal(tf, "kernel-page-fault");

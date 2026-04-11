@@ -601,6 +601,7 @@ audio_filewrite(struct file *f, char *src, int n)
   int copied;
   int chunk;
   int left;
+  pde_t *pgdir;
 
   if(f == 0 || f->type != FD_INODE || f->ip == 0)
     return -1;
@@ -613,7 +614,8 @@ audio_filewrite(struct file *f, char *src, int n)
 
   user_src = ((uint)src < KERNBASE);
   p = user_src ? myproc() : 0;
-  if(user_src && (p == 0 || p->pgdir == 0))
+  pgdir = p ? proc_pgdir(p) : 0;
+  if(user_src && pgdir == 0)
     return -1;
 
   /* Service pending AC97 completions even when IRQ delivery is absent. */
@@ -677,7 +679,7 @@ audio_filewrite(struct file *f, char *src, int n)
     if(user_src){
       if(chunk > (int)sizeof(kchunk))
         chunk = sizeof(kchunk);
-      if(copyin(p->pgdir, kchunk, (uint)(src + copied), (uint)chunk) < 0){
+      if(copyin(pgdir, kchunk, (uint)(src + copied), (uint)chunk) < 0){
         release(&audio_core.lock);
         return (copied > 0) ? copied : -1;
       }

@@ -78,7 +78,7 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_NET_UDP_INO, "net_udp", 4096 },
   { PROCFS_NET_DEV_INO, "net_dev", 1024 },
   { PROCFS_SCHEDSTAT_INO, "schedstat", 256 },
-  { PROCFS_VMSTAT_INO, "vmstat", 512 },
+  { PROCFS_VMSTAT_INO, "vmstat", 4096 },
   { PROCFS_FDLIMITS_INO, "fdlimits", 2048 },
   { PROCFS_AUDIO_INO, "audio", 512 },
   { PROCFS_AUDIO_STATS_INO, "audio_stats", 512 },
@@ -264,6 +264,7 @@ static int
 procfs_copy_data(char *dst, uint off, uint n, char *src, uint len)
 {
   struct proc *p;
+  pde_t *pgdir;
 
   if(off >= len)
     return 0;
@@ -272,9 +273,10 @@ procfs_copy_data(char *dst, uint off, uint n, char *src, uint len)
 
   if((uint)dst < KERNBASE){
     p = myproc();
-    if(p == 0 || p->pgdir == 0)
+    pgdir = p ? proc_pgdir(p) : 0;
+    if(pgdir == 0)
       return -1;
-    if(copyout(p->pgdir, (uint)dst, src + off, n) < 0)
+    if(copyout(pgdir, (uint)dst, src + off, n) < 0)
       return -1;
   } else {
     memmove(dst, src + off, n);
@@ -557,7 +559,7 @@ procfs_vaccess(struct inode *ip, int mode)
 int
 procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
 {
-  char buf[2048];
+  char buf[4096];
   struct procinfo_k *pinfo;
   struct vfs_mount_info *mins;
   struct kalloc_stats_k kstats;
@@ -805,6 +807,7 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     uint vm_pde_repairs;
     uint vm_master_repairs;
     uint vm_bad_pte_drops;
+    uint cow_mappings;
     uint pipe_read_sleeps;
     uint pipe_write_sleeps;
     uint pipe_wake_readers;
@@ -827,6 +830,15 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     uint cache_misses;
     uint cache_total;
     uint cache_hit_permille;
+    uint as_guard_checks;
+    uint as_guard_allows;
+    uint as_guard_denies;
+    uint as_guard_bypass_no_as;
+    uint as_guard_bypass_vm_size;
+    uint vm_fault_dispatches;
+    uint vm_fault_cow_resolved;
+    uint vm_fault_stack_growth;
+    uint vm_fault_sigsegv;
 
     kalloc_stats(&kstats);
     pagedb_stats(&pg_desc_pages, &pg_desc_bytes, &pg_desc_backing_pages,
@@ -835,6 +847,12 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
                &pg_desc_reserved, &pg_desc_pinned);
     vm_get_sync_stats(&vm_sync_calls, &vm_sync_full_calls, &vm_sync_entries,
                       &vm_pde_repairs, &vm_master_repairs, &vm_bad_pte_drops);
+    vm_get_cow_stats(&cow_mappings);
+    vm_get_fault_stats(&vm_fault_dispatches, &vm_fault_cow_resolved,
+               &vm_fault_stack_growth, &vm_fault_sigsegv);
+    vm_get_addrspace_guard_stats(&as_guard_checks, &as_guard_allows,
+                   &as_guard_denies, &as_guard_bypass_no_as,
+                   &as_guard_bypass_vm_size);
     pipe_get_stats(&pipe_read_sleeps, &pipe_write_sleeps,
                    &pipe_wake_readers, &pipe_wake_writers);
     buddy_stats_all(buddy_alloc_order, buddy_free_order,
@@ -924,6 +942,26 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_master_repairs ", vm_master_repairs) < 0)
       return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_bad_pte_drops ", vm_bad_pte_drops) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "cow_mappings ", cow_mappings) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_fault_dispatches ", vm_fault_dispatches) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_fault_cow_resolved ", vm_fault_cow_resolved) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_fault_stack_growth ", vm_fault_stack_growth) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_fault_sigsegv ", vm_fault_sigsegv) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_as_guard_checks ", as_guard_checks) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_as_guard_allows ", as_guard_allows) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_as_guard_denies ", as_guard_denies) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_as_guard_bypass_no_as ", as_guard_bypass_no_as) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_as_guard_bypass_vm_size ", as_guard_bypass_vm_size) < 0)
       return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "pipe_read_sleeps ", pipe_read_sleeps) < 0)
       return -1;

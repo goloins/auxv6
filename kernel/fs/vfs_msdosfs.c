@@ -1228,13 +1228,15 @@ msdos_read_file_data(struct inode *ip, char *dst, uint64_t off, uint n)
   uint within;
   uint done;
   struct proc *p;
+  pde_t *pgdir;
   uint off32;
 
   if(ip == 0 || dst == 0)
     return -1;
 
   p = ((uint)dst < KERNBASE) ? myproc() : 0;
-  if((uint)dst < KERNBASE && (p == 0 || p->pgdir == 0))
+  pgdir = p ? proc_pgdir(p) : 0;
+  if((uint)dst < KERNBASE && pgdir == 0)
     return -1;
 
   md = msdos_data_for_dev(ip->dev);
@@ -1301,7 +1303,7 @@ msdos_read_file_data(struct inode *ip, char *dst, uint64_t off, uint n)
       if(b == 0)
         return (done == 0 && copied == 0) ? -1 : (int)(done + copied);
       if((uint)(dst + done + copied) < KERNBASE){
-        if(copyout(p->pgdir, (uint)(dst + done + copied), b->data + sec_off, chunk) < 0){
+        if(copyout(pgdir, (uint)(dst + done + copied), b->data + sec_off, chunk) < 0){
           brelse(b);
           return (done == 0 && copied == 0) ? -1 : (int)(done + copied);
         }
@@ -2068,7 +2070,8 @@ msdos_read(struct inode *ip, char *dst, uint64_t off, uint n)
     memmove(de.name, nm, cpy);
     if((uint)dst < KERNBASE){
       struct proc *p = myproc();
-      if(p == 0 || p->pgdir == 0 || copyout(p->pgdir, (uint)dst, &de, sizeof(de)) < 0)
+      pde_t *pgdir = p ? proc_pgdir(p) : 0;
+      if(pgdir == 0 || copyout(pgdir, (uint)dst, &de, sizeof(de)) < 0)
         return -1;
     } else {
       memmove(dst, &de, sizeof(de));
@@ -2099,12 +2102,14 @@ msdos_write_file_data(struct inode *ip, char *src, uint64_t off, uint n)
   uint done;
   uint off32;
   struct proc *p;
+  pde_t *pgdir;
 
   if(ip == 0 || src == 0)
     return -1;
 
   p = ((uint)src < KERNBASE) ? myproc() : 0;
-  if((uint)src < KERNBASE && (p == 0 || p->pgdir == 0))
+  pgdir = p ? proc_pgdir(p) : 0;
+  if((uint)src < KERNBASE && pgdir == 0)
     return -1;
 
   old_first_cluster = ip->addrs[0];
@@ -2211,7 +2216,7 @@ msdos_write_file_data(struct inode *ip, char *src, uint64_t off, uint n)
       if(b == 0)
         return (done == 0 && copied == 0) ? -1 : (int)(done + copied);
       if((uint)(src + done + copied) < KERNBASE){
-        if(copyin(p->pgdir, b->data + sec_off, (uint)(src + done + copied), chunk) < 0){
+        if(copyin(pgdir, b->data + sec_off, (uint)(src + done + copied), chunk) < 0){
           brelse(b);
           return (done == 0 && copied == 0) ? -1 : (int)(done + copied);
         }

@@ -1,7 +1,7 @@
 # auxv6-VM-NG: Modern Virtual Memory Redesign
 
-**Date**: April 10, 2026  
-**Status**: Architecture design phase (pre-implementation)  
+**Date**: April 11, 2026  
+**Status**: Phase 4 complete; Phase 5 in progress  
 **Target**: Land complete redesign in 12-14 weeks (10 phases)  
 **Goal**: Production-grade VM system with COW, fault-driven allocation, typed caches, and observability
 
@@ -12,7 +12,7 @@
 The current auxv6 VM allocator and address-space management system is reaching scalability limits:
 
 - Single global `kmem.lock` remains the bottleneck despite per-CPU caches
-- Fork still performs eager page copying at `copyuvm()` time
+- Fork no longer performs dense eager page copying for writable managed user pages; shared mappings now install as COW and resolve on write faults
 - Small objects waste full pages (`struct pipe` = 1 page)
 - Page faults are exceptions, not a normal VM operation
 - Wait/reap require O(NPROC) process table scans
@@ -635,13 +635,13 @@ Each phase is self-contained, testable, and can be reverted independently. Estim
 **Tasks**:
 - [x] Define `struct address_space` and `struct vaddr_range` in `include/vma.h`
 - [x] Implement VMA operations: find, insert, remove, expand, shrink
-- [ ] Rewrite `setupkvm()` to allocate and initialize address_space
-- [ ] Rewrite `allocuvm()` → `vma_expand()`: add VMA entry, allocate pages
-- [ ] Rewrite `deallocuvm()` → `vma_shrink()`: trim VMAs, drop page refs
-- [ ] Rewrite `inituvm()` to use address_space; initialize child image
-- [ ] Modify `struct proc` to hold `address_space *addrsp` instead of raw pgdir
+- [x] Rewrite `setupkvm()` to allocate and initialize address_space
+- [x] Rewrite `allocuvm()` → `vma_expand()`: add VMA entry, allocate pages
+- [x] Rewrite `deallocuvm()` → `vma_shrink()`: trim VMAs, drop page refs
+- [x] Rewrite `inituvm()` to use address_space; initialize child image
+- [x] Modify `struct proc` to hold `address_space *addrsp` instead of raw pgdir
 - [x] Update `switchuvm()` to use `p->addrsp->pgdir` (with legacy `pgdir` fallback during transition)
-- [ ] Update VM traversal (`copyout`, `copyin`, `uva2ka`) to use address_space
+- [x] Update VM traversal (`copyout`, `copyin`, `uva2ka`) to use address_space
 
 **Phase 4 Progress (2026-04-10)**:
 - [x] Added compile-linked Phase 4 scaffold unit `kernel/vm/vma.c`
@@ -649,7 +649,39 @@ Each phase is self-contained, testable, and can be reverted independently. Estim
 - [x] Added exported address-space/VMA APIs in `include/defs.h`
 - [x] Added `proc.addrsp` scaffold field in `include/proc.h` (legacy `pgdir` remains authoritative)
 - [x] Made `switchuvm()` address-space aware in `kernel/core/vm.c` with behavior-neutral fallback
-- [ ] Wire VM core paths (`setupkvm`/`allocuvm`/`deallocuvm`/`switchuvm`) to `address_space`
+- [x] Wired dual-track `addrsp` wrappers through `userinit`, `fork`, `exec`, and zombie reap in process lifecycle paths
+- [x] Added non-owning `address_space_from_pgdir()` wrappers so current `pgdir` ownership remains unchanged during transition
+- [x] Synced `addrsp->vm_size` across `growproc()` and runtime stack growth paths in `kernel/core/proc.c`
+- [x] Centralized current-process `addrsp` size/VMA syncing inside `allocuvm()` and `deallocuvm()` in `kernel/core/vm.c`
+- [x] Upgraded `vma_expand()`/`vma_shrink()` in `kernel/vm/vma.c` to maintain real contiguous VMA ranges instead of size-only bookkeeping
+- [x] Normalized `uva2ka()`/`copyout()`/`copyin()` and current-pgdir writeability checks to honor the effective `addrsp->pgdir` in `kernel/core/vm.c`
+- [x] Switched `userinit` and `exec` image creation to `address_space_create()` first, then derive `pgdir`
+- [x] Switched `fork` duplication to `address_space_dup_cow()` when available, with legacy `copyuvm` fallback for transitional robustness
+- [x] Added address-space-native VM APIs (`allocuvm_as`/`deallocuvm_as`) and migrated `userinit`, `exec`, `growproc`, and stack-growth paths to use them when `addrsp` is present
+- [x] Added `address_space_pgdir()` and hardened `switchuvm`/VM helper resolution to keep `proc.pgdir` coherent with authoritative `addrsp->pgdir`
+- [x] Added address-space-native init/copy wrappers (`inituvm_as`/`copyuvm_as`) and migrated `address_space_dup_cow()` to use VM wrapper boundaries
+- [x] Added conservative VMA membership enforcement in `uva2ka`/`copyout`/`copyin` for effective current-process address spaces, with fallback for transitional non-VMA states
+- [x] Tightened fallback scope for VMA guard checks (size-bounded transitional bypass only) and exported guard telemetry in `/proc/vmstat` (`vm_as_guard_*`)
+- [x] Made transitional fallback explicit via `address_space.transitional` so size-only bypass is policy-driven instead of inferred from `vma_count==0`
+- [x] Refactored `allocuvm`/`deallocuvm` around shared internal helpers so `*_as` callers pass explicit address-space context instead of relying on current-process inference
+- [x] Refactored `setupkvm`/`inituvm` around shared internal helpers and added `setupkvm_as()` so address-space creation now attaches page tables through an explicit VM-core entry point
+- [x] Refactored `copyuvm` around a shared internal helper so `copyuvm_as()` duplicates from explicit source address-space context instead of re-entering the raw pgdir boundary
+- [x] Made `switchuvm()` address-space-first via shared proc-pgdir resolution and reduced nearby runtime stack-growth checks to consult `addrsp->pgdir` when available
+- [x] Removed the direct `fork()` fallback to raw `copyuvm()` by wrapping legacy parent `pgdir` state in a non-owning transitional `address_space` before duplication
+- [x] Added shared `proc_pgdir()` resolution and migrated high-traffic syscall, pipe, and block-device user-copy paths away from open-coded raw `p->pgdir` access
+- [x] Extended `proc_pgdir()` migration through common `sysfile` and `sysproc` user-copy paths (`read`/`write`/`getdents`/`stat`/`pipe`/`wait*`/time/rlimit/signal/kmsg) to shrink the remaining raw-`pgdir` syscall surface
+- [x] Carried `proc_pgdir()` conversion into the denser syscall tail (`mount` data staging, `poll`/`select`, `readlink`/`lstat`/`loopstatus`, `lseek` result copy, and `sys_ioctl`) so the remaining raw-`pgdir` use is now mostly isolated edge cases
+- [x] Eliminated direct raw-`pgdir` access from `kernel/core/sysfile.c` and `kernel/core/sysproc.c`; both major syscall surfaces now route user copies through authoritative `proc_pgdir()` resolution
+- [x] Collapsed the remaining public raw-`pgdir` VM setup/copy boundaries by making legacy `setupkvm()`/`inituvm()`/`copyuvm()` file-local in `kernel/core/vm.c` after all live callers moved to address-space-first or internal paths
+- [x] Pushed `proc_pgdir()` through the remaining core process/trap hot paths (`growproc`, stack growth, signal/termios helpers, and COW fault handling), leaving transition-only raw `pgdir` use mostly confined to lifecycle compatibility and non-core subsystems
+- [x] Extended the same `proc_pgdir()` cleanup into adjacent non-core user-copy helpers (`procfs`, `pty`, `tuntap`, and `audio`) so several common device/pseudo-fs paths no longer open-code `p->pgdir`
+- [x] Migrated the socket syscall layer plus common VFS read/write helpers (`socket.c`, `fs.c`, `file.c`) to cached `proc_pgdir()` resolution, further shrinking routine raw-`pgdir` user-copy traffic outside lifecycle fallback
+- [x] Applied the same current-process page-table cleanup to `ext2` and `tmpfs` backend copy paths, reducing remaining raw `pgdir` use to a smaller set of secondary filesystems plus explicit lifecycle compatibility code
+- [x] Finished the remaining filesystem-backend user-copy sweep (`ufs2`, `isofs`, `msdosfs`, and `btrfs`), leaving routine raw-`pgdir` traffic largely collapsed into explicit lifecycle compatibility and cached bookkeeping paths
+- [x] Tightened lifecycle and exec paths so operational fallback/teardown uses (`userinit`, `fork`, zombie reap, and `exec` old-image cleanup) now resolve page tables through `proc_pgdir()`, further reducing direct `proc.pgdir` use to compatibility synchronization and instrumentation
+- [x] Recast `proc.pgdir` in code and comments as a cached compatibility mirror by routing the remaining `vm.c` operational reads through `proc_pgdir()` and leaving direct field access primarily to cache synchronization in lifecycle setup/teardown
+- [x] Centralized process address-space/cache mutation behind `proc_bind_addrspace()` and `proc_clear_addrspace()` so open-coded `proc.addrsp`/`proc.pgdir` writes are boxed into a narrow VM-core boundary instead of scattered lifecycle updates
+- [x] Removed the stored `proc.pgdir` field and deleted the now-unused `address_space_from_pgdir()` transitional wrapper, making `address_space` the sole process VM authority and retiring the Phase 4 shim
 
 **Files Modified**:
 - `kernel/vm/vma.c` (NEW)
@@ -660,9 +692,9 @@ Each phase is self-contained, testable, and can be reverted independently. Estim
 - `include/proc.h` (add address_space field)
 
 **Validation**:
-- [ ] Kernel builds
+- [x] Kernel builds
 - [ ] Guest boots to shell; login works
-- [ ] Fork still works (still eager copy, no COW yet)
+- [ ] Fork still works through address-space-first duplication and COW setup
 - [ ] `schedperf -n 3`, `kallocstress -n 3` show no regression
 - [ ] `stackgrowtest` passes
 
@@ -675,23 +707,38 @@ Each phase is self-contained, testable, and can be reverted independently. Estim
 **Goal**: Parent-child fork shares pages; parent writable pages become read-only COW; child gets read-only mappings
 
 **Tasks**:
-- [ ] In `copyuvm()`, detect writable pages; call `install_cow_mapping()` instead of allocating child page
-- [ ] `install_cow_mapping(parent_pa, child_pgdir, va, flags)`: incref parent page, map read-only COW to child
-- [ ] Mark parent's mappings read-only (set PTE_COW or remove PTE_W)
-- [ ] After child fork, flush parent TLB (invlpg or full reload)
-- [ ] Add /proc/vmstat counter for COW mappings created
+- [x] In `copyuvm_as()`, detect writable managed user pages and install shared read-only COW mappings instead of allocating child copies
+- [x] Added `install_cow_mapping()` in `kernel/core/vm.c` to centralize child COW-map installation and accounting
+- [x] Mark parent writable managed user mappings read-only COW during fork duplication
+- [x] Flush parent TLB after fork duplication by reloading the current process page table before the child is made runnable
+- [x] Add `/proc/vmstat` counter for COW mappings created
 - [ ] Update phase-5 benchmark baseline
 
+**Phase 5 Progress (2026-04-11)**:
+- [x] COW fork duplication is active via `copyuvm_as()` / `address_space_dup_cow()` for managed writable user pages
+- [x] COW write-fault resolution is active via `cow_fault()` and the trap fault path
+- [x] Added `cow_mappings` export to `/proc/vmstat` for fork-side COW install visibility
+- [x] Fixed the `/proc/vmstat` formatting regression caused by the expanded counter set by increasing procfs vmstat buffer and advertised file size
+- [x] Guest-side `/proc/vmstat` validation now shows live COW activity (`cow_mappings 233`) with clean reads and no VM guard denials
+- [x] Added `vmguardtest` userland regression coverage to pin current-process guard behavior so `vm_as_guard_bypass_no_as` stays flat across procfs, pipe, and forked-child phases
+- [x] Guest-side `vmguardtest` run now passes all three phases with zero guard denies and zero bypass deltas (`procfs`: `d_checks=3056`; `pipe`: `d_checks=1470`; `forked child procfs`: `d_checks=1856`)
+- [x] Added `cowtest` userland correctness coverage to verify two-sided parent/child write isolation across data, heap, and stack after `fork()`
+- [x] Guest-side `cowtest` now passes both the default 8-round run and an extended 32-round run, confirming repeated parent/child write isolation across data, heap, and stack after `fork()`
+- [x] Added `cowexectest` userland correctness coverage to validate the fork-to-exec address-space handoff and parent isolation across data, heap, and stack
+- [ ] Split remaining fault-time behaviors into an explicit dispatcher in Phase 6 instead of the current in-place path
+
 **Files Modified**:
-- `kernel/core/vm.c` (refactor copyuvm, install_cow_mapping new func)
-- `include/mmu.h` (define PTE_COW if not present)
+- `kernel/core/vm.c` (COW install helper, mapping accounting, fork-side sharing)
 - `kernel/fs/procfs.c` (add cow_mappings counter)
 
 **Validation**:
-- [ ] Kernel builds
+- [x] Kernel builds
 - [ ] Fork succeeds; parent + child see same memory initially
-- [ ] Parent writes trigger fault (next phase); for now, verify writes still work
-- [ ] /proc/vmstat shows `cow_mappings` > 0 on fork
+- [x] Parent and child writes resolve through the COW fault path without cross-corruption (`cowtest`: 8/8 rounds pass; `cowtest -r 32`: 32/32 rounds pass)
+- [x] /proc/vmstat shows `cow_mappings` > 0 on fork (`cow_mappings 233`, `vm_as_guard_denies 0` in guest sample)
+- [x] `vmguardtest` passes in guest with zero `vm_as_guard_denies`, zero `vm_as_guard_bypass_no_as`, and zero `vm_as_guard_bypass_vm_size` deltas across procfs, pipe, and forked-child phases
+- [x] `cowtest` passes in guest across repeated parent/child write-isolation rounds for data, heap, and stack
+- [ ] `cowexectest` passes in guest across repeated fork-plus-exec handoff rounds
 - [ ] `schedperf -n 3` fork count improves >30% (less copying)
 - [ ] `kallocstress -n 3` fork count improves >20%
 
@@ -704,8 +751,8 @@ Each phase is self-contained, testable, and can be reverted independently. Estim
 **Goal**: Classify all page faults; resolve COW writes; demand-zero on first write to lazy page
 
 **Tasks**:
-- [ ] Refactor `trap.c` page-fault handler to classify fault type
-- [ ] Implement `vm_handle_fault()` dispatcher in kernel/vm/fault.c
+- [x] Refactor `trap.c` page-fault handler to route user faults through a dedicated VM dispatcher boundary
+- [x] Implement `vm_handle_fault()` dispatcher in `kernel/vm/fault.c` for the current COW and stack-growth paths
 - [ ] Implement `fault_cow_resolve()`: 
   - Check refcount of page at faulted VA
   - If refcount > 1: allocate new page, copy content, decref old, update mapping
@@ -715,18 +762,25 @@ Each phase is self-contained, testable, and can be reverted independently. Estim
 - [ ] Add fault counters to address_space (total, cow, demand_zero, stack_growth)
 - [ ] Export to /proc/vmstat per-process fault statistics
 
+**Phase 6 Progress (2026-04-11)**:
+- [x] Added `kernel/vm/fault.c` as the first dedicated VM fault-dispatch unit
+- [x] Routed user page faults in `trap.c` through `vm_handle_fault()` instead of open-coding COW and stack-growth decisions in the trap handler
+- [x] Added global `/proc/vmstat` fault telemetry (`vm_fault_dispatches`, `vm_fault_cow_resolved`, `vm_fault_stack_growth`, `vm_fault_sigsegv`) so the dispatcher split is immediately observable
+- [ ] Split `cow_fault()` into a dedicated `fault_cow_resolve()` helper owned by the dispatcher layer
+- [ ] Move stack-growth policy behind a `fault_stack_growth()` wrapper owned by the dispatcher layer
+
 **Files Modified**:
 - `kernel/vm/fault.c` (NEW)
 - `kernel/core/trap.c` (route page-fault to vm_handle_fault)
-- `kernel/core/vm.c` (remove old stack-growth code; use new fault path)
-- `kernel/fs/procfs.c` (add per-process fault counters)
+- `kernel/core/vm.c` (current COW resolver still used by dispatcher)
+- `kernel/fs/procfs.c` (add global dispatcher fault counters)
 
 **Validation**:
 - [ ] Kernel builds
 - [ ] Forked processes can write to their data; parent unaffected (COW works)
 - [ ] `stackgrowtest` passes (stack growth via faults)
-- [ ] `schedperf -n 5` shows improved fork-storm performance
-- [ ] `/proc/pid/vmstat` shows breakdown of fault types
+- [ ] `cowexectest` passes (fork-to-exec handoff keeps parent isolated and new image stable)
+- [ ] `/proc/vmstat` shows dispatcher fault counters moving under COW and stack-growth workloads
 - [ ] `kallocstress -n 3` still passes
 
 **Risk**: Medium-High (fault path is hot; COW refcount accuracy critical)
@@ -925,7 +979,7 @@ Risk: If <95%, refactoring introduced overhead; investigate
 ### Phase 5 (COW install)
 ```
 Expected: fork count ↓ 30-50% (less copying)
-Risk: If fork still allocates as much, mapping install failed
+Risk: If `cow_mappings` stays at 0 across fork-heavy runs, mapping install regressed
 ```
 
 ### Phase 6 (fault dispatcher + COW resolution)

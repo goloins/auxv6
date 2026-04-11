@@ -940,6 +940,7 @@ sys_bind(void)
   struct socket *s;
   struct sockaddr_in addr;
   struct proc *p;
+  pde_t *pgdir;
   
   if(argint(0, &sockfd) < 0 || argint(2, &addrlen) < 0)
     return -1;
@@ -953,9 +954,10 @@ sys_bind(void)
     return -1;
 
   p = myproc();
-  if(p == 0 || p->pgdir == 0)
+  pgdir = p ? proc_pgdir(p) : 0;
+  if(pgdir == 0)
     return -1;
-  if(copyin(p->pgdir, &addr, (uint)addr_raw, sizeof(addr)) < 0)
+  if(copyin(pgdir, &addr, (uint)addr_raw, sizeof(addr)) < 0)
     return -1;
   
   // Get socket from fd
@@ -1013,6 +1015,7 @@ sys_connect(void)
   struct ifnet *ifp;
   uint route_src;
   struct proc *p;
+  pde_t *pgdir;
 
   if(argint(0, &sockfd) < 0 || argint(2, &addrlen) < 0)
     return -1;
@@ -1022,9 +1025,10 @@ sys_connect(void)
     return -1;
 
   p = myproc();
-  if(p == 0 || p->pgdir == 0)
+  pgdir = p ? proc_pgdir(p) : 0;
+  if(pgdir == 0)
     return -1;
-  if(copyin(p->pgdir, &addr, (uint)addr_raw, sizeof(addr)) < 0)
+  if(copyin(pgdir, &addr, (uint)addr_raw, sizeof(addr)) < 0)
     return -1;
 
   s = getfd_socket(sockfd);
@@ -1155,6 +1159,7 @@ sys_send(void)
   struct ifnet *ifp;
   uint route_src;
   struct proc *p;
+  pde_t *pgdir;
 
   if(argint(0, &sockfd) < 0 || argint(2, &len) < 0)
     return -1;
@@ -1164,7 +1169,8 @@ sys_send(void)
     return -1;
 
   p = myproc();
-  if(p == 0 || p->pgdir == 0)
+  pgdir = p ? proc_pgdir(p) : 0;
+  if(pgdir == 0)
     return -1;
   buf_u = (uint)buf_raw;
 
@@ -1174,7 +1180,7 @@ sys_send(void)
   kbuf = (char*)kmalloc((uint)len);
   if(kbuf == 0)
     return -1;
-  if(copyin(p->pgdir, kbuf, buf_u, (uint)len) < 0){
+  if(copyin(pgdir, kbuf, buf_u, (uint)len) < 0){
     kmalloc_free(kbuf);
     return -1;
   }
@@ -1280,6 +1286,7 @@ sys_sendto(void)
   struct ifnet *ifp;
   uint route_src;
   struct proc *p;
+  pde_t *pgdir;
 
   if(argint(0, &sockfd) < 0 || argint(2, &len) < 0)
     return -1;
@@ -1290,7 +1297,8 @@ sys_sendto(void)
   if(argint(1, &buf_raw) < 0)
     return -1;
   p = myproc();
-  if(p == 0 || p->pgdir == 0)
+  pgdir = p ? proc_pgdir(p) : 0;
+  if(pgdir == 0)
     return -1;
   buf_u = (uint)buf_raw;
 
@@ -1298,7 +1306,7 @@ sys_sendto(void)
     kbuf = (char*)kmalloc((uint)len);
     if(kbuf == 0)
       return -1;
-    if(copyin(p->pgdir, kbuf, buf_u, (uint)len) < 0){
+    if(copyin(pgdir, kbuf, buf_u, (uint)len) < 0){
       kmalloc_free(kbuf);
       return -1;
     }
@@ -1313,7 +1321,7 @@ sys_sendto(void)
   if(dst_raw != 0) {
     if(argint(5, &dstlen) < 0 || dstlen < (int)sizeof(struct sockaddr_in))
       goto sendto_fail;
-    if(copyin(p->pgdir, &udst, (uint)dst_raw, sizeof(udst)) < 0)
+    if(copyin(pgdir, &udst, (uint)dst_raw, sizeof(udst)) < 0)
       goto sendto_fail;
     if(udst.sin_family != AF_INET)
       goto sendto_fail;
@@ -1403,6 +1411,7 @@ sys_recv(void)
   int n;
   struct socket *s;
   struct proc *p;
+  pde_t *pgdir;
 
   if(argint(0, &sockfd) < 0 || argint(2, &len) < 0)
     return -1;
@@ -1412,7 +1421,8 @@ sys_recv(void)
     return -1;
 
   p = myproc();
-  if(p == 0 || p->pgdir == 0)
+  pgdir = p ? proc_pgdir(p) : 0;
+  if(pgdir == 0)
     return -1;
   buf_u = (uint)buf_raw;
 
@@ -1442,7 +1452,7 @@ sys_recv(void)
 
   release(&socket_lock);
 
-  if(n > 0 && copyout(p->pgdir, buf_u, kbuf, (uint)n) < 0){
+  if(n > 0 && copyout(pgdir, buf_u, kbuf, (uint)n) < 0){
     kmalloc_free(kbuf);
     return -1;
   }
@@ -1468,6 +1478,7 @@ sys_recvfrom(void)
   struct socket *s;
   struct sockaddr_in peer;
   struct proc *p;
+  pde_t *pgdir;
 
   if(argint(0, &sockfd) < 0 || argint(2, &len) < 0)
     return -1;
@@ -1479,7 +1490,8 @@ sys_recvfrom(void)
     return -1;
 
   p = myproc();
-  if(p == 0 || p->pgdir == 0)
+  pgdir = p ? proc_pgdir(p) : 0;
+  if(pgdir == 0)
     return -1;
   buf_u = (uint)buf_raw;
 
@@ -1517,15 +1529,15 @@ sys_recvfrom(void)
   n = socket_recv_copy_locked(s, kbuf, len, &peer);
   release(&socket_lock);
 
-  if(n > 0 && copyout(p->pgdir, buf_u, kbuf, (uint)n) < 0)
+  if(n > 0 && copyout(pgdir, buf_u, kbuf, (uint)n) < 0)
     goto recvfrom_fail;
 
   if(src_raw != 0){
-    if(copyout(p->pgdir, (uint)src_raw, &peer, sizeof(peer)) < 0)
+    if(copyout(pgdir, (uint)src_raw, &peer, sizeof(peer)) < 0)
       goto recvfrom_fail;
     if(srclen_addr != 0){
       int sl = (int)sizeof(struct sockaddr_in);
-      if(copyout(p->pgdir, (uint)srclen_addr, &sl, sizeof(sl)) < 0)
+      if(copyout(pgdir, (uint)srclen_addr, &sl, sizeof(sl)) < 0)
         goto recvfrom_fail;
     }
   }
@@ -1557,6 +1569,7 @@ sys_recvtimeout(void)
   uint now;
   struct socket *s;
   struct proc *p;
+  pde_t *pgdir;
 
   if(argint(0, &sockfd) < 0 || argint(2, &len) < 0 || argint(3, &timeout_ticks) < 0)
     return -1;
@@ -1566,7 +1579,8 @@ sys_recvtimeout(void)
     return -1;
 
   p = myproc();
-  if(p == 0 || p->pgdir == 0)
+  pgdir = p ? proc_pgdir(p) : 0;
+  if(pgdir == 0)
     return -1;
   buf_u = (uint)buf_raw;
 
@@ -1618,7 +1632,7 @@ sys_recvtimeout(void)
 
   release(&socket_lock);
 
-  if(n > 0 && copyout(p->pgdir, buf_u, kbuf, (uint)n) < 0)
+  if(n > 0 && copyout(pgdir, buf_u, kbuf, (uint)n) < 0)
     goto recvtimeout_fail;
 
   if(kbuf)
@@ -1640,6 +1654,7 @@ sys_netifinfo(void)
   uint out_u;
   struct netif_info *kout;
   struct proc *p;
+  pde_t *pgdir;
   int max;
   int n;
 
@@ -1665,8 +1680,8 @@ sys_netifinfo(void)
 
   if(n > 0){
     p = myproc();
-    if(p == 0 || p->pgdir == 0 ||
-       copyout(p->pgdir, out_u, kout, n * sizeof(*kout)) < 0){
+    pgdir = p ? proc_pgdir(p) : 0;
+    if(pgdir == 0 || copyout(pgdir, out_u, kout, n * sizeof(*kout)) < 0){
       kmalloc_free(kout);
       return -1;
     }
@@ -1683,6 +1698,7 @@ sys_routeinfo(void)
   uint out_u;
   struct route_info *kout;
   struct proc *p;
+  pde_t *pgdir;
   int max;
   int n;
 
@@ -1708,8 +1724,8 @@ sys_routeinfo(void)
 
   if(n > 0){
     p = myproc();
-    if(p == 0 || p->pgdir == 0 ||
-       copyout(p->pgdir, out_u, kout, n * sizeof(*kout)) < 0){
+    pgdir = p ? proc_pgdir(p) : 0;
+    if(pgdir == 0 || copyout(pgdir, out_u, kout, n * sizeof(*kout)) < 0){
       kmalloc_free(kout);
       return -1;
     }
@@ -1726,6 +1742,7 @@ sys_arpinfo(void)
   uint out_u;
   struct arp_info *kout;
   struct proc *p;
+  pde_t *pgdir;
   int max;
   int n;
 
@@ -1751,8 +1768,8 @@ sys_arpinfo(void)
 
   if(n > 0){
     p = myproc();
-    if(p == 0 || p->pgdir == 0 ||
-       copyout(p->pgdir, out_u, kout, n * sizeof(*kout)) < 0){
+    pgdir = p ? proc_pgdir(p) : 0;
+    if(pgdir == 0 || copyout(pgdir, out_u, kout, n * sizeof(*kout)) < 0){
       kmalloc_free(kout);
       return -1;
     }
@@ -1890,6 +1907,7 @@ sys_setsockopt(void)
   struct socket *s;
   int v;
   struct proc *p;
+  pde_t *pgdir;
 
   if(argint(0, &sockfd) < 0 || argint(1, &level) < 0 || argint(2, &optname) < 0)
     return -1;
@@ -1900,7 +1918,8 @@ sys_setsockopt(void)
   optval_u = (uint)optval_raw;
 
   p = myproc();
-  if(p == 0 || p->pgdir == 0)
+  pgdir = p ? proc_pgdir(p) : 0;
+  if(pgdir == 0)
     return -1;
 
   s = getfd_socket(sockfd);
@@ -1911,7 +1930,7 @@ sys_setsockopt(void)
     if(optname == IP_TTL) {
       if(optlen < (int)sizeof(int))
         return -1;
-      if(copyin(p->pgdir, &v, optval_u, sizeof(int)) < 0)
+      if(copyin(pgdir, &v, optval_u, sizeof(int)) < 0)
         return -1;
       if(v < 1 || v > 255)
         return -1;
@@ -1926,7 +1945,7 @@ sys_setsockopt(void)
     if(optname == SO_REUSEADDR) {
       if(optlen < (int)sizeof(int))
         return -1;
-      if(copyin(p->pgdir, &v, optval_u, sizeof(int)) < 0)
+      if(copyin(pgdir, &v, optval_u, sizeof(int)) < 0)
         return -1;
       acquire(&socket_lock);
       s->reuseaddr = v ? 1 : 0;
@@ -1949,6 +1968,7 @@ sys_getsockopt(void)
   int outv;
   struct socket *s;
   struct proc *p;
+  pde_t *pgdir;
 
   if(argint(0, &sockfd) < 0 || argint(1, &level) < 0 || argint(2, &optname) < 0)
     return -1;
@@ -1959,9 +1979,10 @@ sys_getsockopt(void)
   optlenp_u = (uint)optlenp_raw;
 
   p = myproc();
-  if(p == 0 || p->pgdir == 0)
+  pgdir = p ? proc_pgdir(p) : 0;
+  if(pgdir == 0)
     return -1;
-  if(copyin(p->pgdir, &optlen, optlenp_u, sizeof(int)) < 0)
+  if(copyin(pgdir, &optlen, optlenp_u, sizeof(int)) < 0)
     return -1;
   if(optlen < (int)sizeof(int))
     return -1;
@@ -1975,10 +1996,10 @@ sys_getsockopt(void)
       acquire(&socket_lock);
       outv = (int)s->ttl;
       release(&socket_lock);
-      if(copyout(p->pgdir, optval_u, &outv, sizeof(int)) < 0)
+      if(copyout(pgdir, optval_u, &outv, sizeof(int)) < 0)
         return -1;
       optlen = sizeof(int);
-      if(copyout(p->pgdir, optlenp_u, &optlen, sizeof(int)) < 0)
+      if(copyout(pgdir, optlenp_u, &optlen, sizeof(int)) < 0)
         return -1;
       return 0;
     }
@@ -1989,10 +2010,10 @@ sys_getsockopt(void)
       acquire(&socket_lock);
       outv = (int)s->reuseaddr;
       release(&socket_lock);
-      if(copyout(p->pgdir, optval_u, &outv, sizeof(int)) < 0)
+      if(copyout(pgdir, optval_u, &outv, sizeof(int)) < 0)
         return -1;
       optlen = sizeof(int);
-      if(copyout(p->pgdir, optlenp_u, &optlen, sizeof(int)) < 0)
+      if(copyout(pgdir, optlenp_u, &optlen, sizeof(int)) < 0)
         return -1;
       return 0;
     }
@@ -2073,6 +2094,7 @@ sys_getsockname(void)
   struct sockaddr_in kaddr;
   int klen;
   struct proc *p;
+  pde_t *pgdir;
 
   if(argint(0, &sockfd) < 0)
     return -1;
@@ -2082,9 +2104,10 @@ sys_getsockname(void)
     return -1;
 
   p = myproc();
-  if(p == 0 || p->pgdir == 0)
+  pgdir = p ? proc_pgdir(p) : 0;
+  if(pgdir == 0)
     return -1;
-  if(copyin(p->pgdir, &klen, (uint)addrlenp_raw, sizeof(int)) < 0)
+  if(copyin(pgdir, &klen, (uint)addrlenp_raw, sizeof(int)) < 0)
     return -1;
   if(klen < (int)sizeof(struct sockaddr_in))
     return -1;
@@ -2097,10 +2120,10 @@ sys_getsockname(void)
   memmove(&kaddr, &s->local_addr, sizeof(kaddr));
   release(&socket_lock);
 
-  if(copyout(p->pgdir, (uint)addr_raw, &kaddr, sizeof(kaddr)) < 0)
+  if(copyout(pgdir, (uint)addr_raw, &kaddr, sizeof(kaddr)) < 0)
     return -1;
   klen = (int)sizeof(struct sockaddr_in);
-  if(copyout(p->pgdir, (uint)addrlenp_raw, &klen, sizeof(klen)) < 0)
+  if(copyout(pgdir, (uint)addrlenp_raw, &klen, sizeof(klen)) < 0)
     return -1;
   return 0;
 }
@@ -2116,6 +2139,7 @@ sys_getpeername(void)
   struct sockaddr_in kaddr;
   int klen;
   struct proc *p;
+  pde_t *pgdir;
 
   if(argint(0, &sockfd) < 0)
     return -1;
@@ -2125,9 +2149,10 @@ sys_getpeername(void)
     return -1;
 
   p = myproc();
-  if(p == 0 || p->pgdir == 0)
+  pgdir = p ? proc_pgdir(p) : 0;
+  if(pgdir == 0)
     return -1;
-  if(copyin(p->pgdir, &klen, (uint)addrlenp_raw, sizeof(int)) < 0)
+  if(copyin(pgdir, &klen, (uint)addrlenp_raw, sizeof(int)) < 0)
     return -1;
   if(klen < (int)sizeof(struct sockaddr_in))
     return -1;
@@ -2144,10 +2169,10 @@ sys_getpeername(void)
   memmove(&kaddr, &s->remote_addr, sizeof(kaddr));
   release(&socket_lock);
 
-  if(copyout(p->pgdir, (uint)addr_raw, &kaddr, sizeof(kaddr)) < 0)
+  if(copyout(pgdir, (uint)addr_raw, &kaddr, sizeof(kaddr)) < 0)
     return -1;
   klen = (int)sizeof(struct sockaddr_in);
-  if(copyout(p->pgdir, (uint)addrlenp_raw, &klen, sizeof(klen)) < 0)
+  if(copyout(pgdir, (uint)addrlenp_raw, &klen, sizeof(klen)) < 0)
     return -1;
   return 0;
 }

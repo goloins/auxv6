@@ -197,14 +197,19 @@ proc_try_grow_stack(struct proc *p, uint fault_addr)
     return 0;  // Hard ceiling: deliver SIGSEGV
   }
 
-  pst = user_page_state(p->pgdir, (char*)stack_guard);
+  pst = user_page_state(proc_pgdir(p), (char*)stack_guard);
   if(pst == 1){
     // Pre-mapped but inaccessible reserve page.
-    setpteu(p->pgdir, (char*)stack_guard);
+    setpteu(proc_pgdir(p), (char*)stack_guard);
   } else if(pst == 0){
     // Sparse child mapping: allocate one stack page on demand.
-    if(allocuvm(p->pgdir, stack_guard, stack_guard + PGSIZE) == 0)
-      return 0;
+    if(p->addrsp){
+      if(allocuvm_as(p->addrsp, stack_guard, stack_guard + PGSIZE) == 0)
+        return 0;
+    } else {
+      if(allocuvm(proc_pgdir(p), stack_guard, stack_guard + PGSIZE) == 0)
+        return 0;
+    }
   } else {
     // Already user-accessible: not a growth fault candidate.
     return 0;
@@ -408,7 +413,7 @@ proc_deliver_signal(struct proc *p)
   sf.sf_sigreturn = sp + ((uint)&((struct sigframe *)0)->sf_trampoline);
 
   // Copy signal frame to user stack
-  if(copyout(p->pgdir, sp, &sf, sizeof(sf)) < 0) {
+  if(copyout(proc_pgdir(p), sp, &sf, sizeof(sf)) < 0) {
     STACKDBG("stack: pid %d signal delivery copyout failed\n", p->pid);
     // Handler delivery could not be set up; terminate as signaled.
     p->xstatus = WSTATUS_SIG(signo);
@@ -454,14 +459,26 @@ growproc(int n)
 {
   uint sz;
   struct proc *curproc = myproc();
+  pde_t *pgdir;
 
   sz = curproc->sz;
+  pgdir = proc_pgdir(curproc);
   if(n > 0){
-    if((sz = allocuvm(curproc->pgdir, sz, sz + n)) == 0)
-      return -1;
+    if(curproc->addrsp){
+      if((sz = allocuvm_as(curproc->addrsp, sz, sz + n)) == 0)
+        return -1;
+    } else {
+      if(pgdir == 0 || (sz = allocuvm(pgdir, sz, sz + n)) == 0)
+        return -1;
+    }
   } else if(n < 0){
-    if((sz = deallocuvm(curproc->pgdir, sz, sz + n)) == 0)
-      return -1;
+    if(curproc->addrsp){
+      if((sz = deallocuvm_as(curproc->addrsp, sz, sz + n)) == 0)
+        return -1;
+    } else {
+      if(pgdir == 0 || (sz = deallocuvm(pgdir, sz, sz + n)) == 0)
+        return -1;
+    }
   }
   curproc->sz = sz;
   switchuvm(curproc);
@@ -472,6 +489,7 @@ int
 proc_sigaction(int signo, uint act_addr, uint oldact_addr)
 {
   struct proc *p;
+  pde_t *pgdir;
   uint act_local[3];
   uint oldact_local[3];
   int have_act;
@@ -481,13 +499,14 @@ proc_sigaction(int signo, uint act_addr, uint oldact_addr)
     return -1;
 
   p = myproc();
-  if(p == 0 || p->pgdir == 0)
+  pgdir = proc_pgdir(p);
+  if(p == 0 || pgdir == 0)
     return -1;
 
   have_act = (act_addr != 0);
   have_oldact = (oldact_addr != 0);
 
-  if(have_act && copyin(p->pgdir, act_local, act_addr, sizeof(act_local)) < 0)
+  if(have_act && copyin(pgdir, act_local, act_addr, sizeof(act_local)) < 0)
     return -1;
 
   acquire(&ptable.lock);
@@ -518,7 +537,7 @@ proc_sigaction(int signo, uint act_addr, uint oldact_addr)
 
   release(&ptable.lock);
 
-  if(have_oldact && copyout(p->pgdir, oldact_addr, oldact_local, sizeof(oldact_local)) < 0)
+  if(have_oldact && copyout(pgdir, oldact_addr, oldact_local, sizeof(oldact_local)) < 0)
     return -1;
 
   return 0;
@@ -528,18 +547,20 @@ int
 proc_sigprocmask(int how, uint set_addr, uint oldset_addr)
 {
   struct proc *p;
+  pde_t *pgdir;
   sigset_t set;
   sigset_t newmask;
   sigset_t oldmask;
   sigset_t unblockable;
 
   p = myproc();
-  if(p == 0 || p->pgdir == 0)
+  pgdir = proc_pgdir(p);
+  if(p == 0 || pgdir == 0)
     return -1;
 
   unblockable = SIGBIT(SIGKILL) | SIGBIT(SIGSTOP);
   set = 0;
-  if(set_addr != 0 && copyin(p->pgdir, &set, set_addr, sizeof(set)) < 0)
+  if(set_addr != 0 && copyin(pgdir, &set, set_addr, sizeof(set)) < 0)
     return -1;
 
   acquire(&ptable.lock);
@@ -562,7 +583,7 @@ proc_sigprocmask(int how, uint set_addr, uint oldset_addr)
 
   release(&ptable.lock);
 
-  if(oldset_addr != 0 && copyout(p->pgdir, oldset_addr, &oldmask, sizeof(oldmask)) < 0)
+  if(oldset_addr != 0 && copyout(pgdir, oldset_addr, &oldmask, sizeof(oldmask)) < 0)
     return -1;
 
   return 0;
@@ -670,10 +691,12 @@ proc_tcgetattr(int fd, uint termios_addr)
   struct proc *curproc;
   struct file *f;
   struct termios kt;
+  pde_t *pgdir;
   int rc;
 
   curproc = myproc();
-  if(curproc == 0 || curproc->pgdir == 0 || termios_addr == 0)
+  pgdir = proc_pgdir(curproc);
+  if(curproc == 0 || pgdir == 0 || termios_addr == 0)
     return -1;
   if(!proc_is_tty_fd(fd)) {
     return -1;
@@ -697,7 +720,7 @@ proc_tcgetattr(int fd, uint termios_addr)
 
   if(rc < 0)
     return rc;
-  if(copyout(curproc->pgdir, termios_addr, &kt, sizeof(kt)) < 0)
+  if(copyout(pgdir, termios_addr, &kt, sizeof(kt)) < 0)
     return -1;
   return 0;
 }
@@ -708,15 +731,17 @@ proc_tcsetattr(int fd, int optional_actions, uint termios_addr)
   struct proc *curproc;
   struct file *f;
   struct termios kt;
+  pde_t *pgdir;
 
   curproc = myproc();
-  if(curproc == 0 || curproc->pgdir == 0 || termios_addr == 0)
+  pgdir = proc_pgdir(curproc);
+  if(curproc == 0 || pgdir == 0 || termios_addr == 0)
     return -1;
   if(!proc_is_tty_fd(fd)) {
     return -1;
   }
 
-  if(copyin(curproc->pgdir, &kt, termios_addr, sizeof(kt)) < 0)
+  if(copyin(pgdir, &kt, termios_addr, sizeof(kt)) < 0)
     return -1;
 
   f = curproc->fdtable->entries[fd];

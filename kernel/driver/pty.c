@@ -409,11 +409,13 @@ pty_fileread(struct file *f, char *dst, int n)
   int send_ttin;
   int user_dst;
   struct proc *pcur;
+  pde_t *pgdir;
   int peer_side;
 
   user_dst = ((uint)dst < KERNBASE);
   pcur = user_dst ? myproc() : 0;
-  if(user_dst && (pcur == 0 || pcur->pgdir == 0))
+  pgdir = pcur ? proc_pgdir(pcur) : 0;
+  if(user_dst && pgdir == 0)
     return -1;
 
   if(pty_lookup_file(f, &pty) < 0)
@@ -470,7 +472,7 @@ pty_fileread(struct file *f, char *dst, int n)
         break;
 
       release(&ptys.lock);
-      if(copyout(pcur->pgdir, (uint)(dst + total), kbuf, rc) < 0)
+      if(copyout(pgdir, (uint)(dst + total), kbuf, rc) < 0)
         return (total > 0) ? total : -1;
       total += rc;
 
@@ -577,10 +579,12 @@ pty_filewrite(struct file *f, char *src, int n)
   int send_ttou;
   int user_src;
   struct proc *pcur;
+  pde_t *pgdir;
 
   user_src = ((uint)src < KERNBASE);
   pcur = user_src ? myproc() : 0;
-  if(user_src && (pcur == 0 || pcur->pgdir == 0))
+  pgdir = pcur ? proc_pgdir(pcur) : 0;
+  if(user_src && pgdir == 0)
     return -1;
 
   if(pty_lookup_file(f, &pty) < 0)
@@ -619,7 +623,7 @@ pty_filewrite(struct file *f, char *src, int n)
       want = n - total;
       if(want > (int)sizeof(kbuf))
         want = sizeof(kbuf);
-      if(copyin(pcur->pgdir, kbuf, (uint)(src + total), (uint)want) < 0){
+      if(copyin(pgdir, kbuf, (uint)(src + total), (uint)want) < 0){
         release(&ptys.lock);
         return (total > 0) ? total : -1;
       }

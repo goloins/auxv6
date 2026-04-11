@@ -51,12 +51,14 @@ blockdev_read(struct inode *ip, char *dst, uint64_t off, int n)
   uint total;
   uint limit;
   struct proc *p;
+  pde_t *pgdir;
 
   if(ip == 0 || dst == 0 || ip->minor < 0 || ip->minor >= NDEV)
     return -1;
 
   p = ((uint)dst < KERNBASE) ? myproc() : 0;
-  if((uint)dst < KERNBASE && (p == 0 || p->pgdir == 0))
+  pgdir = ((uint)dst < KERNBASE) ? proc_pgdir(p) : 0;
+  if((uint)dst < KERNBASE && (p == 0 || pgdir == 0))
     return -1;
 
   limit = bdev_nblocks(ip->minor) * BSIZE;
@@ -80,7 +82,7 @@ blockdev_read(struct inode *ip, char *dst, uint64_t off, int n)
     if(bread_ok(ip->minor, blockno, &bp) < 0)
       return -1;
     if((uint)(dst + total) < KERNBASE){
-      if(copyout(p->pgdir, (uint)(dst + total), bp->data + blockoff, chunk) < 0){
+      if(copyout(pgdir, (uint)(dst + total), bp->data + blockoff, chunk) < 0){
         brelse(bp);
         return -1;
       }
@@ -102,12 +104,14 @@ blockdev_write(struct inode *ip, char *src, uint64_t off, int n)
   uint total;
   uint limit;
   struct proc *p;
+  pde_t *pgdir;
 
   if(ip == 0 || src == 0 || ip->minor < 0 || ip->minor >= NDEV)
     return -1;
 
   p = ((uint)src < KERNBASE) ? myproc() : 0;
-  if((uint)src < KERNBASE && (p == 0 || p->pgdir == 0))
+  pgdir = ((uint)src < KERNBASE) ? proc_pgdir(p) : 0;
+  if((uint)src < KERNBASE && (p == 0 || pgdir == 0))
     return -1;
 
   limit = bdev_nblocks(ip->minor) * BSIZE;
@@ -131,7 +135,7 @@ blockdev_write(struct inode *ip, char *src, uint64_t off, int n)
     if(bread_ok(ip->minor, blockno, &bp) < 0)
       return -1;
     if((uint)(src + total) < KERNBASE){
-      if(copyin(p->pgdir, bp->data + blockoff, (uint)(src + total), chunk) < 0){
+      if(copyin(pgdir, bp->data + blockoff, (uint)(src + total), chunk) < 0){
         brelse(bp);
         return -1;
       }

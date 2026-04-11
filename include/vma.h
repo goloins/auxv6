@@ -22,6 +22,8 @@ struct vaddr_range {
 
 struct address_space {
   pde_t *pgdir;
+  uint owns_pgdir;
+  uint transitional;
   struct vaddr_range *vmas;
   uint vma_count;
   uint vma_cap;

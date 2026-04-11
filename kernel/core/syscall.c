@@ -18,12 +18,14 @@ int
 fetchint(uint addr, int *ip)
 {
   struct proc *curproc = myproc();
+  pde_t *pgdir;
 
-  if(curproc == 0 || curproc->pgdir == 0)
+  pgdir = proc_pgdir(curproc);
+  if(curproc == 0 || pgdir == 0)
     return -1;
   if(addr >= curproc->sz || addr+4 > curproc->sz)
     return -1;
-  if(copyin(curproc->pgdir, ip, addr, sizeof(*ip)) < 0)
+  if(copyin(pgdir, ip, addr, sizeof(*ip)) < 0)
     return -1;
   return 0;
 }
@@ -47,6 +49,7 @@ int
 fetchstr_copyin(uint addr, char *kbuf, uint bufsize)
 {
   struct proc *curproc;
+  pde_t *pgdir;
   uint len;
   char c;
 
@@ -54,7 +57,8 @@ fetchstr_copyin(uint addr, char *kbuf, uint bufsize)
     return -1;
 
   curproc = myproc();
-  if(curproc == 0 || curproc->pgdir == 0)
+  pgdir = proc_pgdir(curproc);
+  if(curproc == 0 || pgdir == 0)
     return -1;
 
   if(addr >= curproc->sz)
@@ -62,7 +66,7 @@ fetchstr_copyin(uint addr, char *kbuf, uint bufsize)
 
   // Copy byte-by-byte using copyin until we find null terminator or exceed buffer
   for(len = 0; len < bufsize - 1; len++){
-    if(copyin(curproc->pgdir, &c, addr + len, 1) < 0)
+    if(copyin(pgdir, &c, addr + len, 1) < 0)
       return -1;
     kbuf[len] = c;
     if(c == 0)
