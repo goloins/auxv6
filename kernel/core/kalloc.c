@@ -71,16 +71,28 @@ kpage_mark_managed(uint pa)
     panic("kpage_mark_managed");
   meta->flags = KPAGE_MANAGED;
   meta->refcount = 1;
+  pagedb_mark_managed_pa(pa);
+  pagedb_mark_allocated_pa(pa);
+  pagedb_set_refcount_pa(pa, 1);
 }
 
 static uint
 kpage_drop_ref(uint pa)
 {
   struct kpage_meta *meta;
+  uint refs;
 
   meta = kpage_meta_pa(pa);
   if(meta == 0 || (meta->flags & KPAGE_MANAGED) == 0)
     panic("kpage_drop_ref");
+  if(pagedb_ready()){
+    refs = pagedb_refcount_pa(pa);
+    if(refs == 0)
+      panic("kpage_drop_ref underflow");
+    refs--;
+    pagedb_set_refcount_pa(pa, refs);
+    return refs;
+  }
   if(meta->refcount == 0)
     panic("kpage_drop_ref underflow");
   meta->refcount--;
@@ -109,7 +121,7 @@ kalloc_free_run_valid(struct run *r)
     return 0;
   if((meta->flags & KPAGE_FREE) == 0)
     return 0;
-  if(meta->refcount != 0)
+  if(kpage_refcount(pa) != 0)
     return 0;
 
   // Guard against stale/corrupt pointers that pass range tests but are
@@ -348,7 +360,7 @@ kfree(char *v)
    * arrive for a page that's already on the free side (refcount==0, KPAGE_FREE).
    * Ignore it instead of panicking/poisoning freelists via a second enqueue.
    */
-  if(meta->refcount == 0){
+  if(kpage_refcount(pa) == 0){
     if(meta->flags & KPAGE_FREE){
       kmem.duplicate_frees++;
       if((kmem.duplicate_frees & 0xff) == 1)
@@ -368,6 +380,7 @@ kfree(char *v)
     return;
   }
   meta->flags |= KPAGE_FREE;
+  pagedb_mark_free_pa(pa);
 
 #ifdef KDEBUG_KFREE_POISON
   // Fill with junk to catch dangling refs.  Compile with
@@ -450,7 +463,10 @@ kalloc(void)
          (meta->flags & KPAGE_MANAGED) == 0)
         panic("kalloc early unmanaged");
       meta->flags &= ~KPAGE_FREE;
-      meta->refcount = 1;
+      if(!pagedb_ready())
+        meta->refcount = 1;
+      pagedb_mark_allocated_pa(pa);
+      pagedb_set_refcount_pa(pa, 1);
     }
     return (char*)r;
   }
@@ -473,7 +489,10 @@ kalloc(void)
        (meta->flags & KPAGE_MANAGED) == 0)
       panic("kalloc cache unmanaged");
     meta->flags &= ~KPAGE_FREE;
-    meta->refcount = 1;
+    if(!pagedb_ready())
+      meta->refcount = 1;
+    pagedb_mark_allocated_pa(pa);
+    pagedb_set_refcount_pa(pa, 1);
     popcli();
     return (char*)r;
   }
@@ -493,7 +512,10 @@ kalloc(void)
        (meta->flags & KPAGE_MANAGED) == 0)
       panic("kalloc refill unmanaged");
     meta->flags &= ~KPAGE_FREE;
-    meta->refcount = 1;
+    if(!pagedb_ready())
+      meta->refcount = 1;
+    pagedb_mark_allocated_pa(pa);
+    pagedb_set_refcount_pa(pa, 1);
   } else {
     r = 0;
   }
@@ -611,7 +633,10 @@ kalloc_contiguous(uint npages)
     if(meta == 0 || (meta->flags & KPAGE_MANAGED) == 0)
       panic("kalloc_contiguous meta");
     meta->flags &= ~KPAGE_FREE;
-    meta->refcount = 1;
+    if(!pagedb_ready())
+      meta->refcount = 1;
+    pagedb_mark_allocated_pa(pa);
+    pagedb_set_refcount_pa(pa, 1);
   }
   if(marked != npages)
     panic("kalloc_contiguous count");
@@ -651,9 +676,10 @@ kalloc_stats(struct kalloc_stats_k *out)
   free_pages = kmem.free_pages;
   shared_pages = 0;
   for(i = 0; i < PHYSTOP / PGSIZE; i++){
-    if((kpage_meta[i].flags & KPAGE_MANAGED) == 0)
+    uint pa = i * PGSIZE;
+    if(!kpage_is_managed(pa))
       continue;
-    if(kpage_meta[i].refcount > 1)
+    if(kpage_refcount(pa) > 1)
       shared_pages++;
   }
 
@@ -678,13 +704,22 @@ void
 kpage_incref(uint pa)
 {
   struct kpage_meta *meta;
+  uint refs;
 
   meta = kpage_meta_pa(pa);
   if(meta == 0 || (meta->flags & KPAGE_MANAGED) == 0)
     panic("kpage_incref");
-  if(meta->refcount == 0)
-    panic("kpage_incref free");
-  __sync_fetch_and_add(&meta->refcount, 1);
+  if(pagedb_ready()){
+    refs = pagedb_refcount_pa(pa);
+    if(refs == 0)
+      panic("kpage_incref free");
+    refs++;
+    pagedb_set_refcount_pa(pa, refs);
+  } else {
+    if(meta->refcount == 0)
+      panic("kpage_incref free");
+    __sync_fetch_and_add(&meta->refcount, 1);
+  }
   meta->flags &= ~KPAGE_FREE;
   __sync_fetch_and_add(&kmem.ref_increments, 1);
 }
@@ -693,6 +728,9 @@ uint
 kpage_refcount(uint pa)
 {
   struct kpage_meta *meta;
+
+  if(pagedb_ready())
+    return pagedb_refcount_pa(pa);
 
   meta = kpage_meta_pa(pa);
   if(meta == 0 || (meta->flags & KPAGE_MANAGED) == 0)

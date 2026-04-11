@@ -563,6 +563,14 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
   struct kalloc_stats_k kstats;
   uint total_pages;
   uint free_pages;
+  uint pg_desc_pages;
+  uint pg_desc_bytes;
+  uint pg_desc_backing_pages;
+  uint pg_desc_managed;
+  uint pg_desc_free;
+  uint pg_desc_reserved;
+  uint pg_desc_pinned;
+  int pg_desc_ready;
   uint total_blocks;
   uint free_blocks;
   uint block_size;
@@ -722,6 +730,10 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     free_pages = 0;
     kalloc_meminfo(&total_pages, &free_pages);
     kalloc_stats(&kstats);
+    pagedb_stats(&pg_desc_pages, &pg_desc_bytes, &pg_desc_backing_pages,
+           &pg_desc_ready);
+    pagedb_flag_counts(&pg_desc_managed, &pg_desc_free,
+               &pg_desc_reserved, &pg_desc_pinned);
 
     len = 0;
     if(procfs_buf_puts(buf, sizeof(buf), &len, "MemTotal: ") < 0)
@@ -754,6 +766,36 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
       return -1;
     if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
       return -1;
+    if(procfs_buf_puts(buf, sizeof(buf), &len, "PgDescReady: ") < 0)
+      return -1;
+    if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)pg_desc_ready) < 0)
+      return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+      return -1;
+    if(procfs_buf_puts(buf, sizeof(buf), &len, "PgDescPages: ") < 0)
+      return -1;
+    if(procfs_buf_putu(buf, sizeof(buf), &len, pg_desc_pages) < 0)
+      return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+      return -1;
+    if(procfs_buf_puts(buf, sizeof(buf), &len, "PgDescBytes: ") < 0)
+      return -1;
+    if(procfs_buf_putu(buf, sizeof(buf), &len, pg_desc_bytes) < 0)
+      return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+      return -1;
+    if(procfs_buf_puts(buf, sizeof(buf), &len, "PgDescManaged: ") < 0)
+      return -1;
+    if(procfs_buf_putu(buf, sizeof(buf), &len, pg_desc_managed) < 0)
+      return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+      return -1;
+    if(procfs_buf_puts(buf, sizeof(buf), &len, "PgDescFree: ") < 0)
+      return -1;
+    if(procfs_buf_putu(buf, sizeof(buf), &len, pg_desc_free) < 0)
+      return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, '\n') < 0)
+      return -1;
     return procfs_copy_data(dst, off, n, buf, len);
   }
   if(ip->inum == PROCFS_VMSTAT_INO){
@@ -769,6 +811,10 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     uint pipe_wake_writers;
 
     kalloc_stats(&kstats);
+    pagedb_stats(&pg_desc_pages, &pg_desc_bytes, &pg_desc_backing_pages,
+           &pg_desc_ready);
+    pagedb_flag_counts(&pg_desc_managed, &pg_desc_free,
+               &pg_desc_reserved, &pg_desc_pinned);
     vm_get_sync_stats(&vm_sync_calls, &vm_sync_full_calls, &vm_sync_entries,
                       &vm_pde_repairs, &vm_master_repairs, &vm_bad_pte_drops);
     pipe_get_stats(&pipe_read_sleeps, &pipe_write_sleeps,
@@ -804,6 +850,22 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "ref_increments ", kstats.ref_increments) < 0)
       return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "deferred_frees ", kstats.deferred_frees) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "pagedb_ready ", (uint)pg_desc_ready) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "pagedb_desc_pages ", pg_desc_pages) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "pagedb_desc_bytes ", pg_desc_bytes) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "pagedb_backing_pages ", pg_desc_backing_pages) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "pagedb_managed ", pg_desc_managed) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "pagedb_free ", pg_desc_free) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "pagedb_reserved ", pg_desc_reserved) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "pagedb_pinned ", pg_desc_pinned) < 0)
       return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_sync_calls ", vm_sync_calls) < 0)
       return -1;

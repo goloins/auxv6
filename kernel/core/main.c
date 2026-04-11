@@ -55,6 +55,7 @@ main(void)
   socket_init();   // socket table
   startothers();   // start other processors
   kinit2(P2V(BOOT_EARLY_PHYSTOP), P2V(PHYSTOP)); // must come after startothers()
+  pagedb_init();   // initialize PFN descriptor backing after full-memory allocator is online
   console_gfx_late_enable(); // framebuffer mirror can allocate after full memory is online
   lockdep_enable(); // enable lockdep after early bring-up to avoid pre-console hard-fail
   userinit();      // first user process

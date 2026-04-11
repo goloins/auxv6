@@ -34,6 +34,8 @@ struct mount;
 struct vfs_mount_info;
 struct vnode;
 struct aux_kbd_event;
+struct trapframe;
+struct page_descriptor;
 
 struct kalloc_stats_k {
 	uint total_pages;
@@ -52,6 +54,11 @@ struct kalloc_stats_k {
 	uint ref_increments;
 	uint deferred_frees;
 };
+
+#define PAGE_MANAGED  0x0001
+#define PAGE_PINNED   0x0002
+#define PAGE_RESERVED 0x0004
+#define PAGE_FREE     0x0008
 
 // bio.c
 void            binit(void);
@@ -463,6 +470,35 @@ void            kpage_incref(uint pa);
 uint            kpage_refcount(uint pa);
 int             kpage_is_managed(uint pa);
 
+// pagedb.c
+void            pagedb_init(void);
+void            pagedb_stats(uint *desc_pages, uint *desc_bytes,
+							 uint *backing_pages, int *ready);
+int             pagedb_ready(void);
+void            pagedb_flag_counts(uint *managed, uint *freep,
+								   uint *reserved, uint *pinned);
+uint            pagedb_refcount_pa(uint pa);
+void            pagedb_set_refcount_pa(uint pa, uint refs);
+void            pagedb_mark_managed_pa(uint pa);
+void            pagedb_mark_free_pa(uint pa);
+void            pagedb_mark_allocated_pa(uint pa);
+extern struct page_descriptor *pg_array;
+extern uint     pg_count;
+struct page_descriptor* pgfn_descriptor(uint pfn);
+int             pgfn_refcount(uint pfn);
+void            pgfn_incref(uint pfn);
+void            pgfn_decref(uint pfn);
+int             pgfn_is_managed(uint pfn);
+uint            pgfn_flags(uint pfn);
+
+// buddy.c / pagealloc.c
+void            buddy_init(void);
+void            pagealloc_init(void);
+struct page_descriptor* alloc_pages_order(int order, int flags);
+void            free_pages_order(struct page_descriptor *pg, int order);
+struct page_descriptor* alloc_single_page(int flags);
+void            free_single_page(struct page_descriptor *pg);
+
 // kbd.c
 int             kbdgetc(void);
 void            kbdintr(void);
@@ -560,6 +596,10 @@ void            proc_get_sched_latency_stats(uint *wake_calls, uint *wake_scanne
 void            proc_get_wakeup_class_stats(uint *ticks_calls, uint *proc_calls,
 											uint *other_calls);
 int             proc_has_tick_sleepers(void);
+int             valid_signo(int signo);
+int             signal_pick_stop(uint pending);
+int             signal_pick_fatal(uint pending);
+void            proc_note_signal_locked(struct proc *p, int signo);
 int             proc_deliver_signal(struct proc *p);
 void            proc_handle_signals_on_return(struct proc *p);
 struct cpu*     mycpu(void);
@@ -668,8 +708,12 @@ extern uint     ticks;
 void            tvinit(void);
 extern struct spinlock tickslock;
 typedef void (*irq_handler_t)(int irq, void *arg);
+void            irq_init(void);
 int             irq_register(int irq, irq_handler_t handler, void *arg, const char *name);
 int             irq_unregister(int irq, const char *name);
+int             irq_dispatch(int irq);
+int             trap_to_signal(int trapno);
+void            trap_kernel_fatal(struct trapframe *tf, const char *reason) __attribute__((noreturn));
 
 // uart.c
 void            uartinit(void);

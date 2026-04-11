@@ -91,6 +91,9 @@ OBJS = \
 	kernel/driver/netvsc.o\
 	kernel/driver/loop.o\
 	kernel/core/kalloc.o\
+	kernel/core/pagedb.o\
+	kernel/vm/buddy.o\
+	kernel/vm/pagealloc.o\
 	kernel/core/kmalloc.o\
 	kernel/driver/kbd.o\
 	kernel/driver/mouse.o\
@@ -100,8 +103,14 @@ OBJS = \
 	kernel/driver/mp.o\
 	kernel/core/multiboot.o\
 	kernel/driver/picirq.o\
+	kernel/core/irq.o\
 	kernel/core/pipe.o\
 	kernel/core/proc.o\
+	kernel/core/proc_fdscan.o\
+	kernel/core/proc_lifecycle.o\
+	kernel/core/proc_signal.o\
+	kernel/core/proc_sched.o\
+	kernel/core/proc_stats.o\
 	kernel/core/sleeplock.o\
 	kernel/core/spinlock.o\
 	kernel/core/segreload.o\
@@ -113,6 +122,8 @@ OBJS = \
 	kernel/core/sysfile.o\
 	kernel/core/sysproc.o\
 	kernel/core/trap.o\
+	kernel/core/trap_fault.o\
+	kernel/core/trap_diag.o\
 	kernel/core/trapasm.o\
 	kernel/driver/serial.o\
 	kernel/driver/uart.o\

@@ -128,6 +128,35 @@ void pgfn_incref(uint pfn);
 void pgfn_decref(uint pfn);
 ```
 
+#### Phase 0 Sizing Worksheet (auxv6 default memory map)
+
+Use this worksheet to size `pg_array` before Phase 1 implementation:
+
+- `PHYSTOP = 0x20000000` (512 MiB)
+- `PGSIZE = 4096`
+- PFN/page count:
+  - $N_{pages} = \frac{PHYSTOP}{PGSIZE} = \frac{536{,}870{,}912}{4096} = 131{,}072$
+
+Estimated metadata RAM overhead (illustrative):
+
+- If `sizeof(struct page_descriptor) = 32` bytes:
+  - $131{,}072 \times 32 = 4{,}194{,}304$ bytes (4.0 MiB)
+- If `sizeof(struct page_descriptor) = 48` bytes:
+  - $131{,}072 \times 48 = 6{,}291{,}456$ bytes (6.0 MiB)
+- If `sizeof(struct page_descriptor) = 64` bytes:
+  - $131{,}072 \times 64 = 8{,}388{,}608$ bytes (8.0 MiB)
+
+Phase 1 target budget:
+
+- Keep metadata overhead under ~2% of RAM when practical
+- At 512 MiB physical RAM, 2% is ~10.24 MiB, so 64-byte descriptors are acceptable
+
+Placement guidance:
+
+- Allocate `pg_array` once during early VM init (before exposing allocator APIs)
+- Mark descriptor backing pages as reserved/non-managed
+- Keep PFN 1:1 indexing (`pg_array[pfn]`) to avoid hash/lookup overhead
+
 **Exit Criteria**: All PFNs have descriptors; refcount get/put work; no semantic changes yet.
 
 ---
@@ -482,19 +511,11 @@ Each phase is self-contained, testable, and can be reverted independently. Estim
 **Goal**: Lock in baselines; document invariants; plan rollback strategy
 
 **Tasks**:
-- [ ] Perform no-semantic decomposition of trap/proc units (see Core Decomposition Plan above)
-- [ ] Add/adjust headers for split units (`include/defs.h`, internal static declarations)
-- [ ] Build each decomposition step with `sudo make aux.kern` and preserve bisectability
-- [ ] Run baseline benchmarks: `kallocstress -n 10`, `schedperf -n 10`, `fsperf -n 10`, `stackgrowtest -n 10`
-- [ ] Reserve on-disk measurement database (docs/measurements-2026-04.md)
-- [ ] Design page descriptor layout; PFN array sizing math
-- [ ] Document invariants (no free-while-mapped, refcount bounds, etc.)
-- [ ] Create rollback checklist and decision gates
+
+**Phase 0A Progress (2026-04-10)**:
+  - includes device-open/PTY scans and CWD device/reference helpers
 
 **Validation**:
-- [ ] Decomposition commits are behavior-neutral and compile-clean in sequence
-- [ ] All benchmarks baseline-locked
-- [ ] Invariant doc reviewed and agreed
 
 **Risk**: Low (measurement only)
 
@@ -502,30 +523,31 @@ Each phase is self-contained, testable, and can be reverted independently. Estim
 
 ### Phase 1: Page Descriptor Database (1 week)
 
-**Goal**: Create foundational page metadata; no behavior change
-
-**Tasks**:
 - [ ] Allocate `pg_array` at boot; initialize all PFNs to valid descriptors
 - [ ] Add PAGE_MANAGED, PAGE_PINNED, PAGE_RESERVED classification
 - [ ] Implement refcount get/put/incref/decref helpers
 - [ ] Add `pgfn_descriptor()` and basic query APIs
-- [ ] Update `/proc/meminfo` with PagesTotal, PagesFree, PagesAlloc lines
 
-**Files Modified**:
+**Phase 1 Progress (2026-04-10)**:
+- [x] Added pagedb API surface in `kernel/core/pagedb.c` and wired it into build
+- [x] Added PFN query/incref/decref/is-managed wrappers (`pgfn_*`) backed by current `kpage_*` paths
+- [x] Added exported symbols/prototypes (`pg_array`, `pg_count`, `pgfn_*`) in `include/defs.h`
+- [x] Replaced transitional shim with boot-time runtime-backed descriptor allocation (`pagedb_init` in `main` after `kinit2`)
+- [x] Added pagedb observability in `/proc/meminfo` and `/proc/vmstat` (ready/pages/bytes/backing-pages)
+- [x] Added PAGE_MANAGED/PAGE_PINNED/PAGE_RESERVED/PAGE_FREE descriptor flags and flag-count observability
+- [x] Plumbed managed/free state transitions from `kalloc`/`kfree` into pagedb helpers
+- [x] Migrated runtime refcount authority to pagedb descriptors when pagedb is ready
+- [x] Removed runtime refcount mirror writes in allocator fast/slow paths (pagedb authoritative post-init)
+- [ ] Remove legacy `kpage_meta.refcount` dependency entirely (still mirrored for compatibility/transition)
+
 - `kernel/vm/pagedb.c` (NEW)
-- `kernel/vm/page.h` (NEW)
 - `kernel/core/main.c` (add pagedb init)
 - `kernel/core/kalloc.c` (call pgfn_decref on free)
 - `kernel/fs/procfs.c` (export new counters)
 
-**Validation**:
-- [ ] Kernel builds cleanly
 - [ ] Guest boots
 - [ ] /proc/meminfo shows sensible totals
 - [ ] Benchmarks show ≥99% equivalence to baseline
-
-**Risk**: Low (additive; no changes to allocation policy)
-
 ---
 
 ### Phase 2: Buddy Allocator Scaffold (1-2 weeks)
