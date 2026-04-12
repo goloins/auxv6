@@ -115,6 +115,11 @@ for src in "$@"; do
       install -m 0755 "$src" "$rootdir/bin/6vi"
       ln -sf 6vi "$rootdir/bin/vi"
       ;;
+    _6nano)
+      install -m 0755 "$src" "$rootdir/bin/6nano"
+      ln -sf 6nano "$rootdir/bin/nano"
+      ln -sf 6nano "$rootdir/bin/pico"
+      ;;
     _dmesg)
       install -m 0755 "$src" "$rootdir/sbin/dmesg"
       ;;

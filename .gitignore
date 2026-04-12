@@ -36,6 +36,7 @@ user/netcat
 user/6get
 user/6fetch
 user/6vi
+user/6nano
 user/6doc
 user/abrowse
 user/telnet

@@ -502,6 +502,9 @@ _6fetch: user/6fetch
 _6vi: user/6vi
 	cp user/6vi _6vi
 
+_6nano: user/6nano
+	cp user/6nano _6nano
+
 _6doc: user/6doc
 	cp user/6doc _6doc
 
@@ -1036,6 +1039,7 @@ UPROGS=\
 	_netcat\
 	_6get\
 	_6vi\
+	_6nano\
 	_6fetch\
 	_6doc\
 	_telnet\
@@ -1239,6 +1243,7 @@ clean:
 	user/tuntapctl user/tuntest \
 	user/dhcp user/v6dhcpd user/ntpd user/nslookup \
 	user/6get \
+	user/6nano \
 	user/6fetch \
 	user/6doc \
 	user/abrowse \
