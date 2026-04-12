@@ -127,7 +127,7 @@ address_space_destroy(struct address_space *as)
 }
 
 int
-vma_expand_flags(struct address_space *as, uint new_size, uint flags)
+vma_expand(struct address_space *as, uint new_size)
 {
   struct vaddr_range *last;
   struct vaddr_range vma;
@@ -143,7 +143,7 @@ vma_expand_flags(struct address_space *as, uint new_size, uint flags)
   old_size = as->vm_size;
   if(as->vma_count > 0){
     last = &as->vmas[as->vma_count - 1];
-    if(last->va_end == old_size && last->flags == flags && last->inode == 0){
+    if(last->va_end == old_size){
       last->va_end = new_size;
       as->vm_size = new_size;
       as->transitional = 0;
@@ -154,19 +154,13 @@ vma_expand_flags(struct address_space *as, uint new_size, uint flags)
   memset(&vma, 0, sizeof(vma));
   vma.va_start = old_size;
   vma.va_end = new_size;
-  vma.flags = flags;
+  vma.flags = VMA_READ | VMA_WRITE;
   if(vma_insert(as, &vma) < 0)
     return -1;
   as->vm_size = new_size;
   if(as->vma_count > 0)
     as->transitional = 0;
   return 0;
-}
-
-int
-vma_expand(struct address_space *as, uint new_size)
-{
-  return vma_expand_flags(as, new_size, VMA_READ | VMA_WRITE);
 }
 
 int

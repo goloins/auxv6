@@ -5,7 +5,6 @@
 #include "mmu.h"
 #include "x86.h"
 #include "proc.h"
-#include "vma.h"
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "wait.h"
@@ -413,10 +412,8 @@ growproc(int n)
   pgdir = proc_pgdir(curproc);
   if(n > 0){
     if(curproc->addrsp){
-      if(vma_expand_flags(curproc->addrsp, sz + n,
-                          VMA_READ | VMA_WRITE | VMA_LAZY) < 0)
+      if((sz = allocuvm_as(curproc->addrsp, sz, sz + n)) == 0)
         return -1;
-      sz = sz + n;
     } else {
       if(pgdir == 0 || (sz = allocuvm(pgdir, sz, sz + n)) == 0)
         return -1;

@@ -35,6 +35,7 @@ user/init
 user/netcat
 user/6get
 user/6fetch
+user/6vi
 user/6doc
 user/abrowse
 user/telnet
@@ -117,7 +118,6 @@ user/vmprobe
 user/vmguardtest
 user/cowtest
 user/cowexectest
-user/demandzerotest
 user/kmemstress
 user/wc
 user/zombie
@@ -188,3 +188,4 @@ user/fdtest
 targetfs/usr/bin/st
 user/xwmtrace
 docs/.DS_Store
+user/demandzerotest

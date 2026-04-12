@@ -1853,6 +1853,15 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
 
   console_gfx_vts->cursor_x = new_cursor_x;
   console_gfx_vts->cursor_y = new_cursor_y;
+  /* propagate cursor visibility so ?25l/h actually suppresses the underline */
+  if(t->ansi.cursor_visible != console_gfx_vts->cursor_visible) {
+    if(new_cursor_x >= 0 && new_cursor_x < (int)console_gfx_vts->width &&
+       new_cursor_y >= 0 && new_cursor_y < (int)console_gfx_vts->height &&
+       console_gfx_vts->dirty)
+      console_gfx_vts->dirty[new_cursor_y * (int)console_gfx_vts->width + new_cursor_x] = 1;
+    console_gfx_vts->cursor_visible = t->ansi.cursor_visible;
+    changed = 1;
+  }
   if(changed)
     console_gfx_vts->any_dirty = 1;
   release(&console_gfx_vts->lock);

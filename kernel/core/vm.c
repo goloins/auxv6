@@ -473,14 +473,6 @@ vm_lookup_pte(pde_t *pgdir, uint va)
   return (uint*)pte;
 }
 
-int
-vm_map_user_page(pde_t *pgdir, uint va, uint pa, int perm)
-{
-  if(pgdir == 0)
-    return -1;
-  return mappages(pgdir, (void*)PGROUNDDOWN(va), PGSIZE, pa, perm);
-}
-
 void
 vm_tlb_flush(pde_t *pgdir)
 {
@@ -1187,13 +1179,8 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
     if(!vm_addrspace_allows_user_va(pgdir, va0))
       return -1;
     pte = walkpgdir(pgdir, (char*)va0, 0);
-    if(pte == 0 || ((*pte & PTE_P) == 0)){
-      if(vm_resolve_user_page(pgdir, va0, 1) < 0)
-        return -1;
-      pte = walkpgdir(pgdir, (char*)va0, 0);
-      if(pte == 0 || ((*pte & PTE_P) == 0))
-        return -1;
-    }
+    if(pte == 0 || ((*pte & PTE_P) == 0))
+      return -1;
     pte_assert_sane(*pte);
     if(!pte_is_user(*pte))
       return -1;
@@ -1201,16 +1188,20 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
       return -1;
 
     if(!pte_is_writable(*pte)){
-      if(vm_resolve_user_page(pgdir, va0, 1) < 0)
+      if(pte_is_cow(*pte)){
+        if(cow_fault(pgdir, va0) < 0)
+          return -1;
+        pte = walkpgdir(pgdir, (char*)va0, 0);
+        if(pte == 0 || ((*pte & PTE_P) == 0))
+          return -1;
+        pte_assert_sane(*pte);
+        if(!pte_is_user(*pte) || !pte_is_writable(*pte))
+          return -1;
+        if(!pte_pa_valid(*pte))
+          return -1;
+      } else {
         return -1;
-      pte = walkpgdir(pgdir, (char*)va0, 0);
-      if(pte == 0 || ((*pte & PTE_P) == 0))
-        return -1;
-      pte_assert_sane(*pte);
-      if(!pte_is_user(*pte) || !pte_is_writable(*pte))
-        return -1;
-      if(!pte_pa_valid(*pte))
-        return -1;
+      }
     }
 
     pa0 = (char*)P2V(PTE_ADDR(*pte));
@@ -1243,13 +1234,8 @@ copyin(pde_t *pgdir, void *p, uint va, uint len)
     if(!vm_addrspace_allows_user_va(pgdir, va0))
       return -1;
     pa0 = uva2ka(pgdir, (char*)va0);
-    if(pa0 == 0){
-      if(vm_resolve_user_page(pgdir, va0, 0) < 0)
-        return -1;
-      pa0 = uva2ka(pgdir, (char*)va0);
-      if(pa0 == 0)
-        return -1;
-    }
+    if(pa0 == 0)
+      return -1;
     n = PGSIZE - (va - va0);
     if(n > len)
       n = len;

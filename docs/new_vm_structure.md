@@ -774,10 +774,6 @@ Each phase is self-contained, testable, and can be reverted independently. Estim
 - [x] Moved the actual `cow_fault()` implementation from `kernel/core/vm.c` into `kernel/vm/fault.c`
 - [x] Moved the actual `proc_try_grow_stack()` implementation from `kernel/core/proc.c` into `kernel/vm/fault.c`
 - [x] Re-collapsed raw page-table internals behind VM-owned helpers by replacing exported `walkpgdir()`/`pte_assert_sane()` access with `vm_lookup_pte()` and `vm_tlb_flush()` for the fault layer
-- [x] Added explicit fault classification in `vm_handle_fault()` so COW, stack-growth, and demand-zero paths are selected by policy instead of ordered fallthrough
-- [x] Added lazy heap growth via `VMA_LAZY` and `vma_expand_flags()`, making `sbrk()` growth for address-space-backed processes demand-zero instead of eager page allocation
-- [x] Added `fault_demand_zero()` and `vm_resolve_user_page()` so both direct user faults and kernel `copyin()`/`copyout()` can materialize untouched lazy pages safely
-- [x] Exported `vm_fault_demand_zero` in `/proc/vmstat` and added `demandzerotest` to validate direct page touches plus pipe I/O against lazy heap pages
 
 **Files Modified**:
 - `kernel/vm/fault.c` (NEW)
@@ -785,9 +781,6 @@ Each phase is self-contained, testable, and can be reverted independently. Estim
 - `kernel/core/vm.c` (COW install and copyout paths now call the fault-layer-owned resolver)
 - `kernel/core/proc.c` (stack-growth implementation moved into the fault layer)
 - `kernel/fs/procfs.c` (add global dispatcher fault counters)
-- `kernel/vm/vma.c` (flag-aware VMA expansion for lazy heap ranges)
-- `include/vma.h` / `include/defs.h` (lazy VMA flag and fault-layer helper prototypes)
-- `user/demandzerotest.c` (lazy demand-zero regression coverage)
 
 **Validation**:
 - [x] Kernel builds
@@ -795,7 +788,6 @@ Each phase is self-contained, testable, and can be reverted independently. Estim
 - [x] `stackgrowtest` passes (stack growth via faults)
 - [x] `cowexectest` passes (fork-to-exec handoff keeps parent isolated and new image stable)
 - [x] `/proc/vmstat` shows dispatcher fault counters moving under COW and stack-growth workloads
-- [ ] `demandzerotest` passes and `vm_fault_demand_zero` moves without `vm_fault_sigsegv` drift
 - [ ] `kallocstress -n 3` still passes
 
 **Risk**: Medium-High (fault path is hot; COW refcount accuracy critical)
