@@ -2866,6 +2866,21 @@ ansi_apply_mode(struct console_tty_state *t, int mode, int set)
 }
 
 static void
+ansi_apply_decscl(struct console_tty_state *t, int p1, int p2)
+{
+  (void)p1;
+
+  if(!t)
+    return;
+
+  /* DECSCL: honor the explicit control-transmission selector (Ps2). */
+  if(p2 == 1)
+    t->ansi.meta_eightbit = 0;
+  else if(p2 == 2)
+    t->ansi.meta_eightbit = 1;
+}
+
+static void
 ansi_copy_osc_text(char *dst, int dstsz, const char *src, int srclen)
 {
   int i;
@@ -4332,7 +4347,7 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
         }
       }
       else if(t->ansi.quote) {
-        /* DECSCL (CSI Ps;Ps " p): accepted for compatibility, no-op for now. */
+        ansi_apply_decscl(t, p1, p2);
       }
       else if(t->ansi.squote) {
         /* CSI ... ' p family: accepted for compatibility, no-op for now. */
