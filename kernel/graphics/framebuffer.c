@@ -446,6 +446,9 @@ fb_blit_rect(struct framebuffer *src, int src_x, int src_y,
              uint w, uint h)
 {
     int j;
+    int step;
+    int start;
+    int end;
     int cw;
     int ch;
     uchar *src_row, *dst_row;
@@ -508,7 +511,19 @@ fb_blit_rect(struct framebuffer *src, int src_x, int src_y,
 
     acquire(&dst->lock);
 
-    for(j = 0; j < ch; j++) {
+    step = 1;
+    start = 0;
+    end = ch;
+
+    /* For in-place overlapping blits, copy bottom-up when destination starts
+     * below source to avoid clobbering yet-to-be-copied rows. */
+    if(src == dst && dst_y > src_y && dst_y < src_y + ch) {
+        step = -1;
+        start = ch - 1;
+        end = -1;
+    }
+
+    for(j = start; j != end; j += step) {
         src_row = (uchar *)src->pixels + (src_y + j) * src->stride + src_x * src->bpp;
         dst_row = (uchar *)dst->pixels + (dst_y + j) * dst->stride + dst_x * dst->bpp;
         memmove(dst_row, src_row, copy_len);

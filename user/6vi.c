@@ -136,6 +136,13 @@ vi_disable_raw(void)
 }
 
 static void
+vi_cleanup_terminal(void)
+{
+  /* Leave shell with a predictable clean viewport and cursor home. */
+  write(1, "\x1b[0m\x1b[2J\x1b[H", sizeof("\x1b[0m\x1b[2J\x1b[H") - 1);
+}
+
+static void
 vi_die(const char *msg)
 {
   vi_disable_raw();
@@ -415,7 +422,14 @@ vi_draw_rows(struct vi_abuf *ab)
   int y;
 
   for(y = 0; y < E.screenrows; y++) {
+    char pos[24];
+    int pn;
     int filerow = y + E.rowoff;
+
+    pn = snprintf(pos, sizeof(pos), "\x1b[%d;1H", y + 1);
+    if(pn > 0)
+      ab_append(ab, pos, pn);
+
     if(filerow >= E.numrows) {
       if(E.numrows == 0 && y == E.screenrows / 3) {
         char welcome[80];
@@ -454,7 +468,7 @@ vi_draw_rows(struct vi_abuf *ab)
         ab_append(ab, &E.rows[filerow].chars[E.coloff], len);
     }
 
-    ab_append(ab, "\x1b[K\r\n", 5);
+    ab_append(ab, "\x1b[K", 3);
   }
 }
 
@@ -474,12 +488,18 @@ vi_mode_name(void)
 static void
 vi_draw_status_bar(struct vi_abuf *ab)
 {
+  char pos[24];
   char left[96];
   char right[64];
   char spaces[256];
   int llen;
   int rlen;
   int pad;
+  int pn;
+
+  pn = snprintf(pos, sizeof(pos), "\x1b[%d;1H", E.screenrows + 1);
+  if(pn > 0)
+    ab_append(ab, pos, pn);
 
   snprintf(left, sizeof(left), " %.40s%s ",
            E.filename ? E.filename : "[No Name]",
@@ -511,12 +531,19 @@ vi_draw_status_bar(struct vi_abuf *ab)
     ab_append(ab, right + start, rlen - start);
   }
 
-  ab_append(ab, "\x1b[m\r\n", 5);
+  ab_append(ab, "\x1b[m", 3);
 }
 
 static void
 vi_draw_cmdline(struct vi_abuf *ab)
 {
+  char pos[24];
+  int pn;
+
+  pn = snprintf(pos, sizeof(pos), "\x1b[%d;1H", E.screenrows + 2);
+  if(pn > 0)
+    ab_append(ab, pos, pn);
+
   ab_append(ab, "\x1b[K", 3);
   if(E.mode == MODE_COMMAND) {
     ab_append(ab, ":", 1);
@@ -572,7 +599,7 @@ vi_refresh_screen(void)
   ab_init(&ab);
 
   /* Force normal white-on-black before redraw to avoid stale SGR drift. */
-  ab_append(&ab, "\x1b[0m\x1b[37;40m\x1b[H\x1b[2J", 17);
+  ab_append(&ab, "\x1b[0m\x1b[37;40m\x1b[H\x1b[2J", 19);
 
   vi_draw_rows(&ab);
   vi_draw_status_bar(&ab);
@@ -957,5 +984,6 @@ main(int argc, char *argv[])
   }
 
   vi_disable_raw();
+  vi_cleanup_terminal();
   return 0;
 }

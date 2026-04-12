@@ -114,8 +114,8 @@ term_leave(struct termstate *ts)
   if(!ts->active)
     return;
 
-  /* Restore cursor and main screen */
-  ts_puts(ts, "\033[?25h\033[?1049l");
+  /* Restore cursor/main screen and leave a clean, canonical shell viewport. */
+  ts_puts(ts, "\033[0m\033[?25h\033[?1049l\033[H\033[2J");
 
   tcsetattr(ts->ifd, TCSAFLUSH, &ts->saved);
   ts->active = 0;

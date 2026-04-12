@@ -31,6 +31,7 @@ static void console_emit_tty_char_locked(struct console_tty_state *t, int c);
 static struct console_tty_state *console_tty_by_index(int tty);
 static void console_flush_tty_locked(struct console_tty_state *t);
 static void console_gfx_sync_from_tty_locked(struct console_tty_state *t);
+static void ansi_reset_tabs(struct console_tty_state *t);
 static int console_pick_display_size(struct display_device *dev, uint *width_out, uint *height_out);
 static void cga_fill(int from, int to, uchar a);
 static void cga_write_cursor(int pos);
@@ -122,6 +123,7 @@ struct console_ansi_state {
   int params[8];
   int nparams;
   int cur_param;
+  int param_overflow;
   int question;
   int greater;
   int dollar;
@@ -140,6 +142,7 @@ struct console_ansi_state {
   int newline_mode;
   int wraparound;
   int reverse_video;
+  int sgr_inverse;
   int underline;
   int italic;
   int strikethrough;
@@ -167,6 +170,8 @@ struct console_ansi_state {
   int alt_active;
   int alt_saved_cursor;
   uchar alt_saved_attr;
+  int alt_buf_cells;
+  uchar tabs[CONSOLE_MAX_COLS];
   ushort alt_buf[CONSOLE_MAX_CELLS];
 };
 
@@ -230,6 +235,7 @@ static struct console_tty_state console_tty_default = {
     .newline_mode = 0,
     .wraparound = 1,
     .reverse_video = 0,
+    .sgr_inverse = 0,
     .underline = 0,
     .italic = 0,
     .strikethrough = 0,
@@ -919,6 +925,145 @@ console_gfx_scroll_up_locked(struct console_tty_state *t, int top, int bot, int 
 }
 
 static void
+console_gfx_scroll_down_locked(struct console_tty_state *t, int top, int bot, int n, uchar a)
+{
+  int cols;
+  int lines;
+  int cell_w;
+  int cell_h;
+  int move_rows;
+  int fill_to;
+  int i;
+  int row;
+  int col;
+  int span_left;
+  int span_right;
+  int span_cols;
+  int px;
+  int src_y;
+  int dst_y;
+  int old_cursor_x;
+  int old_cursor_y;
+  int cursor_dst_y;
+  uint pixel_w;
+  uint pixel_h;
+  struct text_cell blank;
+
+  if(!t)
+    return;
+  if(!console_gfx_boot_ready)
+    return;
+  if(t != console_tty_by_index(console_active_tty))
+    return;
+  if(!console_gfx_fb || !console_gfx_vts || !console_gfx_vts->cells)
+    return;
+
+  cols = console_tty_cols(t);
+  lines = bot - top + 1;
+  if(cols <= 0 || lines <= 0 || n <= 0 || n >= lines)
+    return;
+  if((int)console_gfx_vts->width != cols || (int)console_gfx_vts->height != console_tty_rows(t))
+    return;
+
+  move_rows = lines - n;
+  fill_to = top + n - 1;
+  console_gfx_blank_text_cell(&blank, a);
+  span_left = cols;
+  span_right = -1;
+
+  acquire(&console_gfx_vts->lock);
+  old_cursor_x = console_gfx_vts->cursor_x;
+  old_cursor_y = console_gfx_vts->cursor_y;
+
+  for(row = bot; row >= top + n; row--) {
+    int dst_base;
+    int src_base;
+
+    dst_base = row * cols;
+    src_base = (row - n) * cols;
+    for(col = 0; col < cols; col++) {
+      if(!console_gfx_text_cell_equal(&console_gfx_vts->cells[dst_base + col],
+                                      &console_gfx_vts->cells[src_base + col])) {
+        if(col < span_left)
+          span_left = col;
+        if(col > span_right)
+          span_right = col;
+      }
+    }
+  }
+
+  for(row = top; row <= fill_to; row++) {
+    int base;
+
+    base = row * cols;
+    for(col = 0; col < cols; col++) {
+      if(!console_gfx_text_cell_equal(&console_gfx_vts->cells[base + col], &blank)) {
+        if(col < span_left)
+          span_left = col;
+        if(col > span_right)
+          span_right = col;
+      }
+    }
+  }
+
+  memmove(console_gfx_vts->cells + (top + n) * cols,
+          console_gfx_vts->cells + top * cols,
+          move_rows * cols * sizeof(struct text_cell));
+
+  if(console_gfx_vts->dirty) {
+    memmove(console_gfx_vts->dirty + (top + n) * cols,
+            console_gfx_vts->dirty + top * cols,
+            move_rows * cols);
+    memset(console_gfx_vts->dirty + (top + n) * cols, 0, move_rows * cols);
+    if(span_right >= span_left) {
+      span_cols = span_right - span_left + 1;
+      for(row = top; row <= fill_to; row++)
+        memset(console_gfx_vts->dirty + row * cols + span_left, 1, span_cols);
+    } else {
+      memset(console_gfx_vts->dirty + top * cols, 1, n * cols);
+    }
+
+    if(old_cursor_x >= 0 && old_cursor_x < cols) {
+      if(old_cursor_y >= top && old_cursor_y <= bot)
+        console_gfx_vts->dirty[old_cursor_y * cols + old_cursor_x] = 1;
+      if(old_cursor_y >= top && old_cursor_y <= bot - n) {
+        cursor_dst_y = old_cursor_y + n;
+        if(cursor_dst_y >= top && cursor_dst_y <= bot)
+          console_gfx_vts->dirty[cursor_dst_y * cols + old_cursor_x] = 1;
+      }
+    }
+  }
+
+  for(i = top * cols; i < (fill_to + 1) * cols; i++)
+    console_gfx_vts->cells[i] = blank;
+  console_gfx_vts->any_dirty = 1;
+  release(&console_gfx_vts->lock);
+
+  if(span_right >= span_left)
+    console_gfx_stat_cells_changed += (uint)(n * (span_right - span_left + 1));
+  else
+    console_gfx_stat_cells_changed += (uint)(n * cols);
+
+  console_gfx_cell_metrics_for_grid(cols, console_tty_rows(t), &cell_w, &cell_h);
+  if(cell_w < 1)
+    cell_w = 1;
+  if(cell_h < 1)
+    cell_h = 1;
+
+  if(span_right < span_left)
+    return;
+
+  px = console_gfx_vts->fb_x + span_left * cell_w;
+  src_y = console_gfx_vts->fb_y + top * cell_h;
+  dst_y = console_gfx_vts->fb_y + (top + n) * cell_h;
+  pixel_w = (uint)(span_right - span_left + 1) * (uint)cell_w;
+  pixel_h = (uint)move_rows * (uint)cell_h;
+  fb_blit_rect(console_gfx_fb, px, src_y,
+               console_gfx_fb, px, dst_y,
+               pixel_w, pixel_h);
+}
+
+static void
 console_tty_fill_locked(struct console_tty_state *t, int from, int to, uchar a)
 {
   ushort blank;
@@ -994,6 +1139,7 @@ console_tty_scroll_down_locked(struct console_tty_state *t, int top, int bot, in
     memmove(t->screen + i * cols,
             t->screen + (i - n) * cols,
             cols * sizeof(ushort));
+  console_gfx_scroll_down_locked(t, top, bot, n, a);
   console_tty_fill_locked(t, top * cols, (top + n) * cols, a);
   console_tty_mark_dirty_range_locked(t, top * cols, (bot + 1) * cols);
 }
@@ -1771,6 +1917,7 @@ console_gfx_ensure_locked(struct console_tty_state *t)
     if(t->winsize.ws_row != prev.ws_row || t->winsize.ws_col != prev.ws_col) {
       t->cursor = console_clamp_tty_cursor(t, t->cursor);
       t->ansi.scroll_bot = console_tty_rows(t) - 1;
+      ansi_reset_tabs(t);
       console_tty_mark_dirty_all_locked(t);
       cols = console_tty_cols(t);
       rows = console_tty_rows(t);
@@ -1894,13 +2041,6 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
       tc.bg_color = (uchar)(((s >> 12) & 0x0F));
       tc.width = 1;
 
-      if(tc.codepoint != ' ' && tc.codepoint != 0 && tc.fg_color == tc.bg_color) {
-        if(tc.fg_color == 0)
-          tc.fg_color = 7;
-        else
-          tc.bg_color = 0;
-      }
-
       dst = &console_gfx_vts->cells[i];
       if(dst->codepoint != tc.codepoint ||
          dst->attr != tc.attr ||
@@ -1943,6 +2083,16 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
   }
   if(changed)
     console_gfx_vts->any_dirty = 1;
+
+  /*
+   * Keep the top text row fresh on gfx consoles. Some fullscreen ANSI workloads
+   * can otherwise leave row 0 visually stale even when tty state is correct.
+   */
+  if(console_gfx_vts->dirty && console_gfx_vts->width > 0 && console_gfx_vts->height > 0) {
+    memset(console_gfx_vts->dirty, 1, (uint)console_gfx_vts->width);
+    console_gfx_vts->any_dirty = 1;
+    changed = 1;
+  }
   release(&console_gfx_vts->lock);
 
   if(!changed)
@@ -2408,6 +2558,71 @@ ansi_save_cursor(struct console_tty_state *t)
 }
 
 static void
+ansi_reset_tabs(struct console_tty_state *t)
+{
+  int i;
+  int cols;
+
+  if(!t)
+    return;
+  cols = console_tty_cols(t);
+  if(cols < 0)
+    cols = 0;
+  if(cols > CONSOLE_MAX_COLS)
+    cols = CONSOLE_MAX_COLS;
+
+  memset(t->ansi.tabs, 0, sizeof(t->ansi.tabs));
+  for(i = 0; i < cols; i++) {
+    if((i % 8) == 0)
+      t->ansi.tabs[i] = 1;
+  }
+}
+
+static int
+ansi_next_tab_col(struct console_tty_state *t, int col)
+{
+  int cols;
+  int i;
+
+  cols = console_tty_cols(t);
+  if(cols <= 0)
+    return 0;
+  if(cols > CONSOLE_MAX_COLS)
+    cols = CONSOLE_MAX_COLS;
+
+  if(col < -1)
+    col = -1;
+  for(i = col + 1; i < cols; i++) {
+    if(t->ansi.tabs[i])
+      return i;
+  }
+  return cols - 1;
+}
+
+static int
+ansi_prev_tab_col(struct console_tty_state *t, int col)
+{
+  int cols;
+  int i;
+
+  cols = console_tty_cols(t);
+  if(cols <= 0)
+    return 0;
+  if(cols > CONSOLE_MAX_COLS)
+    cols = CONSOLE_MAX_COLS;
+
+  if(col >= cols)
+    col = cols - 1;
+  if(col < 0)
+    return 0;
+  for(i = col; i >= 0; i--) {
+    if(t->ansi.tabs[i])
+      return i;
+  }
+  return 0;
+}
+
+static void
 ansi_restore_cursor(struct console_tty_state *t)
 {
   t->cursor = console_clamp_tty_cursor(t, t->ansi.saved_cursor);
@@ -2422,7 +2637,12 @@ ansi_enter_alt_screen(struct console_tty_state *t)
   if(t->ansi.alt_active)
     return;
   cells = console_tty_cells(t);
+  if(cells < 0)
+    cells = 0;
+  if(cells > CONSOLE_MAX_CELLS)
+    cells = CONSOLE_MAX_CELLS;
   memmove(t->ansi.alt_buf, t->screen, cells * sizeof(ushort));
+  t->ansi.alt_buf_cells = cells;
   t->ansi.alt_saved_cursor = console_clamp_tty_cursor(t, t->cursor);
   t->ansi.alt_saved_attr = t->ansi.attr;
   t->ansi.alt_active = 1;
@@ -2434,14 +2654,33 @@ static void
 ansi_leave_alt_screen(struct console_tty_state *t)
 {
   int cells;
+  int restore_cells;
+  ushort blank;
 
   if(!t->ansi.alt_active)
     return;
   cells = console_tty_cells(t);
-  memmove(t->screen, t->ansi.alt_buf, cells * sizeof(ushort));
+  if(cells < 0)
+    cells = 0;
+  if(cells > CONSOLE_MAX_CELLS)
+    cells = CONSOLE_MAX_CELLS;
+  restore_cells = t->ansi.alt_buf_cells;
+  if(restore_cells < 0)
+    restore_cells = 0;
+  if(restore_cells > cells)
+    restore_cells = cells;
+
+  if(restore_cells > 0)
+    memmove(t->screen, t->ansi.alt_buf, restore_cells * sizeof(ushort));
+
+  blank = (ushort)(' ' | ((ushort)t->ansi.alt_saved_attr << 8));
+  while(restore_cells < cells)
+    t->screen[restore_cells++] = blank;
+
   console_tty_mark_dirty_all_locked(t);
   t->cursor = console_clamp_tty_cursor(t, t->ansi.alt_saved_cursor);
   t->ansi.attr = t->ansi.alt_saved_attr;
+  t->ansi.alt_buf_cells = 0;
   t->ansi.alt_active = 0;
 }
 
@@ -2457,7 +2696,30 @@ ansi_apply_private_mode(struct console_tty_state *t, int mode, int set)
     else
       t->cursor = 0;
   } else if(mode == 5) {
-    t->ansi.reverse_video = set ? 1 : 0;
+    if((set ? 1 : 0) != t->ansi.reverse_video) {
+      int i;
+      int cells;
+      uchar fg;
+      uchar bg;
+
+      cells = console_tty_cells(t);
+      if(cells < 0)
+        cells = 0;
+      for(i = 0; i < cells; i++) {
+        ushort s;
+
+        s = t->screen[i];
+        fg = (uchar)((s >> 8) & 0x0F);
+        bg = (uchar)((s >> 12) & 0x0F);
+        t->screen[i] = (ushort)((s & 0x00FF) | ((ushort)bg << 8) | ((ushort)fg << 12));
+      }
+
+      fg = (uchar)(t->ansi.attr & 0x0F);
+      bg = (uchar)((t->ansi.attr >> 4) & 0x0F);
+      t->ansi.attr = (uchar)((bg << 4) | fg);
+      t->ansi.reverse_video = set ? 1 : 0;
+      console_tty_mark_dirty_all_locked(t);
+    }
   } else if(mode == 12) {
     t->ansi.cursor_blink = set ? 1 : 0;
   } else if(mode == 7) {
@@ -2632,6 +2894,7 @@ ansi_soft_reset(struct console_tty_state *t)
   t->ansi.newline_mode = 0;
   t->ansi.wraparound = 1;
   t->ansi.reverse_video = 0;
+  t->ansi.sgr_inverse = 0;
   t->ansi.underline = 0;
   t->ansi.italic = 0;
   t->ansi.strikethrough = 0;
@@ -2652,11 +2915,14 @@ ansi_soft_reset(struct console_tty_state *t)
   t->ansi.alt_keypad = 0;
   t->ansi.keyboard_select = 0;
   t->ansi.bracketed_paste = 0;
+  t->ansi.last_glyph = -1;
   t->ansi.utf8_need = 0;
+  t->ansi.param_overflow = 0;
   t->ansi.question = 0;
   t->ansi.greater = 0;
   t->ansi.dollar = 0;
   t->ansi.bang = 0;
+  ansi_reset_tabs(t);
 }
 
 static void
@@ -3096,6 +3362,18 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
   switch(t->ansi.state) {
   case ANSI_NORMAL:
     if(c == 0x1B) { t->ansi.utf8_need = 0; t->ansi.state = ANSI_ESC; return; }
+    if(c == 0x9B) {
+      t->ansi.state = ANSI_CSI;
+      t->ansi.nparams = 0;
+      t->ansi.cur_param = 0;
+      t->ansi.param_overflow = 0;
+      t->ansi.question = 0;
+      t->ansi.greater = 0;
+      t->ansi.dollar = 0;
+      t->ansi.bang = 0;
+      memset(t->ansi.params, 0, sizeof(t->ansi.params));
+      return;
+    }
     if(c == 0x0E) { t->ansi.gl_charset = 1; return; }  /* SO: shift out, use G1 */
     if(c == 0x0F) { t->ansi.gl_charset = 0; return; }  /* SI: shift in, use G0 */
     if(c == '\r') { t->cursor = row * cols; return; }
@@ -3123,9 +3401,7 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
       return;
     }
     if(c == '\t') {
-      c2 = (col + 8) & ~7;
-      if(c2 > last_col)
-        c2 = last_col;
+      c2 = ansi_next_tab_col(t, col);
       t->cursor = console_clamp_tty_cursor(t, row * cols + c2);
       return;
     }
@@ -3161,7 +3437,7 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
 
   case ANSI_ESC:
     if(c == '[') {
-      t->ansi.state=ANSI_CSI; t->ansi.nparams=0; t->ansi.cur_param=0; t->ansi.question=0; t->ansi.greater=0; t->ansi.dollar=0; t->ansi.bang=0;
+      t->ansi.state=ANSI_CSI; t->ansi.nparams=0; t->ansi.cur_param=0; t->ansi.param_overflow=0; t->ansi.question=0; t->ansi.greater=0; t->ansi.dollar=0; t->ansi.bang=0;
       memset(t->ansi.params, 0, sizeof(t->ansi.params));
       return;
     }
@@ -3172,6 +3448,12 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
     if(c == '>') { t->ansi.keypad_app = 0; t->ansi.state = ANSI_NORMAL; return; }
     if(c == '7') { ansi_save_cursor(t); t->ansi.state = ANSI_NORMAL; return; }
     if(c == '8') { ansi_restore_cursor(t); t->ansi.state = ANSI_NORMAL; return; }
+    if(c == 'H') {
+      if(col >= 0 && col < CONSOLE_MAX_COLS)
+        t->ansi.tabs[col] = 1;
+      t->ansi.state = ANSI_NORMAL;
+      return;
+    }
     if(c == 'c') {
       ansi_leave_alt_screen(t);
       ansi_soft_reset(t);
@@ -3182,8 +3464,11 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
     } else if(c == 'M') {
       if(row == t->ansi.scroll_top)
         console_tty_scroll_down_locked(t, t->ansi.scroll_top, t->ansi.scroll_bot, 1, a);
-      else if(row > 0)
-        t->cursor = console_clamp_tty_cursor(t, (row - 1) * cols + col);
+      else {
+        row_base = t->ansi.origin_mode ? t->ansi.scroll_top : 0;
+        if(row > row_base)
+          t->cursor = console_clamp_tty_cursor(t, (row - 1) * cols + col);
+      }
     }
     t->ansi.state = ANSI_NORMAL;
     return;
@@ -3217,6 +3502,28 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
     return;
 
   case ANSI_CSI:
+    if(c == 0x1B) {
+      /* Abort malformed/incomplete CSI and treat ESC as a fresh introducer. */
+      t->ansi.state = ANSI_ESC;
+      return;
+    }
+    if(c == 0x18 || c == 0x1A) {
+      /* CAN/SUB cancel the in-flight control sequence. */
+      t->ansi.state = ANSI_NORMAL;
+      return;
+    }
+    if(c == 0x9B) {
+      /* Nested CSI restarts parameter collection. */
+      t->ansi.nparams = 0;
+      t->ansi.cur_param = 0;
+      t->ansi.param_overflow = 0;
+      t->ansi.question = 0;
+      t->ansi.greater = 0;
+      t->ansi.dollar = 0;
+      t->ansi.bang = 0;
+      memset(t->ansi.params, 0, sizeof(t->ansi.params));
+      return;
+    }
     if(c == '?') { t->ansi.question=1; return; }
     if(c == '>') { t->ansi.greater=1; return; }
     if(c == '$') { t->ansi.dollar=1; return; }
@@ -3225,19 +3532,42 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
       t->ansi.cur_param = t->ansi.cur_param*10 + (c-'0'); return;
     }
     if(c == ';') {
-      if(t->ansi.nparams < 8) t->ansi.params[t->ansi.nparams++] = t->ansi.cur_param;
+      if(t->ansi.nparams < 8)
+        t->ansi.params[t->ansi.nparams++] = t->ansi.cur_param;
+      else
+        t->ansi.param_overflow = 1;
       t->ansi.cur_param = 0; return;
     }
-    if(t->ansi.nparams < 8) t->ansi.params[t->ansi.nparams++] = t->ansi.cur_param;
+    if(t->ansi.nparams < 8)
+      t->ansi.params[t->ansi.nparams++] = t->ansi.cur_param;
+    else
+      t->ansi.param_overflow = 1;
     t->ansi.cur_param = 0; t->ansi.state = ANSI_NORMAL;
+
+    if(t->ansi.param_overflow)
+      return;
 
     p1 = (t->ansi.nparams>=1) ? t->ansi.params[0] : 0;
     p2 = (t->ansi.nparams>=2) ? t->ansi.params[1] : 0;
 
     switch(c) {
     case 'a': n=p1?p1:1; c2=col+n; if(c2>last_col)c2=last_col; t->cursor = console_clamp_tty_cursor(t, row*cols+c2); break;
-    case 'A': n=p1?p1:1; r2=row-n; if(r2<t->ansi.scroll_top)r2=t->ansi.scroll_top; t->cursor = console_clamp_tty_cursor(t, r2*cols+col); break;
-    case 'B': n=p1?p1:1; r2=row+n; if(r2>t->ansi.scroll_bot)r2=t->ansi.scroll_bot; t->cursor = console_clamp_tty_cursor(t, r2*cols+col); break;
+    case 'A':
+      n = p1 ? p1 : 1;
+      row_base = t->ansi.origin_mode ? t->ansi.scroll_top : 0;
+      r2 = row - n;
+      if(r2 < row_base)
+        r2 = row_base;
+      t->cursor = console_clamp_tty_cursor(t, r2 * cols + col);
+      break;
+    case 'B':
+      n = p1 ? p1 : 1;
+      row_max = t->ansi.origin_mode ? t->ansi.scroll_bot : last_row;
+      r2 = row + n;
+      if(r2 > row_max)
+        r2 = row_max;
+      t->cursor = console_clamp_tty_cursor(t, r2 * cols + col);
+      break;
     case 'C': n=p1?p1:1; c2=col+n; if(c2>last_col)c2=last_col; t->cursor = console_clamp_tty_cursor(t, row*cols+c2); break;
     case 'D': n=p1?p1:1; c2=col-n; if(c2<0)c2=0; t->cursor = console_clamp_tty_cursor(t, row*cols+c2); break;
     case 'd':
@@ -3250,10 +3580,40 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
         r2 = row_max;
       t->cursor = console_clamp_tty_cursor(t, r2*cols+col);
       break;
-    case 'e': n=p1?p1:1; r2=row+n; if(r2>t->ansi.scroll_bot)r2=t->ansi.scroll_bot; t->cursor = console_clamp_tty_cursor(t, r2*cols+col); break;
-    case 'E': n=p1?p1:1; r2=row+n; if(r2>last_row)r2=last_row; t->cursor = console_clamp_tty_cursor(t, r2*cols); break;
-    case 'F': n=p1?p1:1; r2=row-n; if(r2<0)r2=0; t->cursor = console_clamp_tty_cursor(t, r2*cols); break;
+    case 'e':
+      n = p1 ? p1 : 1;
+      row_max = t->ansi.origin_mode ? t->ansi.scroll_bot : last_row;
+      r2 = row + n;
+      if(r2 > row_max)
+        r2 = row_max;
+      t->cursor = console_clamp_tty_cursor(t, r2 * cols + col);
+      break;
+    case 'E':
+      n = p1 ? p1 : 1;
+      row_max = t->ansi.origin_mode ? t->ansi.scroll_bot : last_row;
+      r2 = row + n;
+      if(r2 > row_max)
+        r2 = row_max;
+      t->cursor = console_clamp_tty_cursor(t, r2 * cols);
+      break;
+    case 'F':
+      n = p1 ? p1 : 1;
+      row_base = t->ansi.origin_mode ? t->ansi.scroll_top : 0;
+      r2 = row - n;
+      if(r2 < row_base)
+        r2 = row_base;
+      t->cursor = console_clamp_tty_cursor(t, r2 * cols);
+      break;
     case 'G': c2=p1?p1-1:0; if(c2<0)c2=0; if(c2>last_col)c2=last_col; t->cursor = console_clamp_tty_cursor(t, row*cols+c2); break;
+    case 'I':
+      n = p1 ? p1 : 1;
+      c2 = col;
+      while(n-- > 0)
+        c2 = ansi_next_tab_col(t, c2);
+      if(c2 > last_col)
+        c2 = last_col;
+      t->cursor = console_clamp_tty_cursor(t, row * cols + c2);
+      break;
     case 'H': case 'f':
       row_base = t->ansi.origin_mode ? t->ansi.scroll_top : 0;
       row_max = t->ansi.origin_mode ? t->ansi.scroll_bot : last_row;
@@ -3281,7 +3641,10 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
     case 'L': n=p1?p1:1; console_tty_scroll_down_locked(t, row, t->ansi.scroll_bot, n, a); break;
     case 'M': n=p1?p1:1; console_tty_scroll_up_locked(t, row, t->ansi.scroll_bot, n, a); break;
     case 'P': {
-      int av=cols-col; n=p1?p1:1; if(n>av)n=av;
+      int av;
+      if(col < 0 || col >= cols)
+        break;
+      av=cols-col; n=p1?p1:1; if(n>av)n=av;
       memmove(screen+pos, screen+pos+n, (av-n)*sizeof(ushort));
       console_tty_mark_dirty_range_locked(t, row * cols + col, row * cols + cols);
       console_tty_fill_locked(t, pos+av-n, pos+av, a); break; }
@@ -3297,12 +3660,28 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
       }
       break;
     case '@': {
-      int av=cols-col; int i2; n=p1?p1:1; if(n>av)n=av;
+      int av;
+      int i2;
+      if(col < 0 || col >= cols)
+        break;
+      av=cols-col; n=p1?p1:1; if(n>av)n=av;
       for(i2=av-1; i2>=n; i2--) screen[pos+i2]=screen[pos+i2-n];
       console_tty_mark_dirty_range_locked(t, row * cols + col, row * cols + cols);
       console_tty_fill_locked(t, pos, pos+n, a); break; }
     case 'S': n=p1?p1:1; console_tty_scroll_up_locked(t, t->ansi.scroll_top,  t->ansi.scroll_bot, n, a); break;
     case 'T': n=p1?p1:1; console_tty_scroll_down_locked(t, t->ansi.scroll_top, t->ansi.scroll_bot, n, a); break;
+    case 'Z':
+      n = p1 ? p1 : 1;
+      c2 = col;
+      while(n-- > 0) {
+        c2 = ansi_prev_tab_col(t, c2 - 1);
+        if(c2 <= 0) {
+          c2 = 0;
+          break;
+        }
+      }
+      t->cursor = console_clamp_tty_cursor(t, row * cols + c2);
+      break;
     case 'm': {
       int i2;
       if(t->ansi.nparams == 0) { 
@@ -3332,8 +3711,19 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
         else if(sg==24)         t->ansi.underline=0;
         else if(sg==25)         t->ansi.attr&=~0x80;
         else if(sg==29)         t->ansi.strikethrough=0;
-        else if(sg==7)          { uchar fg=t->ansi.attr&0x0F,bg=(t->ansi.attr>>4)&0x0F; t->ansi.attr=(uchar)((fg<<4)|bg); }
-        else if(sg==27)         t->ansi.attr=0x07;
+        else if(sg==7)          {
+          uchar fg=t->ansi.attr&0x0F,bg=(t->ansi.attr>>4)&0x0F;
+          if(!t->ansi.sgr_inverse)
+            t->ansi.attr=(uchar)((fg<<4)|bg);
+          t->ansi.sgr_inverse = 1;
+        }
+        else if(sg==27)         {
+          if(t->ansi.sgr_inverse) {
+            uchar fg=t->ansi.attr&0x0F,bg=(t->ansi.attr>>4)&0x0F;
+            t->ansi.attr=(uchar)((fg<<4)|bg);
+          }
+          t->ansi.sgr_inverse = 0;
+        }
         else if(sg>=30&&sg<=37) t->ansi.attr=(t->ansi.attr&0xF0)|(uchar)ansi16_to_cga_nibble(sg-30);
         else if(sg==39)         t->ansi.attr=(t->ansi.attr&0xF0)|0x07;
         else if(sg>=40&&sg<=47) t->ansi.attr=(t->ansi.attr&0x0F)|(uchar)(ansi16_to_cga_nibble(sg-40)<<4);
@@ -3370,7 +3760,18 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
       if(n > last_row)
         n = last_row;
       if(r2<n) { t->ansi.scroll_top=r2; t->ansi.scroll_bot=n; }
-      t->cursor = 0;
+      if(t->ansi.origin_mode)
+        t->cursor = console_clamp_tty_cursor(t, t->ansi.scroll_top * cols);
+      else
+        t->cursor = 0;
+      break;
+    case 'g':
+      if(p1 == 3) {
+        memset(t->ansi.tabs, 0, sizeof(t->ansi.tabs));
+      } else {
+        if(col >= 0 && col < CONSOLE_MAX_COLS)
+          t->ansi.tabs[col] = 0;
+      }
       break;
     case 's':
       ansi_save_cursor(t);
@@ -3771,6 +4172,7 @@ console_ioctl(int fd, int request, uint arg)
     }
     t->cursor = console_clamp_tty_cursor(t, t->cursor);
     t->ansi.scroll_bot = console_tty_rows(t) - 1;
+    ansi_reset_tabs(t);
     console_tty_mark_dirty_all_locked(t);
     if(t == console_tty_by_index(console_active_tty))
       console_flush_tty_locked(t);
@@ -4455,6 +4857,7 @@ consoleinit(void)
     cttys[i].winsize.ws_row = init_rows;
     cttys[i].winsize.ws_col = init_cols;
     cttys[i].ansi.scroll_bot = init_rows > 0 ? init_rows - 1 : 0;
+    ansi_reset_tabs(&cttys[i]);
     cttys[i].cursor = 0;
     cttys[i].dirty_rows_valid = 1;
     cttys[i].dirty_row_top = 0;

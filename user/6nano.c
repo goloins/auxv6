@@ -134,6 +134,13 @@ nano_disable_raw(void)
 }
 
 static void
+nano_cleanup_terminal(void)
+{
+  /* Leave shell with a predictable clean viewport and cursor home. */
+  write(1, "\x1b[0m\x1b[2J\x1b[H", sizeof("\x1b[0m\x1b[2J\x1b[H") - 1);
+}
+
+static void
 nano_die(const char *msg)
 {
   nano_disable_raw();
@@ -172,6 +179,7 @@ nano_read_key(void)
 
   while(read(0, &c, 1) != 1)
     ;
+
 
   if(c == '\x1b') {
     char seq[3];
@@ -400,41 +408,54 @@ nano_del_at_cursor(void)
 static void
 nano_scroll(void)
 {
+  int viewcols = E.screencols - 2;
+
+  if(viewcols < 1)
+    viewcols = 1;
+
   if(E.cy < E.rowoff)
     E.rowoff = E.cy;
   if(E.cy >= E.rowoff + E.screenrows)
     E.rowoff = E.cy - E.screenrows + 1;
   if(E.cx < E.coloff)
     E.coloff = E.cx;
-  if(E.cx >= E.coloff + E.screencols)
-    E.coloff = E.cx - E.screencols + 1;
+  if(E.cx >= E.coloff + viewcols)
+    E.coloff = E.cx - viewcols + 1;
 }
 
 static void
 nano_draw_rows(struct nano_abuf *ab)
 {
   int y;
+  int viewcols = E.screencols - 2;
+
+  if(viewcols < 1)
+    viewcols = 1;
 
   for(y = 0; y < E.screenrows; y++) {
+    char pos[24];
+    char spaces[256];
+    int fill;
+    int pn;
     int filerow = y + E.rowoff;
+
+    pn = snprintf(pos, sizeof(pos), "\x1b[%d;1H", y + 1);
+    if(pn > 0)
+      ab_append(ab, pos, pn);
+
+    ab_append(ab, "\x1b[44;37m \x1b[0m", 13);
 
     if(filerow >= E.numrows) {
       if(E.numrows == 0 && y == E.screenrows / 3) {
         char welcome[80];
-        char spaces[256];
         int welcomelen;
         int padding;
-        int fill;
 
         welcomelen = snprintf(welcome, sizeof(welcome), "%s", NANO_VERSION);
-        if(welcomelen > E.screencols)
-          welcomelen = E.screencols;
+        if(welcomelen > viewcols)
+          welcomelen = viewcols;
 
-        padding = (E.screencols - welcomelen) / 2;
-        if(padding > 0) {
-          ab_append(ab, "~", 1);
-          padding--;
-        }
+        padding = (viewcols - welcomelen) / 2;
         fill = padding;
         if(fill > (int)sizeof(spaces))
           fill = (int)sizeof(spaces);
@@ -443,32 +464,63 @@ nano_draw_rows(struct nano_abuf *ab)
           ab_append(ab, spaces, fill);
         }
         ab_append(ab, welcome, welcomelen);
+        fill = viewcols - padding - welcomelen;
+        if(fill > (int)sizeof(spaces))
+          fill = (int)sizeof(spaces);
+        if(fill > 0) {
+          memset(spaces, ' ', fill);
+          ab_append(ab, spaces, fill);
+        }
       } else {
-        ab_append(ab, "~", 1);
+        fill = viewcols;
+        while(fill > 0) {
+          int chunk = fill;
+          if(chunk > (int)sizeof(spaces))
+            chunk = (int)sizeof(spaces);
+          memset(spaces, ' ', chunk);
+          ab_append(ab, spaces, chunk);
+          fill -= chunk;
+        }
       }
     } else {
       int len = E.rows[filerow].len - E.coloff;
       if(len < 0)
         len = 0;
-      if(len > E.screencols)
-        len = E.screencols;
+      if(len > viewcols)
+        len = viewcols;
       if(len > 0)
         ab_append(ab, &E.rows[filerow].chars[E.coloff], len);
+
+      fill = viewcols - len;
+      while(fill > 0) {
+        int chunk = fill;
+        if(chunk > (int)sizeof(spaces))
+          chunk = (int)sizeof(spaces);
+        memset(spaces, ' ', chunk);
+        ab_append(ab, spaces, chunk);
+        fill -= chunk;
+      }
     }
 
-    ab_append(ab, "\x1b[K\r\n", 5);
+    ab_append(ab, "\x1b[44;37m \x1b[0m", 13);
   }
 }
 
 static void
 nano_draw_status_bar(struct nano_abuf *ab)
 {
+  char pos[24];
   char left[96];
   char right[64];
   char spaces[256];
   int llen;
   int rlen;
   int pad;
+  int pn;
+
+  pn = snprintf(pos, sizeof(pos), "\x1b[%d;1H", E.screenrows + 1);
+  if(pn > 0)
+    ab_append(ab, pos, pn);
 
   snprintf(left, sizeof(left), " %.40s%s ",
            E.filename ? E.filename : "[No Name]",
@@ -500,13 +552,19 @@ nano_draw_status_bar(struct nano_abuf *ab)
     ab_append(ab, right + start, rlen - start);
   }
 
-  ab_append(ab, "\x1b[m\r\n", 5);
+  ab_append(ab, "\x1b[m", 3);
 }
 
 static void
 nano_draw_message_bar(struct nano_abuf *ab)
 {
+  char pos[24];
+  int pn;
   int n;
+
+  pn = snprintf(pos, sizeof(pos), "\x1b[%d;1H", E.screenrows + 2);
+  if(pn > 0)
+    ab_append(ab, pos, pn);
 
   ab_append(ab, "\x1b[K", 3);
   n = strlen(E.status);
@@ -547,6 +605,7 @@ nano_refresh_screen(void)
 {
   struct nano_abuf ab;
   char buf[32];
+  int viewcols;
   int n;
   int curx;
   int cury;
@@ -556,18 +615,26 @@ nano_refresh_screen(void)
 
   ab_init(&ab);
 
-  ab_append(&ab, "\x1b[0m\x1b[37;40m\x1b[H\x1b[2J", 17);
+  ab_append(&ab, "\x1b[0m\x1b[37;40m\x1b[H\x1b[2J", 19);
 
   nano_draw_rows(&ab);
   nano_draw_status_bar(&ab);
   nano_draw_message_bar(&ab);
 
+  viewcols = E.screencols - 2;
+  if(viewcols < 1)
+    viewcols = 1;
+
   cury = (E.cy - E.rowoff) + 1;
-  curx = (E.cx - E.coloff) + 1;
+  curx = (E.cx - E.coloff) + 2;
   if(cury < 1)
     cury = 1;
+  if(cury > E.screenrows)
+    cury = E.screenrows;
   if(curx < 1)
     curx = 1;
+  if(curx > viewcols + 1)
+    curx = viewcols + 1;
 
   n = snprintf(buf, sizeof(buf), "\x1b[%d;%dH", cury, curx);
   if(n > 0)
@@ -884,5 +951,6 @@ main(int argc, char *argv[])
   }
 
   nano_disable_raw();
+  nano_cleanup_terminal();
   return 0;
 }
