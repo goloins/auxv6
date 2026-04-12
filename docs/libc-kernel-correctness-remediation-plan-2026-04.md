@@ -11,6 +11,11 @@ Project policy for this work:
 3. Truthful behavior over compatibility theater.
 4. Kernel enforces security invariants (do not rely on libc-only checks).
 
+Primary TLS consumer assumption for this plan:
+
+- auxv6 will target LibreSSL, with `libtls` preferred for first application-facing integration where feasible.
+- This makes OpenBSD-style libc and resolver expectations more relevant than OpenSSL-specific compatibility work.
+
 ## Scope
 
 In scope:
@@ -72,11 +77,15 @@ Observed:
 
 - `CLOCK_REALTIME` and `clock_settime` exist, with `ntpd` integration.
 - Root check is performed in libc before `clock_settime` syscall path.
+- `time_t` is currently 32-bit, which is not acceptable long-term for correct
+  certificate validity handling.
 
 Risk to address:
 
 - Kernel must independently enforce privilege and parameter validation regardless of libc behavior.
 - Cert validation correctness depends on reliable realtime and boot ordering.
+- `time_t` widening is an ABI-impacting correction and must be treated as an
+  explicit early tranche, not an incidental cleanup.
 
 ## E. Trust-store filesystem policy is missing
 
@@ -100,14 +109,27 @@ Why this matters:
 
 - Increases long-term maintenance load and complicates external code import.
 
+## G. Additional OpenBSD-style libc compatibility gaps likely matter for LibreSSL
+
+Observed:
+
+- `strlcpy`/`strlcat` and `reallocarray` are present.
+- `explicit_bzero`, `timingsafe_bcmp` or equivalent constant-time compare helpers, and `arc4random` family interfaces were not found in the current libc surface during this audit.
+
+Why this matters:
+
+- LibreSSL portable carries compatibility code, but auxv6 should prefer correct native primitives where the semantics are security-sensitive.
+- `libtls`-style consumer code benefits from OpenBSD-aligned libc behavior rather than a growing pile of local compatibility shims.
+
 ## Remediation Strategy
 
 Implement in strict order:
 
 1. Security substrate correctness (RNG/time enforcement).
 2. Public ABI correctness (socket + resolver).
-3. Trust-store and policy.
-4. TLS library integration only after 1-3 are landed.
+3. OpenBSD-style security helper completion where semantics are security-relevant.
+4. Trust-store and policy.
+5. TLS library integration only after 1-4 are landed.
 
 ## Implementation Plan
 
@@ -123,13 +145,33 @@ Tasks:
 1. Create an API contract doc with exact required signatures and struct layouts.
 2. Mark deprecated auxv6-specific prototypes in headers as transitional.
 3. Add CI/grep checks that reject new non-standard socket prototype additions.
+4. Add a LibreSSL-facing checklist of required libc/kernel contracts so portability work does not drift toward generic OpenSSL assumptions.
 
 Exit criteria:
 
 - Contract doc approved.
 - No new ABI drift introduced during subsequent tranches.
 
-## Tranche 1: Kernel Entropy and Secure Random API
+## Tranche 1: `time_t` Correction and Time ABI Audit
+
+Goals:
+
+- Correct the platform time ABI before importing TLS code that depends on
+  RFC 5280 certificate date handling.
+
+Tasks:
+
+1. Widen `time_t` to 64-bit.
+2. Audit all public structs and syscalls that embed or expose `time_t`.
+3. Fix libc conversion/formatting code paths affected by the widened type.
+4. Add focused tests for post-2038 timestamps and certificate-style validity windows.
+
+Exit criteria:
+
+- Public time ABI is 64-bit clean.
+- No known 2038-era correctness bug remains in libc/kernel time surfaces.
+
+## Tranche 2: Kernel Entropy and Secure Random API
 
 Goals:
 
@@ -141,15 +183,16 @@ Tasks:
 2. Add `getrandom` syscall with blocking/non-blocking semantics defined.
 3. Add `/dev/urandom` character device as a stable userland source.
 4. Add libc wrappers: `getrandom`, `getentropy`.
-5. Add explicit man/doc guidance that `rand/random` are non-crypto.
+5. Add `arc4random`, `arc4random_buf`, and `arc4random_uniform` implemented on top of kernel-backed secure randomness.
+6. Add explicit man/doc guidance that `rand/random` are non-crypto.
 
 Exit criteria:
 
 - Kernel returns secure random bytes under load.
 - Userland can obtain entropy without ad-hoc hacks.
-- Security-focused tests cover short reads, EINTR, and early-boot behavior.
+- Security-focused tests cover short reads, EINTR, early-boot behavior, and `arc4random`-family semantics.
 
-## Tranche 2: Socket ABI and Header Normalization
+## Tranche 3: Socket ABI and Header Normalization
 
 Goals:
 
@@ -173,7 +216,7 @@ Exit criteria:
 - Existing auxv6 apps continue to build via compatibility path.
 - Portable POSIX network code builds without local patches.
 
-## Tranche 3: Resolver Modernization
+## Tranche 4: Resolver Modernization
 
 Goals:
 
@@ -191,7 +234,7 @@ Exit criteria:
 - TLS-capable clients can resolve hosts using standard APIs.
 - Resolver tests cover hosts-only, DNS-only, NXDOMAIN, timeout, and malformed responses.
 
-## Tranche 4: Time and Privilege Hardening
+## Tranche 5: Time and Privilege Hardening
 
 Goals:
 
@@ -209,7 +252,25 @@ Exit criteria:
 - Privilege bypass via custom syscall caller is not possible.
 - Time-dependent verification has predictable behavior at boot.
 
-## Tranche 5: Trust Store and Certificate Policy
+## Tranche 6: OpenBSD-style Security Helper Completion
+
+Goals:
+
+- Fill in libc helpers that should exist natively before importing LibreSSL as a first-class subsystem.
+
+Tasks:
+
+1. Add `explicit_bzero` with semantics that resist dead-store elimination.
+2. Add constant-time comparison helper (`timingsafe_bcmp` and/or equivalent documented public API).
+3. Audit whether any additional LibreSSL-facing helper gaps remain after Tranches 1-5 and implement the missing native surface rather than relying on sprawling local compat glue.
+4. Add tests that validate observable semantics for these helpers.
+
+Exit criteria:
+
+- Security-sensitive libc helper surface needed by LibreSSL/libtls is present and documented.
+- No known helper gap remains that would force immediate downstream portability hacks.
+
+## Tranche 7: Trust Store and Certificate Policy
 
 Goals:
 
@@ -217,7 +278,7 @@ Goals:
 
 Tasks:
 
-1. Define canonical CA bundle path in targetfs (for example `/etc/ssl/certs/ca-certificates.crt`).
+1. Define canonical CA bundle path in targetfs aligned with LibreSSL defaults (prefer `/etc/ssl/cert.pem`).
 2. Ship initial CA bundle and document update workflow.
 3. Add hostname verification policy requirements in docs.
 4. Add failure-mode diagnostics for expired/untrusted/hostname-mismatch certs.
@@ -226,7 +287,7 @@ Exit criteria:
 
 - TLS client code can verify peers by default with documented trust roots.
 
-## Tranche 6: Deletion of Transitional Cruft
+## Tranche 8: Deletion of Transitional Cruft
 
 Goals:
 
@@ -255,6 +316,7 @@ libc + headers:
 1. POSIX-correct networking declarations in canonical headers.
 2. resolver API expansion (`getaddrinfo` family).
 3. random/time wrappers and error semantics consistency.
+4. OpenBSD-style security helpers used by LibreSSL/libtls.
 
 targetfs/docs:
 
@@ -275,7 +337,8 @@ API-level tests to add:
 2. resolver behavior tests (`getaddrinfo` + legacy API).
 3. entropy tests (availability, blocking semantics, error behavior).
 4. time privilege tests (`clock_settime` root vs non-root).
-5. trust-store path existence and cert validation smoke tests.
+5. helper tests for `explicit_bzero`, constant-time compare, and `arc4random` family.
+6. trust-store path existence and cert validation smoke tests.
 
 ## Risk Register
 
@@ -300,5 +363,7 @@ Mitigation: startup ordering and clear diagnostics.
 5. Tranche 4
 6. Tranche 5
 7. Tranche 6
+8. Tranche 7
+9. Tranche 8
 
 This order minimizes security risk and avoids building TLS on an unstable ABI foundation.
