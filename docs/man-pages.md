@@ -13,6 +13,7 @@ Generated: 2026-04-11
 | abrowse | targetfs/usr/share/man/abrowse.md | 2026-04-03 | user/abrowse.c | basic terminal HTTP browser (text/html/markdown/plain) |
 | 6fetch | targetfs/usr/share/man/6fetch.md | 2026-04-07 | user/6fetch.c | compact screenfetch-style system summary (user/host/os/kernel/machine/uptime/memory) |
 | 6get | targetfs/usr/share/man/6get.md | 2026-04-02 | user/6get.c | source-derived usage/options; see docs/6get-http-transfer-notes.md |
+| 6vi | targetfs/usr/share/man/6vi.md | 2026-04-11 | user/6vi.c | minimal vi-style modal text editor with arrow-key navigation and `:w/:q/:wq` commands |
 | ahcitest | targetfs/usr/share/man/ahcitest.md | 2026-04-02 | user/ahcitest.c | AHCI regression binary |
 | audioctl | targetfs/usr/share/man/audioctl.md | 2026-04-05 | user/audioctl.c | Stage-0 audio ioctl control/query utility |
 | audiod | targetfs/usr/share/man/audiod.md | 2026-04-05 | user/audiod.c | Stage-2 audio daemon scaffold (single native sink service loop) |
@@ -23,7 +24,6 @@ Generated: 2026-04-11
 | bcachestress | targetfs/usr/share/man/bcachestress.md | 2026-04-05 | user/bcachestress.c | concurrent fs I/O stress utility with /proc/bcache_health fail-fast checks and vmstat/meminfo context dump |
 | cowtest | targetfs/usr/share/man/cowtest.md | 2026-04-11 | user/cowtest.c | COW fork correctness test validating parent/child write isolation across data, heap, and stack |
 | cowexectest | targetfs/usr/share/man/cowexectest.md | 2026-04-11 | user/cowexectest.c | fork-plus-exec COW correctness test validating old-image teardown and parent isolation across data, heap, and stack |
-| demandzerotest | targetfs/usr/share/man/demandzerotest.md | 2026-04-11 | user/demandzerotest.c | lazy-heap demand-zero regression covering direct user faults plus kernel copyin/copyout materialization of untouched pages |
 | arp | targetfs/usr/share/man/arp.md | 2026-04-01 | user/arp.c | source-derived usage/options |
 | awk | targetfs/usr/share/man/awk.md | 2026-04-06 | user/awk.c | baseline pattern/action processor (`/regex/ { print ... }`) with `$0`/`$N`/`NR` and `-F` field separator |
 | cat | targetfs/usr/share/man/cat.md | 2026-04-01 | user/cat.c | source-derived usage/options |

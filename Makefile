@@ -499,6 +499,9 @@ _6get: user/6get
 _6fetch: user/6fetch
 	cp user/6fetch _6fetch
 
+_6vi: user/6vi
+	cp user/6vi _6vi
+
 _6doc: user/6doc
 	cp user/6doc _6doc
 
@@ -651,9 +654,6 @@ _cowtest: user/cowtest
 
 _cowexectest: user/cowexectest
 	cp user/cowexectest _cowexectest
-
-_demandzerotest: user/demandzerotest
-	cp user/demandzerotest _demandzerotest
 
 _kmemstress: user/kmemstress
 	cp user/kmemstress _kmemstress
@@ -1032,6 +1032,7 @@ UPROGS=\
 	_netstat\
 	_netcat\
 	_6get\
+	_6vi\
 	_6fetch\
 	_6doc\
 	_telnet\
@@ -1060,7 +1061,6 @@ UPROGS=\
 	_vmguardtest\
 	_cowtest\
 	_cowexectest\
-	_demandzerotest\
 	_kmemstress\
 	_bcachestress\
 	_sigtest\
