@@ -129,6 +129,7 @@ user/nftwtest
 user/ftstest
 user/termdemo
 user/termcheck
+user/xtermprobe
 user/testdaemon
 user/stackgrowtest
 user/dmesg

@@ -32,6 +32,7 @@ static struct console_tty_state *console_tty_by_index(int tty);
 static void console_flush_tty_locked(struct console_tty_state *t);
 static void console_gfx_sync_from_tty_locked(struct console_tty_state *t);
 static void ansi_reset_tabs(struct console_tty_state *t);
+static void console_queue_osc52_reply_locked(struct console_tty_state *t, char sel, const char *data);
 static int console_pick_display_size(struct display_device *dev, uint *width_out, uint *height_out);
 static void cga_fill(int from, int to, uchar a);
 static void cga_write_cursor(int pos);
@@ -48,6 +49,7 @@ static int panicked = 0;
 #define CONSOLE_MAX_COLS VT_SURFACE_MAX_WIDTH
 #define CONSOLE_MAX_ROWS VT_SURFACE_MAX_HEIGHT
 #define CONSOLE_MAX_CELLS (CONSOLE_MAX_COLS * CONSOLE_MAX_ROWS)
+#define OSC52_SLOTS 8
 
 #define KMSG_RING_SIZE 16384
 
@@ -128,6 +130,10 @@ struct console_ansi_state {
   int greater;
   int dollar;
   int bang;
+  int squote;
+  int quote;
+  int space;
+  int osc_len;
   uchar attr;
   int scroll_top;
   int scroll_bot;
@@ -149,8 +155,11 @@ struct console_ansi_state {
   int dim;
   int cursor_blink;
   int cursor_visible;
+  int cursor_style;
   int mouse_x10;
-  int mouse_x11;
+  int mouse_btn_event;
+  int mouse_any_event;
+  int mouse_utf8;
   int mouse_sgr;
   int mouse_urxvt;
   int mouse_highlight;
@@ -163,6 +172,8 @@ struct console_ansi_state {
   int alt_keypad;
   int keyboard_select;
   int bracketed_paste;
+  int mouse_col;
+  int mouse_row;
   int last_glyph;
   uint utf8_accum;
   int utf8_need;
@@ -171,6 +182,23 @@ struct console_ansi_state {
   int alt_saved_cursor;
   uchar alt_saved_attr;
   int alt_buf_cells;
+  char osc_buf[128];
+  char osc_icon[64];
+  char osc_title[64];
+  char osc_clipboard_slot_sel[OSC52_SLOTS];
+  char osc_clipboard_slot_b64[OSC52_SLOTS][256];
+  uint csi_unknown_total;
+  uint csi_unsupported_intermediate_total;
+  uint csi_unknown_bare_total;
+  uint csi_unknown_question_total;
+  uint csi_unknown_greater_total;
+  uint csi_unknown_dollar_total;
+  uint csi_unknown_bang_total;
+  uint csi_unknown_squote_total;
+  uint csi_unknown_quote_total;
+  uint csi_unknown_space_total;
+  uint csi_cancelled_total;
+  uint csi_param_overflow_total;
   uchar tabs[CONSOLE_MAX_COLS];
   ushort alt_buf[CONSOLE_MAX_CELLS];
 };
@@ -242,8 +270,11 @@ static struct console_tty_state console_tty_default = {
     .dim = 0,
     .cursor_blink = 1,
     .cursor_visible = 1,
+    .cursor_style = 1,
     .mouse_x10 = 0,
-    .mouse_x11 = 0,
+    .mouse_btn_event = 0,
+    .mouse_any_event = 0,
+    .mouse_utf8 = 0,
     .mouse_sgr = 0,
     .mouse_urxvt = 0,
     .mouse_highlight = 0,
@@ -256,7 +287,12 @@ static struct console_tty_state console_tty_default = {
     .alt_keypad = 0,
     .keyboard_select = 0,
     .bracketed_paste = 0,
+    .mouse_col = 1,
+    .mouse_row = 1,
     .last_glyph = -1,
+    .osc_icon = "auxv6",
+    .osc_title = "auxv6",
+    .osc_clipboard_slot_sel = { 'c' },
     .alt_saved_attr = 0x07,
   },
 };
@@ -1526,6 +1562,18 @@ console_gfx_debug_snapshot(struct console_gfx_debug_info *out)
   out->cell_height = (uint)cell_h;
   out->gfx_owner_pid = console_gfx_owner_pid;
   out->input_events = console_input_event_count;
+  out->csi_unknown_total = t ? t->ansi.csi_unknown_total : 0;
+  out->csi_unsupported_intermediate_total = t ? t->ansi.csi_unsupported_intermediate_total : 0;
+  out->csi_unknown_bare_total = t ? t->ansi.csi_unknown_bare_total : 0;
+  out->csi_unknown_question_total = t ? t->ansi.csi_unknown_question_total : 0;
+  out->csi_unknown_greater_total = t ? t->ansi.csi_unknown_greater_total : 0;
+  out->csi_unknown_dollar_total = t ? t->ansi.csi_unknown_dollar_total : 0;
+  out->csi_unknown_bang_total = t ? t->ansi.csi_unknown_bang_total : 0;
+  out->csi_unknown_squote_total = t ? t->ansi.csi_unknown_squote_total : 0;
+  out->csi_unknown_quote_total = t ? t->ansi.csi_unknown_quote_total : 0;
+  out->csi_unknown_space_total = t ? t->ansi.csi_unknown_space_total : 0;
+  out->csi_cancelled_total = t ? t->ansi.csi_cancelled_total : 0;
+  out->csi_param_overflow_total = t ? t->ansi.csi_param_overflow_total : 0;
 
   release(&cons.tty_lock);
   return 0;
@@ -2546,6 +2594,14 @@ consputc(int c)
 #define ANSI_ESC_G0  4
 #define ANSI_ESC_G1  5
 #define ANSI_OSC_ESC 6
+#define ANSI_DCS     7
+#define ANSI_DCS_ESC 8
+#define ANSI_PM      9
+#define ANSI_PM_ESC  10
+#define ANSI_APC     11
+#define ANSI_APC_ESC 12
+#define ANSI_SOS     13
+#define ANSI_SOS_ESC 14
 
 #define ANSI_CS_ASCII 0
 #define ANSI_CS_DEC   1
@@ -2733,16 +2789,16 @@ ansi_apply_private_mode(struct console_tty_state *t, int mode, int set)
     t->ansi.mouse_highlight = set ? 1 : 0;
   } else if(mode == 1002) {
     /* button event tracking */
-    t->ansi.mouse_x11 = set ? 1 : 0;
+    t->ansi.mouse_btn_event = set ? 1 : 0;
   } else if(mode == 1003) {
     /* any event tracking */
-    t->ansi.mouse_x11 = set ? 1 : 0;
+    t->ansi.mouse_any_event = set ? 1 : 0;
   } else if(mode == 1004) {
     /* focus event */
     t->ansi.focus_event = set ? 1 : 0;
   } else if(mode == 1005) {
     /* UTF-8 mouse encoding */
-    t->ansi.mouse_sgr = set ? 1 : 0;
+    t->ansi.mouse_utf8 = set ? 1 : 0;
   } else if(mode == 1006) {
     /* SGR mouse encoding */
     t->ansi.mouse_sgr = set ? 1 : 0;
@@ -2809,6 +2865,356 @@ ansi_apply_mode(struct console_tty_state *t, int mode, int set)
     t->ansi.newline_mode = set ? 1 : 0;
 }
 
+static void
+ansi_copy_osc_text(char *dst, int dstsz, const char *src, int srclen)
+{
+  int i;
+  int o;
+
+  if(!dst || dstsz <= 0)
+    return;
+
+  o = 0;
+  for(i = 0; src && i < srclen && o < dstsz - 1; i++) {
+    uchar ch;
+
+    ch = (uchar)src[i];
+    if(ch < 0x20)
+      continue;
+    dst[o++] = (char)ch;
+  }
+  dst[o] = 0;
+}
+
+static int
+ansi_is_osc52_b64_char(uchar ch)
+{
+  if(ch >= 'A' && ch <= 'Z')
+    return 1;
+  if(ch >= 'a' && ch <= 'z')
+    return 1;
+  if(ch >= '0' && ch <= '9')
+    return 1;
+  if(ch == '+' || ch == '/' || ch == '=' || ch == '-' || ch == '_')
+    return 1;
+  return 0;
+}
+
+static void
+ansi_copy_osc52_b64(char *dst,
+                    int dstsz,
+                    const char *src,
+                    int srclen,
+                    int *truncated_out,
+                    int *invalid_out)
+{
+  int i;
+  int o;
+  int truncated;
+  int invalid;
+
+  if(truncated_out)
+    *truncated_out = 0;
+  if(invalid_out)
+    *invalid_out = 0;
+  if(!dst || dstsz <= 0)
+    return;
+
+  o = 0;
+  truncated = 0;
+  invalid = 0;
+  for(i = 0; src && i < srclen; i++) {
+    uchar ch;
+
+    ch = (uchar)src[i];
+    if(ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n')
+      continue;
+    if(!ansi_is_osc52_b64_char(ch)) {
+      invalid = 1;
+      continue;
+    }
+    if(o < dstsz - 1)
+      dst[o++] = (char)ch;
+    else
+      truncated = 1;
+  }
+  dst[o] = 0;
+
+  if(truncated_out)
+    *truncated_out = truncated;
+  if(invalid_out)
+    *invalid_out = invalid;
+}
+
+static int
+ansi_osc52_slot_index(struct console_tty_state *t, char sel, int create)
+{
+  int i;
+  int free_slot;
+
+  if(!t || sel == 0)
+    return -1;
+
+  free_slot = -1;
+  for(i = 0; i < OSC52_SLOTS; i++) {
+    if(t->ansi.osc_clipboard_slot_sel[i] == sel)
+      return i;
+    if(free_slot < 0 && t->ansi.osc_clipboard_slot_sel[i] == 0)
+      free_slot = i;
+  }
+
+  if(!create || free_slot < 0)
+    return -1;
+
+  t->ansi.osc_clipboard_slot_sel[free_slot] = sel;
+  t->ansi.osc_clipboard_slot_b64[free_slot][0] = 0;
+  return free_slot;
+}
+
+static int
+ansi_is_osc52_selector_char(char sel)
+{
+  if(sel == 'c' || sel == 'p' || sel == 's')
+    return 1;
+  if(sel >= '0' && sel <= '7')
+    return 1;
+  return 0;
+}
+
+static int
+ansi_osc52_add_selector(char *out, int out_cap, int count, char sel)
+{
+  int i;
+
+  if(!out || out_cap <= 0)
+    return count;
+  for(i = 0; i < count; i++) {
+    if(out[i] == sel)
+      return count;
+  }
+  if(count < out_cap)
+    out[count++] = sel;
+  return count;
+}
+
+static int
+ansi_osc52_collect_selectors(const char *sel_text,
+                             int sel_len,
+                             char *out,
+                             int out_cap,
+                             int *invalid_out)
+{
+  int i;
+  int count;
+  int invalid;
+
+  if(invalid_out)
+    *invalid_out = 0;
+  if(!out || out_cap <= 0)
+    return 0;
+
+  count = 0;
+  invalid = 0;
+  if(sel_len <= 0) {
+    out[0] = 'c';
+    return 1;
+  }
+
+  for(i = 0; sel_text && i < sel_len; i++) {
+    char sel;
+
+    sel = sel_text[i];
+    if(sel == 0 || sel == ',' || sel == ' ' || sel == '\t' || sel == '"' || sel == '\'')
+      continue;
+    if(sel == '*') {
+      count = ansi_osc52_add_selector(out, out_cap, count, 'c');
+      count = ansi_osc52_add_selector(out, out_cap, count, 'p');
+      count = ansi_osc52_add_selector(out, out_cap, count, 's');
+      continue;
+    }
+    if(!ansi_is_osc52_selector_char(sel)) {
+      invalid = 1;
+      continue;
+    }
+    count = ansi_osc52_add_selector(out, out_cap, count, sel);
+  }
+
+  if(invalid_out)
+    *invalid_out = invalid;
+  return count;
+}
+
+static void
+ansi_apply_osc_command(struct console_tty_state *t)
+{
+  int i;
+  int cmd;
+  int has_cmd;
+  int text_off;
+
+  if(!t)
+    return;
+
+  if(t->ansi.osc_len <= 0) {
+    t->ansi.osc_buf[0] = 0;
+    return;
+  }
+  if(t->ansi.osc_len >= (int)sizeof(t->ansi.osc_buf))
+    t->ansi.osc_len = (int)sizeof(t->ansi.osc_buf) - 1;
+  t->ansi.osc_buf[t->ansi.osc_len] = 0;
+
+  cmd = 0;
+  has_cmd = 0;
+  text_off = -1;
+  for(i = 0; i < t->ansi.osc_len; i++) {
+    char ch;
+
+    ch = t->ansi.osc_buf[i];
+    if(ch == ';') {
+      text_off = i + 1;
+      break;
+    }
+    if(ch < '0' || ch > '9') {
+      has_cmd = 0;
+      break;
+    }
+    has_cmd = 1;
+    cmd = cmd * 10 + (ch - '0');
+  }
+
+  if(!has_cmd || text_off < 0 || text_off > t->ansi.osc_len)
+    return;
+
+  if(cmd == 52) {
+    const char *text;
+    const char *sel_text;
+    int text_len;
+    int sel_end;
+    int sel_len;
+    char sels[OSC52_SLOTS];
+    int sels_count;
+    int sel_invalid;
+    int slot;
+    int wrote_any;
+    int truncated;
+    int invalid;
+    char b64_tmp[256];
+
+    text = t->ansi.osc_buf + text_off;
+    text_len = t->ansi.osc_len - text_off;
+    sel_end = -1;
+    for(i = 0; i < text_len; i++) {
+      if(text[i] == ';') {
+        sel_end = i;
+        break;
+      }
+    }
+    if(sel_end < 0)
+      return;
+
+    sel_text = text;
+    sel_len = sel_end;
+
+    sels_count = ansi_osc52_collect_selectors(sel_text,
+                                              sel_len,
+                                              sels,
+                                              OSC52_SLOTS,
+                                              &sel_invalid);
+    if(sel_invalid)
+      return;
+    if(sels_count <= 0)
+      return;
+
+    text += sel_end + 1;
+    text_len -= sel_end + 1;
+
+    if(text_len == 1 && text[0] == '?') {
+      char reply_sel;
+      const char *reply_data;
+
+      reply_sel = sels[0];
+      reply_data = "";
+      for(i = 0; i < sels_count; i++) {
+        slot = ansi_osc52_slot_index(t, sels[i], 0);
+        if(slot >= 0) {
+          reply_sel = sels[i];
+          reply_data = t->ansi.osc_clipboard_slot_b64[slot];
+          break;
+        }
+      }
+
+      console_queue_osc52_reply_locked(t, reply_sel, reply_data);
+      return;
+    }
+
+    /* Empty data field clears clipboard state for the selected slot. */
+    if(text_len == 0) {
+      for(i = 0; i < sels_count; i++) {
+        slot = ansi_osc52_slot_index(t, sels[i], 1);
+        if(slot >= 0)
+          t->ansi.osc_clipboard_slot_b64[slot][0] = 0;
+      }
+      return;
+    }
+
+    truncated = 0;
+    invalid = 0;
+    ansi_copy_osc52_b64(b64_tmp,
+                        sizeof(b64_tmp),
+                        text,
+                        text_len,
+                        &truncated,
+                        &invalid);
+    /* Reject malformed or oversized payload updates and keep previous state. */
+    if(invalid || truncated)
+      return;
+
+    wrote_any = 0;
+    for(i = 0; i < sels_count; i++) {
+      slot = ansi_osc52_slot_index(t, sels[i], 1);
+      if(slot < 0)
+        continue;
+      memmove(t->ansi.osc_clipboard_slot_b64[slot],
+              b64_tmp,
+              strlen(b64_tmp) + 1);
+      wrote_any = 1;
+    }
+
+    if(!wrote_any)
+      return;
+    return;
+  }
+
+  if(cmd == 0 || cmd == 1)
+    ansi_copy_osc_text(t->ansi.osc_icon, sizeof(t->ansi.osc_icon),
+                       t->ansi.osc_buf + text_off, t->ansi.osc_len - text_off);
+  if(cmd == 0 || cmd == 2)
+    ansi_copy_osc_text(t->ansi.osc_title, sizeof(t->ansi.osc_title),
+                       t->ansi.osc_buf + text_off, t->ansi.osc_len - text_off);
+}
+
+static void
+ansi_apply_cursor_style(struct console_tty_state *t, int style)
+{
+  int s;
+
+  if(!t)
+    return;
+
+  s = style;
+  if(s <= 0)
+    s = 1;
+  if(s > 6)
+    s = 6;
+
+  t->ansi.cursor_style = s;
+  t->ansi.cursor_visible = 1;
+  if(s == 1 || s == 3 || s == 5)
+    t->ansi.cursor_blink = 1;
+  else
+    t->ansi.cursor_blink = 0;
+}
+
 static int
 ansi_mode_state(struct console_tty_state *t, int mode)
 {
@@ -2839,13 +3245,13 @@ ansi_private_mode_state(struct console_tty_state *t, int mode)
   if(mode == 1001)
     return t->ansi.mouse_highlight ? 1 : 2;
   if(mode == 1002)
-    return t->ansi.mouse_x11 ? 1 : 2;
+    return t->ansi.mouse_btn_event ? 1 : 2;
   if(mode == 1003)
-    return t->ansi.mouse_x11 ? 1 : 2;
+    return t->ansi.mouse_any_event ? 1 : 2;
   if(mode == 1004)
     return t->ansi.focus_event ? 1 : 2;
   if(mode == 1005)
-    return t->ansi.mouse_sgr ? 1 : 2;
+    return t->ansi.mouse_utf8 ? 1 : 2;
   if(mode == 1006)
     return t->ansi.mouse_sgr ? 1 : 2;
   if(mode == 1007)
@@ -2901,8 +3307,11 @@ ansi_soft_reset(struct console_tty_state *t)
   t->ansi.dim = 0;
   t->ansi.cursor_blink = 1;
   t->ansi.cursor_visible = 1;
+  t->ansi.cursor_style = 1;
   t->ansi.mouse_x10 = 0;
-  t->ansi.mouse_x11 = 0;
+  t->ansi.mouse_btn_event = 0;
+  t->ansi.mouse_any_event = 0;
+  t->ansi.mouse_utf8 = 0;
   t->ansi.mouse_sgr = 0;
   t->ansi.mouse_urxvt = 0;
   t->ansi.mouse_highlight = 0;
@@ -2915,6 +3324,8 @@ ansi_soft_reset(struct console_tty_state *t)
   t->ansi.alt_keypad = 0;
   t->ansi.keyboard_select = 0;
   t->ansi.bracketed_paste = 0;
+  t->ansi.mouse_col = 1;
+  t->ansi.mouse_row = 1;
   t->ansi.last_glyph = -1;
   t->ansi.utf8_need = 0;
   t->ansi.param_overflow = 0;
@@ -2922,6 +3333,15 @@ ansi_soft_reset(struct console_tty_state *t)
   t->ansi.greater = 0;
   t->ansi.dollar = 0;
   t->ansi.bang = 0;
+  t->ansi.squote = 0;
+  t->ansi.quote = 0;
+  t->ansi.space = 0;
+  t->ansi.osc_len = 0;
+  memmove(t->ansi.osc_icon, "auxv6", 6);
+  memmove(t->ansi.osc_title, "auxv6", 6);
+  memset(t->ansi.osc_clipboard_slot_sel, 0, sizeof(t->ansi.osc_clipboard_slot_sel));
+  t->ansi.osc_clipboard_slot_sel[0] = 'c';
+  memset(t->ansi.osc_clipboard_slot_b64, 0, sizeof(t->ansi.osc_clipboard_slot_b64));
   ansi_reset_tabs(t);
 }
 
@@ -3086,6 +3506,22 @@ console_queue_osc_reply_locked(struct console_tty_state *t, char sel, const char
   console_queue_input_byte_locked(t, sel);
   if(text)
     console_queue_input_cstr_locked(t, text);
+  console_queue_input_byte_locked(t, '\033');
+  console_queue_input_byte_locked(t, '\\');
+  t->input.w = t->input.e;
+  wakeup(&t->input.r);
+}
+
+static void
+console_queue_osc52_reply_locked(struct console_tty_state *t, char sel, const char *data)
+{
+  console_queue_input_byte_locked(t, '\033');
+  console_queue_input_byte_locked(t, ']');
+  console_queue_input_cstr_locked(t, "52;");
+  console_queue_input_byte_locked(t, sel ? sel : 'c');
+  console_queue_input_byte_locked(t, ';');
+  if(data)
+    console_queue_input_cstr_locked(t, data);
   console_queue_input_byte_locked(t, '\033');
   console_queue_input_byte_locked(t, '\\');
   t->input.w = t->input.e;
@@ -3371,9 +3807,17 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
       t->ansi.greater = 0;
       t->ansi.dollar = 0;
       t->ansi.bang = 0;
+      t->ansi.squote = 0;
+      t->ansi.quote = 0;
+      t->ansi.space = 0;
       memset(t->ansi.params, 0, sizeof(t->ansi.params));
       return;
     }
+    if(c == 0x9D) { t->ansi.state = ANSI_OSC; t->ansi.osc_len = 0; t->ansi.osc_buf[0] = 0; return; }
+    if(c == 0x90) { t->ansi.state = ANSI_DCS; return; }
+    if(c == 0x98) { t->ansi.state = ANSI_SOS; return; }
+    if(c == 0x9E) { t->ansi.state = ANSI_PM; return; }
+    if(c == 0x9F) { t->ansi.state = ANSI_APC; return; }
     if(c == 0x0E) { t->ansi.gl_charset = 1; return; }  /* SO: shift out, use G1 */
     if(c == 0x0F) { t->ansi.gl_charset = 0; return; }  /* SI: shift in, use G0 */
     if(c == '\r') { t->cursor = row * cols; return; }
@@ -3437,11 +3881,15 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
 
   case ANSI_ESC:
     if(c == '[') {
-      t->ansi.state=ANSI_CSI; t->ansi.nparams=0; t->ansi.cur_param=0; t->ansi.param_overflow=0; t->ansi.question=0; t->ansi.greater=0; t->ansi.dollar=0; t->ansi.bang=0;
+      t->ansi.state=ANSI_CSI; t->ansi.nparams=0; t->ansi.cur_param=0; t->ansi.param_overflow=0; t->ansi.question=0; t->ansi.greater=0; t->ansi.dollar=0; t->ansi.bang=0; t->ansi.squote=0; t->ansi.quote=0; t->ansi.space=0;
       memset(t->ansi.params, 0, sizeof(t->ansi.params));
       return;
     }
-    if(c == ']') { t->ansi.state=ANSI_OSC; return; }
+    if(c == ']') { t->ansi.state=ANSI_OSC; t->ansi.osc_len=0; t->ansi.osc_buf[0]=0; return; }
+    if(c == 'P') { t->ansi.state = ANSI_DCS; return; }
+    if(c == 'X') { t->ansi.state = ANSI_SOS; return; }
+    if(c == '^') { t->ansi.state = ANSI_PM; return; }
+    if(c == '_') { t->ansi.state = ANSI_APC; return; }
     if(c == '(') { t->ansi.state=ANSI_ESC_G0; return; }
     if(c == ')') { t->ansi.state=ANSI_ESC_G1; return; }
     if(c == '=') { t->ansi.keypad_app = 1; t->ansi.state = ANSI_NORMAL; return; }
@@ -3475,6 +3923,7 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
 
   case ANSI_OSC:
     if(c == '\a' || c == 0x9C) {
+      ansi_apply_osc_command(t);
       t->ansi.state = ANSI_NORMAL;
       return;
     }
@@ -3482,13 +3931,93 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
       t->ansi.state = ANSI_OSC_ESC;
       return;
     }
+    if(t->ansi.osc_len < (int)sizeof(t->ansi.osc_buf) - 1)
+      t->ansi.osc_buf[t->ansi.osc_len++] = (char)c;
     return;
 
   case ANSI_OSC_ESC:
+    if(c == '\\' || c == '\a' || c == 0x9C) {
+      ansi_apply_osc_command(t);
+      t->ansi.state = ANSI_NORMAL;
+    } else {
+      if(t->ansi.osc_len < (int)sizeof(t->ansi.osc_buf) - 1)
+        t->ansi.osc_buf[t->ansi.osc_len++] = 0x1B;
+      if(t->ansi.osc_len < (int)sizeof(t->ansi.osc_buf) - 1)
+        t->ansi.osc_buf[t->ansi.osc_len++] = (char)c;
+      t->ansi.state = ANSI_OSC;
+    }
+    return;
+
+  case ANSI_DCS:
+    if(c == '\a' || c == 0x9C) {
+      t->ansi.state = ANSI_NORMAL;
+      return;
+    }
+    if(c == 0x1B) {
+      t->ansi.state = ANSI_DCS_ESC;
+      return;
+    }
+    return;
+
+  case ANSI_DCS_ESC:
     if(c == '\\' || c == '\a' || c == 0x9C)
       t->ansi.state = ANSI_NORMAL;
     else
-      t->ansi.state = ANSI_OSC;
+      t->ansi.state = ANSI_DCS;
+    return;
+
+  case ANSI_PM:
+    if(c == '\a' || c == 0x9C) {
+      t->ansi.state = ANSI_NORMAL;
+      return;
+    }
+    if(c == 0x1B) {
+      t->ansi.state = ANSI_PM_ESC;
+      return;
+    }
+    return;
+
+  case ANSI_PM_ESC:
+    if(c == '\\' || c == '\a' || c == 0x9C)
+      t->ansi.state = ANSI_NORMAL;
+    else
+      t->ansi.state = ANSI_PM;
+    return;
+
+  case ANSI_APC:
+    if(c == '\a' || c == 0x9C) {
+      t->ansi.state = ANSI_NORMAL;
+      return;
+    }
+    if(c == 0x1B) {
+      t->ansi.state = ANSI_APC_ESC;
+      return;
+    }
+    return;
+
+  case ANSI_APC_ESC:
+    if(c == '\\' || c == '\a' || c == 0x9C)
+      t->ansi.state = ANSI_NORMAL;
+    else
+      t->ansi.state = ANSI_APC;
+    return;
+
+  case ANSI_SOS:
+    if(c == '\a' || c == 0x9C) {
+      t->ansi.state = ANSI_NORMAL;
+      return;
+    }
+    if(c == 0x1B) {
+      t->ansi.state = ANSI_SOS_ESC;
+      return;
+    }
+    return;
+
+  case ANSI_SOS_ESC:
+    if(c == '\\' || c == '\a' || c == 0x9C)
+      t->ansi.state = ANSI_NORMAL;
+    else
+      t->ansi.state = ANSI_SOS;
     return;
 
   case ANSI_ESC_G0:
@@ -3504,11 +4033,13 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
   case ANSI_CSI:
     if(c == 0x1B) {
       /* Abort malformed/incomplete CSI and treat ESC as a fresh introducer. */
+      t->ansi.csi_cancelled_total++;
       t->ansi.state = ANSI_ESC;
       return;
     }
     if(c == 0x18 || c == 0x1A) {
       /* CAN/SUB cancel the in-flight control sequence. */
+      t->ansi.csi_cancelled_total++;
       t->ansi.state = ANSI_NORMAL;
       return;
     }
@@ -3521,6 +4052,9 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
       t->ansi.greater = 0;
       t->ansi.dollar = 0;
       t->ansi.bang = 0;
+      t->ansi.squote = 0;
+      t->ansi.quote = 0;
+      t->ansi.space = 0;
       memset(t->ansi.params, 0, sizeof(t->ansi.params));
       return;
     }
@@ -3528,10 +4062,13 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
     if(c == '>') { t->ansi.greater=1; return; }
     if(c == '$') { t->ansi.dollar=1; return; }
     if(c == '!') { t->ansi.bang=1; return; }
+    if(c == '\'') { t->ansi.squote=1; return; }
+    if(c == '"') { t->ansi.quote=1; return; }
+    if(c == ' ') { t->ansi.space=1; return; }
     if(c >= '0' && c <= '9') {
       t->ansi.cur_param = t->ansi.cur_param*10 + (c-'0'); return;
     }
-    if(c == ';') {
+    if(c == ';' || c == ':') {
       if(t->ansi.nparams < 8)
         t->ansi.params[t->ansi.nparams++] = t->ansi.cur_param;
       else
@@ -3544,8 +4081,10 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
       t->ansi.param_overflow = 1;
     t->ansi.cur_param = 0; t->ansi.state = ANSI_NORMAL;
 
-    if(t->ansi.param_overflow)
+    if(t->ansi.param_overflow) {
+      t->ansi.csi_param_overflow_total++;
       return;
+    }
 
     p1 = (t->ansi.nparams>=1) ? t->ansi.params[0] : 0;
     p2 = (t->ansi.nparams>=2) ? t->ansi.params[1] : 0;
@@ -3782,8 +4321,29 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
     case 'p':
       if(t->ansi.bang)
         ansi_soft_reset(t);
-      else if(t->ansi.dollar)
-        console_queue_mode_reply_locked(t, t->ansi.question, p1);
+      else if(t->ansi.dollar) {
+        int i2;
+
+        if(t->ansi.nparams == 0) {
+          console_queue_mode_reply_locked(t, t->ansi.question, p1);
+        } else {
+          for(i2 = 0; i2 < t->ansi.nparams; i2++)
+            console_queue_mode_reply_locked(t, t->ansi.question, t->ansi.params[i2]);
+        }
+      }
+      else if(t->ansi.quote) {
+        /* DECSCL (CSI Ps;Ps " p): accepted for compatibility, no-op for now. */
+      }
+      else if(t->ansi.squote) {
+        /* CSI ... ' p family: accepted for compatibility, no-op for now. */
+      }
+      break;
+    case 'q':
+      if(t->ansi.space && !t->ansi.question && !t->ansi.greater && !t->ansi.dollar && !t->ansi.bang)
+        ansi_apply_cursor_style(t, p1);
+      else if(t->ansi.squote) {
+        /* CSI ... ' q family: accepted for compatibility, no-op for now. */
+      }
       break;
     case 'n':
       if(!t->ansi.bang)
@@ -3824,10 +4384,10 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
           console_queue_pair_t_reply_locked(t, 9, rows, cols);
           break;
         case 20:
-          console_queue_osc_reply_locked(t, 'L', "auxv6");
+          console_queue_osc_reply_locked(t, 'L', t->ansi.osc_icon);
           break;
         case 21:
-          console_queue_osc_reply_locked(t, 'l', "auxv6");
+          console_queue_osc_reply_locked(t, 'l', t->ansi.osc_title);
           break;
         default:
           break;
@@ -3866,7 +4426,29 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
         }
       }
       break;
-    default: break;
+    default:
+      if(t->ansi.question || t->ansi.greater || t->ansi.dollar ||
+         t->ansi.bang || t->ansi.squote || t->ansi.quote || t->ansi.space) {
+        t->ansi.csi_unsupported_intermediate_total++;
+        if(t->ansi.question)
+          t->ansi.csi_unknown_question_total++;
+        if(t->ansi.greater)
+          t->ansi.csi_unknown_greater_total++;
+        if(t->ansi.dollar)
+          t->ansi.csi_unknown_dollar_total++;
+        if(t->ansi.bang)
+          t->ansi.csi_unknown_bang_total++;
+        if(t->ansi.squote)
+          t->ansi.csi_unknown_squote_total++;
+        if(t->ansi.quote)
+          t->ansi.csi_unknown_quote_total++;
+        if(t->ansi.space)
+          t->ansi.csi_unknown_space_total++;
+      } else {
+        t->ansi.csi_unknown_total++;
+        t->ansi.csi_unknown_bare_total++;
+      }
+      break;
     }
     return;
   }
@@ -3927,6 +4509,92 @@ consputc_ansi(struct console_tty_state *t, int c)
 #define KBDMOD_SHIFT (1U << 0)
 #define KBDMOD_CTL   (1U << 1)
 #define KBDMOD_ALT   (1U << 2)
+
+static void
+console_input_enqueue_seq_locked(struct console_tty_state *t, const char *seq)
+{
+  const char *p;
+
+  if(!t || !seq)
+    return;
+  for(p = seq; *p && t->input.e - t->input.r < INPUT_BUF; p++)
+    t->input.buf[t->input.e++ % INPUT_BUF] = *p;
+}
+
+static void
+console_input_emit_focus_event_locked(struct console_tty_state *t, int focus_in)
+{
+  if(!t || !t->ansi.focus_event)
+    return;
+  console_input_enqueue_seq_locked(t, focus_in ? "\033[I" : "\033[O");
+  t->input.w = t->input.e;
+  wakeup(&t->input.r);
+}
+
+static void
+console_switch_active_tty_locked(int next_tty)
+{
+  struct console_tty_state *prev;
+  struct console_tty_state *next;
+  int clamped;
+
+  clamped = console_tty_index_clamp(next_tty);
+  if(clamped == console_active_tty)
+    return;
+
+  prev = console_tty_by_index(console_active_tty);
+  next = console_tty_by_index(clamped);
+  console_active_tty = clamped;
+
+  console_input_emit_focus_event_locked(prev, 0);
+  console_input_emit_focus_event_locked(next, 1);
+}
+
+static void
+console_input_enqueue_csi_mod_locked(struct console_tty_state *t,
+                                     int p1,
+                                     int mod,
+                                     int final)
+{
+  if(!t)
+    return;
+  console_queue_input_byte_locked(t, '\033');
+  console_queue_input_byte_locked(t, '[');
+  console_queue_input_uint_locked(t, p1);
+  console_queue_input_byte_locked(t, ';');
+  console_queue_input_uint_locked(t, mod);
+  console_queue_input_byte_locked(t, final);
+}
+
+static void
+console_input_enqueue_csi_tilde_mod_locked(struct console_tty_state *t,
+                                           int p1,
+                                           int mod)
+{
+  if(!t)
+    return;
+  console_queue_input_byte_locked(t, '\033');
+  console_queue_input_byte_locked(t, '[');
+  console_queue_input_uint_locked(t, p1);
+  console_queue_input_byte_locked(t, ';');
+  console_queue_input_uint_locked(t, mod);
+  console_queue_input_byte_locked(t, '~');
+}
+
+static int
+console_xterm_mod_param(uint mods)
+{
+  int param;
+
+  param = 1;
+  if(mods & KBDMOD_SHIFT)
+    param += 1;
+  if(mods & KBDMOD_ALT)
+    param += 2;
+  if(mods & KBDMOD_CTL)
+    param += 4;
+  return param;
+}
 
 static int
 console_utf8_erase_len(struct console_tty_state *t)
@@ -4048,7 +4716,7 @@ void
 console_set_active_tty(int tty)
 {
   acquire(&cons.tty_lock);
-  console_active_tty = console_tty_index_clamp(tty);
+  console_switch_active_tty_locked(tty);
   console_flush_tty_locked(console_tty_by_index(console_active_tty));
   release(&cons.tty_lock);
 }
@@ -4265,12 +4933,13 @@ consoleintr(int (*getc)(void))
 {
   struct console_tty_state *t;
   int c, doprocdump = 0;
+  uint mods;
+  int mod_param;
   int canonical, echo, isig;
   int pending_pgid;
   uint pending_signals;
   uchar vintr, vquit, vsusp, vkill, verase, veof, veol;
   const char *esc_seq;
-  const char *p;
 
   pending_pgid = 0;
   pending_signals = 0;
@@ -4280,7 +4949,7 @@ consoleintr(int (*getc)(void))
     console_input_event_count++;
 
     if(c == KEY_F1 || c == KEY_F2 || c == KEY_F3 || c == KEY_F4) {
-      console_active_tty = c - KEY_F1;
+      console_switch_active_tty_locked(c - KEY_F1);
       console_flush_tty_locked(console_tty_by_index(console_active_tty));
       continue;
     }
@@ -4347,36 +5016,154 @@ consoleintr(int (*getc)(void))
       if(t->termios.c_cc[VSTART] && c == (int)t->termios.c_cc[VSTART]) continue;
     }
 
+    mods = kbdmodstate();
+    mods &= (KBDMOD_SHIFT | KBDMOD_CTL | KBDMOD_ALT);
+    mod_param = console_xterm_mod_param(mods);
+
     /* Special keyboard keys: inject ANSI escape sequences */
     esc_seq = 0;
     switch(c) {
-    case KEY_UP:   esc_seq = t->ansi.cursor_keys_app ? "\033OA" : "\033[A";  break;
-    case KEY_DN:   esc_seq = t->ansi.cursor_keys_app ? "\033OB" : "\033[B";  break;
-    case KEY_RT:   esc_seq = t->ansi.cursor_keys_app ? "\033OC" : "\033[C";  break;
-    case KEY_LF:   esc_seq = t->ansi.cursor_keys_app ? "\033OD" : "\033[D";  break;
-    case KEY_HOME: esc_seq = "\033[H";  break;
-    case KEY_END:  esc_seq = "\033[F";  break;
-    case KEY_PGUP: esc_seq = "\033[5~"; break;
-    case KEY_PGDN: esc_seq = "\033[6~"; break;
-    case KEY_INS:  esc_seq = "\033[2~"; break;
-    case KEY_DEL:  esc_seq = "\033[3~"; break;
-    case KEY_F1:   esc_seq = "\033[11~"; break;
-    case KEY_F2:   esc_seq = "\033[12~"; break;
-    case KEY_F3:   esc_seq = "\033[13~"; break;
-    case KEY_F4:   esc_seq = "\033[14~"; break;
-    case KEY_F5:   esc_seq = "\033[15~"; break;
-    case KEY_F6:   esc_seq = "\033[17~"; break;
-    case KEY_F7:   esc_seq = "\033[18~"; break;
-    case KEY_F8:   esc_seq = "\033[19~"; break;
-    case KEY_F9:   esc_seq = "\033[20~"; break;
-    case KEY_F10:  esc_seq = "\033[21~"; break;
-    case KEY_F11:  esc_seq = "\033[23~"; break;
-    case KEY_F12:  esc_seq = "\033[24~"; break;
+    case KEY_UP:
+      if(mod_param > 1)
+        console_input_enqueue_csi_mod_locked(t, 1, mod_param, 'A');
+      else
+        esc_seq = t->ansi.cursor_keys_app ? "\033OA" : "\033[A";
+      break;
+    case KEY_DN:
+      if(mod_param > 1)
+        console_input_enqueue_csi_mod_locked(t, 1, mod_param, 'B');
+      else
+        esc_seq = t->ansi.cursor_keys_app ? "\033OB" : "\033[B";
+      break;
+    case KEY_RT:
+      if(mod_param > 1)
+        console_input_enqueue_csi_mod_locked(t, 1, mod_param, 'C');
+      else
+        esc_seq = t->ansi.cursor_keys_app ? "\033OC" : "\033[C";
+      break;
+    case KEY_LF:
+      if(mod_param > 1)
+        console_input_enqueue_csi_mod_locked(t, 1, mod_param, 'D');
+      else
+        esc_seq = t->ansi.cursor_keys_app ? "\033OD" : "\033[D";
+      break;
+    case KEY_HOME:
+      if(mod_param > 1)
+        console_input_enqueue_csi_mod_locked(t, 1, mod_param, 'H');
+      else
+        esc_seq = "\033[H";
+      break;
+    case KEY_END:
+      if(mod_param > 1)
+        console_input_enqueue_csi_mod_locked(t, 1, mod_param, 'F');
+      else
+        esc_seq = "\033[F";
+      break;
+    case KEY_PGUP:
+      if(mod_param > 1)
+        console_input_enqueue_csi_tilde_mod_locked(t, 5, mod_param);
+      else
+        esc_seq = "\033[5~";
+      break;
+    case KEY_PGDN:
+      if(mod_param > 1)
+        console_input_enqueue_csi_tilde_mod_locked(t, 6, mod_param);
+      else
+        esc_seq = "\033[6~";
+      break;
+    case KEY_INS:
+      if(mod_param > 1)
+        console_input_enqueue_csi_tilde_mod_locked(t, 2, mod_param);
+      else
+        esc_seq = "\033[2~";
+      break;
+    case KEY_DEL:
+      if(mod_param > 1)
+        console_input_enqueue_csi_tilde_mod_locked(t, 3, mod_param);
+      else
+        esc_seq = "\033[3~";
+      break;
+    case KEY_F1:
+      if(mod_param > 1)
+        console_input_enqueue_csi_tilde_mod_locked(t, 11, mod_param);
+      else
+        esc_seq = "\033[11~";
+      break;
+    case KEY_F2:
+      if(mod_param > 1)
+        console_input_enqueue_csi_tilde_mod_locked(t, 12, mod_param);
+      else
+        esc_seq = "\033[12~";
+      break;
+    case KEY_F3:
+      if(mod_param > 1)
+        console_input_enqueue_csi_tilde_mod_locked(t, 13, mod_param);
+      else
+        esc_seq = "\033[13~";
+      break;
+    case KEY_F4:
+      if(mod_param > 1)
+        console_input_enqueue_csi_tilde_mod_locked(t, 14, mod_param);
+      else
+        esc_seq = "\033[14~";
+      break;
+    case KEY_F5:
+      if(mod_param > 1)
+        console_input_enqueue_csi_tilde_mod_locked(t, 15, mod_param);
+      else
+        esc_seq = "\033[15~";
+      break;
+    case KEY_F6:
+      if(mod_param > 1)
+        console_input_enqueue_csi_tilde_mod_locked(t, 17, mod_param);
+      else
+        esc_seq = "\033[17~";
+      break;
+    case KEY_F7:
+      if(mod_param > 1)
+        console_input_enqueue_csi_tilde_mod_locked(t, 18, mod_param);
+      else
+        esc_seq = "\033[18~";
+      break;
+    case KEY_F8:
+      if(mod_param > 1)
+        console_input_enqueue_csi_tilde_mod_locked(t, 19, mod_param);
+      else
+        esc_seq = "\033[19~";
+      break;
+    case KEY_F9:
+      if(mod_param > 1)
+        console_input_enqueue_csi_tilde_mod_locked(t, 20, mod_param);
+      else
+        esc_seq = "\033[20~";
+      break;
+    case KEY_F10:
+      if(mod_param > 1)
+        console_input_enqueue_csi_tilde_mod_locked(t, 21, mod_param);
+      else
+        esc_seq = "\033[21~";
+      break;
+    case KEY_F11:
+      if(mod_param > 1)
+        console_input_enqueue_csi_tilde_mod_locked(t, 23, mod_param);
+      else
+        esc_seq = "\033[23~";
+      break;
+    case KEY_F12:
+      if(mod_param > 1)
+        console_input_enqueue_csi_tilde_mod_locked(t, 24, mod_param);
+      else
+        esc_seq = "\033[24~";
+      break;
     default: break;
     }
     if(esc_seq) {
-      for(p = esc_seq; *p && t->input.e - t->input.r < INPUT_BUF; p++)
-        t->input.buf[t->input.e++ % INPUT_BUF] = *p;
+      console_input_enqueue_seq_locked(t, esc_seq);
+      t->input.w = t->input.e;
+      wakeup(&t->input.r);
+      continue;
+    }
+    if(c >= KEY_HOME && c <= KEY_F12) {
       t->input.w = t->input.e;
       wakeup(&t->input.r);
       continue;
@@ -4460,6 +5247,23 @@ void
 console_mouse_packet(int dx, int dy, uchar buttons)
 {
   struct aux_mouse_event evt;
+  struct console_tty_state *t;
+  int cols;
+  int rows;
+  int x;
+  int y;
+  int changed_bits;
+  int is_motion;
+  int pressed_button;
+  int released_button;
+  int motion_btn;
+  int cb;
+  int cx;
+  int cy;
+  int report;
+  uint mods;
+  int release_event;
+  uchar prev_buttons;
   uint cap;
 
   if(dx == 0 && dy == 0 && buttons == console_mouse_buttons)
@@ -4468,10 +5272,173 @@ console_mouse_packet(int dx, int dy, uchar buttons)
   evt.dx = (short)dx;
   evt.dy = (short)dy;
   evt.buttons = buttons;
-  evt.changed = (uchar)(buttons ^ console_mouse_buttons);
+  prev_buttons = console_mouse_buttons;
+  evt.changed = (uchar)(buttons ^ prev_buttons);
   console_mouse_buttons = buttons;
 
   acquire(&cons.input_lock);
+  t = console_tty_by_index(console_active_tty);
+  if(t) {
+    cols = console_tty_cols(t);
+    rows = console_tty_rows(t);
+    if(cols < 1)
+      cols = 1;
+    if(rows < 1)
+      rows = 1;
+
+    if(t->ansi.mouse_col < 1 || t->ansi.mouse_col > cols)
+      t->ansi.mouse_col = 1;
+    if(t->ansi.mouse_row < 1 || t->ansi.mouse_row > rows)
+      t->ansi.mouse_row = 1;
+
+    x = t->ansi.mouse_col + dx;
+    y = t->ansi.mouse_row - dy;
+    if(x < 1)
+      x = 1;
+    if(x > cols)
+      x = cols;
+    if(y < 1)
+      y = 1;
+    if(y > rows)
+      y = rows;
+    t->ansi.mouse_col = x;
+    t->ansi.mouse_row = y;
+
+    changed_bits = (int)(prev_buttons ^ buttons) & 0x07;
+    is_motion = (dx != 0 || dy != 0) ? 1 : 0;
+    pressed_button = -1;
+    released_button = -1;
+    if(changed_bits & 0x01) {
+      if(buttons & 0x01)
+        pressed_button = 0;
+      else
+        released_button = 0;
+    } else if(changed_bits & 0x02) {
+      if(buttons & 0x02)
+        pressed_button = 1;
+      else
+        released_button = 1;
+    } else if(changed_bits & 0x04) {
+      if(buttons & 0x04)
+        pressed_button = 2;
+      else
+        released_button = 2;
+    }
+
+    report = 0;
+    release_event = 0;
+    cb = 3;
+    if(pressed_button >= 0) {
+      report = 1;
+      cb = pressed_button;
+    } else if(released_button >= 0) {
+      if(!t->ansi.mouse_x10) {
+        report = 1;
+        release_event = 1;
+        cb = 3;
+      }
+    } else if(is_motion) {
+      if(t->ansi.mouse_any_event ||
+         (t->ansi.mouse_btn_event && (buttons & 0x07) != 0)) {
+        report = 1;
+        if(buttons & 0x01)
+          motion_btn = 0;
+        else if(buttons & 0x02)
+          motion_btn = 1;
+        else if(buttons & 0x04)
+          motion_btn = 2;
+        else
+          motion_btn = 3;
+        cb = motion_btn | 32;
+      }
+    }
+
+    if(report && !t->ansi.mouse_x10 && !(t->ansi.mouse_btn_event || t->ansi.mouse_any_event) && !changed_bits)
+      report = 0;
+
+    if(report && (t->ansi.mouse_x10 || t->ansi.mouse_btn_event || t->ansi.mouse_any_event)) {
+      mods = kbdmodstate();
+      if(mods & KBDMOD_SHIFT)
+        cb |= 4;
+      if(mods & KBDMOD_ALT)
+        cb |= 8;
+      if(mods & KBDMOD_CTL)
+        cb |= 16;
+
+      cx = t->ansi.mouse_col;
+      cy = t->ansi.mouse_row;
+
+      if(t->ansi.mouse_sgr) {
+        console_queue_input_byte_locked(t, '\033');
+        console_queue_input_byte_locked(t, '[');
+        console_queue_input_byte_locked(t, '<');
+        console_queue_input_uint_locked(t, cb);
+        console_queue_input_byte_locked(t, ';');
+        console_queue_input_uint_locked(t, cx);
+        console_queue_input_byte_locked(t, ';');
+        console_queue_input_uint_locked(t, cy);
+        console_queue_input_byte_locked(t, release_event ? 'm' : 'M');
+        t->input.w = t->input.e;
+        wakeup(&t->input.r);
+      } else if(t->ansi.mouse_urxvt) {
+        console_queue_input_byte_locked(t, '\033');
+        console_queue_input_byte_locked(t, '[');
+        console_queue_input_uint_locked(t, cb);
+        console_queue_input_byte_locked(t, ';');
+        console_queue_input_uint_locked(t, cx);
+        console_queue_input_byte_locked(t, ';');
+        console_queue_input_uint_locked(t, cy);
+        console_queue_input_byte_locked(t, 'M');
+        t->input.w = t->input.e;
+        wakeup(&t->input.r);
+      } else {
+        int c1;
+        int c2;
+        int c3;
+
+        c1 = cb + 32;
+        c2 = cx + 32;
+        c3 = cy + 32;
+        if(!t->ansi.mouse_utf8) {
+          if(c1 > 255) c1 = 255;
+          if(c2 > 255) c2 = 255;
+          if(c3 > 255) c3 = 255;
+          console_queue_input_byte_locked(t, '\033');
+          console_queue_input_byte_locked(t, '[');
+          console_queue_input_byte_locked(t, 'M');
+          console_queue_input_byte_locked(t, (char)c1);
+          console_queue_input_byte_locked(t, (char)c2);
+          console_queue_input_byte_locked(t, (char)c3);
+        } else {
+          uint cpv[3];
+          int k;
+
+          cpv[0] = (uint)c1;
+          cpv[1] = (uint)c2;
+          cpv[2] = (uint)c3;
+          console_queue_input_byte_locked(t, '\033');
+          console_queue_input_byte_locked(t, '[');
+          console_queue_input_byte_locked(t, 'M');
+          for(k = 0; k < 3; k++) {
+            uint cp = cpv[k];
+            if(cp < 0x80) {
+              console_queue_input_byte_locked(t, (char)cp);
+            } else if(cp < 0x800) {
+              console_queue_input_byte_locked(t, (char)(0xC0 | ((cp >> 6) & 0x1F)));
+              console_queue_input_byte_locked(t, (char)(0x80 | (cp & 0x3F)));
+            } else {
+              console_queue_input_byte_locked(t, (char)(0xE0 | ((cp >> 12) & 0x0F)));
+              console_queue_input_byte_locked(t, (char)(0x80 | ((cp >> 6) & 0x3F)));
+              console_queue_input_byte_locked(t, (char)(0x80 | (cp & 0x3F)));
+            }
+          }
+        }
+        t->input.w = t->input.e;
+        wakeup(&t->input.r);
+      }
+    }
+  }
+
   cap = (uint)(sizeof(console_mouse.buf) / sizeof(console_mouse.buf[0]));
   if(console_mouse.w - console_mouse.r < cap) {
     console_mouse.buf[console_mouse.w++ % cap] = evt;

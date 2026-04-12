@@ -710,6 +710,30 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     }
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "input_events ", gfx.input_events) < 0)
       return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "csi_unknown_total ", gfx.csi_unknown_total) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "csi_unsupported_intermediate_total ", gfx.csi_unsupported_intermediate_total) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "csi_unknown_bare_total ", gfx.csi_unknown_bare_total) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "csi_unknown_question_total ", gfx.csi_unknown_question_total) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "csi_unknown_greater_total ", gfx.csi_unknown_greater_total) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "csi_unknown_dollar_total ", gfx.csi_unknown_dollar_total) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "csi_unknown_bang_total ", gfx.csi_unknown_bang_total) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "csi_unknown_squote_total ", gfx.csi_unknown_squote_total) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "csi_unknown_quote_total ", gfx.csi_unknown_quote_total) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "csi_unknown_space_total ", gfx.csi_unknown_space_total) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "csi_cancelled_total ", gfx.csi_cancelled_total) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "csi_param_overflow_total ", gfx.csi_param_overflow_total) < 0)
+      return -1;
 
     return procfs_copy_data(dst, off, n, buf, len);
   }

@@ -704,6 +704,9 @@ _termdemo: user/termdemo
 _termcheck: user/termcheck
 	cp user/termcheck _termcheck
 
+_xtermprobe: user/xtermprobe
+	cp user/xtermprobe _xtermprobe
+
 _tail: user/tail
 	cp user/tail _tail
 
@@ -1084,6 +1087,7 @@ UPROGS=\
 	_ahcitest\
 	_termdemo\
 	_termcheck\
+	_xtermprobe\
 	_tail\
 	_lsof\
 	_which\

@@ -124,6 +124,7 @@ Generated: 2026-04-11
 | whoami | targetfs/usr/share/man/whoami.md | 2026-04-01 | user/whoami.c | source-derived usage/options |
 | x6 | targetfs/usr/share/man/x6.md | 2026-04-06 | user/x6.c | phase-1 local display-server scaffold with simple bring-up protocol |
 | xinit | targetfs/usr/share/man/xinit.md | 2026-04-06 | user/xinit.c | launcher that starts x6, waits for readiness, and runs a client session |
+| xtermprobe | targetfs/usr/share/man/xtermprobe.md | 2026-04-12 | user/xtermprobe.c | interactive xterm input/mouse protocol probe for raw byte-level inspection of key, query, and mouse-report sequences |
 | zombie | targetfs/usr/share/man/zombie.md | 2026-04-01 | user/zombie.c | source-derived usage/options |
 
 ## Task Notes

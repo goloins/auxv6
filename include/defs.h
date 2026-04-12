@@ -126,6 +126,18 @@ struct console_gfx_debug_info {
 	uint vt_nonblank_cells;
 	int gfx_owner_pid;
 	uint input_events;
+	uint csi_unknown_total;
+	uint csi_unsupported_intermediate_total;
+	uint csi_unknown_bare_total;
+	uint csi_unknown_question_total;
+	uint csi_unknown_greater_total;
+	uint csi_unknown_dollar_total;
+	uint csi_unknown_bang_total;
+	uint csi_unknown_squote_total;
+	uint csi_unknown_quote_total;
+	uint csi_unknown_space_total;
+	uint csi_cancelled_total;
+	uint csi_param_overflow_total;
 };
 
 void            consoleinit(void);
