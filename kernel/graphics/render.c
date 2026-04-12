@@ -25,7 +25,24 @@ static const uint ansi16_rgb[16] = {
 
 static struct text_cell vt0_cells[VT_MAX_CELLS];
 static uchar vt0_dirty[VT_MAX_CELLS];
+static struct text_cell vt0_copy[VT_MAX_CELLS];
 static int vt0_in_use;
+
+static void
+render_init_blank_cells(struct text_cell *cells, uint n)
+{
+    uint i;
+
+    if(!cells)
+        return;
+    for(i = 0; i < n; i++) {
+        cells[i].codepoint = ' ';
+        cells[i].attr = 0;
+        cells[i].fg_color = 7;
+        cells[i].bg_color = 0;
+        cells[i].width = 1;
+    }
+}
 
 static uint
 ansi_index_to_pixel(struct vt_surface *vts, int idx)
@@ -297,7 +314,7 @@ vt_surface_create(uint width, uint height, struct render_context *ctx)
     n = width * height;
     vts->cells = vt0_cells;
     vts->dirty = vt0_dirty;
-    memset(vts->cells, 0, n * sizeof(struct text_cell));
+    render_init_blank_cells(vts->cells, n);
     memset(vts->dirty, 1, n);
     vts->any_dirty = 1;
     vt0_in_use = 1;
@@ -337,6 +354,11 @@ vt_surface_destroy(struct vt_surface *vts)
 int
 vt_surface_resize(struct vt_surface *vts, uint new_width, uint new_height)
 {
+    uint old_width;
+    uint old_height;
+    uint copy_w;
+    uint copy_h;
+    uint row;
     uint n;
 
     if(!vts || new_width == 0 || new_height == 0)
@@ -345,10 +367,34 @@ vt_surface_resize(struct vt_surface *vts, uint new_width, uint new_height)
         return -1;
 
     acquire(&vts->lock);
+    old_width = vts->width;
+    old_height = vts->height;
+
+    if(vts->cells && old_width > 0 && old_height > 0)
+        memmove(vt0_copy, vts->cells, old_width * old_height * sizeof(struct text_cell));
+
     vts->width = new_width;
     vts->height = new_height;
     n = new_width * new_height;
-    memset(vts->cells, 0, n * sizeof(struct text_cell));
+    render_init_blank_cells(vts->cells, n);
+
+    copy_w = old_width < new_width ? old_width : new_width;
+    copy_h = old_height < new_height ? old_height : new_height;
+    for(row = 0; row < copy_h; row++) {
+        memmove(&vts->cells[row * new_width],
+                &vt0_copy[row * old_width],
+                copy_w * sizeof(struct text_cell));
+    }
+
+    if(vts->cursor_x < 0)
+        vts->cursor_x = 0;
+    if(vts->cursor_y < 0)
+        vts->cursor_y = 0;
+    if(vts->cursor_x >= (int)new_width)
+        vts->cursor_x = (int)new_width - 1;
+    if(vts->cursor_y >= (int)new_height)
+        vts->cursor_y = (int)new_height - 1;
+
     memset(vts->dirty, 1, n);
     vts->any_dirty = 1;
     release(&vts->lock);
@@ -397,14 +443,50 @@ vt_get_cell(struct vt_surface *vts, int x, int y, struct text_cell *cell_out)
 void
 vt_clear_rect(struct vt_surface *vts, int x, int y, uint w, uint h, uint bg_color)
 {
-    (void)x;
-    (void)y;
-    (void)w;
-    (void)h;
+    int x0;
+    int y0;
+    int x1;
+    int y1;
+    int ix;
+    int iy;
+
     if(!vts)
         return;
+
+    if((int)w <= 0 || (int)h <= 0)
+        return;
+
+    x0 = x;
+    y0 = y;
+    x1 = x + (int)w;
+    y1 = y + (int)h;
+
+    if(x0 < 0)
+        x0 = 0;
+    if(y0 < 0)
+        y0 = 0;
+    if(x1 > (int)vts->width)
+        x1 = (int)vts->width;
+    if(y1 > (int)vts->height)
+        y1 = (int)vts->height;
+
+    if(x0 >= x1 || y0 >= y1)
+        return;
+
     acquire(&vts->lock);
     vts->bg_color = (int)(bg_color & 0xF);
+    for(iy = y0; iy < y1; iy++) {
+        for(ix = x0; ix < x1; ix++) {
+            int idx = iy * (int)vts->width + ix;
+            vts->cells[idx].codepoint = ' ';
+            vts->cells[idx].attr = 0;
+            vts->cells[idx].fg_color = (uchar)(vts->fg_color & 0x0F);
+            vts->cells[idx].bg_color = (uchar)(vts->bg_color & 0x0F);
+            vts->cells[idx].width = 1;
+            if(vts->dirty)
+                vts->dirty[idx] = 1;
+        }
+    }
     vts->any_dirty = 1;
     release(&vts->lock);
 }
@@ -412,11 +494,38 @@ vt_clear_rect(struct vt_surface *vts, int x, int y, uint w, uint h, uint bg_colo
 void
 vt_set_cursor(struct vt_surface *vts, int x, int y)
 {
+    int oldx;
+    int oldy;
+    int idx;
+
     if(!vts)
         return;
     acquire(&vts->lock);
+    oldx = vts->cursor_x;
+    oldy = vts->cursor_y;
+
+    if(x < 0)
+        x = 0;
+    if(y < 0)
+        y = 0;
+    if(x >= (int)vts->width)
+        x = (int)vts->width - 1;
+    if(y >= (int)vts->height)
+        y = (int)vts->height - 1;
+
     vts->cursor_x = x;
     vts->cursor_y = y;
+
+    if(vts->dirty) {
+        if(oldx >= 0 && oldx < (int)vts->width && oldy >= 0 && oldy < (int)vts->height) {
+            idx = oldy * (int)vts->width + oldx;
+            vts->dirty[idx] = 1;
+        }
+        if(x >= 0 && x < (int)vts->width && y >= 0 && y < (int)vts->height) {
+            idx = y * (int)vts->width + x;
+            vts->dirty[idx] = 1;
+        }
+    }
     vts->any_dirty = 1;
     release(&vts->lock);
 }
@@ -452,10 +561,39 @@ vt_show_cursor(struct vt_surface *vts, int visible)
 void
 vt_scroll_up(struct vt_surface *vts, int lines)
 {
-    (void)lines;
+    uint keep_rows;
+    uint row;
+    uint width;
+
     if(!vts)
         return;
+
     acquire(&vts->lock);
+    if(lines <= 0) {
+        release(&vts->lock);
+        return;
+    }
+
+    if((uint)lines >= vts->height) {
+        render_init_blank_cells(vts->cells, vts->width * vts->height);
+    } else {
+        width = vts->width;
+        keep_rows = vts->height - (uint)lines;
+        memmove(vts->cells,
+                &vts->cells[(uint)lines * width],
+                keep_rows * width * sizeof(struct text_cell));
+        for(row = keep_rows; row < vts->height; row++) {
+            render_init_blank_cells(&vts->cells[row * width], width);
+        }
+    }
+
+    if(vts->cursor_y >= lines)
+        vts->cursor_y -= lines;
+    else
+        vts->cursor_y = 0;
+
+    if(vts->dirty)
+        memset(vts->dirty, 1, vts->width * vts->height);
     vts->any_dirty = 1;
     release(&vts->lock);
 }
@@ -463,10 +601,40 @@ vt_scroll_up(struct vt_surface *vts, int lines)
 void
 vt_scroll_down(struct vt_surface *vts, int lines)
 {
-    (void)lines;
+    uint move_rows;
+    uint row;
+    uint width;
+
     if(!vts)
         return;
+
     acquire(&vts->lock);
+    if(lines <= 0) {
+        release(&vts->lock);
+        return;
+    }
+
+    if((uint)lines >= vts->height) {
+        render_init_blank_cells(vts->cells, vts->width * vts->height);
+    } else {
+        width = vts->width;
+        move_rows = vts->height - (uint)lines;
+        for(row = move_rows; row > 0; row--) {
+            memmove(&vts->cells[(row - 1 + (uint)lines) * width],
+                    &vts->cells[(row - 1) * width],
+                    width * sizeof(struct text_cell));
+        }
+        for(row = 0; row < (uint)lines; row++)
+            render_init_blank_cells(&vts->cells[row * width], width);
+    }
+
+    if(vts->cursor_y + lines < (int)vts->height)
+        vts->cursor_y += lines;
+    else
+        vts->cursor_y = (int)vts->height - 1;
+
+    if(vts->dirty)
+        memset(vts->dirty, 1, vts->width * vts->height);
     vts->any_dirty = 1;
     release(&vts->lock);
 }
@@ -716,7 +884,7 @@ ansi_color_to_rgb(int color_index, uchar *r_out, uchar *g_out, uchar *b_out)
     if(r_out)
         *r_out = (uchar)((rgb >> 16) & 0xFF);
     if(g_out)
-        *g_out = (uchar)(rgb & 0xFF);
+        *g_out = (uchar)((rgb >> 8) & 0xFF);
     if(b_out)
-        *b_out = (uchar)((rgb >> 8) & 0xFF);
+        *b_out = (uchar)(rgb & 0xFF);
 }

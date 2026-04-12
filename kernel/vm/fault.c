@@ -6,11 +6,13 @@
 #include "proc.h"
 #include "signal.h"
 #include "traps.h"
+#include "vma.h"
 #include "x86.h"
 
 static uint vm_fault_dispatches;
 static uint vm_fault_cow_resolved;
 static uint vm_fault_stack_growth;
+static uint vm_fault_demand_zero;
 static uint vm_fault_sigsegv;
 
 int
@@ -109,6 +111,14 @@ vm_fault_is_user_write_protect(struct trapframe *tf)
 }
 
 static int
+vm_fault_is_user_not_present(struct trapframe *tf)
+{
+  if(tf == 0)
+    return 0;
+  return (tf->err & 0x5) == 0x4;
+}
+
+static int
 fault_cow_resolve(struct trapframe *tf, struct proc *p, uint fault_addr)
 {
   if(tf == 0 || p == 0)
@@ -126,9 +136,42 @@ fault_stack_growth(struct proc *p, uint fault_addr)
   return proc_try_grow_stack(p, fault_addr);
 }
 
+static int
+fault_demand_zero(struct proc *p, uint fault_addr)
+{
+  struct vaddr_range *vma;
+  uint *pte;
+  uint va;
+  int writable;
+
+  if(p == 0 || p->addrsp == 0)
+    return -1;
+
+  va = PGROUNDDOWN(fault_addr);
+  vma = vma_find(p->addrsp, va);
+  if(vma == 0)
+    return -1;
+  if((vma->flags & VMA_ZEROFILL) == 0)
+    return -1;
+  if(vma->inode != 0)
+    return -1;
+
+  pte = vm_lookup_pte(proc_pgdir(p), va);
+  if(pte != 0 && ((*pte & PTE_P) != 0))
+    return -1;
+
+  writable = (vma->flags & VMA_WRITE) != 0;
+  if(vm_map_zerofill_page(p->addrsp, va, writable) < 0)
+    return -1;
+
+  vm_tlb_flush(proc_pgdir(p));
+  return 0;
+}
+
 void
 vm_get_fault_stats(uint *dispatches, uint *cow_resolved,
                    uint *stack_growth,
+                   uint *demand_zero,
                    uint *sigsegv)
 {
   if(dispatches)
@@ -137,6 +180,8 @@ vm_get_fault_stats(uint *dispatches, uint *cow_resolved,
     *cow_resolved = vm_fault_cow_resolved;
   if(stack_growth)
     *stack_growth = vm_fault_stack_growth;
+  if(demand_zero)
+    *demand_zero = vm_fault_demand_zero;
   if(sigsegv)
     *sigsegv = vm_fault_sigsegv;
 }
@@ -161,6 +206,13 @@ vm_handle_fault(struct trapframe *tf, uint fault_addr)
   if(fault_stack_growth(p, fault_addr)){
     vm_fault_stack_growth++;
     return 0;
+  }
+
+  if(vm_fault_is_user_not_present(tf)){
+    if(fault_demand_zero(p, fault_addr) == 0){
+      vm_fault_demand_zero++;
+      return 0;
+    }
   }
 
   p->sig_pending |= SIGBIT(SIGSEGV);

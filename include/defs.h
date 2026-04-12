@@ -774,6 +774,7 @@ void            inituvm_as(struct address_space *as, char *init, uint sz);
 int             loaduvm(pde_t*, char*, struct inode*, uint, uint);
 void            switchuvm(struct proc*);
 void            switchkvm(void);
+int             vm_map_zerofill_page(struct address_space *as, uint va, int writable);
 int             copyout(pde_t*, uint, void*, uint);
 int             copyin(pde_t*, void*, uint, uint);
 void            clearpteu(pde_t *pgdir, char *uva);
@@ -794,6 +795,7 @@ void            vm_get_cow_stats(uint *mappings_created);
 int             vm_handle_fault(struct trapframe *tf, uint fault_addr);
 void            vm_get_fault_stats(uint *dispatches, uint *cow_resolved,
 								   uint *stack_growth,
+								   uint *demand_zero,
 								   uint *sigsegv);
 
 // vma.c
@@ -804,6 +806,7 @@ void            address_space_release(struct address_space *as);
 void            address_space_destroy(struct address_space *as);
 int             vma_expand(struct address_space *as, uint new_size);
 int             vma_shrink(struct address_space *as, uint new_size);
+int             vma_reserve_zerofill(struct address_space *as, uint start, uint end);
 struct vaddr_range* vma_find(struct address_space *as, uint va);
 int             vma_insert(struct address_space *as, const struct vaddr_range *vma);
 void            vma_remove(struct address_space *as, struct vaddr_range *vma);

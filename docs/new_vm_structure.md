@@ -5,6 +5,14 @@
 **Target**: Land complete redesign in 12-14 weeks (10 phases)  
 **Goal**: Production-grade VM system with COW, fault-driven allocation, typed caches, and observability
 
+Update 2026-04-12:
+
+- explicit `vmreserve()` plus fault-only anonymous zero-fill is now landed as the first safe demand-paging slice
+- guest validation passed via `vmreservetest` for first-touch zero fill, sparse activation, and fork isolation
+- `/proc/vmstat` now reports `vm_fault_demand_zero`, with a validated post-test sample of `vm_fault_demand_zero 4`
+- the follow-on `copyout()`-only materialization slice is also guest-validated; explicit reserved pages can now serve as syscall output buffers without prior user touch
+- normal heap growth remains eager by design; lazy `growproc()` is still intentionally deferred
+
 ---
 
 ## Executive Summary

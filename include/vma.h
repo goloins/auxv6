@@ -11,6 +11,7 @@ struct address_space;
 #define VMA_EXEC   0x0004
 #define VMA_SHARED 0x0008
 #define VMA_COW    0x0010
+#define VMA_ZEROFILL 0x0020
 
 struct vaddr_range {
   uint va_start;

@@ -98,3 +98,4 @@
 #define SYS_lseek64 97
 #define SYS_truncate 98
 #define SYS_ftruncate 99
+#define SYS_vmreserve 100

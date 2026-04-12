@@ -32,6 +32,10 @@ arrow-key movement, and `:` command save/quit flow.
 ## Notes
 - The rootfs staging path creates `/bin/vi` as a symlink to `/bin/6vi`.
 - Terminal dimensions are re-read while running so redraw follows current console size.
+- Rendering intentionally uses a conservative ANSI subset to stay compatible with
+	both UART and framebuffer terminal paths.
+- If tty-reported rows/cols are implausibly large, 6vi falls back to a safe
+	default grid to avoid drawing text off-screen.
 - If no file is provided, editing starts in an unnamed buffer.
 
 ## Examples

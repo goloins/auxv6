@@ -12,6 +12,8 @@
 #define VI_VERSION "6vi 0.1"
 #define VI_STATUS_MAX 160
 #define VI_CMD_MAX 64
+#define VI_MAX_ROWS 60
+#define VI_MAX_COLS 200
 
 enum vi_mode {
   MODE_NORMAL = 0,
@@ -128,8 +130,6 @@ static void
 vi_disable_raw(void)
 {
   if(E.raw_enabled) {
-    /* show cursor and leave alternate screen before restoring termios */
-    write(1, "\x1b[?25h\x1b[?1049l", 14);
     tcsetattr(0, TCSAFLUSH, &E.saved);
     E.raw_enabled = 0;
   }
@@ -165,8 +165,6 @@ vi_enable_raw(void)
     vi_die("tcsetattr failed");
 
   E.raw_enabled = 1;
-  /* enter alternate screen and hide cursor for clean full-screen editing */
-  write(1, "\x1b[?1049h\x1b[?25l", 14);
 }
 
 static int
@@ -221,6 +219,10 @@ vi_get_window_size(int *rows, int *cols)
   struct winsize ws;
 
   if(ioctl(1, TIOCGWINSZ, &ws) < 0 || ws.ws_col == 0 || ws.ws_row == 0)
+    return -1;
+
+  /* Some console paths can transiently report pixel-like magnitudes. */
+  if(ws.ws_row > VI_MAX_ROWS || ws.ws_col > VI_MAX_COLS)
     return -1;
 
   *cols = ws.ws_col;
@@ -543,9 +545,13 @@ vi_update_window_size(void)
   new_screenrows = rows - 2;
   if(new_screenrows < 1)
     new_screenrows = 1;
+  if(new_screenrows > VI_MAX_ROWS)
+    new_screenrows = VI_MAX_ROWS;
   new_screencols = cols;
   if(new_screencols < 20)
     new_screencols = 20;
+  if(new_screencols > VI_MAX_COLS)
+    new_screencols = VI_MAX_COLS;
 
   E.screenrows = new_screenrows;
   E.screencols = new_screencols;
@@ -565,8 +571,8 @@ vi_refresh_screen(void)
 
   ab_init(&ab);
 
-  /* hide cursor and move to home in one shot to avoid partial-frame flicker */
-  ab_append(&ab, "\x1b[?25l\x1b[H", 9);
+  /* Force normal white-on-black before redraw to avoid stale SGR drift. */
+  ab_append(&ab, "\x1b[0m\x1b[37;40m\x1b[H\x1b[2J", 17);
 
   vi_draw_rows(&ab);
   vi_draw_status_bar(&ab);
@@ -579,8 +585,8 @@ vi_refresh_screen(void)
   if(curx < 1)
     curx = 1;
 
-  /* position cursor and show it in one escape string */
-  n = snprintf(buf, sizeof(buf), "\x1b[%d;%dH\x1b[?25h", cury, curx);
+  /* position cursor only; avoid private cursor visibility modes */
+  n = snprintf(buf, sizeof(buf), "\x1b[%d;%dH", cury, curx);
   if(n > 0)
     ab_append(&ab, buf, n);
 
@@ -911,9 +917,13 @@ vi_init(void)
   E.screenrows = rows - 2;
   if(E.screenrows < 1)
     E.screenrows = 1;
+  if(E.screenrows > VI_MAX_ROWS)
+    E.screenrows = VI_MAX_ROWS;
   E.screencols = cols;
   if(E.screencols < 20)
     E.screencols = 20;
+  if(E.screencols > VI_MAX_COLS)
+    E.screencols = VI_MAX_COLS;
 }
 
 static void

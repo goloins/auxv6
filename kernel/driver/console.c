@@ -183,6 +183,7 @@ struct console_tty_state {
   struct console_ansi_state ansi;
   ushort screen[CONSOLE_MAX_CELLS];
   int cursor;
+  int last_out_was_cr;
   int dirty_rows_valid;
   int dirty_row_top;
   int dirty_row_bottom;
@@ -280,6 +281,8 @@ static uint console_gfx_stat_cells_rendered;
 static uint console_gfx_stat_flush_calls;
 static uint console_gfx_stat_flush_pixels;
 static uint console_gfx_stat_flush_blocked_tickslock;
+static uint console_gfx_stat_flush_errors;
+static uint console_gfx_stat_render_errors;
 static int console_gfx_owner_pid = -1;
 static uint console_input_event_count;
 static struct console_mouse_state console_mouse;
@@ -629,12 +632,31 @@ console_hw_view_origin(struct console_tty_state *t, int *row0_out, int *col0_out
 }
 
 static void
+console_clamp_winsize_to_display(struct winsize *ws)
+{
+  if(!ws)
+    return;
+
+  ws->ws_row = (ushort)console_clamp_rows((int)ws->ws_row);
+  ws->ws_col = (ushort)console_clamp_cols((int)ws->ws_col);
+}
+
+static void
 console_select_hw_surface(void)
 {
   crt = cga_hw;
   crt_cols = CONSOLE_HW_COLS;
   crt_rows = CONSOLE_HW_ROWS;
   cga_render_offscreen = 0;
+}
+
+static void
+console_emit_output_char_locked(struct console_tty_state *t, int c)
+{
+  if(!t)
+    return;
+  consputc_ansi(t, c);
+  t->last_out_was_cr = (c == '\r');
 }
 
 static int
@@ -667,15 +689,63 @@ console_hw_cursor_from_tty(struct console_tty_state *t)
 static void
 console_tty_mark_dirty_range_locked(struct console_tty_state *t, int from, int to)
 {
-  (void)t;
-  (void)from;
-  (void)to;
+  int cols;
+  int rows;
+  int max_cells;
+  int start_row;
+  int end_row;
+
+  if(!t)
+    return;
+
+  cols = console_tty_cols(t);
+  rows = console_tty_rows(t);
+  if(cols <= 0 || rows <= 0)
+    return;
+
+  max_cells = cols * rows;
+  if(from < 0)
+    from = 0;
+  if(to > max_cells)
+    to = max_cells;
+  if(from >= to)
+    return;
+
+  start_row = from / cols;
+  end_row = (to - 1) / cols;
+  if(start_row < 0)
+    start_row = 0;
+  if(end_row >= rows)
+    end_row = rows - 1;
+
+  if(!t->dirty_rows_valid) {
+    t->dirty_row_top = start_row;
+    t->dirty_row_bottom = end_row;
+    t->dirty_rows_valid = 1;
+    return;
+  }
+
+  if(start_row < t->dirty_row_top)
+    t->dirty_row_top = start_row;
+  if(end_row > t->dirty_row_bottom)
+    t->dirty_row_bottom = end_row;
 }
 
 static void
 console_tty_mark_dirty_all_locked(struct console_tty_state *t)
 {
-  (void)t;
+  int rows;
+
+  if(!t)
+    return;
+
+  rows = console_tty_rows(t);
+  if(rows <= 0)
+    return;
+
+  t->dirty_row_top = 0;
+  t->dirty_row_bottom = rows - 1;
+  t->dirty_rows_valid = 1;
 }
 
 static void
@@ -1695,6 +1765,19 @@ console_gfx_ensure_locked(struct console_tty_state *t)
     return 0;
   }
 
+  {
+    struct winsize prev = t->winsize;
+    console_clamp_winsize_to_display(&t->winsize);
+    if(t->winsize.ws_row != prev.ws_row || t->winsize.ws_col != prev.ws_col) {
+      t->cursor = console_clamp_tty_cursor(t, t->cursor);
+      t->ansi.scroll_bot = console_tty_rows(t) - 1;
+      console_tty_mark_dirty_all_locked(t);
+      cols = console_tty_cols(t);
+      rows = console_tty_rows(t);
+      clear_full = 1;
+    }
+  }
+
   if(console_gfx_vts) {
     if((int)console_gfx_vts->width != cols || (int)console_gfx_vts->height != rows) {
       if(vt_surface_resize(console_gfx_vts, (uint)cols, (uint)rows) < 0) {
@@ -1752,8 +1835,6 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
 {
   int cols;
   int rows;
-  int row0;
-  int row1;
   int row;
   int row_start;
   int row_end;
@@ -1765,6 +1846,7 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
   int new_cursor_x;
   int new_cursor_y;
   int rendered;
+  int flush_rc;
   int dirty_count;
   int di;
   struct dirty_rect rect;
@@ -1798,41 +1880,38 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
   changed_cells = 0;
   old_cursor_x = console_gfx_vts->cursor_x;
   old_cursor_y = console_gfx_vts->cursor_y;
+  for(row = 0; row < rows; row++) {
+    row_start = row * cols;
+    row_end = row_start + cols;
+    for(i = row_start; i < row_end; i++) {
+      ushort s = t->screen[i];
+      struct text_cell tc;
+      struct text_cell *dst;
 
-  row0 = 0;
-  row1 = rows - 1;
+      tc.codepoint = (uint)(s & 0x00FF);
+      tc.attr = 0;
+      tc.fg_color = (uchar)((s >> 8) & 0x0F);
+      tc.bg_color = (uchar)(((s >> 12) & 0x0F));
+      tc.width = 1;
 
-  if(row0 < 0)
-    row0 = 0;
-  if(row1 >= rows)
-    row1 = rows - 1;
+      if(tc.codepoint != ' ' && tc.codepoint != 0 && tc.fg_color == tc.bg_color) {
+        if(tc.fg_color == 0)
+          tc.fg_color = 7;
+        else
+          tc.bg_color = 0;
+      }
 
-  if(row0 <= row1) {
-    for(row = row0; row <= row1; row++) {
-      row_start = row * cols;
-      row_end = row_start + cols;
-      for(i = row_start; i < row_end; i++) {
-        ushort s = t->screen[i];
-        struct text_cell tc;
-        struct text_cell *dst;
-        tc.codepoint = (uint)(s & 0x00FF);
-        tc.attr = 0;
-        tc.fg_color = (uchar)((s >> 8) & 0x0F);
-        tc.bg_color = (uchar)(((s >> 12) & 0x0F));
-        tc.width = 1;
-
-        dst = &console_gfx_vts->cells[i];
-        if(dst->codepoint != tc.codepoint ||
-           dst->attr != tc.attr ||
-           dst->fg_color != tc.fg_color ||
-           dst->bg_color != tc.bg_color ||
-           dst->width != tc.width) {
-          *dst = tc;
-          if(console_gfx_vts->dirty)
-            console_gfx_vts->dirty[i] = 1;
-          changed = 1;
-          changed_cells++;
-        }
+      dst = &console_gfx_vts->cells[i];
+      if(dst->codepoint != tc.codepoint ||
+         dst->attr != tc.attr ||
+         dst->fg_color != tc.fg_color ||
+         dst->bg_color != tc.bg_color ||
+         dst->width != tc.width) {
+        *dst = tc;
+        if(console_gfx_vts->dirty)
+          console_gfx_vts->dirty[i] = 1;
+        changed = 1;
+        changed_cells++;
       }
     }
   }
@@ -1874,6 +1953,17 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
   rendered = vt_render_dirty(console_gfx_vts);
   if(rendered > 0)
     console_gfx_stat_cells_rendered += (uint)rendered;
+  else if(rendered < 0) {
+    const char *msg;
+    const char *p;
+
+    console_gfx_stat_render_errors++;
+    if((console_gfx_stat_render_errors & 0x3fU) == 1U) {
+      msg = "console: gfx render error\n";
+      for(p = msg; *p; p++)
+        uartputc(*p);
+    }
+  }
   vt_render_cursor(console_gfx_vts);
   console_gfx_draw_logo_locked();
 
@@ -1907,7 +1997,18 @@ console_gfx_sync_from_tty_locked(struct console_tty_state *t)
       area = console_gfx_fb->width * console_gfx_fb->height;
   }
 
-  display_flush(console_gfx_dev, console_gfx_fb);
+  flush_rc = display_flush(console_gfx_dev, console_gfx_fb);
+  if(flush_rc < 0) {
+    const char *msg;
+    const char *p;
+
+    console_gfx_stat_flush_errors++;
+    if((console_gfx_stat_flush_errors & 0x3fU) == 1U) {
+      msg = "console: gfx flush error\n";
+      for(p = msg; *p; p++)
+        uartputc(*p);
+    }
+  }
   console_gfx_stat_flush_calls++;
   console_gfx_stat_flush_pixels += area;
 }
@@ -1963,15 +2064,15 @@ console_emit_tty_char_locked(struct console_tty_state *t, int c)
       c = '\n';
 
     if(c == '\n') {
-      if(t->termios.c_oflag & ONLCR)
-        consputc_ansi(t, '\r');
-      else if(t->termios.c_oflag & ONLRET)
-        consputc_ansi(t, '\r');
+      if((t->termios.c_oflag & ONLCR) && !t->last_out_was_cr)
+        console_emit_output_char_locked(t, '\r');
+      else if((t->termios.c_oflag & ONLRET) && !t->last_out_was_cr)
+        console_emit_output_char_locked(t, '\r');
     }
   }
 
   if(emit)
-    consputc_ansi(t, c);
+    console_emit_output_char_locked(t, c);
 }
 
 static int
@@ -2857,6 +2958,117 @@ ansi_decode_utf8_or_single(struct console_tty_state *t, int ch)
   return ansi_map_codepoint_to_cga(t->ansi.utf8_accum);
 }
 
+static int
+ansi16_to_cga_nibble(int ansi_idx)
+{
+  static const uchar cga_fg[8] = {0, 4, 2, 6, 1, 5, 3, 7};
+  int idx;
+  int bright;
+
+  idx = ansi_idx;
+  if(idx < 0)
+    idx = 0;
+  if(idx > 15)
+    idx = 15;
+
+  bright = idx & 8;
+  return (int)(cga_fg[idx & 7] | bright);
+}
+
+static int
+ansi256_index_to_rgb(int idx, int *r_out, int *g_out, int *b_out)
+{
+  static const int cube[6] = {0, 95, 135, 175, 215, 255};
+  static const int ansi16_rgb[16][3] = {
+    {0, 0, 0}, {205, 0, 0}, {0, 205, 0}, {205, 205, 0},
+    {0, 0, 238}, {205, 0, 205}, {0, 205, 205}, {229, 229, 229},
+    {127, 127, 127}, {255, 0, 0}, {0, 255, 0}, {255, 255, 0},
+    {92, 92, 255}, {255, 0, 255}, {0, 255, 255}, {255, 255, 255}
+  };
+  int r;
+  int g;
+  int b;
+  int n;
+
+  if(idx < 0)
+    idx = 0;
+  if(idx > 255)
+    idx = 255;
+
+  if(idx < 16) {
+    r = ansi16_rgb[idx][0];
+    g = ansi16_rgb[idx][1];
+    b = ansi16_rgb[idx][2];
+  } else if(idx < 232) {
+    n = idx - 16;
+    r = cube[n / 36];
+    g = cube[(n / 6) % 6];
+    b = cube[n % 6];
+  } else {
+    n = 8 + (idx - 232) * 10;
+    r = n;
+    g = n;
+    b = n;
+  }
+
+  if(r_out)
+    *r_out = r;
+  if(g_out)
+    *g_out = g;
+  if(b_out)
+    *b_out = b;
+  return 0;
+}
+
+static int
+ansi_rgb_to_ansi16_index(int r, int g, int b)
+{
+  static const int ansi16_rgb[16][3] = {
+    {0, 0, 0}, {170, 0, 0}, {0, 170, 0}, {170, 85, 0},
+    {0, 0, 170}, {170, 0, 170}, {0, 170, 170}, {170, 170, 170},
+    {85, 85, 85}, {255, 85, 85}, {85, 255, 85}, {255, 255, 85},
+    {85, 85, 255}, {255, 85, 255}, {85, 255, 255}, {255, 255, 255}
+  };
+  int i;
+  int best;
+  int best_dist;
+
+  if(r < 0) r = 0;
+  if(g < 0) g = 0;
+  if(b < 0) b = 0;
+  if(r > 255) r = 255;
+  if(g > 255) g = 255;
+  if(b > 255) b = 255;
+
+  best = 0;
+  best_dist = 0x7fffffff;
+  for(i = 0; i < 16; i++) {
+    int dr = r - ansi16_rgb[i][0];
+    int dg = g - ansi16_rgb[i][1];
+    int db = b - ansi16_rgb[i][2];
+    int dist = dr * dr + dg * dg + db * db;
+    if(dist < best_dist) {
+      best_dist = dist;
+      best = i;
+    }
+  }
+
+  return best;
+}
+
+static int
+ansi256_to_cga_nibble(int idx)
+{
+  int r;
+  int g;
+  int b;
+  int ansi_idx;
+
+  ansi256_index_to_rgb(idx, &r, &g, &b);
+  ansi_idx = ansi_rgb_to_ansi16_index(r, g, b);
+  return ansi16_to_cga_nibble(ansi_idx);
+}
+
 static void
 console_ttyputc_ansi(struct console_tty_state *t, int c)
 {
@@ -3092,7 +3304,6 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
     case 'S': n=p1?p1:1; console_tty_scroll_up_locked(t, t->ansi.scroll_top,  t->ansi.scroll_bot, n, a); break;
     case 'T': n=p1?p1:1; console_tty_scroll_down_locked(t, t->ansi.scroll_top, t->ansi.scroll_bot, n, a); break;
     case 'm': {
-      static const uchar cga_fg[] = {0,4,2,6,1,5,3,7};
       int i2;
       if(t->ansi.nparams == 0) { 
         t->ansi.attr=0x07; 
@@ -3123,12 +3334,33 @@ console_ttyputc_ansi(struct console_tty_state *t, int c)
         else if(sg==29)         t->ansi.strikethrough=0;
         else if(sg==7)          { uchar fg=t->ansi.attr&0x0F,bg=(t->ansi.attr>>4)&0x0F; t->ansi.attr=(uchar)((fg<<4)|bg); }
         else if(sg==27)         t->ansi.attr=0x07;
-        else if(sg>=30&&sg<=37) t->ansi.attr=(t->ansi.attr&0xF0)|cga_fg[sg-30];
+        else if(sg>=30&&sg<=37) t->ansi.attr=(t->ansi.attr&0xF0)|(uchar)ansi16_to_cga_nibble(sg-30);
         else if(sg==39)         t->ansi.attr=(t->ansi.attr&0xF0)|0x07;
-        else if(sg>=40&&sg<=47) t->ansi.attr=(t->ansi.attr&0x0F)|(uchar)(cga_fg[sg-40]<<4);
+        else if(sg>=40&&sg<=47) t->ansi.attr=(t->ansi.attr&0x0F)|(uchar)(ansi16_to_cga_nibble(sg-40)<<4);
         else if(sg==49)         t->ansi.attr&=0x0F;
-        else if(sg>=90&&sg<=97) t->ansi.attr=(t->ansi.attr&0xF0)|(uchar)(cga_fg[sg-90]|0x08);
-        else if(sg>=100&&sg<=107) t->ansi.attr=(t->ansi.attr&0x0F)|(uchar)((cga_fg[sg-100]|0x08)<<4);
+        else if(sg>=90&&sg<=97) t->ansi.attr=(t->ansi.attr&0xF0)|(uchar)ansi16_to_cga_nibble((sg-90)|0x08);
+        else if(sg>=100&&sg<=107) t->ansi.attr=(t->ansi.attr&0x0F)|(uchar)(ansi16_to_cga_nibble((sg-100)|0x08)<<4);
+        else if((sg==38 || sg==48) && (i2 + 1) < t->ansi.nparams) {
+          int mode = t->ansi.params[i2 + 1];
+          if(mode == 5 && (i2 + 2) < t->ansi.nparams) {
+            int nib = ansi256_to_cga_nibble(t->ansi.params[i2 + 2]);
+            if(sg == 38)
+              t->ansi.attr = (t->ansi.attr & 0xF0) | (uchar)nib;
+            else
+              t->ansi.attr = (t->ansi.attr & 0x0F) | (uchar)(nib << 4);
+            i2 += 2;
+          } else if(mode == 2 && (i2 + 4) < t->ansi.nparams) {
+            int r = t->ansi.params[i2 + 2];
+            int g = t->ansi.params[i2 + 3];
+            int b = t->ansi.params[i2 + 4];
+            int nib = ansi16_to_cga_nibble(ansi_rgb_to_ansi16_index(r, g, b));
+            if(sg == 38)
+              t->ansi.attr = (t->ansi.attr & 0xF0) | (uchar)nib;
+            else
+              t->ansi.attr = (t->ansi.attr & 0x0F) | (uchar)(nib << 4);
+            i2 += 4;
+          }
+        }
       }
       break; }
     case 'r':
@@ -3527,9 +3759,16 @@ console_ioctl(int fd, int request, uint arg)
     if(arg == 0) return -1;
     ws = (struct winsize *)arg;
     acquire(&cons.tty_lock);
-    t->winsize = *ws;
-    t->winsize.ws_row = (ushort)console_clamp_rows((int)t->winsize.ws_row);
-    t->winsize.ws_col = (ushort)console_clamp_cols((int)t->winsize.ws_col);
+    {
+      struct winsize prev = t->winsize;
+
+      t->winsize = *ws;
+      console_clamp_winsize_to_display(&t->winsize);
+      if(t->winsize.ws_row == prev.ws_row && t->winsize.ws_col == prev.ws_col) {
+        release(&cons.tty_lock);
+        return 0;
+      }
+    }
     t->cursor = console_clamp_tty_cursor(t, t->cursor);
     t->ansi.scroll_bot = console_tty_rows(t) - 1;
     console_tty_mark_dirty_all_locked(t);

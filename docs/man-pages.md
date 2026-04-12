@@ -24,6 +24,7 @@ Generated: 2026-04-11
 | bcachestress | targetfs/usr/share/man/bcachestress.md | 2026-04-05 | user/bcachestress.c | concurrent fs I/O stress utility with /proc/bcache_health fail-fast checks and vmstat/meminfo context dump |
 | cowtest | targetfs/usr/share/man/cowtest.md | 2026-04-11 | user/cowtest.c | COW fork correctness test validating parent/child write isolation across data, heap, and stack |
 | cowexectest | targetfs/usr/share/man/cowexectest.md | 2026-04-11 | user/cowexectest.c | fork-plus-exec COW correctness test validating old-image teardown and parent isolation across data, heap, and stack |
+| vmreservetest | targetfs/usr/share/man/vmreservetest.md | 2026-04-12 | user/vmreservetest.c | explicit vmreserve regression covering first-touch zeroes, syscall copyout materialization into reserved pages, sparse page activation, and fork isolation |
 | arp | targetfs/usr/share/man/arp.md | 2026-04-01 | user/arp.c | source-derived usage/options |
 | awk | targetfs/usr/share/man/awk.md | 2026-04-06 | user/awk.c | baseline pattern/action processor (`/regex/ { print ... }`) with `$0`/`$N`/`NR` and `-F` field separator |
 | cat | targetfs/usr/share/man/cat.md | 2026-04-01 | user/cat.c | source-derived usage/options |

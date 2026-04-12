@@ -118,6 +118,7 @@ user/vmprobe
 user/vmguardtest
 user/cowtest
 user/cowexectest
+user/vmreservetest
 user/kmemstress
 user/wc
 user/zombie

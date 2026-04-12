@@ -143,7 +143,10 @@ vma_expand(struct address_space *as, uint new_size)
   old_size = as->vm_size;
   if(as->vma_count > 0){
     last = &as->vmas[as->vma_count - 1];
-    if(last->va_end == old_size){
+    if(last->va_end == old_size &&
+       last->flags == (VMA_READ | VMA_WRITE) &&
+       last->inode == 0 &&
+       last->file_offset == 0){
       last->va_end = new_size;
       as->vm_size = new_size;
       as->transitional = 0;
@@ -160,6 +163,40 @@ vma_expand(struct address_space *as, uint new_size)
   as->vm_size = new_size;
   if(as->vma_count > 0)
     as->transitional = 0;
+  return 0;
+}
+
+int
+vma_reserve_zerofill(struct address_space *as, uint start, uint end)
+{
+  struct vaddr_range *last;
+  struct vaddr_range vma;
+
+  if(as == 0 || start >= end)
+    return -1;
+  if(start != as->vm_size)
+    return -1;
+
+  if(as->vma_count > 0){
+    last = &as->vmas[as->vma_count - 1];
+    if(last->va_end == start &&
+       last->flags == (VMA_READ | VMA_WRITE | VMA_ZEROFILL) &&
+       last->inode == 0 &&
+       last->file_offset == 0){
+      last->va_end = end;
+      as->vm_size = end;
+      as->transitional = 0;
+      return 0;
+    }
+  }
+
+  memset(&vma, 0, sizeof(vma));
+  vma.va_start = start;
+  vma.va_end = end;
+  vma.flags = VMA_READ | VMA_WRITE | VMA_ZEROFILL;
+  if(vma_insert(as, &vma) < 0)
+    return -1;
+  as->vm_size = end;
   return 0;
 }
 

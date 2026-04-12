@@ -222,6 +222,7 @@ extern int sys_setrlimit(void);
 extern int sys_lseek64(void);
 extern int sys_truncate(void);
 extern int sys_ftruncate(void);
+extern int sys_vmreserve(void);
 
 static int (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -323,6 +324,7 @@ static int (*syscalls[])(void) = {
 [SYS_lseek64]   sys_lseek64,
 [SYS_truncate]  sys_truncate,
 [SYS_ftruncate] sys_ftruncate,
+[SYS_vmreserve] sys_vmreserve,
 };
 
 void

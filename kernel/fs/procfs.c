@@ -838,6 +838,7 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     uint vm_fault_dispatches;
     uint vm_fault_cow_resolved;
     uint vm_fault_stack_growth;
+    uint vm_fault_demand_zero;
     uint vm_fault_sigsegv;
 
     kalloc_stats(&kstats);
@@ -850,6 +851,7 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     vm_get_cow_stats(&cow_mappings);
     vm_get_fault_stats(&vm_fault_dispatches, &vm_fault_cow_resolved,
           &vm_fault_stack_growth,
+          &vm_fault_demand_zero,
            &vm_fault_sigsegv);
     vm_get_addrspace_guard_stats(&as_guard_checks, &as_guard_allows,
                    &as_guard_denies, &as_guard_bypass_no_as,
@@ -951,6 +953,8 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_fault_cow_resolved ", vm_fault_cow_resolved) < 0)
       return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_fault_stack_growth ", vm_fault_stack_growth) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_fault_demand_zero ", vm_fault_demand_zero) < 0)
       return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "vm_fault_sigsegv ", vm_fault_sigsegv) < 0)
       return -1;

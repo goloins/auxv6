@@ -156,16 +156,36 @@ fb_unref(struct framebuffer *fb)
 void
 fb_mark_dirty(struct framebuffer *fb, int x, int y, uint w, uint h)
 {
+    int cw;
+    int ch;
+
     if(!fb)
         return;
 
-    /* Clamp to framebuffer bounds */
-    if(x < 0) x = 0;
-    if(y < 0) y = 0;
-    if(x + w > fb->width) w = fb->width - x;
-    if(y + h > fb->height) h = fb->height - y;
+    if(w == 0 || h == 0)
+        return;
 
-    if(w <= 0 || h <= 0)
+    cw = (int)w;
+    ch = (int)h;
+
+    if(x >= (int)fb->width || y >= (int)fb->height)
+        return;
+
+    /* Clamp to framebuffer bounds */
+    if(x < 0) {
+        cw += x;
+        x = 0;
+    }
+    if(y < 0) {
+        ch += y;
+        y = 0;
+    }
+    if(x + cw > (int)fb->width)
+        cw = (int)fb->width - x;
+    if(y + ch > (int)fb->height)
+        ch = (int)fb->height - y;
+
+    if(cw <= 0 || ch <= 0)
         return;
 
     acquire(&fb->lock);
@@ -174,15 +194,25 @@ fb_mark_dirty(struct framebuffer *fb, int x, int y, uint w, uint h)
         /* First dirty region */
         fb->dirty_top = y;
         fb->dirty_left = x;
-        fb->dirty_bottom = y + h - 1;
-        fb->dirty_right = x + w - 1;
+        fb->dirty_bottom = y + ch - 1;
+        fb->dirty_right = x + cw - 1;
         fb->dirty = 1;
+        fb->dirty_rects[0].top = fb->dirty_top;
+        fb->dirty_rects[0].left = fb->dirty_left;
+        fb->dirty_rects[0].bottom = fb->dirty_bottom;
+        fb->dirty_rects[0].right = fb->dirty_right;
+        fb->dirty_rect_count = 1;
     } else {
         /* Extend existing dirty region */
         if(y < fb->dirty_top) fb->dirty_top = y;
         if(x < fb->dirty_left) fb->dirty_left = x;
-        if(y + h - 1 > fb->dirty_bottom) fb->dirty_bottom = y + h - 1;
-        if(x + w - 1 > fb->dirty_right) fb->dirty_right = x + w - 1;
+        if(y + ch - 1 > fb->dirty_bottom) fb->dirty_bottom = y + ch - 1;
+        if(x + cw - 1 > fb->dirty_right) fb->dirty_right = x + cw - 1;
+        fb->dirty_rects[0].top = fb->dirty_top;
+        fb->dirty_rects[0].left = fb->dirty_left;
+        fb->dirty_rects[0].bottom = fb->dirty_bottom;
+        fb->dirty_rects[0].right = fb->dirty_right;
+        fb->dirty_rect_count = 1;
     }
 
     release(&fb->lock);
@@ -257,17 +287,22 @@ fb_clear_dirty(struct framebuffer *fb)
     fb->dirty_bottom = 0;
     fb->dirty_right = 0;
     fb->dirty_rect_count = 0;
+    memset(fb->dirty_rects, 0, sizeof(fb->dirty_rects));
     release(&fb->lock);
 }
 
 int
 fb_get_dirty_rect_count(struct framebuffer *fb)
 {
+    int count;
+
     if(!fb)
         return 0;
 
-    /* Runtime currently uses single bounding dirty rect for stability. */
-    return 0;
+    acquire(&fb->lock);
+    count = fb->dirty ? fb->dirty_rect_count : 0;
+    release(&fb->lock);
+    return count;
 }
 
 int
@@ -348,24 +383,43 @@ void
 fb_fill_rect(struct framebuffer *fb, int x, int y, uint w, uint h, uint pixel)
 {
     int i, j;
+    int cw;
+    int ch;
 
     if(!fb)
         return;
 
-    /* Clamp to framebuffer bounds */
-    if(x < 0) x = 0;
-    if(y < 0) y = 0;
-    if(x + (int)w > (int)fb->width) w = fb->width - x;
-    if(y + (int)h > (int)fb->height) h = fb->height - y;
+    if(w == 0 || h == 0)
+        return;
 
-    if(w <= 0 || h <= 0)
+    cw = (int)w;
+    ch = (int)h;
+
+    if(x >= (int)fb->width || y >= (int)fb->height)
+        return;
+
+    /* Clamp to framebuffer bounds */
+    if(x < 0) {
+        cw += x;
+        x = 0;
+    }
+    if(y < 0) {
+        ch += y;
+        y = 0;
+    }
+    if(x + cw > (int)fb->width)
+        cw = (int)fb->width - x;
+    if(y + ch > (int)fb->height)
+        ch = (int)fb->height - y;
+
+    if(cw <= 0 || ch <= 0)
         return;
 
     acquire(&fb->lock);
 
-    for(j = y; j < y + (int)h; j++) {
+    for(j = y; j < y + ch; j++) {
         uchar *row = (uchar *)fb->pixels + j * fb->stride;
-        for(i = x; i < x + (int)w; i++) {
+        for(i = x; i < x + cw; i++) {
             uint offset = i * fb->bpp;
             switch(fb->bpp) {
             case 2:
@@ -380,7 +434,7 @@ fb_fill_rect(struct framebuffer *fb, int x, int y, uint w, uint h, uint pixel)
 
     release(&fb->lock);
 
-    fb_mark_dirty(fb, x, y, w, h);
+    fb_mark_dirty(fb, x, y, (uint)cw, (uint)ch);
 }
 
 /*
@@ -392,46 +446,69 @@ fb_blit_rect(struct framebuffer *src, int src_x, int src_y,
              uint w, uint h)
 {
     int j;
+    int cw;
+    int ch;
     uchar *src_row, *dst_row;
     uint copy_len;
 
     if(!src || !dst)
         return;
 
+    if(w == 0 || h == 0)
+        return;
+
+    cw = (int)w;
+    ch = (int)h;
+
     /* Handle negative coordinates and clipping */
     if(dst_x < 0) {
         src_x -= dst_x;
+        cw += dst_x;
         dst_x = 0;
     }
     if(dst_y < 0) {
         src_y -= dst_y;
+        ch += dst_y;
         dst_y = 0;
     }
-    if(src_x < 0) src_x = 0;
-    if(src_y < 0) src_y = 0;
+    if(src_x < 0) {
+        cw += src_x;
+        dst_x -= src_x;
+        src_x = 0;
+    }
+    if(src_y < 0) {
+        ch += src_y;
+        dst_y -= src_y;
+        src_y = 0;
+    }
+
+    if(src_x >= (int)src->width || src_y >= (int)src->height)
+        return;
+    if(dst_x >= (int)dst->width || dst_y >= (int)dst->height)
+        return;
 
     /* Clamp width and height */
-    if(src_x + (int)w > (int)src->width)
-        w = src->width - src_x;
-    if(src_y + (int)h > (int)src->height)
-        h = src->height - src_y;
-    if(dst_x + (int)w > (int)dst->width)
-        w = dst->width - dst_x;
-    if(dst_y + (int)h > (int)dst->height)
-        h = dst->height - dst_y;
+    if(src_x + cw > (int)src->width)
+        cw = (int)src->width - src_x;
+    if(src_y + ch > (int)src->height)
+        ch = (int)src->height - src_y;
+    if(dst_x + cw > (int)dst->width)
+        cw = (int)dst->width - dst_x;
+    if(dst_y + ch > (int)dst->height)
+        ch = (int)dst->height - dst_y;
 
-    if(w <= 0 || h <= 0)
+    if(cw <= 0 || ch <= 0)
         return;
 
     /* Only works if same pixel format */
     if(src->pixfmt != dst->pixfmt)
         return;
 
-    copy_len = w * src->bpp;
+    copy_len = (uint)cw * src->bpp;
 
     acquire(&dst->lock);
 
-    for(j = 0; j < (int)h; j++) {
+    for(j = 0; j < ch; j++) {
         src_row = (uchar *)src->pixels + (src_y + j) * src->stride + src_x * src->bpp;
         dst_row = (uchar *)dst->pixels + (dst_y + j) * dst->stride + dst_x * dst->bpp;
         memmove(dst_row, src_row, copy_len);
@@ -439,7 +516,7 @@ fb_blit_rect(struct framebuffer *src, int src_x, int src_y,
 
     release(&dst->lock);
 
-    fb_mark_dirty(dst, dst_x, dst_y, w, h);
+    fb_mark_dirty(dst, dst_x, dst_y, (uint)cw, (uint)ch);
 }
 
 /*

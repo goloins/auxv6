@@ -176,6 +176,7 @@ pid_t tcgetpgrp(void);
 int tcgetattr(int fd, struct termios *termios_p);
 int tcsetattr(int fd, int optional_actions, const struct termios *termios_p);
 void* sbrk(intptr_t);
+void* vmreserve(int nbytes);
 unsigned int sleep(unsigned int);
 int uptime(void);
 int socket(int family, int type, int protocol);

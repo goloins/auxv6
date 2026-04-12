@@ -623,6 +623,35 @@ switchkvm(void)
   lcr3(V2P(kpgdir));   // switch to the kernel page table
 }
 
+int
+vm_map_zerofill_page(struct address_space *as, uint va, int writable)
+{
+  char *mem;
+  int perm;
+
+  if(as == 0 || as->pgdir == 0)
+    return -1;
+  if((va % PGSIZE) != 0 || va >= KERNBASE)
+    return -1;
+
+  if(user_page_state(as->pgdir, (char*)va) != 0)
+    return -1;
+
+  mem = kalloc();
+  if(mem == 0)
+    return -1;
+  memset(mem, 0, PGSIZE);
+
+  perm = PTE_U;
+  if(writable)
+    perm |= PTE_W;
+  if(mappages(as->pgdir, (char*)va, PGSIZE, V2P(mem), perm) < 0){
+    kfree(mem);
+    return -1;
+  }
+  return 0;
+}
+
 // Switch TSS and h/w page table to correspond to process p.
 void
 switchuvm(struct proc *p)
@@ -1162,6 +1191,32 @@ uva2ka(pde_t *pgdir, char *uva)
   return (char*)P2V(PTE_ADDR(*pte));
 }
 
+static int
+copyout_resolve_zerofill(pde_t *pgdir, uint va0)
+{
+  struct address_space *as;
+  struct vaddr_range *vma;
+
+  as = vm_current_addrspace_for_pgdir(pgdir);
+  if(as == 0)
+    return -1;
+
+  vma = vma_find(as, va0);
+  if(vma == 0)
+    return -1;
+  if((vma->flags & VMA_ZEROFILL) == 0)
+    return -1;
+  if((vma->flags & VMA_WRITE) == 0)
+    return -1;
+  if(vma->inode != 0)
+    return -1;
+
+  if(vm_map_zerofill_page(as, va0, 1) < 0)
+    return -1;
+  vm_tlb_flush(pgdir);
+  return 0;
+}
+
 // Copy len bytes from p to user address va in page table pgdir.
 // Most useful when pgdir is not the current page table.
 // uva2ka ensures this only works for PTE_U pages.
@@ -1179,8 +1234,13 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
     if(!vm_addrspace_allows_user_va(pgdir, va0))
       return -1;
     pte = walkpgdir(pgdir, (char*)va0, 0);
-    if(pte == 0 || ((*pte & PTE_P) == 0))
-      return -1;
+    if(pte == 0 || ((*pte & PTE_P) == 0)){
+      if(copyout_resolve_zerofill(pgdir, va0) < 0)
+        return -1;
+      pte = walkpgdir(pgdir, (char*)va0, 0);
+      if(pte == 0 || ((*pte & PTE_P) == 0))
+        return -1;
+    }
     pte_assert_sane(*pte);
     if(!pte_is_user(*pte))
       return -1;

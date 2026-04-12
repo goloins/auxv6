@@ -524,6 +524,48 @@ sys_sbrk(void)
 }
 
 int
+sys_vmreserve(void)
+{
+  int n;
+  uint oldsz;
+  uint base;
+  uint len;
+  uint end;
+  struct proc *p;
+
+  if(argint(0, &n) < 0)
+    return -1;
+  if(n <= 0)
+    return -1;
+
+  p = myproc();
+  if(p == 0 || p->addrsp == 0)
+    return -1;
+
+  oldsz = p->sz;
+  base = PGROUNDUP(oldsz);
+  len = PGROUNDUP((uint)n);
+  if(len == 0)
+    return -1;
+  if(base >= KERNBASE || len > (KERNBASE - base))
+    return -1;
+
+  end = base + len;
+  if(base > oldsz){
+    if(vma_expand(p->addrsp, base) < 0)
+      return -1;
+  }
+  if(vma_reserve_zerofill(p->addrsp, base, end) < 0){
+    if(base > oldsz)
+      vma_shrink(p->addrsp, oldsz);
+    return -1;
+  }
+
+  p->sz = end;
+  return base;
+}
+
+int
 sys_sleep(void)
 {
   int n;
