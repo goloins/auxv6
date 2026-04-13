@@ -36,7 +36,7 @@
 #define HAVE_STPCPY       1    /* provided by string.h */
 #define HAVE_MEMPCPY      1    /* provided by string.h */
 #define HAVE_STRSIGNAL    1    /* provided by string.h */
-/* #undef HAVE_STRTOD */        /* no float — system.h stubs it */
+#define HAVE_STRTOD       1    /* provided by include/stdlib.h + user/stdlib.c */
 #define HAVE_STRTOIMAX    1    /* defined as strtoll in inttypes.h */
 #define HAVE_STRTOUMAX    1    /* defined as strtoull in inttypes.h */
 #define HAVE_SYSCONF      1    /* stubbed in system.h / by POSIX layer */
