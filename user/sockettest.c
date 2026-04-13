@@ -29,7 +29,7 @@ main(int argc, char *argv[])
   memset(&raddr, 0, sizeof(raddr));
   raddr.sin_family = AF_INET;
   raddr.sin_port = 12345;
-  raddr.sin_addr = INADDR_LOOPBACK;
+  raddr.sin_addr.s_addr = INADDR_LOOPBACK;
 
   if(bind(rfd, &raddr, sizeof(raddr)) < 0){
     dprintf(1, "sockettest: receiver bind() failed\n");
@@ -83,7 +83,7 @@ main(int argc, char *argv[])
   memset(&saddr, 0, sizeof(saddr));
   saddr.sin_family = AF_INET;
   saddr.sin_port = 12346;
-  saddr.sin_addr = INADDR_LOOPBACK;
+  saddr.sin_addr.s_addr = INADDR_LOOPBACK;
 
   if(bind(sfd, &saddr, sizeof(saddr)) < 0){
     dprintf(1, "sockettest: sender bind() failed\n");

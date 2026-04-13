@@ -46,7 +46,7 @@ test_sendto_autobind(void)
   memset(&saddr, 0, sizeof(saddr));
   saddr.sin_family = AF_INET;
   saddr.sin_port   = 33001;
-  saddr.sin_addr   = INADDR_LOOPBACK;
+  saddr.sin_addr.s_addr   = INADDR_LOOPBACK;
 
   if(bind(sfd, &saddr, sizeof(saddr)) < 0){
     check("server bind", 0);
@@ -77,7 +77,7 @@ test_sendto_autobind(void)
   check("recvfrom returned data",   n > 0);
   check("payload correct",          n > 0 && strcmp(buf, msg) == 0);
   check("src port auto-assigned",   src.sin_port != 0);
-  check("src addr is loopback",     src.sin_addr == INADDR_LOOPBACK);
+  check("src addr is loopback",     src.sin_addr.s_addr == INADDR_LOOPBACK);
   check("srclen filled",            srclen == (int)sizeof(struct sockaddr_in));
 
   wait();
@@ -109,12 +109,12 @@ test_roundtrip_null_src(void)
   memset(&saddr, 0, sizeof(saddr));
   saddr.sin_family = AF_INET;
   saddr.sin_port   = 33002;
-  saddr.sin_addr   = INADDR_LOOPBACK;
+  saddr.sin_addr.s_addr   = INADDR_LOOPBACK;
 
   memset(&caddr, 0, sizeof(caddr));
   caddr.sin_family = AF_INET;
   caddr.sin_port   = 33003;
-  caddr.sin_addr   = INADDR_LOOPBACK;
+  caddr.sin_addr.s_addr   = INADDR_LOOPBACK;
 
   if(bind(sfd, &saddr, sizeof(saddr)) < 0){ check("server bind", 0); goto cleanup; }
   if(bind(cfd, &caddr, sizeof(caddr)) < 0){ check("client bind", 0); goto cleanup; }
@@ -180,12 +180,12 @@ test_sendto_connected(void)
   memset(&saddr, 0, sizeof(saddr));
   saddr.sin_family = AF_INET;
   saddr.sin_port   = 33004;
-  saddr.sin_addr   = INADDR_LOOPBACK;
+  saddr.sin_addr.s_addr   = INADDR_LOOPBACK;
 
   memset(&caddr, 0, sizeof(caddr));
   caddr.sin_family = AF_INET;
   caddr.sin_port   = 33005;
-  caddr.sin_addr   = INADDR_LOOPBACK;
+  caddr.sin_addr.s_addr   = INADDR_LOOPBACK;
 
   if(bind(sfd, &saddr, sizeof(saddr)) < 0){ check("server bind", 0); goto cleanup; }
   if(bind(cfd, &caddr, sizeof(caddr)) < 0){ check("client bind", 0); goto cleanup; }

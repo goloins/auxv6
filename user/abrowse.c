@@ -510,7 +510,7 @@ fetch_once(const struct http_url *u, char *body, int body_max, int *body_len,
   memset(&dst, 0, sizeof(dst));
   dst.sin_family = AF_INET;
   dst.sin_port = (ushort)u->port;
-  dst.sin_addr = ip;
+  dst.sin_addr.s_addr = ip;
 
   if(connect(fd, &dst, sizeof(dst)) < 0) {
     close(fd);

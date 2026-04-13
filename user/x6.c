@@ -5653,7 +5653,7 @@ main(int argc, char **argv)
   memset(&src, 0, sizeof(src));
   src.sin_family = AF_INET;
   src.sin_port = (ushort)port;
-  src.sin_addr = INADDR_LOOPBACK;
+  src.sin_addr.s_addr = INADDR_LOOPBACK;
 
   if(bind(fd, &src, sizeof(src)) < 0) {
     dprintf(2, "x6: bind failed on 127.0.0.1:%d\n", port);

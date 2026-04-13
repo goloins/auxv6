@@ -24,7 +24,7 @@ main(int argc, char *argv[])
   memset(&saddr, 0, sizeof(saddr));
   saddr.sin_family = AF_INET;
   saddr.sin_port = 22345;
-  saddr.sin_addr = INADDR_LOOPBACK;
+  saddr.sin_addr.s_addr = INADDR_LOOPBACK;
 
   if(bind(sfd, &saddr, sizeof(saddr)) < 0){
     dprintf(1, "tcptest: server bind failed\n");

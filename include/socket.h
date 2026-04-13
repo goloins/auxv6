@@ -48,7 +48,7 @@ struct in_addr {
 struct sockaddr_in {
   ushort sin_family;    // Address family (AF_INET)
   ushort sin_port;      // Port number (host byte order internally)
-  uint   sin_addr;      // IPv4 address (host byte order internally)
+  struct in_addr sin_addr; // IPv4 address (host byte order internally)
   char   sin_zero[8];   // Padding to make struct 16 bytes
 };
 

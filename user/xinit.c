@@ -83,7 +83,7 @@ probe_x6_ready(int port)
   memset(&dst, 0, sizeof(dst));
   dst.sin_family = AF_INET;
   dst.sin_port = (ushort)port;
-  dst.sin_addr = INADDR_LOOPBACK;
+  dst.sin_addr.s_addr = INADDR_LOOPBACK;
 
   if(connect(fd, &dst, sizeof(dst)) < 0) {
     close(fd);

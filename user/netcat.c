@@ -85,7 +85,7 @@ open_client_socket(int type, const char *host, int port)
     memset(&dst, 0, sizeof(dst));
     dst.sin_family = AF_INET;
     dst.sin_port = (ushort)port;
-    dst.sin_addr = ip;
+    dst.sin_addr.s_addr = ip;
 
     if(connect(fd, &dst, sizeof(dst)) < 0) {
         dprintf(2, "netcat: connect failed\n");
@@ -120,7 +120,7 @@ open_server_socket(int type, const char *host, int port)
     memset(&src, 0, sizeof(src));
     src.sin_family = AF_INET;
     src.sin_port = (ushort)port;
-    src.sin_addr = ip;
+    src.sin_addr.s_addr = ip;
 
     if(bind(fd, &src, sizeof(src)) < 0) {
         dprintf(2, "netcat: bind failed\n");

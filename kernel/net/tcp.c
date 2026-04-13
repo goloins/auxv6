@@ -111,9 +111,9 @@ tcp_send_segment(struct ifnet *ifp, struct sockaddr_in *src, struct sockaddr_in 
 		memmove(buf + TCP_HDR_LEN, payload, len);
 
 	seglen = TCP_HDR_LEN + len;
-	th->csum = net_htons(tcp_checksum(src->sin_addr, dst->sin_addr, buf, seglen));
+	th->csum = net_htons(tcp_checksum(src->sin_addr.s_addr, dst->sin_addr.s_addr, buf, seglen));
 
-	return ip_output(ifp, NET_IP_TCP, src->sin_addr, dst->sin_addr, buf, seglen);
+	return ip_output(ifp, NET_IP_TCP, src->sin_addr.s_addr, dst->sin_addr.s_addr, buf, seglen);
 }
 
 int
@@ -153,11 +153,11 @@ tcp_send_ack(struct socket *s)
 	release(&socket_lock);
 
 	route_src = 0;
-	ifp = route_lookup(dst.sin_addr, &route_src, 0);
+	ifp = route_lookup(dst.sin_addr.s_addr, &route_src, 0);
 	if(ifp == 0)
 		return -1;
-	if(src.sin_addr == 0)
-		src.sin_addr = route_src;
+	if(src.sin_addr.s_addr == 0)
+		src.sin_addr.s_addr = route_src;
 
 	return tcp_send_segment(ifp, &src, &dst, seq, ack, TCP_FLAG_ACK, win, 0, 0);
 }
@@ -334,7 +334,7 @@ out:
 		if(do_retransmit == -1) {
 			socket_deref(s);
 			// Also notify peer with RST if we have an address.
-			if(dst.sin_addr)
+			if(dst.sin_addr.s_addr)
 				tcp_send_segment(ifp, &src, &dst, seq, ack, TCP_FLAG_RST, 0, 0, 0);
 			return 0;
 		}
@@ -404,9 +404,9 @@ tcp_find_client_socket_locked(struct sockaddr_in *src, struct sockaddr_in *dst)
 			continue;
 		if(s->remote_addr.sin_port != 0 && s->remote_addr.sin_port != src->sin_port)
 			continue;
-		if(s->remote_addr.sin_addr != 0 && s->remote_addr.sin_addr != src->sin_addr)
+		if(s->remote_addr.sin_addr.s_addr != 0 && s->remote_addr.sin_addr.s_addr != src->sin_addr.s_addr)
 			continue;
-		if(s->local_addr.sin_addr != 0 && s->local_addr.sin_addr != dst->sin_addr)
+		if(s->local_addr.sin_addr.s_addr != 0 && s->local_addr.sin_addr.s_addr != dst->sin_addr.s_addr)
 			continue;
 		return s;
 	}
@@ -554,9 +554,9 @@ tcp_output(struct ifnet *ifp, struct sockaddr_in *src,
 			continue;
 		if(s->remote_addr.sin_port != dst->sin_port)
 			continue;
-		if(s->remote_addr.sin_addr != dst->sin_addr)
+		if(s->remote_addr.sin_addr.s_addr != dst->sin_addr.s_addr)
 			continue;
-		if(s->local_addr.sin_addr != 0 && s->local_addr.sin_addr != src->sin_addr)
+		if(s->local_addr.sin_addr.s_addr != 0 && s->local_addr.sin_addr.s_addr != src->sin_addr.s_addr)
 			continue;
 		
 		seq = s->tcp.snd_nxt;
@@ -640,12 +640,12 @@ tcp_input(struct ifnet *ifp, struct ip_hdr *ip, char *payload, uint len)
 	memset(&src, 0, sizeof(src));
 	src.sin_family = AF_INET;
 	src.sin_port = net_ntohs(th->src_port);
-	src.sin_addr = net_ntohl(ip->src);
+	src.sin_addr.s_addr = net_ntohl(ip->src);
 
 	memset(&dst, 0, sizeof(dst));
 	dst.sin_family = AF_INET;
 	dst.sin_port = net_ntohs(th->dst_port);
-	dst.sin_addr = net_ntohl(ip->dst);
+	dst.sin_addr.s_addr = net_ntohl(ip->dst);
 
 	need_ack = 0;
 	ack_seq = 0;
@@ -1004,7 +1004,7 @@ tcp_slowtimo(void)
 		}
 
 		// All remaining paths need the outgoing interface.
-		ifp = route_lookup(s->remote_addr.sin_addr, &route_src, 0);
+		ifp = route_lookup(s->remote_addr.sin_addr.s_addr, &route_src, 0);
 		if(ifp == 0)
 			continue;
 

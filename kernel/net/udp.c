@@ -26,7 +26,7 @@ udp_output(struct ifnet *ifp, struct sockaddr_in *src,
 	if(len > 0)
 		memmove(buf + hlen, payload, len);
 
-	return ip_output(ifp, NET_IP_UDP, src->sin_addr, dst->sin_addr, buf, hlen + len);
+	return ip_output(ifp, NET_IP_UDP, src->sin_addr.s_addr, dst->sin_addr.s_addr, buf, hlen + len);
 }
 
 void
@@ -54,12 +54,12 @@ udp_input(struct ifnet *ifp, struct ip_hdr *ip, char *payload, uint len)
 	memset(&src, 0, sizeof(src));
 	src.sin_family = AF_INET;
 	src.sin_port = net_ntohs(uh->src_port);
-	src.sin_addr = net_ntohl(ip->src);
+	src.sin_addr.s_addr = net_ntohl(ip->src);
 
 	memset(&dst, 0, sizeof(dst));
 	dst.sin_family = AF_INET;
 	dst.sin_port = net_ntohs(uh->dst_port);
-	dst.sin_addr = net_ntohl(ip->dst);
+	dst.sin_addr.s_addr = net_ntohl(ip->dst);
 
 	if(socket_deliver(&src, &dst, payload + hlen, dlen) < 0)
 		icmp_send_unreach(ifp, ip, payload, len, ICMP_UNREACH_PORT);

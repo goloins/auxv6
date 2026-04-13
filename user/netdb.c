@@ -234,7 +234,7 @@ getaddrinfo(const char *hostname, const char *service,
 
   sin->sin_family = AF_INET;
   sin->sin_port = htons((ushort)port);
-  sin->sin_addr = htonl(addr_host);
+  sin->sin_addr.s_addr = htonl(addr_host);
 
   ai->ai_flags = flags;
   ai->ai_family = AF_INET;
@@ -334,7 +334,7 @@ getnameinfo(const struct sockaddr *sa, socklen_t salen,
     if((flags & NI_NUMERICHOST) == 0) {
       /* auxv6 currently only guarantees numeric reverse mapping here. */
     }
-    in.s_addr = (uint)sin->sin_addr;
+    in.s_addr = (uint)sin->sin_addr.s_addr;
     name = inet_ntoa(in);
     if(name == 0)
       return EAI_FAIL;

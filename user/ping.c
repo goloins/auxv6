@@ -142,7 +142,7 @@ main(int argc, char *argv[])
 
   memset(&dst, 0, sizeof(dst));
   dst.sin_family = AF_INET;
-  dst.sin_addr = dst_addr;
+  dst.sin_addr.s_addr = dst_addr;
 
   if(connect(fd, &dst, sizeof(dst)) < 0) {
     dprintf(1, "ping: connect failed\n");

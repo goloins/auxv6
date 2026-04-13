@@ -2590,7 +2590,7 @@ XOpenDisplay(char *display_name)
   memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
   addr.sin_port = (ushort)X6_PORT;
-  addr.sin_addr = INADDR_LOOPBACK;
+  addr.sin_addr.s_addr = INADDR_LOOPBACK;
   if (connect(dpy->fd, &addr, sizeof(addr)) < 0) {
     goto fail;
   }

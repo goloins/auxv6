@@ -168,7 +168,7 @@ sync_once(uint server_ip, const char *server_name, int verbose)
   memset(&dst, 0, sizeof(dst));
   dst.sin_family = AF_INET;
   dst.sin_port = (ushort)NTP_PORT;
-  dst.sin_addr = server_ip;
+  dst.sin_addr.s_addr = server_ip;
 
   if(connect(fd, &dst, sizeof(dst)) < 0) {
     close(fd);

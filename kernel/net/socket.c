@@ -314,10 +314,10 @@ socket_deliver(struct sockaddr_in *src, struct sockaddr_in *dst, char *data, uin
       continue;
     if(sockets[i].remote_addr.sin_port != src->sin_port)
       continue;
-    if(sockets[i].remote_addr.sin_addr != src->sin_addr)
+    if(sockets[i].remote_addr.sin_addr.s_addr != src->sin_addr.s_addr)
       continue;
-    if(sockets[i].local_addr.sin_addr != INADDR_ANY &&
-       sockets[i].local_addr.sin_addr != dst->sin_addr)
+    if(sockets[i].local_addr.sin_addr.s_addr != INADDR_ANY &&
+       sockets[i].local_addr.sin_addr.s_addr != dst->sin_addr.s_addr)
       continue;
     rs = &sockets[i];
     break;
@@ -337,8 +337,8 @@ socket_deliver(struct sockaddr_in *src, struct sockaddr_in *dst, char *data, uin
       if(sockets[i].state != SOCK_BOUND && sockets[i].state != SOCK_CONNECT &&
          sockets[i].state != SOCK_ESTAB)
         continue;
-      if(sockets[i].local_addr.sin_addr != INADDR_ANY &&
-         sockets[i].local_addr.sin_addr != dst->sin_addr)
+      if(sockets[i].local_addr.sin_addr.s_addr != INADDR_ANY &&
+         sockets[i].local_addr.sin_addr.s_addr != dst->sin_addr.s_addr)
         continue;
       rs = &sockets[i];
       break;
@@ -384,11 +384,11 @@ socket_deliver_raw(uchar proto, struct sockaddr_in *src, struct sockaddr_in *dst
       continue;
     if(sockets[i].state != SOCK_CONNECT)
       continue;
-    if(sockets[i].remote_addr.sin_addr != 0 &&
-       sockets[i].remote_addr.sin_addr != src->sin_addr)
+    if(sockets[i].remote_addr.sin_addr.s_addr != 0 &&
+       sockets[i].remote_addr.sin_addr.s_addr != src->sin_addr.s_addr)
       continue;
-    if(sockets[i].local_addr.sin_addr != INADDR_ANY &&
-       sockets[i].local_addr.sin_addr != dst->sin_addr)
+    if(sockets[i].local_addr.sin_addr.s_addr != INADDR_ANY &&
+       sockets[i].local_addr.sin_addr.s_addr != dst->sin_addr.s_addr)
       continue;
     rs = &sockets[i];
     break;
@@ -405,8 +405,8 @@ socket_deliver_raw(uchar proto, struct sockaddr_in *src, struct sockaddr_in *dst
     if(sockets[i].state != SOCK_BOUND && sockets[i].state != SOCK_CLOSED)
       continue;
     if(sockets[i].state == SOCK_BOUND &&
-       sockets[i].local_addr.sin_addr != INADDR_ANY &&
-       sockets[i].local_addr.sin_addr != dst->sin_addr)
+       sockets[i].local_addr.sin_addr.s_addr != INADDR_ANY &&
+       sockets[i].local_addr.sin_addr.s_addr != dst->sin_addr.s_addr)
       continue;
     rs = &sockets[i];
     break;
@@ -507,8 +507,8 @@ socket_stream_connect(struct socket *s, struct sockaddr_in *remote)
       continue;
     if(sockets[i].state != SOCK_LISTEN)
       continue;
-    if(sockets[i].local_addr.sin_addr != INADDR_ANY &&
-       sockets[i].local_addr.sin_addr != remote->sin_addr)
+    if(sockets[i].local_addr.sin_addr.s_addr != INADDR_ANY &&
+       sockets[i].local_addr.sin_addr.s_addr != remote->sin_addr.s_addr)
       continue;
     listener = &sockets[i];
     break;
@@ -530,7 +530,7 @@ socket_stream_connect(struct socket *s, struct sockaddr_in *remote)
   accepted->type = SOCK_STREAM;
   accepted->local_addr = listener->local_addr;
   accepted->remote_addr.sin_family = AF_INET;
-  accepted->remote_addr.sin_addr = s->local_addr.sin_addr;
+  accepted->remote_addr.sin_addr.s_addr = s->local_addr.sin_addr.s_addr;
   accepted->remote_addr.sin_port = s->local_addr.sin_port;
 
   accepted->tcp.state = TCPS_SYN_RECEIVED;
@@ -631,7 +631,7 @@ ksock_sendto(struct socket *s, struct sockaddr_in *dst, char *buf, uint len)
 
   if(s == 0 || dst == 0 || buf == 0)
     return -1;
-  if(dst->sin_family != AF_INET || dst->sin_addr == 0 || dst->sin_port == 0)
+  if(dst->sin_family != AF_INET || dst->sin_addr.s_addr == 0 || dst->sin_port == 0)
     return -1;
   if(len > MBUF_SIZE - sizeof(struct udp_hdr))
     return -1;
@@ -645,12 +645,12 @@ ksock_sendto(struct socket *s, struct sockaddr_in *dst, char *buf, uint len)
   release(&socket_lock);
 
   route_src = 0;
-  ifp = route_lookup(dst->sin_addr, &route_src, 0);
+  ifp = route_lookup(dst->sin_addr.s_addr, &route_src, 0);
   if(ifp == 0)
     return -1;
 
-  if(src.sin_addr == 0)
-    src.sin_addr = route_src;
+  if(src.sin_addr.s_addr == 0)
+    src.sin_addr.s_addr = route_src;
 
   if(src.sin_port == 0) {
     ushort p;
@@ -664,7 +664,7 @@ ksock_sendto(struct socket *s, struct sockaddr_in *dst, char *buf, uint len)
       }
       s->local_addr.sin_family = AF_INET;
       s->local_addr.sin_port = p;
-      s->local_addr.sin_addr = src.sin_addr;
+      s->local_addr.sin_addr.s_addr = src.sin_addr.s_addr;
       if(s->state == SOCK_CLOSED)
         s->state = SOCK_BOUND;
     }
@@ -799,11 +799,11 @@ socket_filewrite(struct file *f, char *src_buf, int n)
   release(&socket_lock);
 
   route_src = 0;
-  ifp = route_lookup(dst.sin_addr, &route_src, 0);
+  ifp = route_lookup(dst.sin_addr.s_addr, &route_src, 0);
   if(ifp == 0)
     return -1;
-  if(src.sin_addr == 0)
-    src.sin_addr = route_src;
+  if(src.sin_addr.s_addr == 0)
+    src.sin_addr.s_addr = route_src;
 
   if(type == SOCK_DGRAM) {
     if((uint)n > MBUF_SIZE - sizeof(struct udp_hdr))
@@ -845,16 +845,16 @@ socket_filewrite(struct file *f, char *src_buf, int n)
 
     if((uint)n > MBUF_SIZE - sizeof(struct ip_hdr))
       return -1;
-    if(dst.sin_addr == 0)
+    if(dst.sin_addr.s_addr == 0)
       return -1;
-    if(src.sin_addr == 0)
-      src.sin_addr = route_src;
+    if(src.sin_addr.s_addr == 0)
+      src.sin_addr.s_addr = route_src;
 
     acquire(&socket_lock);
     snd_ttl = s->ttl ? s->ttl : 64;
     release(&socket_lock);
 
-    if(ip_output_ttl(ifp, (uchar)proto, src.sin_addr, dst.sin_addr,
+    if(ip_output_ttl(ifp, (uchar)proto, src.sin_addr.s_addr, dst.sin_addr.s_addr,
                      src_buf, (uint)n, snd_ttl) < 0)
       return -1;
     return n;
@@ -984,9 +984,9 @@ sys_bind(void)
       if(sockets[i].local_addr.sin_port != addr.sin_port)
         continue;
       // Check address overlap: INADDR_ANY overlaps with everything.
-      if(addr.sin_addr != INADDR_ANY &&
-         sockets[i].local_addr.sin_addr != INADDR_ANY &&
-         sockets[i].local_addr.sin_addr != addr.sin_addr)
+      if(addr.sin_addr.s_addr != INADDR_ANY &&
+         sockets[i].local_addr.sin_addr.s_addr != INADDR_ANY &&
+         sockets[i].local_addr.sin_addr.s_addr != addr.sin_addr.s_addr)
         continue;
       // Port is in use.  Allow only if both sides have SO_REUSEADDR.
       if(!s->reuseaddr || !sockets[i].reuseaddr) {
@@ -1038,13 +1038,13 @@ sys_connect(void)
     return -1;
 
   route_src = 0;
-  ifp = route_lookup(addr.sin_addr, &route_src, 0);
+  ifp = route_lookup(addr.sin_addr.s_addr, &route_src, 0);
   if(ifp == 0)
     return -1;
 
   acquire(&socket_lock);
-  if(s->local_addr.sin_addr == 0)
-    s->local_addr.sin_addr = route_src;
+  if(s->local_addr.sin_addr.s_addr == 0)
+    s->local_addr.sin_addr.s_addr = route_src;
   release(&socket_lock);
 
   if(s->type == SOCK_STREAM)
@@ -1239,11 +1239,11 @@ sys_send(void)
   release(&socket_lock);
 
   route_src = 0;
-  ifp = route_lookup(dst.sin_addr, &route_src, 0);
+  ifp = route_lookup(dst.sin_addr.s_addr, &route_src, 0);
   if(ifp == 0)
     goto send_fail;
-  if(src.sin_addr == 0)
-    src.sin_addr = route_src;
+  if(src.sin_addr.s_addr == 0)
+    src.sin_addr.s_addr = route_src;
 
   if(type == SOCK_DGRAM) {
     if((uint)len > MBUF_SIZE - sizeof(struct udp_hdr))
@@ -1280,14 +1280,14 @@ sys_send(void)
     uchar snd_ttl;
     if((uint)len > MBUF_SIZE - sizeof(struct ip_hdr))
       goto send_fail;
-    if(dst.sin_addr == 0)
+    if(dst.sin_addr.s_addr == 0)
       goto send_fail;
-    if(src.sin_addr == 0)
-      src.sin_addr = route_src;
+    if(src.sin_addr.s_addr == 0)
+      src.sin_addr.s_addr = route_src;
     acquire(&socket_lock);
     snd_ttl = s->ttl ? s->ttl : 64;
     release(&socket_lock);
-    if(ip_output_ttl(ifp, (uchar)proto, src.sin_addr, dst.sin_addr, kbuf, (uint)len, snd_ttl) < 0)
+    if(ip_output_ttl(ifp, (uchar)proto, src.sin_addr.s_addr, dst.sin_addr.s_addr, kbuf, (uint)len, snd_ttl) < 0)
       goto send_fail;
   } else {
     goto send_fail;
@@ -1380,15 +1380,15 @@ sys_sendto(void)
   if(type != SOCK_DGRAM && type != SOCK_RAW)
     goto sendto_fail;
 
-  if(rdst.sin_addr == 0)
+  if(rdst.sin_addr.s_addr == 0)
     goto sendto_fail;
 
   route_src = 0;
-  ifp = route_lookup(rdst.sin_addr, &route_src, 0);
+  ifp = route_lookup(rdst.sin_addr.s_addr, &route_src, 0);
   if(!ifp)
     goto sendto_fail;
-  if(src.sin_addr == 0)
-    src.sin_addr = route_src;
+  if(src.sin_addr.s_addr == 0)
+    src.sin_addr.s_addr = route_src;
 
   // Auto-bind an ephemeral source port when the socket has not been bound yet
   if(type == SOCK_DGRAM && src.sin_port == 0) {
@@ -1401,7 +1401,7 @@ sys_sendto(void)
       }
       s->local_addr.sin_family = AF_INET;
       s->local_addr.sin_port = p;
-      s->local_addr.sin_addr = src.sin_addr;
+      s->local_addr.sin_addr.s_addr = src.sin_addr.s_addr;
       if(s->state == SOCK_CLOSED)
         s->state = SOCK_BOUND;
     }
@@ -1420,7 +1420,7 @@ sys_sendto(void)
     acquire(&socket_lock);
     snd_ttl = s->ttl ? s->ttl : 64;
     release(&socket_lock);
-    if(ip_output_ttl(ifp, (uchar)proto, src.sin_addr, rdst.sin_addr, kbuf, (uint)len, snd_ttl) < 0)
+    if(ip_output_ttl(ifp, (uchar)proto, src.sin_addr.s_addr, rdst.sin_addr.s_addr, kbuf, (uint)len, snd_ttl) < 0)
       goto sendto_fail;
   }
 
@@ -1920,7 +1920,7 @@ socket_close(struct socket *s)
       s->ref++;
       s->tcp.close_pending = 1;
       // Find interface for this connection
-      ifp = route_lookup(s->remote_addr.sin_addr, &route_src, 0);
+      ifp = route_lookup(s->remote_addr.sin_addr.s_addr, &route_src, 0);
       release(&socket_lock);
       if(ifp) {
         tcp_close(s, ifp);
@@ -2118,7 +2118,7 @@ sys_shutdown(void)
       s->tcp.close_pending = 1;
       release(&socket_lock);
       route_src = 0;
-      ifp = route_lookup(s->remote_addr.sin_addr, &route_src, 0);
+      ifp = route_lookup(s->remote_addr.sin_addr.s_addr, &route_src, 0);
       if(ifp) {
         tcp_close(s, ifp);
       } else {
@@ -2326,9 +2326,9 @@ socket_get_table(struct socket_info_k *out, int max)
     out[n].type       = s->type;
     out[n].state      = s->state;
     out[n].tcp_state  = s->tcp.state;
-    out[n].local_ip   = s->local_addr.sin_addr;
+    out[n].local_ip   = s->local_addr.sin_addr.s_addr;
     out[n].local_port = s->local_addr.sin_port;
-    out[n].remote_ip  = s->remote_addr.sin_addr;
+    out[n].remote_ip  = s->remote_addr.sin_addr.s_addr;
     out[n].remote_port= s->remote_addr.sin_port;
     out[n].recv_len   = s->recv_len;
     out[n].send_len   = s->send_len;

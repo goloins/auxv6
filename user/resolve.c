@@ -414,7 +414,7 @@ dns_lookup_ipv4(const char *name, uint server, uint *out)
   memset(&src, 0, sizeof(src));
   src.sin_family = AF_INET;
   src.sin_port = (ushort)(49152 + (((uint)uptime() + (uint)getpid()) & 0x3fff));
-  src.sin_addr = INADDR_ANY;
+  src.sin_addr.s_addr = INADDR_ANY;
   if(bind(fd, &src, sizeof(src)) < 0) {
     close(fd);
     return -1;
@@ -423,7 +423,7 @@ dns_lookup_ipv4(const char *name, uint server, uint *out)
   memset(&dst, 0, sizeof(dst));
   dst.sin_family = AF_INET;
   dst.sin_port = DNS_PORT;
-  dst.sin_addr = server;
+  dst.sin_addr.s_addr = server;
   if(connect(fd, &dst, sizeof(dst)) < 0) {
     close(fd);
     return -1;

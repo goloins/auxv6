@@ -69,7 +69,7 @@ open_telnet(const char *host, int port)
   memset(&dst, 0, sizeof(dst));
   dst.sin_family = AF_INET;
   dst.sin_port = (ushort)port;
-  dst.sin_addr = ip;
+  dst.sin_addr.s_addr = ip;
 
   if(connect(fd, &dst, sizeof(dst)) < 0) {
     dprintf(2, "telnet: connect failed\n");

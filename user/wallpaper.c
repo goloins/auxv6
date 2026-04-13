@@ -76,7 +76,7 @@ wallpaper_try_x6_color(uint rgb)
   memset(&dst, 0, sizeof(dst));
   dst.sin_family = AF_INET;
   dst.sin_port = (ushort)WALLPAPER_X6_PORT;
-  dst.sin_addr = INADDR_LOOPBACK;
+  dst.sin_addr.s_addr = INADDR_LOOPBACK;
   if(connect(fd, &dst, sizeof(dst)) < 0) {
     close(fd);
     return -1;

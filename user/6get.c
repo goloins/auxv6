@@ -583,7 +583,7 @@ fetch_to_file(const struct http_url *u, const char *outfile, char *redirect, int
   memset(&dst, 0, sizeof(dst));
   dst.sin_family = AF_INET;
   dst.sin_port = (ushort)u->port;
-  dst.sin_addr = ip;
+  dst.sin_addr.s_addr = ip;
 
   PROGRESS("6get: connecting to %s:%d\n", u->host, u->port);
   if(connect(fd, &dst, sizeof(dst)) < 0) {

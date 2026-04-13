@@ -21,12 +21,12 @@
 #include "poll.h"
 #include "limits.h"
 #include "net.h"
+#include "sys/socket.h"
 
 struct stat;
 struct dirent;
 struct rtcdate;
 struct timespec;
-struct sockaddr_in;
 struct pollfd;
 
 typedef struct {
@@ -181,22 +181,22 @@ ssize_t getrandom(void *buf, size_t buflen, unsigned int flags);
 unsigned int sleep(unsigned int);
 int uptime(void);
 int socket(int family, int type, int protocol);
-int bind(int sockfd, struct sockaddr_in *addr, int addrlen);
-int connect(int sockfd, struct sockaddr_in *addr, int addrlen);
-ssize_t send(int sockfd, const void *buf, size_t len);
-ssize_t recv(int sockfd, void *buf, size_t len);
+int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+ssize_t send(int sockfd, const void *buf, size_t len, int flags);
+ssize_t recv(int sockfd, void *buf, size_t len, int flags);
 ssize_t recvtimeout(int sockfd, void *buf, size_t len, int timeout_ticks);
 ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
-           struct sockaddr_in *dst, int dstlen);
+					 const struct sockaddr *dst, socklen_t dstlen);
 ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
-             struct sockaddr_in *src, int *srclen);
+						 struct sockaddr *src, socklen_t *srclen);
 int listen(int sockfd, int backlog);
-int accept(int sockfd);
-int setsockopt(int sockfd, int level, int optname, const void *optval, int optlen);
-int getsockopt(int sockfd, int level, int optname, void *optval, int *optlen);
+int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t optlen);
+int getsockopt(int sockfd, int level, int optname, void *optval, socklen_t *optlen);
 int shutdown(int sockfd, int how);
-int getsockname(int sockfd, struct sockaddr_in *addr, int *addrlen);
-int getpeername(int sockfd, struct sockaddr_in *addr, int *addrlen);
+int getsockname(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+int getpeername(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 
 int stat(const char*, struct stat*);
 char* strcpy(char*, const char*);

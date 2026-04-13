@@ -512,12 +512,12 @@ stress_net_socket(int round)
     memset(&raddr, 0, sizeof(raddr));
     raddr.sin_family = AF_INET;
     raddr.sin_port = (ushort)port;
-    raddr.sin_addr = INADDR_LOOPBACK;
+    raddr.sin_addr.s_addr = INADDR_LOOPBACK;
 
     memset(&saddr, 0, sizeof(saddr));
     saddr.sin_family = AF_INET;
     saddr.sin_port = (ushort)(port + 3000);
-    saddr.sin_addr = INADDR_LOOPBACK;
+    saddr.sin_addr.s_addr = INADDR_LOOPBACK;
 
     if(bind(rfd, &raddr, sizeof(raddr)) < 0)
       fails++;

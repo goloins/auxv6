@@ -484,7 +484,7 @@ dhcp_prepare_socket(void)
   memset(&src, 0, sizeof(src));
   src.sin_family = AF_INET;
   src.sin_port = DHCP_CLIENT_PORT;
-  src.sin_addr = INADDR_ANY;
+  src.sin_addr.s_addr = INADDR_ANY;
   if(bind(fd, &src, sizeof(src)) < 0) {
     close(fd);
     return -1;
@@ -506,7 +506,7 @@ dhcp_connect_peer(int fd, struct netifinfo *ifp, uint dst_ip)
   memset(&dst, 0, sizeof(dst));
   dst.sin_family = AF_INET;
   dst.sin_port = DHCP_SERVER_PORT;
-  dst.sin_addr = dst_ip;
+  dst.sin_addr.s_addr = dst_ip;
   return connect(fd, &dst, sizeof(dst));
 }
 

@@ -133,7 +133,7 @@ main(int argc, char *argv[])
 
   memset(&dst, 0, sizeof(dst));
   dst.sin_family = AF_INET;
-  dst.sin_addr = dst_addr;
+  dst.sin_addr.s_addr = dst_addr;
 
   pid = getpid();
   seq = 1;
@@ -226,7 +226,7 @@ main(int argc, char *argv[])
 
           if(ih->type == ICMP_ECHO_REPLY) {
             if(ih->ident == (ushort)pid && ih->seq == (ushort)seq) {
-              hop_addr = peer.sin_addr;
+              hop_addr = peer.sin_addr.s_addr;
               reply_type = ICMP_ECHO_REPLY;
               got_reply = 1;
             }
@@ -246,7 +246,7 @@ main(int argc, char *argv[])
               if(n - inner_off >= (int)sizeof(struct icmp_hdr)) {
                 struct icmp_hdr *inner = (struct icmp_hdr *)(buf + inner_off);
                 if(inner->ident == (ushort)pid && inner->seq == (ushort)seq) {
-                  hop_addr = peer.sin_addr;
+                  hop_addr = peer.sin_addr.s_addr;
                   reply_type = ICMP_TIMXCEED;
                   got_reply = 1;
                 }

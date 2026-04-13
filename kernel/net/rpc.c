@@ -120,7 +120,7 @@ rpc_udp_send(rpc_client *client, char *callbuf, uint calllen)
 
   memset(&dst, 0, sizeof(dst));
   dst.sin_family = AF_INET;
-  dst.sin_addr = client->server.s_addr;
+  dst.sin_addr.s_addr = client->server.s_addr;
   dst.sin_port = client->port;
 
   sent = ksock_sendto(sock, &dst, callbuf, calllen);
@@ -151,7 +151,7 @@ rpc_udp_exchange(rpc_client *client, char *callbuf, uint calllen,
 
   memset(&dst, 0, sizeof(dst));
   dst.sin_family = AF_INET;
-  dst.sin_addr = client->server.s_addr;
+  dst.sin_addr.s_addr = client->server.s_addr;
   dst.sin_port = client->port;
 
   sent = ksock_sendto(sock, &dst, callbuf, calllen);
@@ -169,7 +169,7 @@ rpc_udp_exchange(rpc_client *client, char *callbuf, uint calllen,
   if (n <= 0)
     return -1;
 
-  if (src.sin_addr != client->server.s_addr)
+  if (src.sin_addr.s_addr != client->server.s_addr)
     return -1;
   if (src.sin_port != client->port)
     return -1;

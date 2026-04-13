@@ -39,11 +39,11 @@ icmp_input(struct ifnet *ifp, struct ip_hdr *ip, char *payload, uint len)
 
   memset(&src, 0, sizeof(src));
   src.sin_family = AF_INET;
-  src.sin_addr = net_ntohl(ip->src);
+  src.sin_addr.s_addr = net_ntohl(ip->src);
 
   memset(&dst, 0, sizeof(dst));
   dst.sin_family = AF_INET;
-  dst.sin_addr = net_ntohl(ip->dst);
+  dst.sin_addr.s_addr = net_ntohl(ip->dst);
 
   // Raw sockets should be able to observe inbound ICMP packets.
   socket_deliver_raw(IPPROTO_ICMP, &src, &dst, payload, len);
@@ -52,7 +52,7 @@ icmp_input(struct ifnet *ifp, struct ip_hdr *ip, char *payload, uint len)
     ic->type = ICMP_ECHO_REPLY;
     ic->csum = 0;
     ic->csum = icmp_csum(payload, len);
-    ip_output(ifp, NET_IP_ICMP, dst.sin_addr, src.sin_addr, payload, len);
+    ip_output(ifp, NET_IP_ICMP, dst.sin_addr.s_addr, src.sin_addr.s_addr, payload, len);
 
   }
 }
