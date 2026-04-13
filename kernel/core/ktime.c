@@ -242,7 +242,10 @@ ktime_set_realtime(const struct timespec *ts)
 
   if(ts == 0)
     return -1;
-  if(ts->tv_sec < 0)
+  /* RFC 5280 compliance: reject timestamps outside [0, Y9999-12-31 23:59:59 UTC].
+   * This ensures file/certificate timestamps remain representable without overflow.
+   */
+  if(ts->tv_sec < 0 || ts->tv_sec > 253402300799LL)
     return -1;
   if(ts->tv_nsec < 0 || ts->tv_nsec >= (long)KTIME_NSEC_PER_SEC)
     return -1;

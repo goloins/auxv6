@@ -219,7 +219,11 @@ time_tm_to_epoch(const struct tm *tm, time_t *out)
   seconds += (long long)tm->tm_min * 60LL;
   seconds += (long long)tm->tm_sec;
 
-  if(seconds < -2147483648LL || seconds > 2147483647LL) {
+  /* RFC 5280 compliance: reject timestamps outside [0, Y9999-12-31 23:59:59 UTC].
+   * RFC 5280 certificate dates must be representable without overflow.
+   * Range: 0 (1970-01-01 UTC) to 253402300799 (9999-12-31 23:59:59 UTC).
+   */
+  if(seconds < 0 || seconds > 253402300799LL) {
     errno = EOVERFLOW;
     return -1;
   }

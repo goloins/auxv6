@@ -1,5 +1,11 @@
 #include "stdint.h"
 
+/* time_t definition for stat timestamps (Tranche 1: 64-bit for RFC 5280) */
+#ifndef _TIME_T_DEFINED
+#define _TIME_T_DEFINED
+typedef long time_t;
+#endif
+
 #define T_DIR     1   // Directory
 #define T_FILE    2   // File
 #define T_DEV     3   // Device
@@ -36,7 +42,7 @@ struct stat {
   short st_gid;    // Owner group ID
   ushort st_mode;  // File type and permission bits
   uint64_t st_size; // Size of file in bytes (64-bit; supports files up to 2^64-1 bytes)
-  int st_atime;    // Time of last access (seconds since epoch; 0 if not tracked)
-  int st_mtime;    // Time of last modification (seconds since epoch; 0 if not tracked)
-  int st_ctime;    // Time of status change (seconds since epoch; 0 if not tracked)
+  time_t st_atime;    // Time of last access (seconds since epoch; 0 if not tracked; 64-bit for RFC 5280)
+  time_t st_mtime;    // Time of last modification (seconds since epoch; 0 if not tracked; 64-bit for RFC 5280)
+  time_t st_ctime;    // Time of status change (seconds since epoch; 0 if not tracked; 64-bit for RFC 5280)
 };

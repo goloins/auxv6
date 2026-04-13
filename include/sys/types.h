@@ -37,8 +37,8 @@ typedef unsigned char   u_char;
 typedef unsigned long   u_long;
 
 /* Time types */
-typedef int             time_t;     /* Time in seconds since epoch */
-typedef int             suseconds_t;/* Microseconds */
+typedef long            time_t;     /* Time in seconds since epoch (64-bit for RFC 5280 cert dates) */
+typedef long            suseconds_t;/* Microseconds (64-bit for symmetry with timeval) */
 typedef unsigned int    useconds_t; /* Microseconds (unsigned) */
 typedef int             clock_t;    /* Clock ticks */
 
