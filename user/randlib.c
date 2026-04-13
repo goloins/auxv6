@@ -18,6 +18,7 @@
 #include "stdlib.h"
 #include "string.h"
 #include "errno.h"
+#include "time.h"
 
 /* Forward declare kernel syscall */
 extern ssize_t getrandom(void *buf, size_t buflen, unsigned int flags);
@@ -121,8 +122,8 @@ arc4random_stir(void)
   arc4_state.keystream_idx = 64;  /* Force rekey on first use */
   arc4_state.initialized = 1;
 
-  /* Burn the seed data */
-  explicit_bzero(seed, sizeof(seed));
+  /* Burn the seed data (explicit_bzero lands in a later tranche). */
+  memset(seed, 0, sizeof(seed));
 }
 
 /*

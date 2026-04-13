@@ -157,8 +157,6 @@ char       *realpath(const char *path, char *resolved_path);
 /* Global environment variable array (initialised in user/posix.c) */
 extern char **environ;
 
-#endif /* _STDLIB_H */
-
 /*
  * Cryptographically secure random number generation (Tranche 2)
  * ChaCha20-based CSPRNG with automatic kernel entropy seeding.

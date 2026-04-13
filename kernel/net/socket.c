@@ -945,7 +945,7 @@ sys_bind(void)
   if(argint(0, &sockfd) < 0 || argint(2, &addrlen) < 0)
     return -1;
   
-  if(addrlen != sizeof(struct sockaddr_in)) {
+  if(addrlen < (int)sizeof(struct sockaddr_in)) {
     cprintf("bind: invalid address length\n");
     return -1;
   }
@@ -1019,7 +1019,7 @@ sys_connect(void)
 
   if(argint(0, &sockfd) < 0 || argint(2, &addrlen) < 0)
     return -1;
-  if(addrlen != sizeof(struct sockaddr_in))
+  if(addrlen < (int)sizeof(struct sockaddr_in))
     return -1;
   if(argint(1, &addr_raw) < 0)
     return -1;
@@ -1097,13 +1097,26 @@ int
 sys_accept(void)
 {
   int sockfd;
+  int addr_raw;
+  int addrlenp_raw;
   int fd;
   struct socket *listener;
   struct socket *accepted;
   struct file *f;
+  struct proc *p;
+  pde_t *pgdir;
+  struct sockaddr_in peer;
+  int outlen;
 
   if(argint(0, &sockfd) < 0)
     return -1;
+
+  addr_raw = 0;
+  addrlenp_raw = 0;
+  if(argint(1, &addr_raw) < 0)
+    addr_raw = 0;
+  if(argint(2, &addrlenp_raw) < 0)
+    addrlenp_raw = 0;
 
   listener = getfd_socket(sockfd);
   if(listener == 0)
@@ -1140,6 +1153,22 @@ sys_accept(void)
     return -1;
   }
 
+  if(addr_raw != 0 && addrlenp_raw != 0) {
+    p = myproc();
+    pgdir = p ? proc_pgdir(p) : 0;
+    if(pgdir != 0) {
+      if(copyin(pgdir, &outlen, (uint)addrlenp_raw, sizeof(outlen)) == 0 &&
+         outlen >= (int)sizeof(struct sockaddr_in)) {
+        acquire(&socket_lock);
+        memmove(&peer, &accepted->remote_addr, sizeof(peer));
+        release(&socket_lock);
+        copyout(pgdir, (uint)addr_raw, &peer, sizeof(peer));
+        outlen = (int)sizeof(struct sockaddr_in);
+        copyout(pgdir, (uint)addrlenp_raw, &outlen, sizeof(outlen));
+      }
+    }
+  }
+
   return fd;
 }
 
@@ -1148,6 +1177,7 @@ int
 sys_send(void)
 {
   int sockfd, len, buf_raw;
+  int flags;
   uint buf_u;
   char *kbuf;
   struct socket *s;
@@ -1166,6 +1196,10 @@ sys_send(void)
   if(len < 0)
     return -1;
   if(argint(1, &buf_raw) < 0)
+    return -1;
+  if(argint(3, &flags) < 0)
+    flags = 0;
+  if(flags & ~(MSG_NOSIGNAL | MSG_DONTWAIT))
     return -1;
 
   p = myproc();
@@ -1406,6 +1440,7 @@ int
 sys_recv(void)
 {
   int sockfd, len, buf_raw;
+  int flags;
   uint buf_u;
   char *kbuf;
   int n;
@@ -1418,6 +1453,10 @@ sys_recv(void)
   if(len < 0)
     return -1;
   if(argint(1, &buf_raw) < 0)
+    return -1;
+  if(argint(3, &flags) < 0)
+    flags = 0;
+  if(flags & ~(MSG_PEEK | MSG_DONTWAIT))
     return -1;
 
   p = myproc();
@@ -1440,15 +1479,37 @@ sys_recv(void)
   }
 
   acquire(&socket_lock);
-  while(s->recv_len == 0) {
-    if(socket_stream_eof_locked(s)) {
+  if(flags & MSG_DONTWAIT) {
+    if(s->recv_len == 0) {
+      if(socket_stream_eof_locked(s)) {
+        release(&socket_lock);
+        kmalloc_free(kbuf);
+        return 0;
+      }
       release(&socket_lock);
-      return 0;
+      kmalloc_free(kbuf);
+      return -1;
     }
-    sleep(s, &socket_lock);
+  } else {
+    while(s->recv_len == 0) {
+      if(socket_stream_eof_locked(s)) {
+        release(&socket_lock);
+        kmalloc_free(kbuf);
+        return 0;
+      }
+      sleep(s, &socket_lock);
+    }
   }
 
-  n = socket_recv_copy_locked(s, kbuf, len, 0);
+  if(flags & MSG_PEEK) {
+    n = len;
+    if((uint)n > s->recv_len)
+      n = (int)s->recv_len;
+    if(n > 0)
+      memmove(kbuf, s->recv_buf, (uint)n);
+  } else {
+    n = socket_recv_copy_locked(s, kbuf, len, 0);
+  }
 
   release(&socket_lock);
 
@@ -1459,7 +1520,8 @@ sys_recv(void)
 
   kmalloc_free(kbuf);
 
-  socket_stream_window_update(s, n);
+  if((flags & MSG_PEEK) == 0)
+    socket_stream_window_update(s, n);
   return n;
 }
 

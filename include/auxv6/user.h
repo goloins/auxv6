@@ -177,6 +177,7 @@ int tcgetattr(int fd, struct termios *termios_p);
 int tcsetattr(int fd, int optional_actions, const struct termios *termios_p);
 void* sbrk(intptr_t);
 void* vmreserve(int nbytes);
+ssize_t getrandom(void *buf, size_t buflen, unsigned int flags);
 unsigned int sleep(unsigned int);
 int uptime(void);
 int socket(int family, int type, int protocol);
