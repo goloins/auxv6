@@ -33,6 +33,7 @@
 #define SERIALDEV 4
 #define AUDIODEV 5
 #define TUNTAPDEV 6
+#define RNGDEV 7
 
 struct devman_device {
   char path[MAX_PATH];
@@ -594,6 +595,22 @@ devman_enumerate_pty_devices(void)
     devices[ndevices].type = M_IFCHR;
     ndevices++;
   }
+
+  if(ndevices < MAX_DEVICES) {
+    strcpy(devices[ndevices].path, "/dev/urandom");
+    devices[ndevices].major = RNGDEV;
+    devices[ndevices].minor = 0;
+    devices[ndevices].type = M_IFCHR;
+    ndevices++;
+  }
+
+  if(ndevices < MAX_DEVICES) {
+    strcpy(devices[ndevices].path, "/dev/random");
+    devices[ndevices].major = RNGDEV;
+    devices[ndevices].minor = 1;
+    devices[ndevices].type = M_IFCHR;
+    ndevices++;
+  }
 }
 
 static int
@@ -733,6 +750,8 @@ devman_remove_managed_nodes(void)
   devman_remove_node("/dev/kbd0");
   devman_remove_node("/dev/null");
   devman_remove_node("/dev/zero");
+  devman_remove_node("/dev/urandom");
+  devman_remove_node("/dev/random");
 }
 
 /*
@@ -865,6 +884,8 @@ devman_scan_and_create(void)
             mode = 0666;             /* /dev/null, /dev/zero */
           else
             mode = 0620;             /* /dev/tty* */
+        } else if(dev->major == RNGDEV) {
+          mode = 0666;               /* /dev/random, /dev/urandom */
         }
       }
     }

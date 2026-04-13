@@ -35,6 +35,7 @@ main(void)
   virtio_gpu_init(); // virtio-gpu subsystem
   intel_gfx_init();  // intel display-class PCI probe stub
   consoleinit();   // console hardware
+  rng_init();      // kernel randomness device (/dev/random, /dev/urandom)
   ptyinit();       // pseudo-terminal endpoints
   serialinit();    // serial tty chardev endpoints
   audio_init();    // audio char-device skeleton and ioctl entrypoints

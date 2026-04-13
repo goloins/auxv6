@@ -735,6 +735,10 @@ int             sys_date(void);
 // timer.c
 void            timerinit(void);
 
+// rng.c
+void            rng_init(void);
+void            rng_add_entropy(uint value);
+
 // trap.c
 void            idtinit(void);
 extern uint     ticks;

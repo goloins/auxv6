@@ -17,9 +17,12 @@
 #include "types.h"
 #include "param.h"
 #include "spinlock.h"
+#include "sleeplock.h"
 #include "defs.h"
 #include "x86.h"
 #include "memlayout.h"
+#include "fs.h"
+#include "file.h"
 
 /* Per-CPU entropy accumulation state */
 #define RNG_POOL_WORDS  32      /* 256 bits / entropy pool for mixing */
@@ -27,6 +30,9 @@
 /* Spinlock protecting global RNG state */
 static struct spinlock rng_lock;
 static int            rng_initialized = 0;
+
+#define RNG_MINOR_URANDOM 0
+#define RNG_MINOR_RANDOM  1
 
 /* ChaCha20 state (64 bytes) */
 typedef struct {
@@ -38,6 +44,9 @@ static chacha20_state  rng_state;
 /* Entropy accumulation buffer (for mixing various sources) */
 static uint          entropy_pool[RNG_POOL_WORDS];
 static int           entropy_pool_idx = 0;
+
+static int rngread(struct inode *ip, char *dst, uint64_t off, int n);
+static int rngwrite(struct inode *ip, char *src, uint64_t off, int n);
 
 /*
  * ChaCha20 quarter-round function (compact version)
@@ -114,9 +123,72 @@ rng_generate_locked(void *buf, uint buflen)
 void
 rng_add_entropy(uint value)
 {
+  if(!rng_initialized)
+    return;
+
+  acquire(&rng_lock);
   entropy_pool[entropy_pool_idx] ^= value;
   entropy_pool[entropy_pool_idx] ^= rdtsc();  /* Add RDTSC jitter */
   entropy_pool_idx = (entropy_pool_idx + 1) % RNG_POOL_WORDS;
+  release(&rng_lock);
+}
+
+static void
+rng_mix_bytes_locked(const uchar *src, uint len)
+{
+  uint i;
+
+  for(i = 0; i < len; i++) {
+    uint slot;
+    uint shift;
+
+    slot = (uint)entropy_pool_idx;
+    shift = (i & 3U) * 8U;
+    entropy_pool[slot] ^= ((uint)src[i]) << shift;
+    entropy_pool[slot] ^= (uint)rdtsc();
+    rng_state.state[4 + (slot & 7U)] ^= entropy_pool[slot];
+    entropy_pool_idx = (entropy_pool_idx + 1) % RNG_POOL_WORDS;
+  }
+}
+
+static int
+rngread(struct inode *ip, char *dst, uint64_t off, int n)
+{
+  int ret;
+
+  (void)off;
+  if(ip == 0 || dst == 0 || n < 0)
+    return -1;
+  if(ip->minor != RNG_MINOR_URANDOM && ip->minor != RNG_MINOR_RANDOM)
+    return -1;
+  if(n == 0)
+    return 0;
+  if(!rng_initialized)
+    return -1;
+
+  acquire(&rng_lock);
+  ret = rng_generate_locked(dst, (uint)n);
+  release(&rng_lock);
+  return ret;
+}
+
+static int
+rngwrite(struct inode *ip, char *src, uint64_t off, int n)
+{
+  (void)off;
+  if(ip == 0 || src == 0 || n < 0)
+    return -1;
+  if(ip->minor != RNG_MINOR_URANDOM && ip->minor != RNG_MINOR_RANDOM)
+    return -1;
+  if(n == 0)
+    return 0;
+  if(!rng_initialized)
+    return -1;
+
+  acquire(&rng_lock);
+  rng_mix_bytes_locked((const uchar *)src, (uint)n);
+  release(&rng_lock);
+  return n;
 }
 
 /*
@@ -152,8 +224,11 @@ rng_init(void)
   /* Collect initial entropy from various sources */
   for(i = 0; i < RNG_POOL_WORDS; i++) {
     entropy_pool[i] = (rdtsc() ^ (timestamp >> i)) & 0xffffffff;
+    rng_state.state[4 + (i & 7)] ^= entropy_pool[i];
   }
 
+  devsw[RNGDEV].read = rngread;
+  devsw[RNGDEV].write = rngwrite;
   rng_initialized = 1;
 }
 
