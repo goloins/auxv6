@@ -991,23 +991,15 @@ ports-progs:
 				continue; \
 			fi; \
 		fi; \
-		portbin=""; \
-		for cand in "$$portdir/_$$name" "$$portdir/$$binname"; do \
-			if [ -f "$$cand" ] && $(OBJDUMP) -f "$$cand" 2>/dev/null | grep -q 'file format elf32-i386'; then \
-				portbin="$$cand"; \
-				break; \
-			fi; \
-		done; \
-		if [ -z "$$portbin" ]; then \
-			if [ -f "$$portdir/_$$name" ]; then \
-				portbin="$$portdir/_$$name"; \
-			elif [ -f "$$portdir/$$binname" ]; then \
-				portbin="$$portdir/$$binname"; \
-			fi; \
-		fi; \
+		stamp="$$portdir/.auxv6-built.stamp"; \
 		rebuild=1; \
-		if [ -n "$$portbin" ] && $(OBJDUMP) -f "$$portbin" 2>/dev/null | grep -q 'file format elf32-i386'; then \
-			if ! find "$$portdir" -type f \( -name 'Makefile*' -o -name '*.mk' -o -name '*.in' -o -name '*.ac' -o -name 'configure*' -o -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.h' -o -name '*.S' -o -name '*.s' -o -name '*.asm' -o -name '*.ld' \) -newer "$$portbin" 2>/dev/null | grep -q .; then \
+		if [ -f "$$stamp" ]; then \
+			if ! find "$$portdir" \
+				-not -path "$$portdir/.auxv6-build/*" \
+				-not -path "$$portdir/obj/*" \
+				-not -path "$$portdir/autom4te.cache/*" \
+				-not -name '.auxv6-built.stamp' \
+				-type f \( -name 'Makefile*' -o -name '*.mk' -o -name '*.in' -o -name '*.ac' -o -name 'configure*' -o -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.h' -o -name '*.S' -o -name '*.s' -o -name '*.asm' -o -name '*.ld' \) -newer "$$stamp" 2>/dev/null | grep -q .; then \
 				rebuild=0; \
 			fi; \
 		fi; \
@@ -1017,19 +1009,20 @@ ports-progs:
 				echo "ports: build failed for $$name" | tee -a $(PORTS_BUILD_LOG); \
 				continue; \
 			fi; \
-			portbin=""; \
-			for cand in "$$portdir/_$$name" "$$portdir/$$binname"; do \
-				if [ -f "$$cand" ] && $(OBJDUMP) -f "$$cand" 2>/dev/null | grep -q 'file format elf32-i386'; then \
-					portbin="$$cand"; \
-					break; \
-				fi; \
-			done; \
-			if [ -z "$$portbin" ]; then \
-				echo "ports: built binary not found for $$name (looked for _$$name and $$binname)" | tee -a $(PORTS_BUILD_LOG); \
-				continue; \
-			fi; \
+			touch "$$stamp"; \
 		else \
 			echo "ports: up-to-date $$name (skipping build)" | tee -a $(PORTS_BUILD_LOG); \
+		fi; \
+		portbin=""; \
+		for cand in "$$portdir/_$$name" "$$portdir/$$binname"; do \
+			if [ -f "$$cand" ] && $(OBJDUMP) -f "$$cand" 2>/dev/null | grep -q 'file format elf32-i386'; then \
+				portbin="$$cand"; \
+				break; \
+			fi; \
+		done; \
+		if [ -z "$$portbin" ]; then \
+			echo "ports: built binary not found for $$name (looked for _$$name and $$binname)" | tee -a $(PORTS_BUILD_LOG); \
+			continue; \
 		fi; \
 		if ! $(OBJDUMP) -f "$$portbin" 2>/dev/null | grep -q 'file format elf32-i386'; then \
 			echo "ports: refusing non-ELF artifact for $$name: $$portbin" | tee -a $(PORTS_BUILD_LOG); \
@@ -1210,10 +1203,6 @@ UPROGS=\
 	_x6test\
 	_wallpaper\
 	_dash\
-	_dwm\
-	_st\
-	_dmenu\
-	_stest\
 	_symlinktest\
 	_nftwtest\
 	_ftwtest\

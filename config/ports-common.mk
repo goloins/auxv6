@@ -31,11 +31,27 @@ TOOLPREFIX := $(shell \
   else echo "ERROR: no i386 cross-toolchain found" >&2; exit 1; fi)
 endif
 
-CC ?= $(TOOLPREFIX)gcc
-LD ?= $(TOOLPREFIX)ld
-AR ?= $(TOOLPREFIX)ar
-RANLIB ?= $(TOOLPREFIX)ranlib
-STRIP ?= $(TOOLPREFIX)strip
-OBJDUMP ?= $(TOOLPREFIX)objdump
+# Use plain assignment so make's built-in default CC=cc (origin "default") is
+# properly overridden with the cross-compiler.  ?= only fires for origin
+# "undefined" and silently loses to the built-in default.  Command-line
+# overrides (e.g. make CC=clang) still win over plain = assignments.
+ifneq ($(filter default undefined,$(origin CC)),)
+CC = $(TOOLPREFIX)gcc
+endif
+ifneq ($(filter default undefined,$(origin LD)),)
+LD = $(TOOLPREFIX)ld
+endif
+ifneq ($(filter default undefined,$(origin AR)),)
+AR = $(TOOLPREFIX)ar
+endif
+ifneq ($(filter default undefined,$(origin RANLIB)),)
+RANLIB = $(TOOLPREFIX)ranlib
+endif
+ifneq ($(filter default undefined,$(origin STRIP)),)
+STRIP = $(TOOLPREFIX)strip
+endif
+ifneq ($(filter default undefined,$(origin OBJDUMP)),)
+OBJDUMP = $(TOOLPREFIX)objdump
+endif
 
 LIBGCC ?= $(shell $(CC) -m32 -print-libgcc-file-name 2>/dev/null)

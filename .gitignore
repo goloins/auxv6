@@ -210,3 +210,11 @@ ports/ports-build.log
 ports/ports-build.log
 libc/libauxrt.a
 targetfs/lib/libc.a
+user/libX11.a
+user/libc.a
+user/libauxrt.a
+user/crt0.o
+.gitignore
+targetfs/usr/bin/bash
+config/.auxv6-build/first-pass.log
+user/libc.a

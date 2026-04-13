@@ -16,7 +16,9 @@
 PORTS_COMMON_CALLER := $(lastword $(MAKEFILE_LIST))
 include $(dir $(abspath $(PORTS_COMMON_CALLER)))../../config/ports-common.mk
 
-SRCDIR := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
+# PORTS_COMMON_CALLER is captured before the include above, so it correctly
+# refers to this Makefile rather than the last file pulled in by libc.mk.
+SRCDIR := $(realpath $(dir $(abspath $(PORTS_COMMON_CALLER))))
 BUILDDIR := $(SRCDIR)/.auxv6-build
 LEGACY_OUT := $(SRCDIR)/_bash
 OUT := $(SRCDIR)/bash
@@ -107,7 +109,9 @@ check-host-contamination:
 $(BUILDDIR):
 	mkdir -p "$(BUILDDIR)"
 
-$(OUT):
+# first-pass is listed as a prerequisite so that $(OUT) always re-copies the
+# fresh binary after first-pass rebuilds .auxv6-build/bash.
+$(OUT): first-pass
 	@if [ -f "$(BUILDDIR)/bash" ] && $(OBJDUMP) -f "$(BUILDDIR)/bash" 2>/dev/null | grep -q 'file format elf32-i386'; then \
 		cp "$(BUILDDIR)/bash" "$(OUT)"; \
 		chmod 0755 "$(OUT)"; \
