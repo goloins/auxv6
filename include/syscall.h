@@ -99,3 +99,4 @@
 #define SYS_truncate 98
 #define SYS_ftruncate 99
 #define SYS_vmreserve 100
+#define SYS_getrandom 101

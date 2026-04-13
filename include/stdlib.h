@@ -158,3 +158,14 @@ char       *realpath(const char *path, char *resolved_path);
 extern char **environ;
 
 #endif /* _STDLIB_H */
+
+/*
+ * Cryptographically secure random number generation (Tranche 2)
+ * ChaCha20-based CSPRNG with automatic kernel entropy seeding.
+ */
+uint32_t    arc4random(void);
+void        arc4random_buf(void *buf, size_t n);
+uint32_t    arc4random_uniform(uint32_t upper_bound);
+void        arc4random_stir(void);
+
+#endif /* _STDLIB_H */
