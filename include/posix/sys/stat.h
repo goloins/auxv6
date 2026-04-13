@@ -73,10 +73,4 @@ int __posix_lstat(const char *path, struct stat *buf);
 #define fstat64  fstat
 #define lstat64  lstat
 
-/* umask - not yet a real syscall; stub returns 0 */
-#ifndef _UMASK_DECLARED
-#define _UMASK_DECLARED
-static inline mode_t umask(mode_t mask) { (void)mask; return 022; }
-#endif
-
 #endif /* _SYS_STAT_H */

@@ -112,6 +112,7 @@ struct proc {
   int tty;                     // Controlling terminal index (-1 means none)
   int uid;                     // Effective user ID
   int gid;                     // Effective group ID
+  int umask;                   // File creation mask
   uint rlimit_nofile_cur;      // Soft RLIMIT_NOFILE for this process
   uint rlimit_nofile_max;      // Hard RLIMIT_NOFILE for this process
   struct proc *parent;         // Parent process

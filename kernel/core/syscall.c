@@ -224,6 +224,9 @@ extern int sys_truncate(void);
 extern int sys_ftruncate(void);
 extern int sys_vmreserve(void);
 extern int sys_getrandom(void);
+extern int sys_umask(void);
+extern int sys_setreuid(void);
+extern int sys_setregid(void);
 
 static int (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -326,8 +329,9 @@ static int (*syscalls[])(void) = {
 [SYS_truncate]  sys_truncate,
 [SYS_ftruncate] sys_ftruncate,
 [SYS_vmreserve] sys_vmreserve,
-[SYS_getrandom] sys_getrandom,
-};
+[SYS_getrandom] sys_getrandom,  [SYS_umask]     sys_umask,
+  [SYS_setreuid]  sys_setreuid,
+  [SYS_setregid]  sys_setregid,};
 
 void
 syscall(void)

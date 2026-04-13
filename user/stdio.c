@@ -951,6 +951,12 @@ putc(int c, FILE *fp)
   return fputc(c, fp);
 }
 
+int
+putchar(int c)
+{
+  return fputc(c, stdout);
+}
+
 char *
 fgets(char *s, int size, FILE *fp)
 {

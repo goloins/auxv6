@@ -56,4 +56,8 @@ char       *ctime_r(const time_t *timer, char *buf);
 size_t      strftime(char *s, size_t max, const char *format,
                      const struct tm *tm);
 
+void        tzset(void);
+extern int  daylight;
+extern char *tzname[2];
+
 #endif /* _TIME_H */

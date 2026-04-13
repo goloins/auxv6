@@ -46,9 +46,7 @@ double      atof(const char *nptr);
 int         atoi(const char *nptr);
 long        atol(const char *nptr);
 long long   atoll(const char *nptr);
-/* strtod intentionally absent: auxv6 has no float support. Callers
- * that need it must provide their own (e.g. dash's system.h stub). */
-/* double strtod(const char *nptr, char **endptr); */
+double      strtod(const char *nptr, char **endptr);
 float       strtof(const char *nptr, char **endptr);
 long double strtold(const char *nptr, char **endptr);
 long        strtol(const char *nptr, char **endptr, int base);

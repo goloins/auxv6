@@ -456,6 +456,24 @@ sys_setgid(void)
 }
 
 int
+sys_umask(void)
+{
+  struct proc *p;
+  int newmask;
+  int oldmask;
+
+  p = myproc();
+  if(p == 0)
+    return -1;
+  if(argint(0, &newmask) < 0)
+    return -1;
+  newmask &= 0777;
+  oldmask = p->umask;
+  p->umask = newmask;
+  return oldmask;
+}
+
+int
 sys_tcsetpgrp(void)
 {
   int pgid;
@@ -1151,3 +1169,43 @@ sys_setrlimit(void)
     }
 
   }
+
+int
+sys_setreuid(void)
+{
+  struct proc *p;
+  int ruid, euid;
+
+  p = myproc();
+  if(p == 0)
+    return -1;
+  if(argint(0, &ruid) < 0 || argint(1, &euid) < 0)
+    return -1;
+  /* auxv6 has a single uid field (effective).  Honour standard
+   * semantics: -1 means leave unchanged; otherwise set if allowed. */
+  if(euid != -1) {
+    if(p->uid != 0 && euid != p->uid && euid != ruid)
+      return -1;
+    p->uid = euid;
+  }
+  return 0;
+}
+
+int
+sys_setregid(void)
+{
+  struct proc *p;
+  int rgid, egid;
+
+  p = myproc();
+  if(p == 0)
+    return -1;
+  if(argint(0, &rgid) < 0 || argint(1, &egid) < 0)
+    return -1;
+  if(egid != -1) {
+    if(p->uid != 0 && egid != p->gid && egid != rgid)
+      return -1;
+    p->gid = egid;
+  }
+  return 0;
+}

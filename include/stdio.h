@@ -54,6 +54,7 @@ int getc(FILE *fp);
 int ungetc(int c, FILE *fp);
 int fputc(int c, FILE *fp);
 int putc(int c, FILE *fp);
+int putchar(int c);
 
 char *fgets(char *s, int size, FILE *fp);
 int fputs(const char *s, FILE *fp);

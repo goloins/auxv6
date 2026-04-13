@@ -16,5 +16,8 @@ struct group {
 
 struct group *getgrnam(const char *name);
 struct group *getgrgid(gid_t gid);
+struct group *getgrent(void);
+void          setgrent(void);
+void          endgrent(void);
 
 #endif /* _GRP_H */

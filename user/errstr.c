@@ -125,3 +125,55 @@ strsignal(int sig)
     }
   }
 }
+/*
+ * sys_errlist / sys_nerr — POSIX legacy error string table.
+ * Indexed by errno value; entries for gaps are "Unknown error N".
+ * sys_nerr is the size of the table (highest valid index + 1).
+ */
+#define _SYS_NERR 41
+
+const char * const sys_errlist[_SYS_NERR] = {
+  /* 0  */ "Success",
+  /* 1  */ "Operation not permitted",
+  /* 2  */ "No such file or directory",
+  /* 3  */ "No such process",
+  /* 4  */ "Interrupted system call",
+  /* 5  */ "I/O error",
+  /* 6  */ "No such device or address",
+  /* 7  */ "Argument list too long",
+  /* 8  */ "Exec format error",
+  /* 9  */ "Bad file descriptor",
+  /* 10 */ "No child processes",
+  /* 11 */ "Try again",
+  /* 12 */ "Out of memory",
+  /* 13 */ "Permission denied",
+  /* 14 */ "Bad address",
+  /* 15 */ "Unknown error 15",
+  /* 16 */ "Device or resource busy",
+  /* 17 */ "File exists",
+  /* 18 */ "Cross-device link",
+  /* 19 */ "No such device",
+  /* 20 */ "Not a directory",
+  /* 21 */ "Is a directory",
+  /* 22 */ "Invalid argument",
+  /* 23 */ "Unknown error 23",
+  /* 24 */ "Too many open files",
+  /* 25 */ "Not a typewriter",
+  /* 26 */ "Unknown error 26",
+  /* 27 */ "Unknown error 27",
+  /* 28 */ "No space left on device",
+  /* 29 */ "Unknown error 29",
+  /* 30 */ "Unknown error 30",
+  /* 31 */ "Unknown error 31",
+  /* 32 */ "Broken pipe",
+  /* 33 */ "Domain error",
+  /* 34 */ "Result too large",
+  /* 35 */ "Unknown error 35",
+  /* 36 */ "File name too long",
+  /* 37 */ "Unknown error 37",
+  /* 38 */ "Unknown error 38",
+  /* 39 */ "Directory not empty",
+  /* 40 */ "Too many symbolic links",
+};
+
+int sys_nerr = _SYS_NERR;

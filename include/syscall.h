@@ -100,3 +100,6 @@
 #define SYS_ftruncate 99
 #define SYS_vmreserve 100
 #define SYS_getrandom 101
+#define SYS_umask     102
+#define SYS_setreuid  103
+#define SYS_setregid  104

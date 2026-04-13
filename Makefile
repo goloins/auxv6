@@ -362,7 +362,7 @@ tags: $(OBJS) kernel/boot/entryother.S user/_init
 kernel/core/vectors.S: tools/vectors.pl
 	./tools/vectors.pl > kernel/core/vectors.S
 
-LIBC_OBJS = user/ulib.o user/string.o user/errstr.o user/umalloc.o user/tty.o user/inet.o user/fmt.o user/dirent.o user/fnmatch.o user/glob.o user/ftw.o user/fts.o user/locale.o user/pwdgrp.o user/env.o user/conf.o user/path.o user/tempfile.o user/timecore.o user/resource.o user/netdb.o user/stdlib.o user/randlib.o user/mman.o user/posix_fs.o user/posix.o user/pthread.o user/syslog.o user/stdio.o user/regex.o user/calloc.o user/libterm.o user/checksum.o user/gzip.o user/user_font.o
+LIBC_OBJS = user/ulib.o user/string.o user/errstr.o user/umalloc.o user/tty.o user/inet.o user/fmt.o user/dirent.o user/fnmatch.o user/glob.o user/ftw.o user/fts.o user/locale.o user/pwdgrp.o user/env.o user/conf.o user/path.o user/tempfile.o user/timecore.o user/resource.o user/netdb.o user/stdlib.o user/randlib.o user/mman.o user/posix_fs.o user/posix.o user/pthread.o user/syslog.o user/stdio.o user/regex.o user/calloc.o user/libterm.o user/checksum.o user/gzip.o user/user_font.o user/setjmp.o
 LIBAUXV6_OBJS = user/crt0.o user/usys.o user/printf.o user/resolve.o
 ULIB = $(LIBC_OBJS) $(LIBAUXV6_OBJS)
 
@@ -959,11 +959,28 @@ ports-progs:
 			echo "ports: missing Makefile.auxv6 for $$name (expected $$portdir/Makefile.auxv6)" | tee -a $(PORTS_BUILD_LOG); \
 			continue; \
 		fi; \
+		canon_mk="ports/makefiles/$$name.Makefile"; \
+		if [ -f "$$canon_mk" ] && ! cmp -s "$$canon_mk" "$$portdir/Makefile.auxv6"; then \
+			if cp "$$canon_mk" "$$portdir/Makefile.auxv6"; then \
+				echo "ports: synced canonical makefile for $$name" >> $(PORTS_BUILD_LOG); \
+			else \
+				echo "ports: failed to sync canonical makefile for $$name from $$canon_mk" | tee -a $(PORTS_BUILD_LOG); \
+				continue; \
+			fi; \
+		fi; \
 		portbin=""; \
-		if [ -f "$$portdir/_$$name" ]; then \
-			portbin="$$portdir/_$$name"; \
-		elif [ -f "$$portdir/$$binname" ]; then \
-			portbin="$$portdir/$$binname"; \
+		for cand in "$$portdir/_$$name" "$$portdir/$$binname"; do \
+			if [ -f "$$cand" ] && $(OBJDUMP) -f "$$cand" 2>/dev/null | grep -q 'file format elf32-i386'; then \
+				portbin="$$cand"; \
+				break; \
+			fi; \
+		done; \
+		if [ -z "$$portbin" ]; then \
+			if [ -f "$$portdir/_$$name" ]; then \
+				portbin="$$portdir/_$$name"; \
+			elif [ -f "$$portdir/$$binname" ]; then \
+				portbin="$$portdir/$$binname"; \
+			fi; \
 		fi; \
 		rebuild=1; \
 		if [ -n "$$portbin" ] && $(OBJDUMP) -f "$$portbin" 2>/dev/null | grep -q 'file format elf32-i386'; then \
@@ -977,11 +994,14 @@ ports-progs:
 				echo "ports: build failed for $$name" | tee -a $(PORTS_BUILD_LOG); \
 				continue; \
 			fi; \
-			if [ -f "$$portdir/_$$name" ]; then \
-				portbin="$$portdir/_$$name"; \
-			elif [ -f "$$portdir/$$binname" ]; then \
-				portbin="$$portdir/$$binname"; \
-			else \
+			portbin=""; \
+			for cand in "$$portdir/_$$name" "$$portdir/$$binname"; do \
+				if [ -f "$$cand" ] && $(OBJDUMP) -f "$$cand" 2>/dev/null | grep -q 'file format elf32-i386'; then \
+					portbin="$$cand"; \
+					break; \
+				fi; \
+			done; \
+			if [ -z "$$portbin" ]; then \
 				echo "ports: built binary not found for $$name (looked for _$$name and $$binname)" | tee -a $(PORTS_BUILD_LOG); \
 				continue; \
 			fi; \

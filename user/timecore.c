@@ -873,3 +873,19 @@ strftime(char *s, size_t max, const char *format, const struct tm *tm)
   s[len] = '\0';
   return len;
 }
+
+/* Timezone globals — auxv6 is UTC-only, no TZ environment support. */
+long timezone = 0;
+long altzone  = 0;
+int  daylight = 0;
+char *tzname[2] = { "UTC", "UTC" };
+
+void
+tzset(void)
+{
+  /* No-op: auxv6 has no timezone database. All times are UTC. */
+  timezone = 0;
+  daylight = 0;
+  tzname[0] = "UTC";
+  tzname[1] = "UTC";
+}

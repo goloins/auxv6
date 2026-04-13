@@ -337,6 +337,87 @@ atof(const char *nptr)
   return sign < 0 ? -value : value;
 }
 
+double
+strtod(const char *nptr, char **endptr)
+{
+  const char *s;
+  double value;
+  double frac;
+  double div;
+  int sign;
+  int exp_sign;
+  int exp;
+
+  if(nptr == 0) {
+    if(endptr) *endptr = (char *)nptr;
+    return 0.0;
+  }
+
+  s = nptr;
+  while(*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r' || *s == '\f' || *s == '\v')
+    s++;
+
+  sign = 1;
+  if(*s == '+' || *s == '-') {
+    if(*s == '-')
+      sign = -1;
+    s++;
+  }
+
+  value = 0.0;
+  while(*s >= '0' && *s <= '9') {
+    value = value * 10.0 + (double)(*s - '0');
+    s++;
+  }
+
+  frac = 0.0;
+  div = 1.0;
+  if(*s == '.') {
+    s++;
+    while(*s >= '0' && *s <= '9') {
+      frac = frac * 10.0 + (double)(*s - '0');
+      div *= 10.0;
+      s++;
+    }
+  }
+
+  value += frac / div;
+
+  if(*s == 'e' || *s == 'E') {
+    s++;
+    exp_sign = 1;
+    if(*s == '+' || *s == '-') {
+      if(*s == '-')
+        exp_sign = -1;
+      s++;
+    }
+    exp = 0;
+    while(*s >= '0' && *s <= '9') {
+      exp = exp * 10 + (int)(*s - '0');
+      s++;
+    }
+    if(exp_sign > 0)
+      value *= pow10_int(exp);
+    else
+      value /= pow10_int(exp);
+  }
+
+  if(endptr) *endptr = (char *)s;
+  return sign < 0 ? -value : value;
+}
+
+long double
+strtold(const char *nptr, char **endptr)
+{
+  return (long double)strtod(nptr, endptr);
+}
+
+float
+strtof(const char *nptr, char **endptr)
+{
+  return (float)strtod(nptr, endptr);
+}
+
 int
 abs(int j)
 {

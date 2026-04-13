@@ -80,5 +80,7 @@
 #define EINPROGRESS 115 /* Operation now in progress */
 
 extern int errno;
+extern int sys_nerr;
+extern const char * const sys_errlist[];
 
 #endif

@@ -426,3 +426,85 @@ getgrgid(gid_t gid)
   errno = ENOENT;
   return 0;
 }
+/* Sequential group file iteration */
+static char  _grent_buf[ACCOUNT_DB_MAX];
+static int   _grent_n   = -1;   /* -1 = not loaded */
+static int   _grent_off = 0;
+
+void
+setgrent(void)
+{
+  _grent_n = accountdb_read("/etc/group", "/etc/groups",
+                             _grent_buf, sizeof(_grent_buf));
+  _grent_off = 0;
+}
+
+void
+endgrent(void)
+{
+  _grent_n   = -1;
+  _grent_off = 0;
+}
+
+struct group *
+getgrent(void)
+{
+  static struct group     gr;
+  static char  namebuf[ACCOUNT_FIELD_MAX];
+  static char  passbuf[ACCOUNT_FIELD_MAX];
+  static char  membersbuf[ACCOUNT_FIELD_MAX];
+  static char *members[GROUP_MEMBERS_MAX + 1];
+  char *line;
+  int   linelen;
+  char *fields[4];
+  int   lengths[4];
+  int   nf;
+  uint  gidval;
+  int   member_count;
+
+  if(_grent_n < 0)
+    setgrent();
+  if(_grent_n <= 0)
+    return 0;
+
+  while(_grent_off < _grent_n) {
+    if(!accountdb_next_line(_grent_buf, _grent_n, &_grent_off, &line, &linelen))
+      break;
+    nf = accountdb_split_fields(line, linelen, fields, lengths, 4);
+    if(nf < 2)
+      continue;
+
+    if(nf >= 3) {
+      if(accountdb_parse_uint(fields[2], lengths[2], &gidval) < 0)
+        continue;
+      accountdb_copy(passbuf, sizeof(passbuf), fields[1], lengths[1]);
+      if(nf >= 4)
+        accountdb_copy(membersbuf, sizeof(membersbuf), fields[3], lengths[3]);
+      else
+        membersbuf[0] = 0;
+    } else {
+      if(accountdb_parse_uint(fields[1], lengths[1], &gidval) < 0)
+        continue;
+      passbuf[0] = 0;
+      membersbuf[0] = 0;
+    }
+
+    accountdb_copy(namebuf, sizeof(namebuf), fields[0], lengths[0]);
+    member_count = 0;
+    if(membersbuf[0]) {
+      char *p = membersbuf;
+      while(*p && member_count < GROUP_MEMBERS_MAX) {
+        members[member_count++] = p;
+        while(*p && *p != ',') p++;
+        if(*p == ',') *p++ = 0;
+      }
+    }
+    members[member_count] = 0;
+    gr.gr_name   = namebuf;
+    gr.gr_passwd = passbuf;
+    gr.gr_gid    = (gid_t)gidval;
+    gr.gr_mem    = members;
+    return &gr;
+  }
+  return 0;
+}

@@ -255,3 +255,11 @@ open64(const char *path, int flags, ...)
 {
   return open((char*)path, flags);
 }
+int
+fchmod(int fd, mode_t mode)
+{
+  /* auxv6 has no fchmod syscall; no-op returning success. */
+  (void)fd;
+  (void)mode;
+  return 0;
+}
