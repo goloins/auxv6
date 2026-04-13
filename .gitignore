@@ -195,3 +195,5 @@ targetfs/usr/bin/st
 user/xwmtrace
 docs/.DS_Store
 user/demandzerotest
+targetfs/usr/bin/libressl
+ports/ports-build.log

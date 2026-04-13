@@ -8,4 +8,4 @@
 # icewm|https://github.com/ice-wm/icewm/releases/download/3.8.0/icewm-3.8.0.tar.gz|user|icewm-3.8.0|icewm
 
 # Non-first-class TLS preparation lane: first configure/build pass only.
-libressl|https://github.com/libressl/portable/releases/download/v4.2.1/libressl-4.2.1.tar.gz|helper|libressl-4.2.1|libressl
+libressl|https://github.com/libressl/portable/releases/download/v4.2.1/libressl-4.2.1.tar.gz|user|libressl-4.2.1|libressl
