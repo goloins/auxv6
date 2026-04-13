@@ -7,5 +7,8 @@
 # Example:
 # icewm|https://github.com/ice-wm/icewm/releases/download/3.8.0/icewm-3.8.0.tar.gz|user|icewm-3.8.0|icewm
 
+# Non-first-class shell preparation lane: first configure/build pass only.
+bash|https://ftp.gnu.org/gnu/bash/bash-5.2.37.tar.gz|user|bash-5.2.37|bash
+
 # Non-first-class TLS preparation lane: first configure/build pass only.
 libressl|https://github.com/libressl/portable/releases/download/v4.2.1/libressl-4.2.1.tar.gz|user|libressl-4.2.1|libressl
