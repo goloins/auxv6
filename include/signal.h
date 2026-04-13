@@ -58,6 +58,9 @@ struct sigaction {
   int sa_flags;
 };
 
+/* POSIX sigaction flags (subset currently supported by auxv6). */
+#define SA_RESTART 0x10000000
+
 // Signal frame pushed onto user stack during signal delivery.
 // The trampoline code at the top returns to sigreturn.
 struct sigframe {

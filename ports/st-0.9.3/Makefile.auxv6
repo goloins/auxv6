@@ -93,9 +93,9 @@ RUNTIME_OBJS := \
   $(ROOT)/user/resolve.o
 
 
-.PHONY: all clean toolchain-check
+.PHONY: all clean toolchain-check check-host-contamination
 
-all: toolchain-check $(OUT)
+all: toolchain-check $(OUT) check-host-contamination
 
 toolchain-check:
 	@$(CC) -m32 -dM -E -x c /dev/null | grep -q '__i386__' || \
@@ -110,6 +110,13 @@ $(RUNTIME_OBJS):
 $(OUT): $(OBJ) $(RUNTIME_OBJS)
 	$(LD) $(LDFLAGS) -o $@ $(RUNTIME_OBJS) $(OBJ) $(LIBGCC)
 	$(OBJDUMP) -S $@ > $(ST_DIR)/st-auxv6.asm || true
+
+check-host-contamination:
+     @! find "$(ST_DIR)" -name '*.d' -type f -print0 2>/dev/null | \
+          xargs -0 grep -En '/usr/include|/usr/local/include|/opt/homebrew/include|/Library/Developer/CommandLineTools/usr/include|/Applications/Xcode.*/usr/include' >/dev/null || \
+          (echo "ERROR: host header path detected in st port dependency files" >&2; \
+          echo "Inspect ports/st-0.9.3/*.d for details." >&2; \
+          exit 1)
 
 clean:
 	rm -f $(OBJ) $(OUT) $(SRC:.c=.d)

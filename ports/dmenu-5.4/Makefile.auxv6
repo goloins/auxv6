@@ -95,9 +95,9 @@ STEST_OBJ := $(BUILD_DIR)/stest.o $(BUILD_DIR)/util.o
 DMENU_ELF := $(BUILD_DIR)/dmenu
 STEST_ELF := $(BUILD_DIR)/stest
 
-.PHONY: all clean toolchain-check config-check
+.PHONY: all clean toolchain-check config-check check-host-contamination
 
-all: toolchain-check config-check $(DMENU_OUT) $(STEST_OUT)
+all: toolchain-check config-check $(DMENU_OUT) $(STEST_OUT) check-host-contamination
 
 toolchain-check:
 	@$(CC) -m32 -dM -E -x c /dev/null | grep -q '__i386__' || \
@@ -134,6 +134,13 @@ $(DMENU_OUT): $(DMENU_ELF)
 
 $(STEST_OUT): $(STEST_ELF)
 	cp $< $@
+
+check-host-contamination:
+	@! find "$(BUILD_DIR)" "$(DMENU_DIR)" -name '*.d' -type f -print0 2>/dev/null | \
+		xargs -0 grep -En '/usr/include|/usr/local/include|/opt/homebrew/include|/Library/Developer/CommandLineTools/usr/include|/Applications/Xcode.*/usr/include' >/dev/null || \
+		(echo "ERROR: host header path detected in dmenu port dependency files" >&2; \
+		echo "Inspect ports/dmenu-5.4 and user/.stage/dmenu-5.4 .d files for details." >&2; \
+		exit 1)
 
 clean:
 	rm -f $(DMENU_OUT) $(STEST_OUT)

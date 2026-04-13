@@ -214,6 +214,8 @@ endif
 CC = $(TOOLPREFIX)gcc
 AS = $(TOOLPREFIX)gas
 LD = $(TOOLPREFIX)ld
+AR = $(TOOLPREFIX)ar
+RANLIB = $(TOOLPREFIX)ranlib
 STRIP = $(TOOLPREFIX)strip
 OBJCOPY = $(TOOLPREFIX)objcopy
 OBJDUMP = $(TOOLPREFIX)objdump
@@ -363,6 +365,13 @@ kernel/core/vectors.S: tools/vectors.pl
 LIBC_OBJS = user/ulib.o user/string.o user/errstr.o user/umalloc.o user/tty.o user/inet.o user/fmt.o user/dirent.o user/fnmatch.o user/glob.o user/ftw.o user/fts.o user/locale.o user/pwdgrp.o user/env.o user/conf.o user/path.o user/tempfile.o user/timecore.o user/resource.o user/netdb.o user/stdlib.o user/randlib.o user/mman.o user/posix_fs.o user/posix.o user/pthread.o user/syslog.o user/stdio.o user/regex.o user/calloc.o user/libterm.o user/checksum.o user/gzip.o user/user_font.o
 LIBAUXV6_OBJS = user/crt0.o user/usys.o user/printf.o user/resolve.o
 ULIB = $(LIBC_OBJS) $(LIBAUXV6_OBJS)
+
+# Convenience static archive of the full auxv6 userland libc.
+# Used by autoconf-based ports (e.g. LibreSSL) that need to link against
+# our libc without knowing about individual .o files.
+user/libc.a: $(ULIB)
+	$(AR) rcs $@ $(ULIB)
+	$(RANLIB) $@
 
 USER_STAGE_DIR = user/.stage
 USER_PROG_JOBS ?= $(shell nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
@@ -862,12 +871,14 @@ _st: ports/st-0.9.3/Makefile.auxv6 $(ULIB) user/x11.o
 	$(MAKE) -f ports/st-0.9.3/Makefile.auxv6 all
 	cp ports/st-0.9.3/_st _st
 
-_dmenu: ports/dmenu-5.4/Makefile.auxv6 $(ULIB) user/x11.o
+.PHONY: dmenu-port-build
+dmenu-port-build: ports/dmenu-5.4/Makefile.auxv6 $(ULIB) user/x11.o
 	$(MAKE) -f ports/dmenu-5.4/Makefile.auxv6 all
+
+_dmenu: dmenu-port-build
 	cp ports/dmenu-5.4/_dmenu _dmenu
 
-_stest: ports/dmenu-5.4/Makefile.auxv6 $(ULIB)
-	$(MAKE) -f ports/dmenu-5.4/Makefile.auxv6 all
+_stest: dmenu-port-build
 	cp ports/dmenu-5.4/_stest _stest
 
 _symlinktest: user/symlinktest
@@ -948,17 +959,37 @@ ports-progs:
 			echo "ports: missing Makefile.auxv6 for $$name (expected $$portdir/Makefile.auxv6)" | tee -a $(PORTS_BUILD_LOG); \
 			continue; \
 		fi; \
-		echo "ports: building $$name from $$portdir" | tee -a $(PORTS_BUILD_LOG); \
-		if ! $(MAKE) -C "$$portdir" -f Makefile.auxv6 all; then \
-			echo "ports: build failed for $$name" | tee -a $(PORTS_BUILD_LOG); \
-			continue; \
-		fi; \
+		portbin=""; \
 		if [ -f "$$portdir/_$$name" ]; then \
 			portbin="$$portdir/_$$name"; \
 		elif [ -f "$$portdir/$$binname" ]; then \
 			portbin="$$portdir/$$binname"; \
+		fi; \
+		rebuild=1; \
+		if [ -n "$$portbin" ] && $(OBJDUMP) -f "$$portbin" 2>/dev/null | grep -q 'file format elf32-i386'; then \
+			if ! find "$$portdir" -type f \( -name 'Makefile*' -o -name '*.mk' -o -name '*.in' -o -name '*.ac' -o -name 'configure*' -o -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.h' -o -name '*.S' -o -name '*.s' -o -name '*.asm' -o -name '*.ld' \) -newer "$$portbin" 2>/dev/null | grep -q .; then \
+				rebuild=0; \
+			fi; \
+		fi; \
+		if [ "$$rebuild" = "1" ]; then \
+			echo "ports: building $$name from $$portdir" | tee -a $(PORTS_BUILD_LOG); \
+			if ! $(MAKE) -C "$$portdir" -f Makefile.auxv6 all; then \
+				echo "ports: build failed for $$name" | tee -a $(PORTS_BUILD_LOG); \
+				continue; \
+			fi; \
+			if [ -f "$$portdir/_$$name" ]; then \
+				portbin="$$portdir/_$$name"; \
+			elif [ -f "$$portdir/$$binname" ]; then \
+				portbin="$$portdir/$$binname"; \
+			else \
+				echo "ports: built binary not found for $$name (looked for _$$name and $$binname)" | tee -a $(PORTS_BUILD_LOG); \
+				continue; \
+			fi; \
 		else \
-			echo "ports: built binary not found for $$name (looked for _$$name and $$binname)" | tee -a $(PORTS_BUILD_LOG); \
+			echo "ports: up-to-date $$name (skipping build)" | tee -a $(PORTS_BUILD_LOG); \
+		fi; \
+		if ! $(OBJDUMP) -f "$$portbin" 2>/dev/null | grep -q 'file format elf32-i386'; then \
+			echo "ports: refusing non-ELF artifact for $$name: $$portbin" | tee -a $(PORTS_BUILD_LOG); \
 			continue; \
 		fi; \
 		case "$$pclass" in \
@@ -1259,7 +1290,8 @@ clean:
 	user/top \
 	user/date user/time user/killall user/halt user/wallpaper \
 	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/stackgrowtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/dmesg user/tail user/lspci user/v6init user/testdaemon \
-	user/schedperf user/fsperf user/gfxperf user/kallocstress user/kernperf user/bcachestress user/kmemstress
+	user/schedperf user/fsperf user/gfxperf user/kallocstress user/kernperf user/bcachestress user/kmemstress \
+	user/libc.a
 
 # make a printout
 FILES = $(shell grep -v '^\#' tools/runoff.list)

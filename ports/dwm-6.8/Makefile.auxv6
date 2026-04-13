@@ -101,9 +101,9 @@ RUNTIME_OBJS := \
   $(ROOT)/user/printf.o \
   $(ROOT)/user/resolve.o
 
-.PHONY: all clean toolchain-check config-check
+.PHONY: all clean toolchain-check config-check check-host-contamination
 
-all: toolchain-check config-check $(OUT)
+all: toolchain-check config-check $(OUT) check-host-contamination
 
 toolchain-check:
 	@$(CC) -m32 -dM -E -x c /dev/null | grep -q '__i386__' || \
@@ -122,6 +122,13 @@ $(RUNTIME_OBJS):
 $(OUT): $(OBJ) $(RUNTIME_OBJS)
 	$(LD) $(LDFLAGS) -o $@ $(RUNTIME_OBJS) $(OBJ) $(LIBS) $(LIBGCC)
 	$(OBJDUMP) -S $@ > $(DWM_DIR)/dwm-auxv6.asm || true
+
+check-host-contamination:
+     @! find "$(DWM_DIR)" -name '*.d' -type f -print0 2>/dev/null | \
+          xargs -0 grep -En '/usr/include|/usr/local/include|/opt/homebrew/include|/Library/Developer/CommandLineTools/usr/include|/Applications/Xcode.*/usr/include' >/dev/null || \
+          (echo "ERROR: host header path detected in dwm port dependency files" >&2; \
+          echo "Inspect ports/dwm-6.8/*.d for details." >&2; \
+          exit 1)
 
 clean:
 	rm -f $(OBJ) $(OUT) $(SRC:.c=.d)

@@ -147,7 +147,7 @@ GENERATED := \
 # ---------------------------------------------------------------------------
 # Targets
 # ---------------------------------------------------------------------------
-.PHONY: all generated clean toolchain-check
+.PHONY: all generated clean toolchain-check check-host-contamination
 
 toolchain-check:
 	@$(CC) -m32 -dM -E -x c /dev/null | grep -q '__i386__' || \
@@ -155,11 +155,18 @@ toolchain-check:
 	@nm "$(LIBGCC)" 2>/dev/null | grep -Eq '__divmoddi4|__udivdi3|__divdi3' || \
 		(echo "ERROR: libgcc is missing i386 64-bit division helpers: $(LIBGCC)" >&2; exit 1)
 
-all: toolchain-check $(GENERATED) $(OUT)
+all: toolchain-check $(GENERATED) $(OUT) check-host-contamination
 
 $(OUT): $(DASH_OBJS) $(RUNTIME_OBJS) | toolchain-check
 	$(LD) $(LDFLAGS) -o $@ $^ $(LIBGCC)
 	$(OBJDUMP) -S $@ > $(ROOT)/ports/dash-0.5.12/dash.asm || true
+
+check-host-contamination:
+  @! find "$(ROOT)/ports/dash-0.5.12/obj" -name '*.d' -type f -print0 2>/dev/null | \
+    xargs -0 grep -En '/usr/include|/usr/local/include|/opt/homebrew/include|/Library/Developer/CommandLineTools/usr/include|/Applications/Xcode.*/usr/include' >/dev/null || \
+    (echo "ERROR: host header path detected in dash port dependency files" >&2; \
+    echo "Inspect ports/dash-0.5.12/obj/*.d for details." >&2; \
+    exit 1)
 
 # Compile dash sources into obj/
 $(ROOT)/ports/dash-0.5.12/obj/%.o: $(SRCDIR)/%.c

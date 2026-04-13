@@ -138,6 +138,11 @@ user/lsof
 user/which
 user/file
 user/gunzip
+user/libc.a
+targetfs/usr/bin/libressl
+targetfs/usr/lib/libcrypto.a
+targetfs/usr/lib/libssl.a
+targetfs/usr/lib/libtls.a
 user/tar
 user/uniq
 user/sort
@@ -196,4 +201,6 @@ user/xwmtrace
 docs/.DS_Store
 user/demandzerotest
 targetfs/usr/bin/libressl
+ports/ports-build.log
+ports/ports-build.log
 ports/ports-build.log

@@ -74,6 +74,47 @@ static char *addr_list[2];
 static struct in_addr addr_slot;
 static char name_slot[256];
 
+struct service_ent {
+  const char *name;
+  int port_host;
+  const char *proto;
+};
+
+static const struct service_ent g_services[] = {
+  { "http", 80, "tcp" },
+  { "https", 443, "tcp" },
+  { "domain", 53, "tcp" },
+  { "domain", 53, "udp" },
+  { "ftp", 21, "tcp" },
+  { "ssh", 22, "tcp" },
+  { "telnet", 23, "tcp" },
+  { "smtp", 25, "tcp" },
+  { "pop3", 110, "tcp" },
+  { "imap", 143, "tcp" },
+};
+
+static struct servent se;
+static char *service_aliases[1];
+
+static int
+service_proto_match(const char *a, const char *b)
+{
+  if(a == 0 || *a == 0 || b == 0 || *b == 0)
+    return 1;
+  return strcmp(a, b) == 0;
+}
+
+static struct servent *
+set_servent_common(const struct service_ent *src)
+{
+  se.s_name = (char*)src->name;
+  service_aliases[0] = 0;
+  se.s_aliases = service_aliases;
+  se.s_port = htons((ushort)src->port_host);
+  se.s_proto = (char*)src->proto;
+  return &se;
+}
+
 static void
 set_hostent_common(uint addr_net, const char *name)
 {
@@ -146,6 +187,47 @@ gethostbyaddr(const void *addr, socklen_t len, int type)
   set_hostent_common(in.s_addr, name);
   h_errno = 0;
   return &he;
+}
+
+struct servent *
+getservbyname(const char *name, const char *proto)
+{
+  int i;
+
+  if(name == 0 || *name == 0) {
+    errno = EINVAL;
+    return 0;
+  }
+
+  for(i = 0; i < (int)(sizeof(g_services) / sizeof(g_services[0])); i++) {
+    if(strcmp(g_services[i].name, name) != 0)
+      continue;
+    if(!service_proto_match(proto, g_services[i].proto))
+      continue;
+    return set_servent_common(&g_services[i]);
+  }
+
+  errno = ENOENT;
+  return 0;
+}
+
+struct servent *
+getservbyport(int port, const char *proto)
+{
+  int i;
+  int host_port;
+
+  host_port = (int)ntohs((ushort)port);
+  for(i = 0; i < (int)(sizeof(g_services) / sizeof(g_services[0])); i++) {
+    if(g_services[i].port_host != host_port)
+      continue;
+    if(!service_proto_match(proto, g_services[i].proto))
+      continue;
+    return set_servent_common(&g_services[i]);
+  }
+
+  errno = ENOENT;
+  return 0;
 }
 
 const char *

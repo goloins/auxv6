@@ -32,6 +32,13 @@ struct hostent {
     char **h_addr_list; /* List of addresses (NULL-terminated). */
 };
 
+struct servent {
+    char  *s_name;     /* Official service name. */
+    char **s_aliases;  /* Alias list (NULL-terminated). */
+    int    s_port;     /* Port number, network byte order. */
+    char  *s_proto;    /* Protocol to use. */
+};
+
 #define h_addr h_addr_list[0]
 
 /* h_errno values */
@@ -87,6 +94,8 @@ struct addrinfo {
 
 struct hostent *gethostbyname(const char *name);
 struct hostent *gethostbyaddr(const void *addr, socklen_t len, int type);
+struct servent *getservbyname(const char *name, const char *proto);
+struct servent *getservbyport(int port, const char *proto);
 const char *hstrerror(int err);
 
 int getaddrinfo(const char *hostname, const char *service,
