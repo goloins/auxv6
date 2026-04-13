@@ -71,7 +71,8 @@ first-pass: | $(BUILDDIR)
 				--without-bash-malloc \
 				--disable-nls \
 				>>"$(LOG)" 2>&1
-	@$(MAKE) -C "$(BUILDDIR)" -k -j1 all >>"$(LOG)" 2>&1
+	# Avoid top-level "all" because it forces host-side doc helpers (man2html).
+	@$(MAKE) -C "$(BUILDDIR)" -k -j1 bash >>"$(LOG)" 2>&1
 	@tail -40 "$(LOG)"
 
 check-host-contamination:
