@@ -718,15 +718,18 @@ inituvm_as(struct address_space *as, char *init, uint sz)
 int
 loaduvm(pde_t *pgdir, char *addr, struct inode *ip, uint offset, uint sz)
 {
-  uint i, pa, n;
+  uint i, pa, n, va, va0, page_off;
   pte_t *pte;
   const struct vnode_ops *ops;
 
-  if((uint) addr % PGSIZE != 0)
-    panic("loaduvm: addr must be page aligned");
   ops = vfs_dev_vops(inode_get_dev(ip));
-  for(i = 0; i < sz; i += PGSIZE){
-    if((pte = walkpgdir(pgdir, addr+i, 0)) == 0)
+  if((uint)addr + sz < (uint)addr)
+    return -1;
+  for(i = 0; i < sz; i += n){
+    va = (uint)addr + i;
+    va0 = PGROUNDDOWN(va);
+    page_off = va - va0;
+    if((pte = walkpgdir(pgdir, (char*)va0, 0)) == 0)
       panic("loaduvm: address should exist");
     if((*pte & PTE_P) == 0)
       panic("loaduvm: pte not present");
@@ -734,15 +737,14 @@ loaduvm(pde_t *pgdir, char *addr, struct inode *ip, uint offset, uint sz)
     pa = PTE_ADDR(*pte);
     if(!pte_pa_valid(*pte))
       panic("loaduvm: bad pa");
-    if(sz - i < PGSIZE)
+    n = PGSIZE - page_off;
+    if(n > sz - i)
       n = sz - i;
-    else
-      n = PGSIZE;
     if(ops && ops->read){
-      if(ops->read(ip, P2V(pa), offset+i, n) != n)
+      if(ops->read(ip, P2V(pa) + page_off, offset+i, n) != n)
         return -1;
     } else {
-      if(readi(ip, P2V(pa), offset+i, n) != n)
+      if(readi(ip, P2V(pa) + page_off, offset+i, n) != n)
         return -1;
     }
   }

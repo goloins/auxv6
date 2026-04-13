@@ -10,6 +10,7 @@
 #include "fs.h"
 #include "vfs.h"
 #include "fcntl.h"
+#include "vma.h"
 
 #define EXEC_SHEBANG_LINE_MAX 128
 #define EXEC_SHEBANG_MAX_DEPTH 2
@@ -71,6 +72,49 @@ parse_shebang(const char *line, int n, char *interp, uint interp_sz,
 
   *has_interp_arg = 1;
   return 1;
+}
+
+static int
+exec_map_load_segment(struct address_space *as, const struct proghdr *ph)
+{
+  struct vaddr_range vma;
+  uint map_start;
+  uint map_end;
+  uint a;
+  int writable;
+
+  if(as == 0 || ph == 0)
+    return -1;
+  if(ph->memsz == 0)
+    return 0;
+
+  map_start = PGROUNDDOWN(ph->vaddr);
+  map_end = PGROUNDUP(ph->vaddr + ph->memsz);
+  if(map_end < map_start || map_end >= KERNBASE)
+    return -1;
+
+  memset(&vma, 0, sizeof(vma));
+  vma.va_start = ph->vaddr;
+  vma.va_end = ph->vaddr + ph->memsz;
+  if(ph->flags & ELF_PROG_FLAG_READ)
+    vma.flags |= VMA_READ;
+  if(ph->flags & ELF_PROG_FLAG_WRITE)
+    vma.flags |= VMA_WRITE;
+  if(ph->flags & ELF_PROG_FLAG_EXEC)
+    vma.flags |= VMA_EXEC;
+  vma.file_offset = ph->off;
+  if(vma_insert(as, &vma) < 0)
+    return -1;
+
+  writable = (ph->flags & ELF_PROG_FLAG_WRITE) != 0;
+  for(a = map_start; a < map_end; a += PGSIZE){
+    if(vm_map_zerofill_page(as, a, writable) < 0)
+      return -1;
+  }
+
+  if(vma.va_end > as->vm_size)
+    as->vm_size = vma.va_end;
+  return 0;
 }
 
 int
@@ -174,12 +218,12 @@ exec_internal(char *path, char **argv, int depth)
       goto bad;
     if(ph.vaddr + ph.memsz < ph.vaddr)
       goto bad;
-    if((sz = allocuvm_as(newaddrsp, sz, ph.vaddr + ph.memsz)) == 0)
-      goto bad;
-    if(ph.vaddr % PGSIZE != 0)
+    if(exec_map_load_segment(newaddrsp, &ph) < 0)
       goto bad;
     if(loaduvm(pgdir, (char*)ph.vaddr, ip, ph.off, ph.filesz) < 0)
       goto bad;
+    if(ph.vaddr + ph.memsz > sz)
+      sz = ph.vaddr + ph.memsz;
   }
   iunlockput(ip);
   end_op();
