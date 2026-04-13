@@ -1,7 +1,7 @@
 # sh(1)
 
 ## Name
-sh - Command interpreter (shell).
+sh - 6sh  A/UXV6 Default command interpreter (6shell).
 
 ## Synopsis
 ```
@@ -12,6 +12,8 @@ sh script [args...]
 ## Duty
 An interactive command shell and script interpreter. Supports pipelines,
 I/O redirection, background jobs, variable expansion, and profile loading.
+Does not support running shell scripts in the background or subshells.
+We have imported dash for this purpose, but it is not the default shell.
 
 ## Options
 None. Shell behavior is controlled through the interactive session or
@@ -22,7 +24,7 @@ environment variables.
 - `args...` — Arguments passed to the script as `$1`, `$2`, etc.
 
 ## Builtin Commands
-- `cd [dir]` — Change the current directory. Defaults to `/` if omitted.
+- `cd [dir]` — Change the current directory. Defaults to `$HOME` if omitted; `~` and `~/...` expand to `$HOME`.
 - `exit [status]` — Exit the shell with optional exit status.
 - `jobs` — List background and stopped jobs.
 - `fg [%jobid]` — Bring a background or stopped job to the foreground.

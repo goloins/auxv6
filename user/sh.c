@@ -6,6 +6,7 @@
 #include "auxv6/user.h"
 #include "fcntl.h"
 #include "fs.h"
+#include "stdio.h"
 
 // Parsed command representation
 #define EXEC  1
@@ -90,6 +91,7 @@ void sh_append(char *dst, const char *src, int dstsz);
 void set_shell_var(const char *key, const char *value);
 void print_shell_var(const char *key);
 void print_shell_vars(void);
+const char *lookup_shell_var(const char *name, char *scratch, int scratchsz);
 void prompt_string(char *out, int outsz);
 void format_cwd_for_prompt(char *out, int outsz);
 void trim_trailing_ws(char *s);
@@ -271,13 +273,28 @@ main(void)
     if(buf[0] == 0)
       continue;
 
-    if(buf[0] == 'c' && buf[1] == 'd' && (buf[2] == ' ' || buf[2] == '\n' || buf[2] == '\r' || buf[2] == 0)){
+    if(buf[0] == 'c' && buf[1] == 'd' && (buf[2] == ' ' || buf[2] == '\t' || buf[2] == '\n' || buf[2] == '\r' || buf[2] == 0)){
       // Chdir must be called by the parent, not the child.
       buf[strlen(buf)-1] = 0;  // chop \n
       const char *path;
-      if(buf[2] == ' '){
-        trim_trailing_ws(buf + 3);
-        path = buf + 3;
+      char cdpath[CWD_MAX];
+      if(buf[2] == ' ' || buf[2] == '\t'){
+        char *arg = buf + 3;
+        while(*arg == ' ' || *arg == '\t')
+          arg++;
+        trim_trailing_ws(arg);
+
+        if(arg[0] == 0 || strcmp(arg, "~") == 0) {
+          path = sh_home;
+        } else if(arg[0] == '~' && arg[1] == '/') {
+          sh_copy(cdpath, sh_home, sizeof(cdpath));
+          if(strcmp(cdpath, "/") != 0)
+            sh_append(cdpath, "/", sizeof(cdpath));
+          sh_append(cdpath, arg + 2, sizeof(cdpath));
+          path = cdpath;
+        } else {
+          path = arg;
+        }
       } else {
         path = sh_home;
       }
@@ -1018,6 +1035,38 @@ print_shell_vars(void)
   dprintf(2, "PWD=%s\n", sh_cwd);
 }
 
+const char *
+lookup_shell_var(const char *name, char *scratch, int scratchsz)
+{
+  int uid;
+
+  if(strcmp(name, "PATH") == 0)
+    return sh_path;
+  if(strcmp(name, "PROMPT") == 0)
+    return sh_prompt;
+  if(strcmp(name, "USER") == 0)
+    return sh_user;
+  if(strcmp(name, "HOST") == 0)
+    return sh_host;
+  if(strcmp(name, "HOME") == 0)
+    return sh_home;
+  if(strcmp(name, "PWD") == 0)
+    return sh_cwd;
+  if(strcmp(name, "UID") == 0) {
+    uid = getuid();
+    if(uid < 0)
+      uid = sh_uid;
+    if(scratchsz <= 0)
+      return "";
+    if(uid < 0)
+      uid = 0;
+    snprintf(scratch, (size_t)scratchsz, "%d", uid);
+    return scratch;
+  }
+
+  return "";
+}
+
 void
 exec_with_path(char *cmd, char **argv)
 {
@@ -1722,6 +1771,17 @@ parseexec(char **ps, char *es)
 {
   char *q, *eq;
   int tok, argc;
+  int tlen;
+  int nstart;
+  int nend;
+  int i;
+  int valid;
+  int nlen;
+  int vlen;
+  char name[32];
+  char uidbuf[16];
+  char *expanded;
+  const char *value;
   struct execcmd *cmd;
   struct cmd *ret;
 
@@ -1738,8 +1798,54 @@ parseexec(char **ps, char *es)
       break;
     if(tok != 'a')
       panic("syntax");
-    cmd->argv[argc] = q;
-    cmd->eargv[argc] = eq;
+
+    tlen = eq - q;
+    if(tlen >= 2 && q[0] == '$') {
+      nstart = 1;
+      nend = tlen;
+      if(tlen >= 4 && q[1] == '{' && q[tlen - 1] == '}') {
+        nstart = 2;
+        nend = tlen - 1;
+      }
+
+      nlen = nend - nstart;
+      valid = (nlen > 0 && nlen < (int)sizeof(name));
+      for(i = nstart; valid && i < nend; i++) {
+        char c = q[i];
+        if(i == nstart) {
+          if(!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_'))
+            valid = 0;
+        } else {
+          if(!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+               (c >= '0' && c <= '9') || c == '_'))
+            valid = 0;
+        }
+      }
+
+      if(valid) {
+        memmove(name, q + nstart, nlen);
+        name[nlen] = 0;
+        value = lookup_shell_var(name, uidbuf, sizeof(uidbuf));
+        vlen = strlen(value);
+        expanded = malloc(vlen + 1);
+        if(expanded != 0) {
+          memmove(expanded, value, vlen);
+          expanded[vlen] = 0;
+          cmd->argv[argc] = expanded;
+          cmd->eargv[argc] = expanded + vlen;
+        } else {
+          cmd->argv[argc] = q;
+          cmd->eargv[argc] = eq;
+        }
+      } else {
+        cmd->argv[argc] = q;
+        cmd->eargv[argc] = eq;
+      }
+    } else {
+      cmd->argv[argc] = q;
+      cmd->eargv[argc] = eq;
+    }
+
     argc++;
     if(argc >= MAXARGS)
       panic("too many args");
