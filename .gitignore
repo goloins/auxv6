@@ -180,6 +180,9 @@ ports/dash-0.5.12/src/mksyntax
 ports/dash-0.5.12/src/mksignames
 ports/dash-0.5.12/src/mknodes
 ports/dash-0.5.12/src/mkinit
+ports/dist/
+ports/ports-sync.log
+ports/*-[0-9]*/
 .vscode/
 user/vblktest
 user/netcat
