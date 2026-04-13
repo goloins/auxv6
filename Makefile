@@ -286,6 +286,8 @@ $(OBJS) kernel/core/entry.o: $(ROOTFS_CONFIG) $(EXTRA_CFLAGS_STAMP)
 
 user/%.o: $(ROOTFS_CONFIG) $(EXTRA_CFLAGS_STAMP)
 
+libc/%.o: $(ROOTFS_CONFIG) $(EXTRA_CFLAGS_STAMP)
+
 aux.bootkern: bootblock aux.kern
 	dd if=/dev/zero of=aux.bootkern count=10000
 	dd if=bootblock of=aux.bootkern conv=notrunc
@@ -357,20 +359,32 @@ kernelmemfs: $(MEMFSOBJS) kernel/core/entry.o entryother config/kernel.ld fs.img
 	$(OBJDUMP) -t kernelmemfs | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > kernelmemfs.sym
 
 tags: $(OBJS) kernel/boot/entryother.S user/_init
-	etags kernel/**/*.S kernel/**/*.c user/*.c
+	etags kernel/**/*.S kernel/**/*.c libc/*.[cS] user/*.c
 
 kernel/core/vectors.S: tools/vectors.pl
 	./tools/vectors.pl > kernel/core/vectors.S
 
-LIBC_OBJS = user/ulib.o user/string.o user/errstr.o user/umalloc.o user/tty.o user/inet.o user/fmt.o user/dirent.o user/fnmatch.o user/glob.o user/ftw.o user/fts.o user/locale.o user/pwdgrp.o user/env.o user/conf.o user/path.o user/tempfile.o user/timecore.o user/resource.o user/netdb.o user/stdlib.o user/randlib.o user/mman.o user/posix_fs.o user/posix.o user/pthread.o user/syslog.o user/stdio.o user/regex.o user/calloc.o user/libterm.o user/checksum.o user/gzip.o user/user_font.o user/setjmp.o
-LIBAUXV6_OBJS = user/crt0.o user/usys.o user/printf.o user/resolve.o
-ULIB = $(LIBC_OBJS) $(LIBAUXV6_OBJS)
+LIBC_OBJS = libc/ulib.o libc/string.o libc/errstr.o libc/umalloc.o libc/tty.o libc/inet.o libc/fmt.o libc/dirent.o libc/fnmatch.o libc/glob.o libc/ftw.o libc/fts.o libc/locale.o libc/pwdgrp.o libc/env.o libc/conf.o libc/path.o libc/tempfile.o libc/timecore.o libc/resource.o libc/netdb.o libc/stdlib.o libc/randlib.o libc/mman.o libc/posix_fs.o libc/posix.o libc/pthread.o libc/syslog.o libc/stdio.o libc/regex.o libc/calloc.o libc/setjmp.o libc/usys.o libc/printf.o libc/resolve.o
+LIBAUXRT_OBJS = libc/libterm.o libc/checksum.o libc/gzip.o libc/user_font.o
+CRT0_OBJ = libc/crt0.o
+LIBC_A = libc/libc.a
+AUXRT_A = libc/libauxrt.a
+X11_OBJS = user/x11.o
+X11_A = user/libX11.a
 
-# Convenience static archive of the full auxv6 userland libc.
-# Used by autoconf-based ports (e.g. LibreSSL) that need to link against
-# our libc without knowing about individual .o files.
-user/libc.a: $(ULIB)
-	$(AR) rcs $@ $(ULIB)
+# Convenience static archive of the full auxv6 userland runtime library.
+# Used by native programs and by ports that need to link against our libc
+# without knowing about individual implementation objects.
+$(LIBC_A): $(LIBC_OBJS)
+	$(AR) rcs $@ $(LIBC_OBJS)
+	$(RANLIB) $@
+
+$(AUXRT_A): $(LIBAUXRT_OBJS)
+	$(AR) rcs $@ $(LIBAUXRT_OBJS)
+	$(RANLIB) $@
+
+$(X11_A): $(X11_OBJS)
+	$(AR) rcs $@ $(X11_OBJS)
 	$(RANLIB) $@
 
 USER_STAGE_DIR = user/.stage
@@ -389,8 +403,8 @@ user/sh.o: user/sh.c
 user/usertests.o: user/usertests.c
 	$(CC) $(CFLAGS) -Os -c -o $@ $<
 
-user/%: user/%.o $(ULIB) | toolchain-check
-	$(LD) $(LDFLAGS) -N -e _start -Ttext 0 -o $@ $^ $(LIBGCC)
+user/%: user/%.o $(CRT0_OBJ) $(LIBC_A) $(AUXRT_A) | toolchain-check
+	$(LD) $(LDFLAGS) -N -e _start -Ttext 0 -o $@ $(CRT0_OBJ) $< $(AUXRT_A) $(LIBC_A) $(LIBGCC)
 	@$(OBJDUMP) -f $@ | grep -q 'file format elf32-i386' || \
 		(echo "ERROR: $@ is not elf32-i386." 1>&2; exit 1)
 	$(OBJDUMP) -S $@ > $(basename $@).asm
@@ -399,8 +413,8 @@ user/%: user/%.o $(ULIB) | toolchain-check
 $(USER_STAGE_DIR):
 	mkdir -p $(USER_STAGE_DIR)
 
-$(USER_STAGE_DIR)/%: user/%.o $(ULIB) | $(USER_STAGE_DIR) toolchain-check
-	$(LD) $(LDFLAGS) -N -e _start -Ttext 0 -o $@ $^ $(LIBGCC)
+$(USER_STAGE_DIR)/%: user/%.o $(CRT0_OBJ) $(LIBC_A) $(AUXRT_A) | $(USER_STAGE_DIR) toolchain-check
+	$(LD) $(LDFLAGS) -N -e _start -Ttext 0 -o $@ $(CRT0_OBJ) $< $(AUXRT_A) $(LIBC_A) $(LIBGCC)
 	@$(OBJDUMP) -f $@ | grep -q 'file format elf32-i386' || \
 		(echo "ERROR: $@ is not elf32-i386." 1>&2; exit 1)
 
@@ -834,8 +848,8 @@ _xinit: user/xinit
 _xwmtrace: user/xwmtrace
 	cp user/xwmtrace _xwmtrace
 
-user/xwmselftest: user/xwmselftest.o user/x11.o $(ULIB) | toolchain-check
-	$(LD) $(LDFLAGS) -N -e _start -Ttext 0 -o $@ $^ $(LIBGCC)
+user/xwmselftest: user/xwmselftest.o $(X11_A) $(CRT0_OBJ) $(LIBC_A) $(AUXRT_A) | toolchain-check
+	$(LD) $(LDFLAGS) -N -e _start -Ttext 0 -o $@ $(CRT0_OBJ) user/xwmselftest.o $(X11_A) $(AUXRT_A) $(LIBC_A) $(LIBGCC)
 	$(OBJDUMP) -S $@ > $(basename $@).asm
 	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(basename $@).sym
 
@@ -848,13 +862,13 @@ _startx: user/startx
 _x6test: user/x6test
 	cp user/x6test _x6test
 
-user/wallpaper: user/wallpaper.o user/img.o user/img_png.o user/img_jpg.o $(ULIB) | toolchain-check
-	$(LD) $(LDFLAGS) -N -e _start -Ttext 0 -o $@ $^ $(LIBGCC)
+user/wallpaper: user/wallpaper.o user/img.o user/img_png.o user/img_jpg.o $(CRT0_OBJ) $(LIBC_A) $(AUXRT_A) | toolchain-check
+	$(LD) $(LDFLAGS) -N -e _start -Ttext 0 -o $@ $(CRT0_OBJ) user/wallpaper.o user/img.o user/img_png.o user/img_jpg.o $(AUXRT_A) $(LIBC_A) $(LIBGCC)
 	$(OBJDUMP) -S $@ > $(basename $@).asm
 	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(basename $@).sym
 
-$(USER_STAGE_DIR)/wallpaper: user/wallpaper.o user/img.o user/img_png.o user/img_jpg.o $(ULIB) | $(USER_STAGE_DIR) toolchain-check
-	$(LD) $(LDFLAGS) -N -e _start -Ttext 0 -o $@ $^ $(LIBGCC)
+$(USER_STAGE_DIR)/wallpaper: user/wallpaper.o user/img.o user/img_png.o user/img_jpg.o $(CRT0_OBJ) $(LIBC_A) $(AUXRT_A) | $(USER_STAGE_DIR) toolchain-check
+	$(LD) $(LDFLAGS) -N -e _start -Ttext 0 -o $@ $(CRT0_OBJ) user/wallpaper.o user/img.o user/img_png.o user/img_jpg.o $(AUXRT_A) $(LIBC_A) $(LIBGCC)
 
 _wallpaper: user/wallpaper
 	cp user/wallpaper _wallpaper
@@ -868,20 +882,20 @@ _time: user/time
 _dmesg: user/dmesg
 	cp user/dmesg _dmesg
 
-_dash: ports/dash-0.5.12/Makefile.auxv6 $(ULIB) user/setjmp.o
+_dash: ports/dash-0.5.12/Makefile.auxv6 $(CRT0_OBJ) $(LIBC_A) $(AUXRT_A)
 	$(MAKE) -f ports/dash-0.5.12/Makefile.auxv6 all
 	cp ports/dash-0.5.12/_dash _dash
 
-_dwm: ports/dwm-6.8/Makefile.auxv6 $(ULIB) user/x11.o
+_dwm: ports/dwm-6.8/Makefile.auxv6 $(CRT0_OBJ) $(LIBC_A) $(AUXRT_A) $(X11_A)
 	$(MAKE) -f ports/dwm-6.8/Makefile.auxv6 all
 	cp ports/dwm-6.8/_dwm _dwm
 
-_st: ports/st-0.9.3/Makefile.auxv6 $(ULIB) user/x11.o
+_st: ports/st-0.9.3/Makefile.auxv6 $(CRT0_OBJ) $(LIBC_A) $(AUXRT_A) $(X11_A)
 	$(MAKE) -f ports/st-0.9.3/Makefile.auxv6 all
 	cp ports/st-0.9.3/_st _st
 
 .PHONY: dmenu-port-build
-dmenu-port-build: ports/dmenu-5.4/Makefile.auxv6 $(ULIB) user/x11.o
+dmenu-port-build: ports/dmenu-5.4/Makefile.auxv6 $(CRT0_OBJ) $(LIBC_A) $(AUXRT_A) $(X11_A)
 	$(MAKE) -f ports/dmenu-5.4/Makefile.auxv6 all
 
 _dmenu: dmenu-port-build
@@ -1325,7 +1339,7 @@ clean:
 	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/stackgrowtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/dmesg user/tail user/lspci user/v6init user/testdaemon \
 	user/cowsay \
 	user/schedperf user/fsperf user/gfxperf user/kallocstress user/kernperf user/bcachestress user/kmemstress \
-	user/libc.a
+	libc/libc.a
 
 # make a printout
 FILES = $(shell grep -v '^\#' tools/runoff.list)
@@ -1912,12 +1926,12 @@ test-termcap-smoke: aux.bootkern $(EXT2IMG)
 # check in that version.
 
 EXTRA=\
-	tools/mkfs.c tools/stage-fat-root.sh tools/stage-exfat-root.sh tools/stage-btrfs-root.sh user/ulib.c include/user.h user/cat.c user/echo.c user/fatregress.c user/grep.c user/kill.c\
-	user/stdio.c user/regex.c user/calloc.c\
+	tools/mkfs.c tools/stage-fat-root.sh tools/stage-exfat-root.sh tools/stage-btrfs-root.sh libc/ulib.c include/user.h user/cat.c user/echo.c user/fatregress.c user/grep.c user/kill.c\
+	libc/stdio.c libc/regex.c libc/calloc.c\
 	user/date.c user/time.c user/killall.c user/halt.c\
 	user/lsof.c user/which.c user/file.c\
 	user/id.c user/login.c user/ln.c user/ls.c user/free.c user/df.c user/ps.c user/fsregress.c user/mkdir.c user/mount.c user/mounts.c user/mounttest.c user/umount.c user/passwd.c user/pwd.c user/chmod.c user/chown.c user/chgrp.c user/rm.c user/netinfo.c user/stressfs.c user/su.c user/usertests.c user/vblktest.c user/ahcitest.c user/wc.c user/whoami.c user/zombie.c\
-	user/printf.c user/umalloc.c\
+	libc/printf.c libc/umalloc.c\
 	README targetfs/etc/hosts targetfs/etc/fstab targetfs/etc/profile targetfs/etc/termcap targetfs/etc/passwd targetfs/etc/hostname config/dot-bochsrc tools/*.pl tools/toc.* tools/runoff tools/runoff1 tools/runoff.list\
 	config/.gdbinit.tmpl gdbutil\
 

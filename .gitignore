@@ -139,7 +139,7 @@ user/lsof
 user/which
 user/file
 user/gunzip
-user/libc.a
+libc/libc.a
 targetfs/usr/bin/libressl
 targetfs/usr/lib/libcrypto.a
 targetfs/usr/lib/libssl.a
@@ -208,3 +208,4 @@ ports/ports-build.log
 ports/ports-build.log
 ports/ports-build.log
 ports/ports-build.log
+libc/libauxrt.a

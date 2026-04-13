@@ -3,38 +3,13 @@
 # This file is intentionally separate from upstream Makefile so we can
 # iterate on auxv6/x6 integration without changing default host builds.
 
-ROOT ?= $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST))))../..)
+PORTS_COMMON_CALLER := $(lastword $(MAKEFILE_LIST))
+include $(dir $(abspath $(PORTS_COMMON_CALLER)))../../config/ports-common.mk
+
 DWM_DIR := $(ROOT)/ports/dwm-6.8
 OUT := $(DWM_DIR)/_dwm
 
 VERSION = 6.8
-
-# Toolchain detection mirrors the repo root Makefile style.
-CROSS_ROOT ?= /opt/cross
-CROSS_BINDIR ?= $(CROSS_ROOT)/bin
-
-ifndef TOOLPREFIX
-TOOLPREFIX := $(shell \
-  if i386-jos-elf-objdump -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
-  then echo 'i386-jos-elf-'; \
-  elif test -x '$(CROSS_BINDIR)/i386-jos-elf-objdump' && \
-       '$(CROSS_BINDIR)/i386-jos-elf-objdump' -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
-  then echo '$(CROSS_BINDIR)/i386-jos-elf-'; \
-  elif test -x '$(CROSS_BINDIR)/i386-elf-objdump' && \
-       '$(CROSS_BINDIR)/i386-elf-objdump' -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
-  then echo '$(CROSS_BINDIR)/i386-elf-'; \
-  elif test -x '$(CROSS_BINDIR)/i686-elf-objdump' && \
-       '$(CROSS_BINDIR)/i686-elf-objdump' -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
-  then echo '$(CROSS_BINDIR)/i686-elf-'; \
-  elif objdump -i 2>&1 | grep 'elf32-i386' >/dev/null 2>&1; \
-  then echo ''; \
-  else echo "ERROR: no i386 cross-toolchain found" >&2; exit 1; fi)
-endif
-
-CC := $(TOOLPREFIX)gcc
-LD := $(TOOLPREFIX)ld
-OBJDUMP := $(TOOLPREFIX)objdump
-LIBGCC := $(shell $(CC) -m32 -print-libgcc-file-name 2>/dev/null)
 
 # x6/X11 compatibility wiring.
 #
@@ -63,43 +38,7 @@ LDFLAGS := -N -e _start -Ttext 0 -m $(shell $(LD) -V 2>/dev/null | grep elf_i386
 SRC := $(DWM_DIR)/drw.c $(DWM_DIR)/dwm.c $(DWM_DIR)/util.c
 OBJ := $(SRC:.c=.o)
 
-RUNTIME_OBJS := \
-     $(ROOT)/user/x11.o \
-     $(ROOT)/user/user_font.o \
-  $(ROOT)/user/ulib.o \
-  $(ROOT)/user/string.o \
-  $(ROOT)/user/errstr.o \
-  $(ROOT)/user/umalloc.o \
-  $(ROOT)/user/tty.o \
-  $(ROOT)/user/inet.o \
-  $(ROOT)/user/fmt.o \
-  $(ROOT)/user/dirent.o \
-  $(ROOT)/user/fnmatch.o \
-  $(ROOT)/user/glob.o \
-  $(ROOT)/user/ftw.o \
-  $(ROOT)/user/fts.o \
-  $(ROOT)/user/locale.o \
-  $(ROOT)/user/pwdgrp.o \
-  $(ROOT)/user/env.o \
-  $(ROOT)/user/conf.o \
-  $(ROOT)/user/path.o \
-  $(ROOT)/user/tempfile.o \
-  $(ROOT)/user/timecore.o \
-  $(ROOT)/user/resource.o \
-  $(ROOT)/user/netdb.o \
-  $(ROOT)/user/stdlib.o \
-  $(ROOT)/user/posix_fs.o \
-  $(ROOT)/user/posix.o \
-  $(ROOT)/user/stdio.o \
-  $(ROOT)/user/regex.o \
-  $(ROOT)/user/calloc.o \
-  $(ROOT)/user/libterm.o \
-  $(ROOT)/user/checksum.o \
-  $(ROOT)/user/gzip.o \
-  $(ROOT)/user/crt0.o \
-  $(ROOT)/user/usys.o \
-  $(ROOT)/user/printf.o \
-  $(ROOT)/user/resolve.o
+RUNTIME_INPUTS := $(AUXV6_CRT0_OBJ) $(AUXV6_X11_A) $(AUXV6_AUXRT_A) $(AUXV6_LIBC_A)
 
 .PHONY: all clean toolchain-check config-check check-host-contamination
 
@@ -116,19 +55,12 @@ config-check:
 $(DWM_DIR)/%.o: $(DWM_DIR)/%.c $(DWM_DIR)/config.h
 	$(CC) -c $(CFLAGS) -o $@ $<
 
-$(RUNTIME_OBJS):
+$(RUNTIME_INPUTS):
 	$(MAKE) -C $(ROOT) $(patsubst $(ROOT)/%,%,$@)
 
-$(OUT): $(OBJ) $(RUNTIME_OBJS)
-	$(LD) $(LDFLAGS) -o $@ $(RUNTIME_OBJS) $(OBJ) $(LIBS) $(LIBGCC)
-	$(OBJDUMP) -S $@ > $(DWM_DIR)/dwm-auxv6.asm || true
+$(OUT): $(OBJ) $(RUNTIME_INPUTS) ; $(LD) $(LDFLAGS) -o $@ $(AUXV6_CRT0_OBJ) $(OBJ) $(AUXV6_X11_A) $(LIBS) $(AUXV6_AUXRT_A) $(AUXV6_LIBC_A) $(LIBGCC); $(OBJDUMP) -S $@ > $(DWM_DIR)/dwm-auxv6.asm || true
 
-check-host-contamination:
-     @! find "$(DWM_DIR)" -name '*.d' -type f -print0 2>/dev/null | \
-          xargs -0 grep -En '/usr/include|/usr/local/include|/opt/homebrew/include|/Library/Developer/CommandLineTools/usr/include|/Applications/Xcode.*/usr/include' >/dev/null || \
-          (echo "ERROR: host header path detected in dwm port dependency files" >&2; \
-          echo "Inspect ports/dwm-6.8/*.d for details." >&2; \
-          exit 1)
+check-host-contamination: ; @! find "$(DWM_DIR)" -name '*.d' -type f -print0 2>/dev/null | xargs -0 grep -En '/usr/include|/usr/local/include|/opt/homebrew/include|/Library/Developer/CommandLineTools/usr/include|/Applications/Xcode.*/usr/include' >/dev/null || (echo "ERROR: host header path detected in dwm port dependency files" >&2; echo "Inspect ports/dwm-6.8/*.d for details." >&2; exit 1)
 
 clean:
 	rm -f $(OBJ) $(OUT) $(SRC:.c=.d)

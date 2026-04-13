@@ -68,7 +68,7 @@ kernel/driver/uart.c
 
 # user-level
 kernel/boot/initcode.S
-user/usys.S
+libc/usys.S
 user/init.c
 user/sh.c
 

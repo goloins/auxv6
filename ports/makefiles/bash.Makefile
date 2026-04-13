@@ -13,40 +13,14 @@
 #   bash (ELF artifact used by ports-progs install logic)
 #   .auxv6-build/first-pass.log (configure+build transcript)
 
-ROOT ?= $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST))))../..)
+PORTS_COMMON_CALLER := $(lastword $(MAKEFILE_LIST))
+include $(dir $(abspath $(PORTS_COMMON_CALLER)))../../config/ports-common.mk
+
 SRCDIR := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 BUILDDIR := $(SRCDIR)/.auxv6-build
 LEGACY_OUT := $(SRCDIR)/_bash
 OUT := $(SRCDIR)/bash
 LOG := $(BUILDDIR)/first-pass.log
-
-CROSS_ROOT ?= /opt/cross
-CROSS_BINDIR ?= $(CROSS_ROOT)/bin
-
-ifndef TOOLPREFIX
-TOOLPREFIX := $(shell \
-  if i386-jos-elf-objdump -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
-  then echo 'i386-jos-elf-'; \
-  elif test -x '$(CROSS_BINDIR)/i386-jos-elf-objdump' && \
-       '$(CROSS_BINDIR)/i386-jos-elf-objdump' -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
-  then echo '$(CROSS_BINDIR)/i386-jos-elf-'; \
-  elif test -x '$(CROSS_BINDIR)/i386-elf-objdump' && \
-       '$(CROSS_BINDIR)/i386-elf-objdump' -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
-  then echo '$(CROSS_BINDIR)/i386-elf-'; \
-  elif test -x '$(CROSS_BINDIR)/i686-elf-objdump' && \
-       '$(CROSS_BINDIR)/i686-elf-objdump' -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
-  then echo '$(CROSS_BINDIR)/i686-elf-'; \
-  elif objdump -i 2>&1 | grep 'elf32-i386' >/dev/null 2>&1; \
-  then echo ''; \
-  else echo "ERROR: no i386 cross-toolchain found" >&2; exit 1; fi)
-endif
-
-CC := $(TOOLPREFIX)gcc
-AR := $(TOOLPREFIX)ar
-RANLIB := $(TOOLPREFIX)ranlib
-STRIP := $(TOOLPREFIX)strip
-OBJDUMP := $(TOOLPREFIX)objdump
-LIBGCC := $(shell $(CC) -print-libgcc-file-name)
 
 TOOL_GCC_INCLUDE := $(shell $(CC) -print-file-name=include)
 
@@ -114,8 +88,8 @@ first-pass: | $(BUILDDIR)
 	@set +e; \
 	$(MAKE) -C "$(BUILDDIR)" -j1 \
 		CC_FOR_BUILD="$(BUILD_CC)" CFLAGS_FOR_BUILD="$(BUILD_CFLAGS)" \
-		LDFLAGS="-nostdlib -static -Wl,--allow-multiple-definition $(ROOT)/user/crt0.o" \
-		LOCAL_LIBS="$(ROOT)/user/libc.a $(LIBGCC)" \
+		LDFLAGS="-nostdlib -static -Wl,--allow-multiple-definition $(AUXV6_CRT0_OBJ)" \
+		LOCAL_LIBS="$(AUXV6_AUXRT_A) $(AUXV6_LIBC_A) $(LIBGCC)" \
 		bash >>"$(LOG)" 2>&1; \
 	rc=$$?; \
 	echo "bash: first-pass make rc=$$rc" >>"$(LOG)"; \

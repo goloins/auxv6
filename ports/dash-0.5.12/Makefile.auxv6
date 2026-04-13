@@ -10,10 +10,12 @@
 #   make -f ports/dash-0.5.12/Makefile generated
 # This only needs a host cc (gcc/clang); it does NOT need the cross-compiler.
 
+PORTS_COMMON_CALLER := $(lastword $(MAKEFILE_LIST))
+include $(dir $(abspath $(PORTS_COMMON_CALLER)))../../config/ports-common.mk
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-ROOT     ?= $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST))))../..)
 SRCDIR   := $(ROOT)/ports/dash-0.5.12/src
 INCDIR   := $(ROOT)/include
 POSIXDIR := $(ROOT)/include/posix
@@ -21,37 +23,6 @@ UBLIBDIR := $(ROOT)/user
 OUT      := $(ROOT)/ports/dash-0.5.12/_dash
 
 .DEFAULT_GOAL := all
-
-# ---------------------------------------------------------------------------
-# Toolchain — mirrors the root Makefile
-# ---------------------------------------------------------------------------
-CROSS_ROOT   ?= /opt/cross
-CROSS_BINDIR ?= $(CROSS_ROOT)/bin
-
-ifndef TOOLPREFIX
-TOOLPREFIX := $(shell \
-  if i386-jos-elf-objdump -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
-  then echo 'i386-jos-elf-'; \
-  elif test -x '$(CROSS_BINDIR)/i386-jos-elf-objdump' && \
-       '$(CROSS_BINDIR)/i386-jos-elf-objdump' -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
-  then echo '$(CROSS_BINDIR)/i386-jos-elf-'; \
-  elif test -x '$(CROSS_BINDIR)/i386-elf-objdump' && \
-       '$(CROSS_BINDIR)/i386-elf-objdump' -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
-  then echo '$(CROSS_BINDIR)/i386-elf-'; \
-  elif test -x '$(CROSS_BINDIR)/i686-elf-objdump' && \
-       '$(CROSS_BINDIR)/i686-elf-objdump' -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
-  then echo '$(CROSS_BINDIR)/i686-elf-'; \
-  elif objdump -i 2>&1 | grep 'elf32-i386' >/dev/null 2>&1; \
-  then echo ''; \
-  else echo "ERROR: no i386 cross-toolchain found" >&2; exit 1; fi)
-endif
-
-CC      := $(TOOLPREFIX)gcc
-LD      := $(TOOLPREFIX)ld
-OBJDUMP := $(TOOLPREFIX)objdump
-
-# GCC runtime helper library (provides __udivmoddi4 etc. for 64-bit ops on i386)
-LIBGCC  := $(shell $(CC) -m32 -print-libgcc-file-name 2>/dev/null)
 
 # ---------------------------------------------------------------------------
 # Compiler flags
@@ -100,32 +71,7 @@ DASH_SRCS := \
   bltin/printf.c bltin/test.c bltin/times.c \
   builtins.c init.c nodes.c syntax.c signames.c
 
-# auxv6 runtime (from user/)
-RUNTIME_OBJS := \
-  $(ROOT)/user/ulib.o \
-  $(ROOT)/user/string.o \
-  $(ROOT)/user/errstr.o \
-  $(ROOT)/user/umalloc.o \
-  $(ROOT)/user/tty.o \
-  $(ROOT)/user/inet.o \
-  $(ROOT)/user/fmt.o \
-  $(ROOT)/user/dirent.o \
-  $(ROOT)/user/env.o \
-  $(ROOT)/user/conf.o \
-  $(ROOT)/user/path.o \
-  $(ROOT)/user/tempfile.o \
-  $(ROOT)/user/timecore.o \
-  $(ROOT)/user/stdlib.o \
-  $(ROOT)/user/posix_fs.o \
-  $(ROOT)/user/posix.o \
-  $(ROOT)/user/stdio.o \
-  $(ROOT)/user/regex.o \
-  $(ROOT)/user/calloc.o \
-  $(ROOT)/user/crt0.o \
-  $(ROOT)/user/usys.o \
-  $(ROOT)/user/printf.o \
-  $(ROOT)/user/resolve.o \
-  $(ROOT)/user/setjmp.o
+RUNTIME_INPUTS := $(AUXV6_CRT0_OBJ) $(AUXV6_AUXRT_A) $(AUXV6_LIBC_A)
 
 DASH_OBJS := $(patsubst %.c,$(ROOT)/ports/dash-0.5.12/obj/%.o,$(DASH_SRCS))
 
@@ -157,16 +103,9 @@ toolchain-check:
 
 all: toolchain-check $(GENERATED) $(OUT) check-host-contamination
 
-$(OUT): $(DASH_OBJS) $(RUNTIME_OBJS) | toolchain-check
-	$(LD) $(LDFLAGS) -o $@ $^ $(LIBGCC)
-	$(OBJDUMP) -S $@ > $(ROOT)/ports/dash-0.5.12/dash.asm || true
+$(OUT): $(DASH_OBJS) $(RUNTIME_INPUTS) | toolchain-check ; $(LD) $(LDFLAGS) -o $@ $(AUXV6_CRT0_OBJ) $(DASH_OBJS) $(AUXV6_AUXRT_A) $(AUXV6_LIBC_A) $(LIBGCC); $(OBJDUMP) -S $@ > $(ROOT)/ports/dash-0.5.12/dash.asm || true
 
-check-host-contamination:
-	@! find "$(ROOT)/ports/dash-0.5.12/obj" -name '*.d' -type f -print0 2>/dev/null | \
-		xargs -0 grep -En '/usr/include|/usr/local/include|/opt/homebrew/include|/Library/Developer/CommandLineTools/usr/include|/Applications/Xcode.*/usr/include' >/dev/null || \
-		(echo "ERROR: host header path detected in dash port dependency files" >&2; \
-		echo "Inspect ports/dash-0.5.12/obj/*.d for details." >&2; \
-		exit 1)
+check-host-contamination: ; @! find "$(ROOT)/ports/dash-0.5.12/obj" -name '*.d' -type f -print0 2>/dev/null | xargs -0 grep -En '/usr/include|/usr/local/include|/opt/homebrew/include|/Library/Developer/CommandLineTools/usr/include|/Applications/Xcode.*/usr/include' >/dev/null || (echo "ERROR: host header path detected in dash port dependency files" >&2; echo "Inspect ports/dash-0.5.12/obj/*.d for details." >&2; exit 1)
 
 # Compile dash sources into obj/
 $(ROOT)/ports/dash-0.5.12/obj/%.o: $(SRCDIR)/%.c
@@ -178,9 +117,9 @@ $(ROOT)/ports/dash-0.5.12/obj/bltin/%.o: $(SRCDIR)/bltin/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# Build auxv6 runtime objects through the root Makefile so the port tracks
+# Build auxv6 runtime inputs through the root Makefile so the port tracks
 # current compiler flags, startup objects, and ABI splits.
-$(RUNTIME_OBJS):
+$(RUNTIME_INPUTS):
 	$(MAKE) -C $(ROOT) $(patsubst $(ROOT)/%,%,$@)
 
 # ---------------------------------------------------------------------------
