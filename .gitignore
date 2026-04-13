@@ -33,6 +33,7 @@ user/fsregress
 user/grep
 user/init
 user/netcat
+user/6ftp
 user/6get
 user/6fetch
 user/6vi

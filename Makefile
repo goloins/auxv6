@@ -506,6 +506,9 @@ _mkdir: user/mkdir
 _netcat: $(USER_STAGE_DIR)/netcat
 	cp $(USER_STAGE_DIR)/netcat _netcat
 
+_6ftp: user/6ftp
+	cp user/6ftp _6ftp
+
 _6get: user/6get
 	cp user/6get _6get
 
@@ -1099,6 +1102,7 @@ UPROGS=\
 	_ifconfig\
 	_netstat\
 	_netcat\
+	_6ftp\
 	_6get\
 	_6vi\
 	_6nano\
@@ -1306,6 +1310,7 @@ clean:
 	user/ifconfig user/netstat user/route user/arp user/rarp user/ip \
 	user/tuntapctl user/tuntest \
 	user/dhcp user/v6dhcpd user/ntpd user/nslookup \
+	user/6ftp \
 	user/6get \
 	user/6nano \
 	user/6fetch \
