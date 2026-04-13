@@ -1,1 +1,47 @@
-auxv6 is based on the work of MIT's xv6 project (x86 version) and Kelsidavis' System7 Project. My poor code and some quality slop should make up the binder.
+auxv6 is based on the work of MIT's xv6 project (x86 version)
+
+We've created a more fleshed out version of xv6 with the goal
+of supporting a custom classic MacOS UI- somewhere in the sweet
+spot between System 7 and OS 9. Think of it as a jankier OS X
+or a more modern A/UX (thus the name). 
+
+At this point we have a lot of common drivers for network cards,
+virtio devices, basic audio support, a custom X server, networking,
+several custom 6utils (clones of popular software, i.e. 6vi, 6get,
+6nano, etc), basic POSIX suppory, a LibreSSL port, and much more.
+
+We're also lacking a lot of other features such as threading, 
+true SSL/TLS integration, a better ports structure, more WMS, etc.
+
+The MacOS UI is going to take a while to land, as our current focus
+is landing all the little pieces we need to operate like a modern
+Unix-like OS, but as we work towards that goal, it becomes easier
+to put the UI in the driver seat. For now, we have dwm+st for those
+wanting to start a graphical session. The system consumes 4MB when
+running in a non-graphical session (via serial) and ~10 with the 
+framebuffer active. 
+
+We're planning for the WM to implement the top macos bar by implementing
+custom headers that hijack the GNOME/KDE/<toolkit> menubar logic and
+wiring it in so that our top menubar handles it instead. This is a 
+lofty goal for certain, but with some targeted patches to GTK/qt this
+isn't likely to be as impossible as it seems on the ground. Retooling
+xv6 into a somewhat competent unix-like was pretty lofty, too, eh?
+
+The elephant in the room: this is without a doubt, unequivacally, 
+and entirely a: SLOPERATING SYSTEM. The vast majority of the code and 
+all of the roadmaps, planning, and documentation are done by LLMs. 
+
+I write a bit of code here or there, but there is absolutely no way
+I can write the sheer quantity of C code required otherwise. 
+
+If that turns you off, that's absolutely fair, no judgement. This is 
+more of a project to keep me out of the bars, anyway, and it still
+requires a substantial amount of editing/user direction to get what
+is basically glorified autocorrect to generate the desired code anyway.
+
+With that said, we're open for suggestions and PRs and whatever.
+
+DISCLAIMER: DO NOT TRUST YOUR DATA TO OUR FILESYSTEM IMPLEMENTATIONS
+THEY SHOULD BE MOSTLY CORRECT BUT I WOULD NOT RISK MY KIDS BABY PICS
+TO ANYTHING WRITTEN BY AN LLM. NO WARRANTY, EXPRESS NOR IMPLIED APPLIES.
