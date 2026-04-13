@@ -666,14 +666,27 @@ sys_clock_settime(void)
     return -1;
   if(clock_id != KTIME_CLOCK_REALTIME)
     return -1;
-  if(proc_getuid() != 0)
-    return -1;
+
   p = myproc();
   pgdir = proc_pgdir(p);
   if(p == 0 || pgdir == 0)
     return -1;
+
+  /* Kernel-side privilege hardening: only root uid/gid may set realtime. */
+  if(proc_getuid() != 0 || proc_getgid() != 0)
+    return -1;
+
+  /* Defensive pointer/range validation before touching kernel timebase. */
+  if(tpaddr <= 0)
+    return -1;
+  p = myproc();
   if(copyin(pgdir, &tp, (uint)tpaddr, sizeof(tp)) < 0)
     return -1;
+  if(tp.tv_sec < 0)
+    return -1;
+  if(tp.tv_nsec < 0 || tp.tv_nsec >= 1000000000L)
+    return -1;
+
   return ktime_set_realtime(&tp);
 }
 

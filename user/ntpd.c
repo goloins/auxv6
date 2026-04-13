@@ -255,6 +255,11 @@ main(int argc, char **argv)
   if(parse_ipv4(server, &server_ip) == 0)
     server_is_ip = 1;
 
+  dprintf(1, "ntpd: launch mode=%s server=%s interval=%d\n",
+          foreground ? "foreground" : "daemon",
+          server,
+          interval_sec);
+
   if(!foreground) {
     if(daemonize_self() < 0)
       exit(1);
