@@ -9,6 +9,26 @@
 
 #include "../socket.h"   /* sockaddr_in, AF_INET, INADDR_*, IPPROTO_* */
 #include "../net.h"      /* net_htons / net_htonl helpers */
+#include "../stdint.h"
+
+typedef uint16_t in_port_t;
+typedef uint32_t in_addr_t;
+
+#ifndef INET6_ADDRSTRLEN
+#define INET6_ADDRSTRLEN 46
+#endif
+
+struct in6_addr {
+		unsigned char s6_addr[16];
+};
+
+struct sockaddr_in6 {
+	ushort          sin6_family;
+	in_port_t       sin6_port;
+	uint32_t        sin6_flowinfo;
+	struct in6_addr sin6_addr;
+	uint32_t        sin6_scope_id;
+};
 
 /* struct in_addr is re-exported from include/socket.h. */
 

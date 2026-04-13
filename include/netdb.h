@@ -67,6 +67,13 @@ struct addrinfo {
 #define NI_NAMEREQD     0x0008
 #define NI_DGRAM        0x0010
 
+#ifndef NI_MAXHOST
+#define NI_MAXHOST 1025
+#endif
+#ifndef NI_MAXSERV
+#define NI_MAXSERV 32
+#endif
+
 /* getaddrinfo error codes */
 #define EAI_AGAIN       2
 #define EAI_BADFLAGS    3

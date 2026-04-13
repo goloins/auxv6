@@ -13,6 +13,7 @@
 #define _STDLIB_H
 
 #include "stddef.h"
+#include "stdint.h"
 
 /* Exit codes */
 #define EXIT_SUCCESS    0

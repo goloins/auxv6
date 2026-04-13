@@ -11,11 +11,40 @@
 #include "sys/types.h"
 #include "../socket.h"
 
+#ifndef PF_UNSPEC
+#define PF_UNSPEC AF_UNSPEC
+#endif
+#ifndef PF_UNIX
+#define PF_UNIX AF_UNIX
+#endif
+#ifndef PF_INET
+#define PF_INET AF_INET
+#endif
+
+#ifndef AF_INET6
+#define AF_INET6 10
+#endif
+#ifndef PF_INET6
+#define PF_INET6 AF_INET6
+#endif
+
+#ifndef SOMAXCONN
+#define SOMAXCONN 128
+#endif
+
+struct sockaddr_storage {
+  sa_family_t ss_family;
+  char __ss_pad[126];
+};
+
 /* Generic POSIX socket address type. */
+#ifndef _NETDB_SOCKADDR_DECL
+#define _NETDB_SOCKADDR_DECL
 struct sockaddr {
   ushort sa_family;
   char   sa_data[14];
 };
+#endif
 
 int socket(int domain, int type, int protocol);
 int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);

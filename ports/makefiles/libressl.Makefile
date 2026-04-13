@@ -45,9 +45,16 @@ AR := $(TOOLPREFIX)ar
 RANLIB := $(TOOLPREFIX)ranlib
 STRIP := $(TOOLPREFIX)strip
 
+TOOL_GCC_INCLUDE := $(shell $(CC) -print-file-name=include)
+
 COMMON_CPPFLAGS := -I$(ROOT)/include -I$(ROOT)/include/posix -I$(ROOT)/include/posix/sys
-COMMON_CFLAGS := -fno-pic -static -fno-builtin -fno-strict-aliasing -O2 -Wall -m32 -nostdinc -fno-stack-protector
+COMMON_CFLAGS := -fno-pic -static -fno-builtin -fno-strict-aliasing -O2 -Wall -m32 -fno-stack-protector
 COMMON_LDFLAGS := -static
+CONFIGURE_CPPFLAGS := $(COMMON_CPPFLAGS) -isystem $(TOOL_GCC_INCLUDE) \
+	-DHAVE_ARC4RANDOM=1 -DHAVE_ARC4RANDOM_BUF=1 -DHAVE_ARC4RANDOM_UNIFORM=1 \
+	-D__linux__=1
+# Configure links probe executables; avoid crt0/libc requirements for cross checks.
+CONFIGURE_LDFLAGS := -nostdlib -nostartfiles
 
 .PHONY: all clean first-pass
 
@@ -58,17 +65,20 @@ first-pass: | $(BUILDDIR)
 	@cd "$(BUILDDIR)" && \
 		env \
 			CC="$(CC)" AR="$(AR)" RANLIB="$(RANLIB)" STRIP="$(STRIP)" \
-			CPPFLAGS="$(COMMON_CPPFLAGS)" CFLAGS="$(COMMON_CFLAGS)" LDFLAGS="$(COMMON_LDFLAGS)" \
+			CPPFLAGS="$(CONFIGURE_CPPFLAGS)" CFLAGS="$(COMMON_CFLAGS)" LDFLAGS="$(CONFIGURE_LDFLAGS)" \
 			../configure \
 				--host=i386-jos-elf \
 				--build=$$(../config.guess 2>/dev/null || echo x86_64-unknown-linux-gnu) \
 				--disable-shared \
 				--enable-static \
+				--enable-libtls-only \
 				--disable-tests \
 				--without-openssldir \
 				--prefix=/usr \
 				>>"$(LOG)" 2>&1
-	@$(MAKE) -C "$(BUILDDIR)" -k -j1 >>"$(LOG)" 2>&1
+	@$(MAKE) -C "$(BUILDDIR)/crypto" -k -j1 >>"$(LOG)" 2>&1
+	@$(MAKE) -C "$(BUILDDIR)/ssl" -k -j1 >>"$(LOG)" 2>&1
+	@$(MAKE) -C "$(BUILDDIR)/tls" -k -j1 >>"$(LOG)" 2>&1
 	@tail -40 "$(LOG)"
 
 $(BUILDDIR):
