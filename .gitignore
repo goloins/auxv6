@@ -209,3 +209,4 @@ ports/ports-build.log
 ports/ports-build.log
 ports/ports-build.log
 libc/libauxrt.a
+targetfs/lib/libc.a

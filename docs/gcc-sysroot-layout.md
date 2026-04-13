@@ -76,11 +76,11 @@ This table defines where each sysroot artifact comes from in auxv6 source tree.
 - Destination: sysroot/usr/include/
 
 2. libc archive
-- Source: user build output (libc.a)
+- Source: libc build output (`libc/libc.a`)
 - Destination: sysroot/usr/lib/libc.a
 
 3. Startfiles (crt objects)
-- Source: auxv6 user runtime build artifacts
+- Source: libc runtime build artifacts (for example: `libc/crt0.o`)
 - Destination: sysroot/usr/lib/
 
 4. Optional compatibility headers

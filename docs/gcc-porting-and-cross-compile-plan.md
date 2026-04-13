@@ -179,7 +179,7 @@ Objective:
 Sysroot contents:
 
 1. Canonical headers from include/.
-2. libc archive and start files from userland build artifacts.
+2. libc archive and start files from libc/ build artifacts (for example: `libc/libc.a`, `libc/crt0.o`).
 3. Any auxv6-specific crt objects and linker scripts used for user binaries.
 
 Checklist:
