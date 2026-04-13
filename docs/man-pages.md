@@ -23,6 +23,7 @@ Generated: 2026-04-11
 | audiotest | targetfs/usr/share/man/audiotest.md | 2026-04-05 | user/audiotest.c | Stage-0 audio write-path/xrun recovery exerciser |
 | audiotone | targetfs/usr/share/man/audiotone.md | 2026-04-05 | user/audiotone.c | deterministic S16_LE square-wave generator for audiod track tests |
 | bcachestress | targetfs/usr/share/man/bcachestress.md | 2026-04-05 | user/bcachestress.c | concurrent fs I/O stress utility with /proc/bcache_health fail-fast checks and vmstat/meminfo context dump |
+| cowsay | targetfs/usr/share/man/cowsay.md | 2026-04-13 | user/cowsay.c | speech-bubble ASCII cow renderer with template files under `/usr/share/games/cows` |
 | cowtest | targetfs/usr/share/man/cowtest.md | 2026-04-11 | user/cowtest.c | COW fork correctness test validating parent/child write isolation across data, heap, and stack |
 | cowexectest | targetfs/usr/share/man/cowexectest.md | 2026-04-11 | user/cowexectest.c | fork-plus-exec COW correctness test validating old-image teardown and parent isolation across data, heap, and stack |
 | vmreservetest | targetfs/usr/share/man/vmreservetest.md | 2026-04-12 | user/vmreservetest.c | explicit vmreserve regression covering first-touch zeroes, syscall copyout materialization into reserved pages, sparse page activation, and fork isolation |
@@ -37,6 +38,7 @@ Generated: 2026-04-11
 | clear | targetfs/usr/share/man/clear.md | 2026-04-01 | user/clear.c | source-derived usage/options |
 | dash | targetfs/usr/share/man/dash.md | 2026-04-01 | ports/ignored | manual baseline page |
 | dd | targetfs/usr/share/man/dd.md | 2026-04-06 | user/dd.c | block-oriented copy utility with standard `key=value` args and core conversion flags |
+| ddate | targetfs/usr/share/man/ddate.md | 2026-04-13 | user/ddate.c | Discordian date renderer with YOLD output and leap-year St. Tib's Day handling |
 | date | targetfs/usr/share/man/date.md | 2026-04-01 | user/date.c | source-derived usage/options |
 | devman | targetfs/usr/share/man/devman.md | 2026-04-02 | user/devman.c | source-derived usage/options |
 | df | targetfs/usr/share/man/df.md | 2026-04-01 | user/df.c | source-derived usage/options |

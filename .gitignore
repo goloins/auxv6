@@ -172,7 +172,9 @@ user/x6test
 user/xwmselftest
 user/wallpaper
 user/date
+user/ddate
 user/time
+user/cowsay
 user/halt
 include/rootfs_config.h
 .ext2root/

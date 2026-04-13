@@ -473,6 +473,9 @@ _cp: user/cp
 _dd: user/dd
 	cp user/dd _dd
 
+_ddate: user/ddate
+	cp user/ddate _ddate
+
 _ls: user/ls
 	cp user/ls _ls
 
@@ -725,6 +728,9 @@ _lsof: user/lsof
 
 _which: user/which
 	cp user/which _which
+
+_cowsay: user/cowsay
+	cp user/cowsay _cowsay
 
 _file: user/file
 	cp user/file _file
@@ -1060,6 +1066,7 @@ UPROGS=\
 	_ln\
 	_cp\
 	_dd\
+	_ddate\
 	_ls\
 	_lsblk\
 	_free\
@@ -1143,6 +1150,7 @@ UPROGS=\
 	_tail\
 	_lsof\
 	_which\
+	_cowsay\
 	_file\
 	_gunzip\
 	_tar\
@@ -1308,8 +1316,9 @@ clean:
 	user/audioctl user/audiostat user/audiotest user/audiotone user/audiopollstress user/audiod user/audiodctl \
 	user/server7 user/xwmselftest \
 	user/top \
-	user/date user/time user/killall user/halt user/wallpaper \
+	user/date user/ddate user/time user/killall user/halt user/wallpaper \
 	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/stackgrowtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/dmesg user/tail user/lspci user/v6init user/testdaemon \
+	user/cowsay \
 	user/schedperf user/fsperf user/gfxperf user/kallocstress user/kernperf user/bcachestress user/kmemstress \
 	user/libc.a
 

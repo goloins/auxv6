@@ -12,7 +12,7 @@
 #include "sys/time.h"
 #include "auxv6/user.h"
 
-static const char auxv6_default_path[] = "/:/bin:/sbin";
+static const char auxv6_default_path[] = "/:/bin:/sbin:/usr/bin:/usr/sbin:/usr/share/games";
 static const char auxv6_default_login[] = "root";
 static const char auxv6_hostname[] = "auxv6";
 
