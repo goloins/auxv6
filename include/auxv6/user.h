@@ -198,6 +198,31 @@ int shutdown(int sockfd, int how);
 int getsockname(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 int getpeername(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 
+/*
+ * Legacy auxv6 socket-call convenience forms.
+ * Keep existing callers building while the public ABI is POSIX-compliant.
+ */
+#ifndef AUXV6_DISABLE_LEGACY_SOCKET_MACROS
+#define bind(sockfd, addr, addrlen) \
+	bind((sockfd), (const struct sockaddr *)(addr), (socklen_t)(addrlen))
+#define connect(sockfd, addr, addrlen) \
+	connect((sockfd), (const struct sockaddr *)(addr), (socklen_t)(addrlen))
+#define send(sockfd, buf, len) \
+	send((sockfd), (buf), (len), 0)
+#define recv(sockfd, buf, len) \
+	recv((sockfd), (buf), (len), 0)
+#define accept(sockfd) \
+	accept((sockfd), 0, 0)
+#define sendto(sockfd, buf, len, flags, dst, dstlen) \
+	sendto((sockfd), (buf), (len), (flags), (const struct sockaddr *)(dst), (socklen_t)(dstlen))
+#define recvfrom(sockfd, buf, len, flags, src, srclen) \
+	recvfrom((sockfd), (buf), (len), (flags), (struct sockaddr *)(src), (socklen_t *)(srclen))
+#define getsockname(sockfd, addr, addrlen) \
+	getsockname((sockfd), (struct sockaddr *)(addr), (socklen_t *)(addrlen))
+#define getpeername(sockfd, addr, addrlen) \
+	getpeername((sockfd), (struct sockaddr *)(addr), (socklen_t *)(addrlen))
+#endif
+
 int stat(const char*, struct stat*);
 char* strcpy(char*, const char*);
 void *memmove(void*, const void*, size_t);

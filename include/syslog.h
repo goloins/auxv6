@@ -49,5 +49,7 @@ void closelog(void);
 int setlogmask(int maskpri);
 void syslog(int priority, const char *format, ...);
 void vsyslog(int priority, const char *format, va_list ap);
+void syslog_r(int priority, struct syslog_data *data, const char *format, ...);
+void vsyslog_r(int priority, struct syslog_data *data, const char *format, va_list ap);
 
 #endif

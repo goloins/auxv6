@@ -92,6 +92,7 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
 int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
 int sigsuspend(const sigset_t *mask);
 void (*signal(int signum, void (*handler)(int)))(int);
+int raise(int sig);
 #endif
 
 #endif

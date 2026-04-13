@@ -166,6 +166,49 @@ raise(int sig)
 }
 
 /*
+ * pread() — read from a file descriptor at a given offset without
+ * changing the file offset (POSIX.1-2001).
+ *
+ * Implemented via lseek + read + lseek restore. Correct for a
+ * single-threaded kernel where no concurrent lseek can interleave.
+ */
+ssize_t
+pread(int fd, void *buf, size_t count, off_t offset)
+{
+  off_t orig;
+  ssize_t n;
+
+  orig = lseek(fd, 0, SEEK_CUR);
+  if (orig == (off_t)-1)
+    return -1;
+  if (lseek(fd, offset, SEEK_SET) == (off_t)-1)
+    return -1;
+  n = read(fd, buf, count);
+  lseek(fd, orig, SEEK_SET);  /* restore; ignore error to preserve read result */
+  return n;
+}
+
+/*
+ * pwrite() — write to a file descriptor at a given offset without
+ * changing the file offset (POSIX.1-2001).
+ */
+ssize_t
+pwrite(int fd, const void *buf, size_t count, off_t offset)
+{
+  off_t orig;
+  ssize_t n;
+
+  orig = lseek(fd, 0, SEEK_CUR);
+  if (orig == (off_t)-1)
+    return -1;
+  if (lseek(fd, offset, SEEK_SET) == (off_t)-1)
+    return -1;
+  n = write(fd, buf, count);
+  lseek(fd, orig, SEEK_SET);
+  return n;
+}
+
+/*
  * execve() — execute a program with environment.
  * auxv6's exec(path, argv) ignores envp at the kernel level; we update
  * the global environ pointer so child's getenv() sees the new env.

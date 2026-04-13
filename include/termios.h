@@ -131,5 +131,8 @@ struct winsize {
 #define IEXTEN  0x00008000U  /* enable implementation-defined input processing */
 
 int tcsendbreak(int fd, int duration);
+int tcgetattr(int fd, struct termios *termios_p);
+int tcsetattr(int fd, int optional_actions, const struct termios *termios_p);
+int tcflush(int fd, int queue_selector);
 
 #endif /* XV6_TERMIOS_H */
