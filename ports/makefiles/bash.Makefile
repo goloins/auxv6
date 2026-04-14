@@ -49,7 +49,12 @@ first-pass: | $(BUILDDIR)
 	@cd "$(BUILDDIR)" && \
 		env \
 			CC="$(CC)" AR="$(AR)" RANLIB="$(RANLIB)" STRIP="$(STRIP)" \
+			bash_cv_posix_signals=yes bash_cv_signal_vintage=posix \
+			ac_cv_type_long_long_int=yes ac_cv_type_unsigned_long_long_int=yes \
 			ac_cv_func_getrusage=yes \
+			ac_cv_func_tcgetattr=yes \
+			ac_cv_func_strchr=yes ac_cv_func_strrchr=yes ac_cv_func_bcopy=yes \
+			ac_cv_func_killpg=yes ac_cv_func_mkfifo=yes bash_cv_sys_named_pipes=present \
 			CPPFLAGS="$(CONFIGURE_CPPFLAGS)" CFLAGS="$(COMMON_CFLAGS)" LDFLAGS="$(CONFIGURE_LDFLAGS)" \
 			../configure \
 				--host=i386-jos-elf \
@@ -61,12 +66,31 @@ first-pass: | $(BUILDDIR)
 				--disable-bang-history \
 				--disable-nls \
 				>>"$(LOG)" 2>&1
+	@set +e; \
+	$(MAKE) -C "$(ROOT)" libc/libc.a libc/libauxrt.a >>"$(LOG)" 2>&1; \
+	libc_rc=$$?; \
+	if [ $$libc_rc -ne 0 ]; then \
+		echo "bash: failed to rebuild auxv6 libc/libauxrt (rc=$$libc_rc)" | tee -a "$(LOG)" >&2; \
+		exit $$libc_rc; \
+	fi
 	@cd "$(BUILDDIR)" && \
 		perl -0pi -e 's@/\* #undef HAVE_DPRINTF \*/@#define HAVE_DPRINTF 1@g; \
+		s@/\* #undef HAVE_LONG_LONG_INT \*/@#define HAVE_LONG_LONG_INT 1@g; \
+		s@/\* #undef HAVE_UNSIGNED_LONG_LONG_INT \*/@#define HAVE_UNSIGNED_LONG_LONG_INT 1@g; \
+		s@/\* #undef HAVE_SELECT \*/@#define HAVE_SELECT 1@g; \
 		s@/\* #undef HAVE_GETHOSTNAME \*/@#define HAVE_GETHOSTNAME 1@g; \
 		s@/\* #undef HAVE_GETRUSAGE \*/@#define HAVE_GETRUSAGE 1@g; \
 		s@/\* #undef HAVE_GETTIMEOFDAY \*/@#define HAVE_GETTIMEOFDAY 1@g; \
 		s@/\* #undef HAVE_ISBLANK \*/@#define HAVE_ISBLANK 1@g; \
+		s@/\* #undef HAVE_STRCHR \*/@#define HAVE_STRCHR 1@g; \
+		s@/\* #undef HAVE_STRRCHR \*/@#define HAVE_STRRCHR 1@g; \
+		s@/\* #undef HAVE_BCOPY \*/@#define HAVE_BCOPY 1@g; \
+		s@/\* #undef HAVE_KILLPG \*/@#define HAVE_KILLPG 1@g; \
+		s@/\* #undef HAVE_MKFIFO \*/@#define HAVE_MKFIFO 1@g; \
+		s@/\* #undef HAVE_POSIX_SIGNALS \*/@#define HAVE_POSIX_SIGNALS 1@g; \
+		s@#define HAVE_BSD_SIGNALS 1@/* #undef HAVE_BSD_SIGNALS */@g; \
+		s@/\* #undef HAVE_TCGETATTR \*/@#define HAVE_TCGETATTR 1@g; \
+		s@/\* #undef HAVE_STRFTIME \*/@#define HAVE_STRFTIME 1@g; \
 		s@#define HAVE_ULIMIT_H 1@/* #undef HAVE_ULIMIT_H */@g; \
 		s@#define HAVE_SYS_RANDOM_H 1@/* #undef HAVE_SYS_RANDOM_H */@g;' config.h
 	# Avoid top-level "all" because it forces host-side doc helpers (man2html).
