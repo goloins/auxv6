@@ -1426,13 +1426,16 @@ TARGETFS_ETC ?= $(TARGETFS_DIR)/etc
 TARGETFS_SBIN ?= $(TARGETFS_DIR)/sbin
 TARGETFS_LIB ?= $(TARGETFS_DIR)/lib
 TARGETFS_LIBC_A ?= $(TARGETFS_LIB)/libc.a
+TARGETFS_INCLUDE ?= $(TARGETFS_DIR)/usr/include
 TARGETFS_MAN_DIR ?= $(TARGETFS_DIR)/usr/share/man
 EXT2ROOT_FSTAB ?= $(TARGETFS_ETC)/fstab.ext2root
+INCLUDE_HEADER_SOURCES = $(shell find include -type f 2>/dev/null)
+TARGETFS_INCLUDE_HEADERS = $(patsubst include/%,$(TARGETFS_INCLUDE)/%,$(INCLUDE_HEADER_SOURCES))
 ROOTFS_LEGACY_FILES =
 ifeq ($(LEGACY_XV6FS),1)
 ROOTFS_LEGACY_FILES += $(TARGETFS_SBIN)/mount.xv6fs
 endif
-ROOTFS_COMMON_FILES = README $(TARGETFS_ETC)/hosts $(EXT2ROOT_FSTAB) $(TARGETFS_ETC)/profile $(TARGETFS_ETC)/termcap $(TARGETFS_ETC)/passwd $(TARGETFS_ETC)/group $(TARGETFS_ETC)/hostname $(TARGETFS_ETC)/motd $(TARGETFS_ETC)/resolv.conf $(TARGETFS_SBIN)/mount.ext2 $(TARGETFS_SBIN)/mount.msdosfs $(TARGETFS_SBIN)/mount.exfat $(TARGETFS_SBIN)/mount.isofs $(TARGETFS_LIBC_A) $(ROOTFS_LEGACY_FILES) $(TARGETFS_DIR)/tmp/test.iso
+ROOTFS_COMMON_FILES = README $(TARGETFS_ETC)/hosts $(EXT2ROOT_FSTAB) $(TARGETFS_ETC)/profile $(TARGETFS_ETC)/termcap $(TARGETFS_ETC)/passwd $(TARGETFS_ETC)/group $(TARGETFS_ETC)/hostname $(TARGETFS_ETC)/motd $(TARGETFS_ETC)/resolv.conf $(TARGETFS_SBIN)/mount.ext2 $(TARGETFS_SBIN)/mount.msdosfs $(TARGETFS_SBIN)/mount.exfat $(TARGETFS_SBIN)/mount.isofs $(TARGETFS_LIBC_A) $(TARGETFS_INCLUDE_HEADERS) $(ROOTFS_LEGACY_FILES) $(TARGETFS_DIR)/tmp/test.iso
 ROOTFS_RC_FILES = $(TARGETFS_ETC)/rc.S $(TARGETFS_ETC)/rc.0 $(TARGETFS_ETC)/rc.1 $(TARGETFS_ETC)/rc.2 $(TARGETFS_ETC)/rc.3 $(TARGETFS_ETC)/rc.6
 ROOTFS_RC_FILES_SERVER7 = $(filter-out $(TARGETFS_ETC)/rc.2,$(ROOTFS_RC_FILES)) $(TARGETFS_ETC)/rc.2.server7
 ROOTFS_MAN_FILES = $(wildcard $(TARGETFS_MAN_DIR)/*.md)
@@ -1475,6 +1478,11 @@ $(TARGETFS_DIR)/tmp/test.iso:
 $(TARGETFS_LIBC_A): $(LIBC_A)
 	install -d $(TARGETFS_LIB)
 	install -m 0644 $(LIBC_A) $@
+
+$(TARGETFS_INCLUDE)/%: include/%
+	install -d $(dir $@)
+	install -m 0644 $< $@
+
 #nice
 test_ext2.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) strip-uprogs
 	sh tools/stage-ext2-root.sh .ext2root $(EXT2IMG) $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) $(UPROGS)
