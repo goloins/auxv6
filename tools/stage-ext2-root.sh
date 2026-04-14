@@ -38,7 +38,7 @@ build_ext2_image() {
 
   # Use fakeroot to build with root ownership
   if [ "$use_fakeroot" = true ]; then
-    fakeroot sh -c "chown -R 0:0 '$rootdir' && '$mke2fs_cmd' -q -t ext2 -d '$rootdir' -F '$image' 262144"
+    fakeroot sh -c "chown -R 0:0 '$rootdir' && chown 1000:1000 '$rootdir/home/aux' && '$mke2fs_cmd' -q -t ext2 -d '$rootdir' -F '$image' 262144"
   else
     # Try with sudo if not using fakeroot
     if sudo -n "$mke2fs_cmd" -q -t ext2 -d "$rootdir" -F "$image" 262144 2>/dev/null; then
