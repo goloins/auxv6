@@ -40,9 +40,8 @@ getgroups(int n, gid_t *groups)
 /* -------------------------------------------------------------------------
  * environ — global environment variable array
  *
- * auxv6 does not pass envp to main() yet.  Start with an empty environment
- * so that dash initialises without crashing.  The user can export variables
- * to populate it.
+ * crt0 seeds environ from the process envp at startup.  Keep an empty
+ * fallback for programs that start with no environment.
  * ------------------------------------------------------------------------- */
 static char *_posix_empty_env[] = { 0 };
 char **environ = _posix_empty_env;

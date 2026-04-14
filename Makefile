@@ -372,6 +372,12 @@ AUXRT_A = libc/libauxrt.a
 X11_OBJS = user/x11.o
 X11_A = user/libX11.a
 
+.PHONY: libc-rebuild
+# Force a clean libc runtime rebuild (crt0 + libc + auxrt) and restage libc.a.
+libc-rebuild:
+	rm -f $(LIBC_OBJS) $(LIBAUXRT_OBJS) $(CRT0_OBJ) $(LIBC_A) $(AUXRT_A) $(TARGETFS_LIBC_A)
+	$(MAKE) $(CRT0_OBJ) $(LIBC_A) $(AUXRT_A) $(TARGETFS_LIBC_A)
+
 # Convenience static archive of the full auxv6 userland runtime library.
 # Used by native programs and by ports that need to link against our libc
 # without knowing about individual implementation objects.

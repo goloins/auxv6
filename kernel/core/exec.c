@@ -127,6 +127,8 @@ exec_internal(char *path, char **argv, int depth)
   const struct vnode_ops *ops;
   uint argc, sz, sp;
   uint arg_bytes;
+  uint stack_words;
+  uint stack_base;
   uint *ustack;
   struct elfhdr elf;
   struct inode *ip;
@@ -139,7 +141,7 @@ exec_internal(char *path, char **argv, int depth)
   struct address_space *newaddrsp, *oldaddrsp;
   struct proc *curproc = myproc();
 
-#if ((3 + EXEC_ARGC_MAX + 1) * 4 > PGSIZE)
+#if ((6 + EXEC_ARGC_MAX) * 4 > PGSIZE)
 #error "exec ustack staging exceeds one page; lower EXEC_ARGC_MAX or refactor staging"
 #endif
 
@@ -276,16 +278,21 @@ exec_internal(char *path, char **argv, int depth)
     sp = (sp - arglen) & ~3;
     if(copyout(pgdir, sp, argv[argc], arglen) < 0)
       goto bad;
-    ustack[3+argc] = sp;
+    ustack[4+argc] = sp;
   }
-  ustack[3+argc] = 0;
+  ustack[4+argc] = 0;  // argv[argc]
+  ustack[5+argc] = 0;  // envp[0] (empty environment)
 
-  ustack[0] = 0xffffffff;  // fake return PC
+  stack_words = 6 + argc;
+  stack_base = sp - stack_words * 4;
+
+  ustack[0] = 0xffffffff;            // fake return PC
   ustack[1] = argc;
-  ustack[2] = sp - (argc+1)*4;  // argv pointer
+  ustack[2] = stack_base + 4 * 4;    // argv pointer
+  ustack[3] = stack_base + (5 + argc) * 4;  // envp pointer
 
-  sp -= (3+argc+1) * 4;
-  if(copyout(pgdir, sp, ustack, (3+argc+1)*4) < 0)
+  sp = stack_base;
+  if(copyout(pgdir, sp, ustack, stack_words * 4) < 0)
     goto bad;
 
   kfree((char*)ustack);
