@@ -87,7 +87,7 @@ struct arpinfo {
 pid_t fork(void);
 void __auxv6_sys_exit(int status) __attribute__((noreturn));
 void exit(int status) __attribute__((noreturn));
-pid_t wait(void);
+pid_t wait(int *status);
 pid_t waitpid(pid_t pid, int *status, int options);
 pid_t wait4(pid_t pid, int *status, int options, void *rusage);
 int waitid(id_t idtype, id_t id, siginfo_t *info, int options);

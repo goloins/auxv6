@@ -243,7 +243,7 @@ proc_apply_pending_signals(struct proc *p)
   if(pending & fatal){
     termsig = signal_pick_fatal(pending);
     p->killed = 1;
-    if(termsig)
+    if(valid_signo(termsig))
       p->xstatus = WSTATUS_SIG(termsig);
     if(p->state == STOPPED)
       p->state = RUNNABLE;
@@ -351,7 +351,8 @@ proc_deliver_signal(struct proc *p)
              p->pid, sp);
     // Match Unix behavior: if we cannot construct a handler frame
     // (e.g. exhausted stack and no alt stack), force default fatal action.
-    p->xstatus = WSTATUS_SIG(signo);
+    if(valid_signo(signo))
+      p->xstatus = WSTATUS_SIG(signo);
     p->killed = 1;
     return 0;
   }
@@ -363,7 +364,8 @@ proc_deliver_signal(struct proc *p)
   if(copyout(proc_pgdir(p), sp, &sf, sizeof(sf)) < 0) {
     STACKDBG("stack: pid %d signal delivery copyout failed\n", p->pid);
     // Handler delivery could not be set up; terminate as signaled.
-    p->xstatus = WSTATUS_SIG(signo);
+    if(valid_signo(signo))
+      p->xstatus = WSTATUS_SIG(signo);
     p->killed = 1;
     return 0;
   }

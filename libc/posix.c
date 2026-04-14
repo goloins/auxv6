@@ -337,6 +337,15 @@ execvp(const char *file, char *const argv[])
 }
 
 /*
+ * wait() — POSIX wait; delegates to waitpid(-1, status, 0).
+ */
+int
+wait(int *status)
+{
+  return waitpid(-1, status, 0);
+}
+
+/*
  * wait3() — BSD-compat wait; rusage is ignored on auxv6.
  */
 int

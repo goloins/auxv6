@@ -62,6 +62,14 @@ proc_kstack_npages(void)
 }
 
 static int
+wait_status_has_valid_signal(int status)
+{
+  if(!WIFSIGNALED_INT(status))
+    return 1;
+  return valid_signo(WTERMSIG_INT(status));
+}
+
+static int
 proc_wait_target_match(struct proc *curproc, struct proc *child, int pid)
 {
   if(pid > 0)
@@ -335,6 +343,8 @@ exit(int status)
     }
   }
 
+  if(curproc->xstatus != 0 && !wait_status_has_valid_signal(curproc->xstatus))
+    curproc->xstatus = 0;
   if(curproc->xstatus == 0)
     curproc->xstatus = WSTATUS_EXIT(status);
   curproc->state = ZOMBIE;

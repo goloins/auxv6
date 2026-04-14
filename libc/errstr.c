@@ -13,6 +13,7 @@ strerror(int errnum)
   static char buf[32];
 
   switch(errnum) {
+  case 0:  return "Success";
   case 1:  return "Operation not permitted";
   case 2:  return "No such file or directory";
   case 3:  return "No such process";

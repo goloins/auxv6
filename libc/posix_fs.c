@@ -7,6 +7,7 @@
 #include "stat.h"
 #include "dirent.h"
 #include "errno.h"
+#include "stdarg.h"
 #include "string.h"
 #include "auxv6/user.h"
 
@@ -36,6 +37,195 @@
 
 uid_t geteuid(void);
 gid_t getegid(void);
+
+int __auxv6_sys_open(const char *path, int flags);
+ssize_t __auxv6_sys_read(int fd, void *buf, size_t count);
+ssize_t __auxv6_sys_write(int fd, const void *buf, size_t count);
+int __auxv6_sys_close(int fd);
+int __auxv6_sys_fstat(int fd, struct stat *st);
+int __auxv6_sys_stat(const char *path, struct stat *st);
+int __auxv6_sys_lstat(const char *path, struct stat *st);
+int __auxv6_sys_chdir(const char *path);
+int __auxv6_sys_dup(int fd);
+int __auxv6_sys_dup2(int oldfd, int newfd);
+off_t __auxv6_sys_lseek(int fd, off_t offset, int whence);
+int __auxv6_sys_fcntl(int fd, int cmd, int arg);
+int __auxv6_sys_ioctl(int fd, int request, void *argp);
+ssize_t __auxv6_sys_readlink(const char *path, char *buf, size_t bufsiz);
+
+static int
+posix_fail_errno(int fallback)
+{
+  if(errno == 0)
+    errno = fallback;
+  return -1;
+}
+
+int
+open(const char *path, int flags, ...)
+{
+  va_list ap;
+  int rc;
+
+  va_start(ap, flags);
+  va_end(ap);
+
+  if(path == 0) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  errno = 0;
+  rc = __auxv6_sys_open(path, flags);
+  if(rc < 0)
+    return posix_fail_errno(ENOENT);
+  return rc;
+}
+
+ssize_t
+read(int fd, void *buf, size_t count)
+{
+  ssize_t rc;
+
+  errno = 0;
+  rc = __auxv6_sys_read(fd, buf, count);
+  if(rc < 0)
+    return posix_fail_errno(EBADF);
+  return rc;
+}
+
+ssize_t
+write(int fd, const void *buf, size_t count)
+{
+  ssize_t rc;
+
+  errno = 0;
+  rc = __auxv6_sys_write(fd, buf, count);
+  if(rc < 0)
+    return posix_fail_errno(EBADF);
+  return rc;
+}
+
+int
+close(int fd)
+{
+  int rc;
+
+  errno = 0;
+  rc = __auxv6_sys_close(fd);
+  if(rc < 0)
+    return posix_fail_errno(EBADF);
+  return rc;
+}
+
+int
+chdir(const char *path)
+{
+  int rc;
+
+  if(path == 0) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  errno = 0;
+  rc = __auxv6_sys_chdir(path);
+  if(rc < 0)
+    return posix_fail_errno(ENOENT);
+  return rc;
+}
+
+int
+dup(int fd)
+{
+  int rc;
+
+  errno = 0;
+  rc = __auxv6_sys_dup(fd);
+  if(rc < 0)
+    return posix_fail_errno(EBADF);
+  return rc;
+}
+
+int
+dup2(int oldfd, int newfd)
+{
+  int rc;
+
+  errno = 0;
+  rc = __auxv6_sys_dup2(oldfd, newfd);
+  if(rc < 0)
+    return posix_fail_errno(EBADF);
+  return rc;
+}
+
+off_t
+lseek(int fd, off_t offset, int whence)
+{
+  off_t rc;
+
+  errno = 0;
+  rc = __auxv6_sys_lseek(fd, offset, whence);
+  if(rc == (off_t)-1 && errno == 0)
+    errno = (whence == SEEK_SET || whence == SEEK_CUR || whence == SEEK_END) ? ESPIPE : EINVAL;
+  return rc;
+}
+
+int
+fcntl(int fd, int cmd, ...)
+{
+  va_list ap;
+  int arg;
+  int rc;
+
+  arg = 0;
+  va_start(ap, cmd);
+  switch(cmd) {
+  case 0:
+  case 2:
+  case 4:
+  case 1030:
+    arg = va_arg(ap, int);
+    break;
+  default:
+    break;
+  }
+  va_end(ap);
+
+  errno = 0;
+  rc = __auxv6_sys_fcntl(fd, cmd, arg);
+  if(rc < 0) {
+    if(errno == 0) {
+      if(cmd == 0 || cmd == 1030)
+        errno = EMFILE;
+      else if(cmd < 0 || (cmd > 4 && cmd != 1030))
+        errno = EINVAL;
+      else
+        errno = EBADF;
+    }
+    return -1;
+  }
+  return rc;
+}
+
+int
+ioctl(int fd, int request, ...)
+{
+  va_list ap;
+  void *argp;
+  int rc;
+
+  argp = 0;
+  va_start(ap, request);
+  argp = va_arg(ap, void*);
+  va_end(ap);
+
+  errno = 0;
+  rc = __auxv6_sys_ioctl(fd, request, argp);
+  if(rc < 0)
+    return posix_fail_errno(ENOTTY);
+  return rc;
+}
 
 static void
 posix_fixup_mode_from_type(struct stat *st)
@@ -103,9 +293,9 @@ __posix_stat(const char *path, struct stat *buf)
   struct stat lst;
 
   errno = 0;
-  if(stat(path, buf) < 0) {
+  if(__auxv6_sys_stat(path, buf) < 0) {
     if(errno == 0) {
-      if(lstat(path, &lst) == 0 && lst.st_type == T_SYMLINK)
+      if(__auxv6_sys_lstat(path, &lst) == 0 && lst.st_type == T_SYMLINK)
         errno = ELOOP;
       else
         errno = ENOENT;
@@ -120,7 +310,7 @@ int
 __posix_fstat(int fd, struct stat *buf)
 {
   errno = 0;
-  if(fstat(fd, buf) < 0) {
+  if(__auxv6_sys_fstat(fd, buf) < 0) {
     if(errno == 0)
       errno = EBADF;
     return -1;
@@ -133,13 +323,31 @@ int
 __posix_lstat(const char *path, struct stat *buf)
 {
   errno = 0;
-  if(lstat(path, buf) < 0) {
+  if(__auxv6_sys_lstat(path, buf) < 0) {
     if(errno == 0)
       errno = ENOENT;
     return -1;
   }
   posix_fixup_mode_from_type(buf);
   return 0;
+}
+
+int
+stat(const char *path, struct stat *buf)
+{
+  return __posix_stat(path, buf);
+}
+
+int
+fstat(int fd, struct stat *buf)
+{
+  return __posix_fstat(fd, buf);
+}
+
+int
+lstat(const char *path, struct stat *buf)
+{
+  return __posix_lstat(path, buf);
 }
 
 char *
@@ -254,6 +462,18 @@ int
 open64(const char *path, int flags, ...)
 {
   return open((char*)path, flags);
+}
+
+ssize_t
+readlink(const char *path, char *buf, size_t bufsiz)
+{
+  ssize_t rc;
+
+  errno = 0;
+  rc = __auxv6_sys_readlink(path, buf, bufsiz);
+  if(rc < 0)
+    return posix_fail_errno(ENOENT);
+  return rc;
 }
 
 int
