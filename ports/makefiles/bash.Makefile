@@ -66,13 +66,6 @@ first-pass: | $(BUILDDIR)
 				--disable-bang-history \
 				--disable-nls \
 				>>"$(LOG)" 2>&1
-	@set +e; \
-	$(MAKE) -C "$(ROOT)" libc/libc.a libc/libauxrt.a >>"$(LOG)" 2>&1; \
-	libc_rc=$$?; \
-	if [ $$libc_rc -ne 0 ]; then \
-		echo "bash: failed to rebuild auxv6 libc/libauxrt (rc=$$libc_rc)" | tee -a "$(LOG)" >&2; \
-		exit $$libc_rc; \
-	fi
 	@cd "$(BUILDDIR)" && \
 		perl -0pi -e 's@/\* #undef HAVE_DPRINTF \*/@#define HAVE_DPRINTF 1@g; \
 		s@/\* #undef HAVE_LONG_LONG_INT \*/@#define HAVE_LONG_LONG_INT 1@g; \
