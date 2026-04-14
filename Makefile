@@ -1028,17 +1028,11 @@ ports-progs:
 				continue; \
 			fi; \
 		fi; \
-		stamp="$$portdir/.auxv6-built.stamp"; \
+		stamp="$$portdir/built.auxv6"; \
+		legacy_stamp="$$portdir/.auxv6-built.stamp"; \
 		rebuild=1; \
-		if [ -f "$$stamp" ]; then \
-			if ! find "$$portdir" \
-				-not -path "$$portdir/.auxv6-build/*" \
-				-not -path "$$portdir/obj/*" \
-				-not -path "$$portdir/autom4te.cache/*" \
-				-not -name '.auxv6-built.stamp' \
-				-type f \( -name 'Makefile*' -o -name '*.mk' -o -name '*.in' -o -name '*.ac' -o -name 'configure*' -o -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.h' -o -name '*.S' -o -name '*.s' -o -name '*.asm' -o -name '*.ld' \) -newer "$$stamp" 2>/dev/null | grep -q .; then \
-				rebuild=0; \
-			fi; \
+		if [ -f "$$stamp" ] || [ -f "$$legacy_stamp" ]; then \
+			rebuild=0; \
 		fi; \
 		if [ "$$rebuild" = "1" ]; then \
 			echo "ports: building $$name from $$portdir" | tee -a $(PORTS_BUILD_LOG); \
@@ -1046,7 +1040,7 @@ ports-progs:
 				echo "ports: build failed for $$name" | tee -a $(PORTS_BUILD_LOG); \
 				continue; \
 			fi; \
-			touch "$$stamp"; \
+			touch "$$stamp" "$$legacy_stamp"; \
 		else \
 			echo "ports: up-to-date $$name (skipping build)" | tee -a $(PORTS_BUILD_LOG); \
 		fi; \

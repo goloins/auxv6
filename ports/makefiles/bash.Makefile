@@ -26,11 +26,13 @@ LOG := $(BUILDDIR)/first-pass.log
 
 TOOL_GCC_INCLUDE := $(shell $(CC) -print-file-name=include)
 
-COMMON_CPPFLAGS := -I$(ROOT)/include -I$(ROOT)/include/posix -I$(ROOT)/include/posix/sys
-COMMON_CFLAGS := -fno-pic -static -fno-builtin -fno-strict-aliasing -O2 -Wall -m32 -fno-stack-protector
+COMMON_CPPFLAGS := -nostdinc -I$(ROOT)/include -I$(ROOT)/include/posix -I$(ROOT)/include/posix/sys
+COMMON_CFLAGS := -fno-pic -static -fno-builtin -fno-strict-aliasing -O2 -Wall -m32 -fno-stack-protector -std=gnu17 -Wno-error=implicit-function-declaration -Wno-error=implicit-int
 COMMON_LDFLAGS := -static
 BUILD_CC := cc
-BUILD_CFLAGS := -g -DCROSS_COMPILING -DHAVE_STRERROR=1 -DHAVE_DECL_SYS_NERR=1 -DHAVE_DECL_SYS_ERRLIST=1
+BUILD_CFLAGS := -g -std=gnu17 -Wno-error=implicit-function-declaration -Wno-error=implicit-int -DCROSS_COMPILING -DHAVE_STRERROR=1 -DHAVE_DECL_SYS_NERR=1 -DHAVE_DECL_SYS_ERRLIST=1
+LIBC_FALLBACK_A := $(ROOT)/targetfs/lib/libc.a
+LIBC_LINK_A := $(firstword $(wildcard $(AUXV6_LIBC_A)) $(wildcard $(LIBC_FALLBACK_A)))
 CONFIGURE_CPPFLAGS := $(COMMON_CPPFLAGS) -isystem $(TOOL_GCC_INCLUDE) -D__linux__=1 \
 	-DHAVE_DPRINTF=1 -DHAVE_GETHOSTNAME=1 -DHAVE_GETTIMEOFDAY=1 -DHAVE_ISBLANK=1 \
 	-DPARAMS\(protos\)=protos -Dshell_input_line_property=shell_input_line \
@@ -85,20 +87,25 @@ first-pass: | $(BUILDDIR)
 		s@/\* #undef HAVE_SETREGID \*/@#define HAVE_SETREGID 1@g; \
 		s@/\* #undef HAVE_STRTOLD \*/@#define HAVE_STRTOLD 1@g; \
 		s@/\* #undef HAVE_PUTCHAR \*/@#define HAVE_PUTCHAR 1@g; \
+		s@#define HAVE_ULIMIT_H 1@/* #undef HAVE_ULIMIT_H */@g; \
 		s@#define HAVE_SYS_RANDOM_H 1@/* #undef HAVE_SYS_RANDOM_H */@g;' config.h
 	# Avoid top-level "all" because it forces host-side doc helpers (man2html).
+	@if [ -z "$(LIBC_LINK_A)" ]; then \
+		echo "bash: missing libc archive; expected $(AUXV6_LIBC_A) or $(LIBC_FALLBACK_A)" | tee -a "$(LOG)" >&2; \
+		exit 1; \
+	fi
 	@set +e; \
 	$(MAKE) -C "$(BUILDDIR)" -j1 \
 		CC_FOR_BUILD="$(BUILD_CC)" CFLAGS_FOR_BUILD="$(BUILD_CFLAGS)" \
-		LDFLAGS="-nostdlib -static -Wl,--allow-multiple-definition $(AUXV6_CRT0_OBJ)" \
-		LOCAL_LIBS="$(AUXV6_AUXRT_A) $(AUXV6_LIBC_A) $(LIBGCC)" \
+		LDFLAGS="-m32 -nostdlib -static -Wl,--allow-multiple-definition $(AUXV6_CRT0_OBJ)" \
+		LOCAL_LIBS="$(AUXV6_AUXRT_A) $(LIBC_LINK_A) $(LIBGCC)" \
 		bash >>"$(LOG)" 2>&1; \
 	rc=$$?; \
 	echo "bash: first-pass make rc=$$rc" >>"$(LOG)"; \
 	if [ $$rc -ne 0 ]; then \
 		echo "bash: first-pass portability failures recorded (non-fatal in staging lane)" >>"$(LOG)"; \
 	fi
-	@tail -40 "$(LOG)"
+	@tail -100 "$(LOG)"
 
 check-host-contamination:
 	@! grep -En '(^|[[:space:]])(cc|gcc|clang|i386-jos-elf-gcc)([[:space:]].*)?(-I|-isystem)[[:space:]]*(/usr/include|/usr/local/include|/opt/homebrew/include|/Library/Developer/CommandLineTools/usr/include|/Applications/Xcode.*/usr/include)' "$(LOG)" >/dev/null || \
