@@ -85,7 +85,7 @@ Generated: 2026-04-11
 | nslookup | targetfs/usr/share/man/nslookup.md | 2026-04-01 | user/nslookup.c | source-derived usage/options |
 | ntpd | targetfs/usr/share/man/ntpd.md | 2026-04-03 | user/ntpd.c | daemonized NTP sync service |
 | passwd | targetfs/usr/share/man/passwd.md | 2026-04-01 | user/passwd.c | source-derived usage/options |
-| ping | targetfs/usr/share/man/ping.md | 2026-04-02 | user/ping.c | source-derived usage/options |
+| ping | targetfs/usr/share/man/ping.md | 2026-04-14 | user/ping.c | source-derived usage/options |
 | ps | targetfs/usr/share/man/ps.md | 2026-04-01 | user/ps.c | source-derived usage/options |
 | pwd | targetfs/usr/share/man/pwd.md | 2026-04-01 | user/pwd.c | source-derived usage/options |
 | rarp | targetfs/usr/share/man/rarp.md | 2026-04-01 | user/rarp.c | source-derived usage/options |
