@@ -11,6 +11,7 @@
 #include "errno.h"
 #include "stdarg.h"
 #include "unistd.h"
+#include "../include/signal.h"
 #include "auxv6/user.h"
 #include "stdlib.h"
 
@@ -151,7 +152,7 @@ void (*signal(int signum, void (*handler)(int)))(int)
 {
   struct sigaction sa, old;
   sa.sa_handler = handler;
-  sa.sa_mask    = 0;
+  sigemptyset(&sa.sa_mask);
   sa.sa_flags   = 0;
   if(sigaction(signum, &sa, &old) < 0)
     return (void(*)(int))-1;  /* SIG_ERR */
@@ -163,6 +164,17 @@ int
 raise(int sig)
 {
   return kill(getpid(), sig);
+}
+
+/* killpg() — send signal to all members of process group pgrp. */
+int
+killpg(int pgrp, int sig)
+{
+  if(pgrp <= 0) {
+    errno = EINVAL;
+    return -1;
+  }
+  return kill(-pgrp, sig);
 }
 
 /*

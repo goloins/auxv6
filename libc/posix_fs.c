@@ -255,6 +255,13 @@ open64(const char *path, int flags, ...)
 {
   return open((char*)path, flags);
 }
+
+int
+mkfifo(const char *path, mode_t mode)
+{
+  return mknod(path, M_IFIFO | (mode & 0777), 0, 0);
+}
+
 int
 fchmod(int fd, mode_t mode)
 {

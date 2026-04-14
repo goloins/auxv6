@@ -16,6 +16,7 @@ typedef long time_t;
 #define M_IFDIR  0040000
 #define M_IFCHR  0020000
 #define M_IFBLK  0060000
+#define M_IFIFO  0010000
 #define M_IFLNK  0120000   // Symbolic link
 
 #define M_ISUID 04000
