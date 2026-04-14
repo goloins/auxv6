@@ -8,6 +8,35 @@ The kernel implements several hierarchical debug flags to control verbosity of l
 
 In addition to compile-time kernel flags, auxv6 now has a userspace boot-time tuner for device-node manager verbosity in `/etc/devman.conf`.
 
+### `DBG_LOGIN` - Login(1) Step Trace
+
+Controls verbose step-by-step tracing inside `login` userspace flow.
+
+**Default:** 0 (disabled)  
+**Type:** Compile-time userspace flag  
+**File:** `user/login.c`
+
+When enabled, `login` prints `login: dbg ...` markers to stderr at each stage:
+- stdio reset/open console
+- login prompt shown
+- username read/trim
+- before/after `getpwnam`
+- before/after password prompt and `readpass`
+- auth pass/fail
+- uid/gid switch, motd, chdir, exec
+
+Enable for diagnosis:
+```sh
+make EXTRA_CFLAGS="-DDBG_LOGIN=1" _login
+make EXTRA_CFLAGS="-DDBG_LOGIN=1" test_ext2.img
+```
+
+Disable after diagnosis (default):
+```sh
+make _login
+make test_ext2.img
+```
+
 ### `devman` Runtime Debug Tuner
 
 Controls `devman` verbosity during early runlevel `/dev` population.

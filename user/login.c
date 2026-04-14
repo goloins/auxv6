@@ -1,272 +1,623 @@
 #include "types.h"
-#include "pwd.h"
 #include "stat.h"
+#include "pwd.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
+#include "stdlib.h"
+#include "stdio.h"
 
-#define USER_MAX 32
-#define MOTD_MAX 2048
-#define HOST_MAX 64
+#define LOGIN_NAME_MAX   64
+#define LOGIN_PASS_MAX   64
+#define LOGIN_PATH_MAX   128
+#define LOGIN_BUF_MAX    4096
+#define LOGIN_RETRIES    10
+#define LOGIN_HOST_MAX   64
 
-/* ---------- MOTD helpers ---------- */
+/* Toggle to 1 for built-in step tracing without build flags. */
+#define LOGIN_DEBUG      1
 
-static void trim_trailing_ws(char *s);  /* defined below */
+#define NOLOGIN_PATH "/etc/nologin"
+#define UTMP_PATH    "/var/run/utmp"
+#define WTMP_PATH    "/var/log/wtmp"
+#define MOTD_PATH    "/etc/motd"
 
-static int
-motd_read_file(const char *path, char *buf, int max)
+mode_t umask(mode_t mask);
+
+struct session_user {
+  char name[LOGIN_NAME_MAX];
+  char pass[LOGIN_PASS_MAX];
+  int uid;
+  int gid;
+  char home[LOGIN_PATH_MAX];
+  char shell[LOGIN_PATH_MAX];
+};
+
+static void
+logdbg(const char *msg)
 {
-  int fd, n, off;
-  if(max <= 0) return -1;
-  fd = open(path, O_RDONLY);
-  if(fd < 0) return -1;
-  off = 0;
-  while(off < max - 1){
-    n = read(fd, buf + off, max - 1 - off);
-    if(n <= 0) break;
-    off += n;
-  }
-  close(fd);
-  buf[off] = 0;
-  return off;
+  if(!LOGIN_DEBUG)
+    return;
+  dprintf(1, "[login-dbg] %s\n", msg);
+  dprintf(2, "[login-dbg] %s\n", msg);
+}
+
+static void
+trim(char *s)
+{
+  int n;
+
+  if(s == 0)
+    return;
+
+  n = strlen(s);
+  while(n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r' ||
+                  s[n - 1] == ' '  || s[n - 1] == '\t'))
+    n--;
+  s[n] = 0;
 }
 
 static int
-motd_find_kb(char *text, const char *key)
+read_file_text(const char *path, char *buf, int bufsz)
 {
-  int i, j;
-  for(i = 0; text[i]; i++){
-    for(j = 0; key[j] && text[i+j] == key[j]; j++)
-      ;
-    if(!key[j]){
-      i += j;
-      while(text[i] && (text[i] < '0' || text[i] > '9')) i++;
-      return atoi(&text[i]);
-    }
+  int fd;
+  int n;
+
+  if(path == 0 || buf == 0 || bufsz <= 1)
+    return -1;
+
+  fd = open(path, O_RDONLY);
+  if(fd < 0)
+    return -1;
+
+  n = read(fd, buf, bufsz - 1);
+  close(fd);
+  if(n < 0)
+    return -1;
+
+  buf[n] = 0;
+  return n;
+}
+
+static void
+copy_field(char *dst, int dstsz, const char *src, int len)
+{
+  if(dst == 0 || dstsz <= 0)
+    return;
+  if(src == 0 || len <= 0) {
+    dst[0] = 0;
+    return;
   }
+  if(len >= dstsz)
+    len = dstsz - 1;
+  memmove(dst, src, len);
+  dst[len] = 0;
+}
+
+static int
+parse_uint(const char *s, int len, int *out)
+{
+  int i;
+  int v;
+
+  if(s == 0 || out == 0 || len <= 0)
+    return -1;
+
+  v = 0;
+  for(i = 0; i < len; i++) {
+    if(s[i] < '0' || s[i] > '9')
+      return -1;
+    v = v * 10 + (s[i] - '0');
+  }
+
+  *out = v;
+  return 0;
+}
+
+static int
+lookup_user_local(const char *name, struct session_user *u)
+{
+  static char buf[LOGIN_BUF_MAX];
+  int n;
+  int i;
+
+  if(name == 0 || u == 0 || name[0] == 0)
+    return -1;
+
+  n = read_file_text("/etc/passwd", buf, sizeof(buf));
+  if(n <= 0)
+    return -1;
+
+  i = 0;
+  while(i < n) {
+    int start;
+    int end;
+    int nf;
+    int fs[8];
+    int fl[8];
+    int j;
+    int uid;
+    int gid;
+
+    while(i < n && (buf[i] == '\n' || buf[i] == '\r'))
+      i++;
+    if(i >= n)
+      break;
+
+    start = i;
+    while(i < n && buf[i] != '\n' && buf[i] != '\r')
+      i++;
+    end = i;
+
+    nf = 0;
+    fs[0] = start;
+    for(j = start; j <= end; j++) {
+      if(j == end || buf[j] == ':') {
+        if(nf < 8) {
+          fl[nf] = j - fs[nf];
+          nf++;
+        }
+        if(j < end && nf < 8)
+          fs[nf] = j + 1;
+      }
+    }
+
+    if(nf < 7)
+      continue;
+
+    if(fl[0] != (int)strlen(name))
+      continue;
+    if(strncmp(buf + fs[0], name, fl[0]) != 0)
+      continue;
+
+    if(parse_uint(buf + fs[2], fl[2], &uid) < 0)
+      return -1;
+    if(parse_uint(buf + fs[3], fl[3], &gid) < 0)
+      return -1;
+
+    copy_field(u->name, sizeof(u->name), buf + fs[0], fl[0]);
+    copy_field(u->pass, sizeof(u->pass), buf + fs[1], fl[1]);
+    u->uid = uid;
+    u->gid = gid;
+    copy_field(u->home, sizeof(u->home), buf + fs[5], fl[5]);
+    if(fl[6] > 0)
+      copy_field(u->shell, sizeof(u->shell), buf + fs[6], fl[6]);
+    else
+      copy_field(u->shell, sizeof(u->shell), "/bin/sh", 7);
+
+    return 0;
+  }
+
   return -1;
 }
 
-static int
-motd_next_tok(char **pp, char *tok, int max)
+static void
+ensure_stdio(void)
 {
-  char *p = *pp;
+  int fd;
+
+  close(0);
+  close(1);
+  close(2);
+  fd = open("/dev/console", O_RDWR);
+  if(fd < 0)
+    exit(0);
+
+  if(fd != 0)
+    dup2(fd, 0);
+  dup(0);
+  dup(0);
+
+  if(fd > 2)
+    close(fd);
+}
+
+static int
+read_username(char *buf, int bufsz)
+{
+  int i;
+  int cc;
+  char c;
+
+  if(buf == 0 || bufsz <= 1)
+    return -1;
+
+  i = 0;
+  while(i + 1 < bufsz) {
+    cc = read(0, &c, 1);
+    if(cc < 1)
+      return -1;
+    if(c == '\n' || c == '\r')
+      break;
+    buf[i++] = c;
+  }
+  buf[i] = 0;
+  return 0;
+}
+
+static void
+restore_tty_cooked_mode(void)
+{
+  struct termios t;
+
+  if(tcgetattr(0, &t) < 0)
+    return;
+
+  t.c_lflag |= (ECHO | ICANON);
+  tcsetattr(0, TCSANOW, &t);
+}
+
+static void
+claim_tty_foreground(void)
+{
+  int mypgrp;
+  int fg_before;
+  int fg_after;
+
+  mypgrp = (int)getpid();
+  setpgid(0, 0);
+  fg_before = (int)tcgetpgrp();
+  tcsetpgrp((pid_t)mypgrp);
+  fg_after = (int)tcgetpgrp();
+
+  if(LOGIN_DEBUG)
+    dprintf(1, "[login-dbg] pgrp my=%d fg_before=%d fg_after=%d\n", mypgrp, fg_before, fg_after);
+}
+
+static void
+show_nologin_and_exit_if_needed(const struct session_user *u)
+{
+  char buf[512];
+  int fd;
   int n;
-  while(*p == ' ' || *p == '\t') p++;
-  if(!*p || *p == '\n') return 0;
-  n = 0;
-  while(*p && *p != ' ' && *p != '\t' && *p != '\n'){
-    if(n < max-1) tok[n++] = *p;
+
+  if(u == 0 || u->uid == 0)
+    return;
+
+  fd = open(NOLOGIN_PATH, O_RDONLY);
+  if(fd < 0)
+    return;
+
+  while((n = read(fd, buf, sizeof(buf))) > 0)
+    write(1, buf, n);
+  close(fd);
+  exit(0);
+}
+
+static void
+set_session_env(const struct session_user *u)
+{
+  char ttybuf[LOGIN_PATH_MAX];
+  char *tty;
+
+  clearenv();
+  setenv("LOGNAME", u->name, 1);
+  setenv("USER", u->name, 1);
+  setenv("HOME", u->home, 1);
+  setenv("SHELL", u->shell, 1);
+  setenv("PATH", "/bin:/usr/bin:/sbin:/usr/sbin", 1);
+
+  tty = ttyname(0);
+  if(tty)
+    setenv("TTY", tty, 1);
+  else if(ttyname_r(0, ttybuf, sizeof(ttybuf)) == 0)
+    setenv("TTY", ttybuf, 1);
+}
+
+static void
+ensure_log_dirs(void)
+{
+  mkdir("/var");
+  mkdir("/var/run");
+  mkdir("/var/log");
+}
+
+static void
+append_login_record(const char *path, const struct session_user *u)
+{
+  int fd;
+  char line[256];
+  char *tty;
+  char ttybuf[LOGIN_PATH_MAX];
+
+  tty = ttyname(0);
+  if(tty == 0 && ttyname_r(0, ttybuf, sizeof(ttybuf)) == 0)
+    tty = ttybuf;
+
+  fd = open(path, O_CREATE | O_WRONLY | O_APPEND);
+  if(fd < 0)
+    return;
+
+  snprintf(line, sizeof(line), "%s tty=%s\n", u->name, tty ? tty : "?");
+  write(fd, line, strlen(line));
+  close(fd);
+}
+
+static void
+record_utmp_wtmp(const struct session_user *u)
+{
+  ensure_log_dirs();
+  append_login_record(UTMP_PATH, u);
+  append_login_record(WTMP_PATH, u);
+}
+
+static int
+read_memfree_kb(void)
+{
+  char buf[512];
+  char *p;
+
+  if(read_file_text("/proc/meminfo", buf, sizeof(buf)) < 0)
+    return -1;
+
+  p = buf;
+  while(*p) {
+    if(strncmp(p, "MemFree:", 8) == 0)
+      break;
     p++;
   }
-  tok[n] = 0;
-  *pp = p;
-  return 1;
+  if(*p == 0)
+    return -1;
+
+  while(*p && (*p < '0' || *p > '9'))
+    p++;
+  if(!*p)
+    return -1;
+
+  return atoi(p);
 }
 
-static void
-motd_humanize(uint bytes, char *buf, int bufsz)
+static int
+read_root_free_bytes(uint *out)
 {
-  static const char units[] = "BKMG";
-  uint div = 1;
-  int idx = 0;
-  uint val;
-  char tmp[16];
-  int i, j;
-  while(idx < 3 && bytes / div >= 1024){ div *= 1024; idx++; }
-  val = bytes / div;
-  i = 0;
-  if(val == 0){ tmp[i++] = '0'; }
-  else{ while(val > 0){ tmp[i++] = '0' + (val % 10); val /= 10; } }
-  j = 0;
-  while(i > 0 && j < bufsz - 2) buf[j++] = tmp[--i];
-  if(j < bufsz - 1) buf[j++] = units[idx];
-  buf[j] = 0;
-}
+  char buf[1024];
+  char *line;
+  char *p;
 
-static void
-motd_humanize_kb(int kb, char *buf, int bufsz)
-{
-  motd_humanize((uint)kb * 1024, buf, bufsz);
-}
+  if(out == 0)
+    return -1;
+  if(read_file_text("/proc/mountstats", buf, sizeof(buf)) < 0)
+    return -1;
 
-static void
-read_hostname(char *buf, int bufsz)
-{
-  if(motd_read_file("/etc/hostname", buf, bufsz) < 0 || buf[0] == 0)
-    strcpy(buf, "auxv6");
-  else
-    trim_trailing_ws(buf);
-}
+  p = buf;
+  while(*p) {
+    int fields = 0;
+    char *tok[6];
 
-static void
-read_free_mem(char *buf, int bufsz)
-{
-  static char text[256];
-  int fkb;
-  if(motd_read_file("/proc/meminfo", text, sizeof(text)) < 0){ strcpy(buf, "n/a"); return; }
-  fkb = motd_find_kb(text, "MemFree:");
-  if(fkb < 0){ strcpy(buf, "n/a"); return; }
-  motd_humanize_kb(fkb, buf, bufsz);
-}
-
-static void
-read_root_free_disk(char *buf, int bufsz)
-{
-  static char text[1024];
-  char *p, *line;
-  static char tok[6][32];
-  int t;
-
-  if(bufsz > 0)
-    buf[0] = 0;
-
-  if(motd_read_file("/proc/mountstats", text, sizeof(text)) < 0){ strcpy(buf, "n/a"); return; }
-  p = text;
-  while(*p){
     line = p;
     while(*p && *p != '\n') p++;
     if(*p == '\n') *p++ = 0;
-    if(line[0] == 0) continue;
-    { char *nl = line;
-      for(t = 0; t < 6; t++) if(!motd_next_tok(&nl, tok[t], 32)) break;
-      if(t < 6) continue;
-      if(strcmp(tok[0], "dev") == 0 && strcmp(tok[1], "path") == 0)
-        continue;
+
+    while(*line == ' ' || *line == '\t')
+      line++;
+    if(*line == 0)
+      continue;
+
+    tok[fields++] = line;
+    while(*line && fields < 6) {
+      if(*line == ' ' || *line == '\t') {
+        *line = 0;
+        line++;
+        while(*line == ' ' || *line == '\t')
+          line++;
+        if(*line)
+          tok[fields++] = line;
+      } else {
+        line++;
+      }
     }
-    if(strcmp(tok[1], "/") != 0) continue;
+
+    if(fields < 6)
+      continue;
+    if(strcmp(tok[0], "dev") == 0 && strcmp(tok[1], "path") == 0)
+      continue;
+    if(strcmp(tok[1], "/") != 0)
+      continue;
+
     {
-      int fblk = atoi(tok[4]);
-      int bsz  = atoi(tok[5]);
-      if(fblk < 0 || bsz <= 0){ strcpy(buf, "n/a"); return; }
-      motd_humanize((uint)fblk * (uint)bsz, buf, bufsz);
-      return;
+      int free_blocks = atoi(tok[4]);
+      int block_size = atoi(tok[5]);
+      if(free_blocks < 0 || block_size <= 0)
+        return -1;
+      *out = (uint)free_blocks * (uint)block_size;
+      return 0;
     }
   }
-  strcpy(buf, "n/a");
+
+  return -1;
 }
 
-static int
-motd_safe_len(const char *s, int max)
+static void
+human_size(uint bytes, char *out, int outsz)
 {
-  int n;
+  static const char suffix[] = "BKMG";
+  uint div;
+  uint v;
+  int idx;
 
-  if(!s || max <= 0)
-    return 0;
+  if(out == 0 || outsz <= 2)
+    return;
 
-  n = 0;
-  while(n < max && s[n] && s[n] != '\n' && s[n] != '\r')
-    n++;
-  return n;
+  div = 1;
+  idx = 0;
+  while(idx < 3 && bytes / div >= 1024) {
+    div *= 1024;
+    idx++;
+  }
+
+  v = bytes / div;
+  snprintf(out, outsz, "%u%c", v, suffix[idx]);
 }
 
 static void
 print_motd(void)
 {
-  static char motd[MOTD_MAX];
-  static char hostname[HOST_MAX];
-  static char free_mem[16];
-  static char free_disk[16];
-  const char *p;
-  const char *tok_h  = "@HOSTNAME@";
-  const char *tok_m  = "@FREE_MEM@";
-  const char *tok_d  = "@FREE_DISK@";
-  int lh, lm, ld;
-  int hlen, mlen, dlen;
+  static char motd[LOGIN_BUF_MAX];
+  static char host[LOGIN_HOST_MAX];
+  char mem[16];
+  char disk[16];
+  int mem_kb;
+  uint disk_bytes;
+  char *p;
 
-  if(motd_read_file("/etc/motd", motd, sizeof(motd)) < 0)
+  if(read_file_text(MOTD_PATH, motd, sizeof(motd)) < 0)
     return;
 
-  read_hostname(hostname, sizeof(hostname));
-  read_free_mem(free_mem, sizeof(free_mem));
-  read_root_free_disk(free_disk, sizeof(free_disk));
+  if(read_file_text("/etc/hostname", host, sizeof(host)) < 0 || host[0] == 0)
+    strcpy(host, "auxv6");
+  trim(host);
 
-  lh = strlen(tok_h);
-  lm = strlen(tok_m);
-  ld = strlen(tok_d);
-  hlen = motd_safe_len(hostname, sizeof(hostname) - 1);
-  mlen = motd_safe_len(free_mem, sizeof(free_mem) - 1);
-  dlen = motd_safe_len(free_disk, sizeof(free_disk) - 1);
+  mem_kb = read_memfree_kb();
+  if(mem_kb < 0)
+    strcpy(mem, "n/a");
+  else
+    human_size((uint)mem_kb * 1024, mem, sizeof(mem));
 
-  for(p = motd; *p; ){
-    if(strncmp(p, tok_h, lh) == 0){ write(1, hostname,  hlen); p += lh; }
-    else if(strncmp(p, tok_m, lm) == 0){ write(1, free_mem,  mlen); p += lm; }
-    else if(strncmp(p, tok_d, ld) == 0){ write(1, free_disk, dlen); p += ld; }
-    else { write(1, p, 1); p++; }
+  if(read_root_free_bytes(&disk_bytes) < 0)
+    strcpy(disk, "n/a");
+  else
+    human_size(disk_bytes, disk, sizeof(disk));
+
+  p = motd;
+  while(*p) {
+    if(strncmp(p, "@HOSTNAME@", 10) == 0) {
+      write(1, host, strlen(host));
+      p += 10;
+      continue;
+    }
+    if(strncmp(p, "@FREE_MEM@", 10) == 0) {
+      write(1, mem, strlen(mem));
+      p += 10;
+      continue;
+    }
+    if(strncmp(p, "@FREE_DISK@", 11) == 0) {
+      write(1, disk, strlen(disk));
+      p += 11;
+      continue;
+    }
+    write(1, p, 1);
+    p++;
   }
 }
 
 static void
-trim_trailing_ws(char *s)
+make_login_shell_name(char *dst, int dstsz, const char *shell)
 {
-  int n;
+  const char *base;
+  int i;
 
-  n = strlen(s);
-  while(n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t' ||
-                  s[n - 1] == '\r' || s[n - 1] == '\n'))
-    n--;
-  s[n] = 0;
+  if(dst == 0 || dstsz <= 1 || shell == 0)
+    return;
+
+  base = shell;
+  for(i = 0; shell[i]; i++)
+    if(shell[i] == '/')
+      base = shell + i + 1;
+
+  dst[0] = '-';
+  snprintf(dst + 1, dstsz - 1, "%s", base);
 }
 
 int
 main(int argc, char *argv[])
 {
-  int fd;
-  char user[USER_MAX];
-  char pass[USER_MAX];
-  struct passwd *ent;
+  char user[LOGIN_NAME_MAX];
+  char pass[LOGIN_PASS_MAX];
+  char login_argv0[LOGIN_NAME_MAX + 2];
   char *sh_argv[2];
+  struct session_user su;
+  int i;
 
   (void)argc;
   (void)argv;
 
-  while((fd = open("/dev/console", O_RDWR)) >= 0) {
-    if(fd >= 3) {
-      close(fd);
-      break;
-    }
-  }
+  logdbg("main enter");
+  ensure_stdio();
+  logdbg("ensure_stdio done");
+  umask(022);
+  logdbg("umask done");
 
-  for(;;) {
+  for(i = 0; i < LOGIN_RETRIES; i++) {
+    logdbg("loop top");
+    claim_tty_foreground();
+    logdbg("tty foreground claimed");
+    restore_tty_cooked_mode();
+    logdbg("tty cooked mode restored");
     dprintf(1, "login: ");
+    logdbg("login prompt printed");
     memset(user, 0, sizeof(user));
-    if(gets(user, sizeof(user)) == 0)
+    logdbg("before read_username");
+    if(read_username(user, sizeof(user)) < 0) {
+      logdbg("read_username returned < 0");
       exit(0);
+    }
+    logdbg("after read_username");
 
-    trim_trailing_ws(user);
-    if(user[0] == 0)
-      continue;
-
-    ent = getpwnam(user);
-    if(ent == 0) {
-      dprintf(1, "login: unknown user %s\n", user);
+    trim(user);
+    logdbg("after trim username");
+    if(user[0] == 0) {
+      logdbg("empty username");
+      i--;
       continue;
     }
 
-    dprintf(1, "password: ");
+    logdbg("before password prompt");
+    dprintf(1, "Password: ");
+    logdbg("after password prompt");
     memset(pass, 0, sizeof(pass));
-    if(readpass(pass, sizeof(pass)) == 0)
+    logdbg("before readpass");
+    if(readpass(pass, sizeof(pass)) == 0) {
+      logdbg("readpass returned 0");
       exit(0);
-    trim_trailing_ws(pass);
+    }
+    logdbg("after readpass");
+    trim(pass);
+    logdbg("after trim password");
 
-    if(strcmp(pass, ent->pw_passwd) != 0) {
-      dprintf(1, "login: authentication failed\n");
+    logdbg("before lookup_user_local");
+    if(lookup_user_local(user, &su) < 0 || strcmp(pass, su.pass) != 0) {
+      logdbg("auth failed");
+      dprintf(1, "Login incorrect\n");
       continue;
     }
+    logdbg("auth success");
 
-    if(setgid(ent->pw_gid) < 0 || setuid(ent->pw_uid) < 0) {
+    logdbg("before nologin check");
+    show_nologin_and_exit_if_needed(&su);
+    logdbg("after nologin check");
+
+    logdbg("before setgid/setuid");
+    if(setgid(su.gid) < 0 || setuid(su.uid) < 0) {
+      logdbg("setgid/setuid failed");
       dprintf(1, "login: permission denied\n");
       continue;
     }
+    logdbg("after setgid/setuid");
+
+    set_session_env(&su);
+    logdbg("after set_session_env");
+    if(chdir(su.home) < 0)
+      chdir("/");
+    logdbg("after chdir");
 
     print_motd();
+    logdbg("after print_motd");
+    record_utmp_wtmp(&su);
+    logdbg("after record_utmp_wtmp");
 
-    if(ent->pw_dir[0] != 0)
-      chdir(ent->pw_dir);
+    if(su.shell[0] == 0)
+      strcpy(su.shell, "/bin/sh");
 
-    sh_argv[0] = (ent->pw_shell && ent->pw_shell[0]) ? ent->pw_shell : "/bin/sh";
+    make_login_shell_name(login_argv0, sizeof(login_argv0), su.shell);
+    sh_argv[0] = login_argv0;
     sh_argv[1] = 0;
-    exec(sh_argv[0], sh_argv);
+    logdbg("before exec shell");
+    exec(su.shell, sh_argv);
 
-    dprintf(1, "login: exec %s failed\n", sh_argv[0]);
+    logdbg("exec failed");
+    dprintf(1, "login: exec %s failed\n", su.shell);
+    exit(0);
   }
+
+  dprintf(1, "login: too many attempts\n");
+  exit(0);
 }
