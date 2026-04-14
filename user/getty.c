@@ -89,7 +89,8 @@ main(int argc, char **argv)
   }
 
   for(;;) {
-    wpid = wait();
+    int status;
+    wpid = wait(&status);
     if(wpid < 0) {
       sleep(20);
       for(i = 0; i < ntty; i++) {

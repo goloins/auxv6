@@ -8,6 +8,7 @@ main(int argc, char *argv[])
   int sfd, cfd, afd;
   int pid;
   int n;
+  int status;
   char buf[64];
   char *msg = "hello tcp lo0";
   struct sockaddr_in saddr;
@@ -73,7 +74,8 @@ main(int argc, char *argv[])
   if(afd < 0){
     dprintf(1, "tcptest: accept failed\n");
     close(sfd);
-    wait();
+    int status;
+    wait(&status);
     exit(1);
   }
 
@@ -82,12 +84,12 @@ main(int argc, char *argv[])
     dprintf(1, "tcptest: server recv failed\n");
     close(afd);
     close(sfd);
-    wait();
+    wait(&status);
     exit(1);
   }
   buf[n] = '\0';
 
-  wait();
+  wait(&status);
   close(afd);
   close(sfd);
 

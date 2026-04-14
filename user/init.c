@@ -208,7 +208,8 @@ main(void)
       dprintf(1, "init: exec login failed\n");
       exit(0);
     }
-    while((wpid=wait()) >= 0 && wpid != pid){
+    int status;
+    while((wpid=wait(&status)) >= 0 && wpid != pid){
       maybe_process_runlevel_change(&pid, &cur_runlevel);
       dprintf(1, "zombie! wpid=%d pid=%d\n", wpid, pid);
     }

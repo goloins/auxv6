@@ -73,7 +73,8 @@ test_fork_storm(void)
     if(pid < 0){
       FAIL("fork-storm", "fork returned < 0 before limit");
       // reap whatever we managed to spawn and bail
-      while(wait() > 0)
+      int status;
+      while(wait(&status) > 0)
         ;
       return;
     }
@@ -128,7 +129,8 @@ test_yield_storm(void)
 
   ok = 1;
   for(i = 0; i < YIELD_WORKERS; i++){
-    if(wait() < 0)
+    int status;
+    if(wait(&status) < 0)
       ok = 0;
   }
 
@@ -191,7 +193,8 @@ test_pipe_wakeup(void)
   // Reap all children (PIPE_PAIRS * 2 = writers + readers)
   int bad = 0;
   for(i = 0; i < PIPE_PAIRS * 2; i++){
-    if(wait() < 0)
+    int status;
+    if(wait(&status) < 0)
       bad++;
   }
 
@@ -247,7 +250,8 @@ test_alarm_counter(void)
 
   ok = 1;
   for(i = 0; i < NALARM_WORKERS; i++){
-    if(wait() < 0)
+    int status;
+    if(wait(&status) < 0)
       ok = 0;
   }
 
@@ -330,8 +334,10 @@ test_idle_responsiveness(void)
       exit(0);
     }
   }
-  for(i = 0; i < 4; i++)
-    wait();
+  for(i = 0; i < 4; i++){
+    int status;
+    wait(&status);
+  }
 
   // If we get here with no hang, idle hlt did not deadlock anything
   PASS("idle-responsiveness");
@@ -357,7 +363,8 @@ test_sched_spread(void)
     int pid = fork();
     if(pid < 0){
       // couldn't spawn all; reap and report
-      while(wait() > 0)
+      int status;
+      while(wait(&status) > 0)
         ;
       FAIL("sched-spread", "fork failed before SPREAD_WORKERS");
       return;
@@ -415,7 +422,8 @@ test_proc_table_limit(void)
     spawned++;
   }
   // Reap all
-  while(wait() > 0)
+  int status;
+  while(wait(&status) > 0)
     ;
 
   if(spawned >= SPAWN_LIMIT)

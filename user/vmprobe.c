@@ -156,7 +156,8 @@ bench_fork_wait(int forks, uint *dt_ticks)
       return -1;
     if(pid == 0)
       exit(0);
-    if(wait() < 0)
+    int status;
+    if(wait(&status) < 0)
       return -1;
   }
   t1 = uptime();
@@ -188,7 +189,8 @@ bench_tick_sleepers(int sleepers, int iters, uint *dt_ticks)
   }
 
   for(i = 0; i < sleepers; i++){
-    st = wait();
+    int status;
+    st = wait(&status);
     if(st < 0)
       return -1;
   }

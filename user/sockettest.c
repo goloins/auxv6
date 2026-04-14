@@ -8,6 +8,7 @@ main(int argc, char *argv[])
   int rfd, sfd;
   int pid;
   int n;
+  int status;
   int pfd[2];
   int child_n;
   char buf[64];
@@ -114,7 +115,7 @@ main(int argc, char *argv[])
     close(pfd[0]);
     close(sfd);
     close(rfd);
-    wait();
+    wait(&status);
     exit(1);
   }
 
@@ -123,7 +124,7 @@ main(int argc, char *argv[])
     close(pfd[0]);
     close(sfd);
     close(rfd);
-    wait();
+    wait(&status);
     exit(1);
   }
 
@@ -134,7 +135,7 @@ main(int argc, char *argv[])
     close(pfd[0]);
     close(sfd);
     close(rfd);
-    wait();
+    wait(&status);
     exit(1);
   }
   child_buf[child_n] = '\0';
@@ -142,7 +143,7 @@ main(int argc, char *argv[])
 
   dprintf(1, "sockettest: recv() ok n=%d msg=%s\n", child_n, child_buf);
 
-  wait();
+  wait(&status);
 
   close(sfd);
   close(rfd);

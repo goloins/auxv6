@@ -67,7 +67,8 @@ exitiputtest(void)
     }
     exit(0);
   }
-  wait();
+  int status;
+  wait(&status);
   dprintf(stdout, "exitiput test ok\n");
 }
 
@@ -110,7 +111,8 @@ openiputtest(void)
     dprintf(stdout, "unlink failed\n");
     exit(0);
   }
-  wait();
+  int status;
+  wait(&status);
   dprintf(stdout, "openiput test ok\n");
 }
 
@@ -350,6 +352,7 @@ void
 pipe1(void)
 {
   int fds[2], pid;
+  int status;
   int seq, i, n, cc, total;
 
   if(pipe(fds) != 0){
@@ -390,7 +393,7 @@ pipe1(void)
       exit(0);
     }
     close(fds[0]);
-    wait();
+    wait(&status);
   } else {
     dprintf(1, "fork() failed\n");
     exit(0);
@@ -438,9 +441,10 @@ preempt(void)
   kill(pid2, SIGKILL);
   kill(pid3, SIGKILL);
   dprintf(1, "wait... ");
-  wait();
-  wait();
-  wait();
+  int status;
+  wait(&status);
+  wait(&status);
+  wait(&status);
   dprintf(1, "preempt ok\n");
 }
 
@@ -457,7 +461,8 @@ exitwait(void)
       return;
     }
     if(pid){
-      if(wait() != pid){
+      int status;
+      if(wait(&status) != pid){
         dprintf(1, "wait wrong pid\n");
         return;
       }
@@ -497,7 +502,8 @@ mem(void)
     dprintf(1, "mem ok\n");
     exit(0);
   } else {
-    wait();
+    int status;
+    wait(&status);
   }
 }
 
@@ -529,8 +535,10 @@ sharedfd(void)
   }
   if(pid == 0)
     exit(0);
-  else
-    wait();
+  else{
+    int status;
+    wait(&status);
+  }
   close(fd);
   fd = open("sharedfd", 0);
   if(fd < 0){
@@ -596,7 +604,8 @@ fourfiles(void)
   }
 
   for(pi = 0; pi < 4; pi++){
-    wait();
+    int status;
+    wait(&status);
   }
 
   for(i = 0; i < 2; i++){
@@ -664,7 +673,8 @@ createdelete(void)
   }
 
   for(pi = 0; pi < 4; pi++){
-    wait();
+    int status;
+    wait(&status);
   }
 
   name[0] = name[1] = name[2] = 0;
@@ -837,8 +847,10 @@ concreate(void)
     }
     if(pid == 0)
       exit(0);
-    else
-      wait();
+    else{
+      int status;
+      wait(&status);
+    }
   }
 
   memset(fa, 0, sizeof(fa));
@@ -889,8 +901,10 @@ concreate(void)
     }
     if(pid == 0)
       exit(0);
-    else
-      wait();
+    else{
+      int status;
+      wait(&status);
+    }
   }
 
   dprintf(1, "concreate ok\n");
@@ -902,6 +916,7 @@ void
 linkunlink()
 {
   int pid, i;
+  int status;
 
   dprintf(1, "linkunlink test\n");
 
@@ -925,7 +940,7 @@ linkunlink()
   }
 
   if(pid)
-    wait();
+    wait(&status);
   else
     exit(0);
 
@@ -1424,6 +1439,7 @@ void
 forktest(void)
 {
   int n, pid;
+  int status;
 
   dprintf(1, "fork test\n");
 
@@ -1441,13 +1457,14 @@ forktest(void)
   }
 
   for(; n > 0; n--){
-    if(wait() < 0){
+    int status;
+    if(wait(&status) < 0){
       dprintf(1, "wait stopped early\n");
       exit(0);
     }
   }
 
-  if(wait() != -1){
+  if(wait(&status) != -1){
     dprintf(1, "wait got too many\n");
     exit(0);
   }
@@ -1490,7 +1507,8 @@ sbrktest(void)
   }
   if(pid == 0)
     exit(0);
-  wait();
+  int status;
+  wait(&status);
 
   // can one grow address space to something big?
 #define BIG (100*1024*1024)
@@ -1550,7 +1568,8 @@ sbrktest(void)
       kill(ppid, SIGKILL);
       exit(0);
     }
-    wait();
+    int status;
+    wait(&status);
   }
 
   // if we run the system out of memory, does it clean up the last
@@ -1577,7 +1596,8 @@ sbrktest(void)
     if(pids[i] == -1)
       continue;
     kill(pids[i], SIGKILL);
-    wait();
+    int status;
+    wait(&status);
   }
   if(c == (char*)0xffffffff){
     dprintf(stdout, "failed sbrk leaked memory\n");
@@ -1621,7 +1641,8 @@ validatetest(void)
     sleep(0);
     sleep(0);
     kill(pid, SIGKILL);
-    wait();
+    int status;
+    wait(&status);
 
     // try to crash the kernel by passing in a bad string pointer
     if(link("nosuchfile", (char*)p) != -1){
@@ -1676,7 +1697,8 @@ bigargtest(void)
     dprintf(stdout, "bigargtest: fork failed\n");
     exit(0);
   }
-  wait();
+  int status;
+  wait(&status);
   fd = open("bigarg-ok", 0);
   if(fd < 0){
     dprintf(stdout, "bigarg test failed!\n");
@@ -1764,7 +1786,8 @@ uio()
     dprintf(1, "fork failed\n");
     exit(0);
   }
-  wait();
+  int status;
+  wait(&status);
   dprintf(1, "uio test done\n");
 }
 

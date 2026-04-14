@@ -427,7 +427,8 @@ test_concurrent_openers(void)
 
   int bad = 0;
   for(i = 0; i < NOPENERS; i++){
-    if(wait() < 0)
+    int status;
+    if(wait(&status) < 0)
       bad++;
   }
 
@@ -480,7 +481,8 @@ test_parallel_writers(void)
 
   int bad = 0;
   for(i = 0; i < NWRITERS; i++){
-    if(wait() < 0)
+    int status;
+    if(wait(&status) < 0)
       bad++;
   }
 

@@ -123,7 +123,8 @@ main(void)
   }
   if(mpid > 0){
     dprintf(1, "init: waiting for mount (pid %d)\n", mpid);
-    wait();
+    int status;
+    wait(&status);
     dprintf(1, "init: mount process exited\n");
   }
 
@@ -141,7 +142,8 @@ main(void)
       dprintf(1, "init: exec login failed\n");
       exit(1);
     }
-    while((wpid=wait()) >= 0 && wpid != pid){
+    int status;
+    while((wpid=wait(&status)) >= 0 && wpid != pid){
       dprintf(1, "zombie! wpid=%d pid=%d\n", wpid, pid);
     }
   }

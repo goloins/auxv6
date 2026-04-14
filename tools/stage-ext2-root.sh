@@ -224,7 +224,7 @@ for src in "$@"; do
       install -d -m 0755 "$(dirname "$dest")"
       mode=0644
       case "$rel" in
-        bin/*|sbin/*|etc/rc.*)
+        bin/*|sbin/*|usr/bin/*|usr/sbin/*|etc/rc.*)
           mode=0755
           ;;
       esac

@@ -99,7 +99,8 @@ main(int argc, char *argv[])
            signal_received);
   }
   
-  wait();  // Reap child
+  int status;
+  wait(&status);  // Reap child
   
   // Test 5: User-defined signals
   dprintf(1, "Test 5: User-defined signals (SIGUSR1/SIGUSR2)\n");

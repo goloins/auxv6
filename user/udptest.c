@@ -80,7 +80,8 @@ test_sendto_autobind(void)
   check("src addr is loopback",     src.sin_addr.s_addr == INADDR_LOOPBACK);
   check("srclen filled",            srclen == (int)sizeof(struct sockaddr_in));
 
-  wait();
+  int status;
+  wait(&status);
   close(sfd);
 }
 
@@ -149,7 +150,8 @@ test_roundtrip_null_src(void)
   n = sendto(sfd, resp, strlen(resp) + 1, 0, &src, sizeof(src));
   check("server reply ok",        n > 0);
 
-  wait();
+  int status;
+  wait(&status);
   close(sfd);
   return;
 
@@ -216,7 +218,8 @@ test_sendto_connected(void)
   check("payload correct",  n > 0 && strcmp(buf, msg) == 0);
   check("src port correct", src.sin_port == caddr.sin_port);
 
-  wait();
+  int status;
+  wait(&status);
   close(sfd);
   return;
 

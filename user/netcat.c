@@ -61,7 +61,8 @@ relay_stdio_socket(int fd)
     }
 
     kill(pid, SIGTERM);
-    wait();
+    int status;
+    wait(&status);
 }
 
 static int

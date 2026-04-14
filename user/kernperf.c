@@ -170,7 +170,8 @@ bench_fork_wait(int *value)
       return -1;
     if(pid == 0)
       exit(0);
-    if(wait() < 0)
+    int status;
+    if(wait(&status) < 0)
       return -1;
   }
   t1 = uptime();
@@ -234,7 +235,8 @@ bench_pipe_throughput(int *value)
 
   close(p2c[1]);
   close(c2p[0]);
-  if(wait() < 0)
+  int status;
+  if(wait(&status) < 0)
     return -1;
 
   *value = kb_per_sec(PIPE_ROUNDS * PIPE_PAYLOAD * 2, t0, t1);

@@ -205,7 +205,8 @@ test_fork_inherit(void)
   }
   // parent
   close(fd);
-  wait();
+  int status;
+  wait(&status);
   // status check not possible with this wait() — child exits 0 on success,
   // but we can't distinguish here; failure will show in overall test output
   PASS("fork_inherit");
@@ -462,7 +463,8 @@ test_cloexec_exec(void)
   msg[0] = 0;
   read(pfd[0], msg, 2);
   close(pfd[0]);
-  wait();
+  int status;
+  wait(&status);
   if(msg[0] == 'o' && msg[1] == 'k')
     PASS("cloexec_exec");
   else
