@@ -365,7 +365,7 @@ kernel/core/vectors.S: tools/vectors.pl
 	./tools/vectors.pl > kernel/core/vectors.S
 
 LIBC_OBJS = libc/ulib.o libc/string.o libc/errstr.o libc/umalloc.o libc/tty.o libc/inet.o libc/fmt.o libc/dirent.o libc/fnmatch.o libc/glob.o libc/ftw.o libc/fts.o libc/locale.o libc/pwdgrp.o libc/env.o libc/conf.o libc/path.o libc/tempfile.o libc/timecore.o libc/resource.o libc/netdb.o libc/stdlib.o libc/randlib.o libc/mman.o libc/posix_fs.o libc/posix.o libc/pthread.o libc/syslog.o libc/stdio.o libc/regex.o libc/calloc.o libc/setjmp.o libc/usys.o libc/printf.o libc/resolve.o
-LIBAUXRT_OBJS = libc/libterm.o libc/checksum.o libc/gzip.o libc/user_font.o
+LIBAUXRT_OBJS = libc/libterm.o libc/checksum.o libc/gzip.o libc/bzip2.o libc/user_font.o
 CRT0_OBJ = libc/crt0.o
 LIBC_A = libc/libc.a
 AUXRT_A = libc/libauxrt.a
@@ -795,6 +795,15 @@ _gunzip: user/gunzip
 _tar: user/tar
 	cp user/tar _tar
 
+_bzip2: user/bzip2
+	cp user/bzip2 _bzip2
+
+_bunzip2: user/bunzip2
+	cp user/bunzip2 _bunzip2
+
+_ar: user/ar
+	cp user/ar _ar
+
 _uniq: user/uniq
 	cp user/uniq _uniq
 
@@ -1203,6 +1212,9 @@ UPROGS=\
 	_file\
 	_gunzip\
 	_tar\
+	_bzip2\
+	_bunzip2\
+	_ar\
 	_uniq\
 	_sort\
 	_sum\
@@ -1357,7 +1369,7 @@ clean:
 	user/6fetch \
 	user/6doc \
 	user/abrowse \
-	user/lsof user/which user/file \
+	user/lsof user/which user/file user/ar user/bzip2 user/bunzip2 \
 	user/uniq user/sort user/sum user/sleep user/yes user/boolean user/sync user/touch user/hashsum user/baseenc user/asroot \
 	user/audioctl user/audiostat user/audiotest user/audiotone user/audiopollstress user/audiod user/audiodctl \
 	user/server7 user/xwmselftest \

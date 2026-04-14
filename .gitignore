@@ -96,8 +96,12 @@ user/ifconfig
 user/netstat
 user/route
 user/arp
+user/ar
+user/ar_test
 user/rarp
 user/ip
+user/bzip2
+user/bunzip2
 user/tuntapctl
 user/tuntest
 user/dhcp

@@ -1,6 +1,7 @@
 #include "types.h"
 #include "auxv6/user.h"
 #include "auxv6/gzip.h"
+#include "auxv6/bzip2.h"
 #include "dirent.h"
 #include "stat.h"
 #include "fcntl.h"
@@ -17,6 +18,7 @@ struct tar_opts {
   int mode_extract;
   int mode_list;
   int gzip;
+  int bzip2;
   int verbose;
   char *archive;
 };
@@ -45,7 +47,7 @@ static void
 usage(void)
 {
   dprintf(2,
-          "usage: tar -c|-t|-x [-v] [-z] -f archive [path ...]\n");
+          "usage: tar -c|-t|-x [-v] [-z] [-j] -f archive [path ...]\n");
   exit(1);
 }
 
@@ -601,6 +603,41 @@ prepare_archive_reader(const struct tar_opts *opts, int *fd_out, char *tmp_path,
     return 0;
   }
 
+  if(opts->bzip2 || aux_bzip2_has_suffix(opts->archive)) {
+    int tmp_fd;
+
+    if(tmp_sz < 16) {
+      close(in_fd);
+      return -1;
+    }
+
+    strcpy(tmp_path, "/tmp/tar.XXXXXX");
+    tmp_fd = mkstemp(tmp_path);
+    if(tmp_fd < 0) {
+      close(in_fd);
+      dprintf(2, "tar: unable to create temporary file\n");
+      return -1;
+    }
+
+    if(aux_bzip2_inflate_fd(in_fd, tmp_fd) < 0) {
+      close(in_fd);
+      close(tmp_fd);
+      unlink(tmp_path);
+      dprintf(2, "tar: %s: invalid or unsupported bzip2 archive\n", opts->archive);
+      return -1;
+    }
+
+    close(in_fd);
+    if(lseek(tmp_fd, 0, SEEK_SET) < 0) {
+      close(tmp_fd);
+      unlink(tmp_path);
+      return -1;
+    }
+
+    *fd_out = tmp_fd;
+    return 0;
+  }
+
   tmp_path[0] = 0;
   *fd_out = in_fd;
   return 0;
@@ -830,6 +867,7 @@ main(int argc, char *argv[])
         case 't': opts.mode_list = 1; break;
         case 'x': opts.mode_extract = 1; break;
         case 'z': opts.gzip = 1; break;
+        case 'j': opts.bzip2 = 1; break;
         case 'v': opts.verbose = 1; break;
         case 'f':
           if(arg[j + 1]) {
