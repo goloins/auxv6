@@ -4,7 +4,7 @@
 #include "dirent.h"
 #include "string.h"
 #include "stdlib.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "errno.h"
 #include "auxv6/user.h"
 
@@ -42,7 +42,7 @@ path_is_dir(const char *path)
 
   if(stat(path, &st) < 0)
     return 0;
-  return (st.st_mode & M_IFMT) == M_IFDIR;
+  return S_ISDIR(st.st_mode);
 }
 
 static char*

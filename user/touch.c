@@ -1,5 +1,5 @@
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
 #include "string.h"
@@ -20,7 +20,7 @@ touch_one(const char *path, int no_create)
     return 0;
   }
 
-  if(st.st_type == T_FILE) {
+  if(S_ISREG(st.st_mode)) {
     int fd;
     fd = open(path, O_RDWR);
     if(fd < 0)

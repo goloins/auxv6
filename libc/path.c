@@ -3,7 +3,7 @@
  */
 
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "errno.h"
 #include "limits.h"
 #include "string.h"
@@ -184,7 +184,7 @@ realpath(const char *path, char *resolved_path)
       return 0;
     }
 
-    if(st.st_type == T_SYMLINK) {
+    if(S_ISLNK(st.st_mode)) {
       if(++nlinks > MAXSYMLINKS) {
         errno = ELOOP;
         return 0;

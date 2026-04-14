@@ -1,5 +1,5 @@
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "auxv6/user.h"
 #include "fs.h"
 #include "fcntl.h"

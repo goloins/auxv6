@@ -66,9 +66,9 @@ walk_one(const char *path,
   fb.base = basename_offset(path);
   fb.level = level;
 
-  if(st.st_type == T_SYMLINK || (st.st_mode & M_IFMT) == M_IFLNK)
+  if(S_ISLNK(st.st_mode))
     typeflag = FTW_SL;
-  else if(st.st_type == T_DIR || (st.st_mode & M_IFMT) == M_IFDIR)
+  else if(S_ISDIR(st.st_mode))
     typeflag = FTW_D;
   else
     typeflag = FTW_F;

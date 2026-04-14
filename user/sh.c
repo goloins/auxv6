@@ -2,7 +2,7 @@
 
 #include "types.h"
 #include "pwd.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
 #include "fs.h"

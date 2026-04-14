@@ -1,5 +1,5 @@
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "unistd.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
@@ -16,7 +16,7 @@ path_is_dir(const struct stat *st)
 {
   if(st == 0)
     return 0;
-  if(st->st_type == T_DIR)
+  if(S_ISDIR(st->st_mode))
     return 1;
   return (st->st_mode & M_IFMT) == M_IFDIR;
 }

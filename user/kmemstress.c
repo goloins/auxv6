@@ -6,7 +6,7 @@
 // - Help catch racey memory corruption that only appears under interface churn
 
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "fcntl.h"
 #include "dirent.h"
 #include "auxv6/user.h"
@@ -446,7 +446,7 @@ stress_procfs_and_dir(void)
     int n;
     struct stat st;
 
-    if(stat(g_scratch, &st) < 0 || st.st_type != T_DIR){
+    if(stat(g_scratch, &st) < 0 || !S_ISDIR(st.st_mode)){
       if(!g_warned_scratch_scan){
         dprintf(1, "[warn] scratch path not a directory for getdents scan: %s\n", g_scratch);
         g_warned_scratch_scan = 1;

@@ -10,7 +10,7 @@
 //   gfxperf [-l lines] [-r rounds] [-w width]
 
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "stdio.h"
 #include "auxv6/user.h"
 #include "fcntl.h"

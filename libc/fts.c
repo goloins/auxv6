@@ -22,17 +22,13 @@ name_off(const char *path)
 static int
 is_dir_stat(const struct stat *st)
 {
-  if(st->st_type == T_DIR)
-    return 1;
-  return (st->st_mode & M_IFMT) == M_IFDIR;
+  return S_ISDIR(st->st_mode);
 }
 
 static int
 is_lnk_stat(const struct stat *st)
 {
-  if(st->st_type == T_SYMLINK)
-    return 1;
-  return (st->st_mode & M_IFMT) == M_IFLNK;
+  return S_ISLNK(st->st_mode);
 }
 
 static FTSENT*

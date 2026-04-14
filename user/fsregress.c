@@ -1,5 +1,5 @@
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
 #include "fs.h"
@@ -89,7 +89,7 @@ scan_dir(struct scan_target *t, int rounds, int *total_entries)
       exit(0);
     }
 
-    if(fstat(fd, &st) < 0 || st.st_type != T_DIR){
+    if(fstat(fd, &st) < 0 || !S_ISDIR(st.st_mode)){
       dprintf(1, "fsregress: FAIL not a dir %s\n", t->path);
       close(fd);
       exit(0);
@@ -476,7 +476,7 @@ check_mnt_dir_rename_cycle(void)
     dprintf(1, "fsregress: FAIL stale src dir after rename %s\n", src);
     exit(0);
   }
-  if(stat(dst, &st) < 0 || st.st_type != T_DIR){
+  if(stat(dst, &st) < 0 || !S_ISDIR(st.st_mode)){
     dprintf(1, "fsregress: FAIL missing dst dir after rename %s\n", dst);
     exit(0);
   }
@@ -1253,12 +1253,12 @@ check_mnt_devnode_cycle(void)
     dprintf(1, "fsregress: FAIL stat dev %s\n", cpath);
     exit(0);
   }
-  if(st.st_type != T_DEV){
+  if(!(S_ISCHR(st.st_mode) || S_ISBLK(st.st_mode))){
     dprintf(1, "fsregress: FAIL wrong type dev %s\n", cpath);
     exit(0);
   }
-  if((st.st_mode & M_IFMT) != M_IFCHR || st.st_major != 1 || st.st_minor != 7){
-    dprintf(1, "fsregress: FAIL bad dev ids major=%d minor=%d\n", st.st_major, st.st_minor);
+  if((st.st_mode & M_IFMT) != M_IFCHR || major(st.st_rdev) != 1 || minor(st.st_rdev) != 7){
+    dprintf(1, "fsregress: FAIL bad dev ids major=%d minor=%d\n", major(st.st_rdev), minor(st.st_rdev));
     exit(0);
   }
 
@@ -1278,8 +1278,8 @@ check_mnt_devnode_cycle(void)
       dprintf(1, "fsregress: FAIL stat block dev %s\n", bpath);
       exit(0);
     }
-    if(st.st_type != T_DEV || (st.st_mode & M_IFMT) != M_IFBLK || st.st_major != 2 || st.st_minor != dev){
-      dprintf(1, "fsregress: FAIL bad block dev metadata major=%d minor=%d mode=%x\n", st.st_major, st.st_minor, st.st_mode);
+    if(!(S_ISCHR(st.st_mode) || S_ISBLK(st.st_mode)) || (st.st_mode & M_IFMT) != M_IFBLK || major(st.st_rdev) != 2 || minor(st.st_rdev) != dev){
+      dprintf(1, "fsregress: FAIL bad block dev metadata major=%d minor=%d mode=%x\n", major(st.st_rdev), minor(st.st_rdev), st.st_mode);
       exit(0);
     }
     fd = open(bpath, O_RDONLY);

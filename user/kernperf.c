@@ -16,7 +16,7 @@
 // - Non-zero exit only on functional test failures
 
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "fcntl.h"
 #include "auxv6/user.h"
 

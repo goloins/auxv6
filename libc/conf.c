@@ -4,7 +4,7 @@
 
 #include "types.h"
 #include "param.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "errno.h"
 #include "limits.h"
 #include "unistd.h"

@@ -1,5 +1,5 @@
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
 #include "fs.h"
@@ -112,10 +112,10 @@ require_dir(char *path)
   int rc;
 
   rc = stat(path, &st);
-  DBG("fatregress[d]: stat(%s) -> %d type=%d\n", path, rc, (rc < 0) ? -1 : st.st_type);
+  DBG("fatregress[d]: stat(%s) -> %d mode=%o\n", path, rc, (rc < 0) ? 0 : st.st_mode);
   if(rc < 0)
     fail("mountpoint missing", path);
-  if(st.st_type != T_DIR)
+  if(!S_ISDIR(st.st_mode))
     fail("mountpoint not dir", path);
 }
 
@@ -479,7 +479,7 @@ check_rename_cycles(char *mnt)
   if(rename(dirsrc, dirdst) < 0)
     fail("dirrename move", dirdst);
   expect_absent(dirsrc);
-  if(stat(dirdst, &st) < 0 || st.st_type != T_DIR)
+  if(stat(dirdst, &st) < 0 || !S_ISDIR(st.st_mode))
     fail("dirrename stat", dirdst);
   if(mkdir(sub) < 0)
     fail("dirrename subdir", sub);
@@ -516,7 +516,7 @@ check_mkdir_roundtrip(char *mnt)
 
   if(stat(dir, &st) < 0)
     fail("stat dir", dir);
-  if(st.st_type != T_DIR)
+  if(!S_ISDIR(st.st_mode))
     fail("dir type", dir);
 
   fd = open(file, O_CREATE | O_RDWR | O_TRUNC);

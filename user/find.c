@@ -43,15 +43,15 @@ matches_type(const struct stat *st)
     return 0;
 
   if(g_opt.type_filter == 'f')
-    return st->st_type == T_FILE;
+    return S_ISREG(st->st_mode);
   if(g_opt.type_filter == 'd')
-    return st->st_type == T_DIR;
+    return S_ISDIR(st->st_mode);
   if(g_opt.type_filter == 'l')
-    return st->st_type == T_SYMLINK;
+    return S_ISLNK(st->st_mode);
   if(g_opt.type_filter == 'b')
-    return st->st_type == T_DEV;
+    return (S_ISCHR(st->st_mode) || S_ISBLK(st->st_mode));
   if(g_opt.type_filter == 'c')
-    return st->st_type == T_DEV;
+    return (S_ISCHR(st->st_mode) || S_ISBLK(st->st_mode));
   return 0;
 }
 

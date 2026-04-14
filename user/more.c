@@ -1,6 +1,6 @@
 #include "types.h"
 #include "fcntl.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "termios.h"
 #include "sys/ioctl.h"
 #include "auxv6/user.h"

@@ -1,5 +1,5 @@
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "auxv6/user.h"
 
 static void
@@ -103,7 +103,7 @@ main(int argc, char *argv[])
     return 1;
   }
 
-  if(stat(argv[1], &st) < 0 || st.st_type != T_DIR){
+  if(stat(argv[1], &st) < 0 || !S_ISDIR(st.st_mode)){
     dprintf(2, "mktmpfs: mountpoint must be an existing directory\n");
     return 1;
   }

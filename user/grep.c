@@ -6,7 +6,7 @@
  */
 
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "fcntl.h"
 #include "errno.h"
 #include "dirent.h"
@@ -177,7 +177,7 @@ grep_path(const char *path, int print_fname)
     return;
   }
 
-  if(st.st_type == T_DIR) {
+  if(S_ISDIR(st.st_mode)) {
     if(g_opts.recursive) {
       grep_dir(path, print_fname);
     } else {

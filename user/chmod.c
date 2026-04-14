@@ -1,5 +1,5 @@
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "auxv6/user.h"
 
 static int
@@ -158,7 +158,7 @@ main(int argc, char *argv[])
         status = 1;
         continue;
       }
-      new_mode = apply_symbolic(st.st_mode & 07777, st.st_type == T_DIR, modestr);
+      new_mode = apply_symbolic(st.st_mode & 07777, S_ISDIR(st.st_mode), modestr);
       if(new_mode < 0){
         dprintf(2, "chmod: invalid mode %s\n", modestr);
         exit(1);

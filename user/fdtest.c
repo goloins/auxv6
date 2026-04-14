@@ -24,7 +24,7 @@
 //   -v  verbose: print each sub-test name as it starts.
 
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
 #include "poll.h"

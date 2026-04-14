@@ -10,7 +10,7 @@
 // Note: creates/removes files in /tmp/fsperf_* (must be writable tmpfs).
 
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
 #include "param.h"

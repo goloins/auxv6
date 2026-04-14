@@ -1,5 +1,5 @@
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "fs.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
@@ -38,7 +38,7 @@ ensure_dir(char *path)
   struct stat st;
 
   if(stat(path, &st) == 0){
-    if(st.st_type == T_DIR)
+    if(S_ISDIR(st.st_mode))
       return 0;
     return -1;
   }

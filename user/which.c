@@ -1,5 +1,5 @@
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "auxv6/user.h"
 
 char *getenv(const char *name);
@@ -11,7 +11,7 @@ is_executable_file(const char *path)
 
   if(stat(path, &st) < 0)
     return 0;
-  if(st.st_type != T_FILE)
+  if(!S_ISREG(st.st_mode))
     return 0;
   return (st.st_mode & (M_IXUSR | M_IXGRP | M_IXOTH)) != 0;
 }

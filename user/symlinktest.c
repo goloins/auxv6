@@ -1,5 +1,5 @@
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
 
@@ -36,19 +36,19 @@ void test_basic_symlink(void)
     dprintf(2, "stat /tmp/testlink failed\n");
     return;
   }
-  dprintf(1, "stat /tmp/testlink: type=%d size=%d\n", st.st_type, st.st_size);
+  dprintf(1, "stat /tmp/testlink: mode=%o size=%d\n", st.st_mode, st.st_size);
 
   // Test lstat (should return link properties, not target)
   if(lstat("/tmp/testlink", &st_link) < 0){
     dprintf(2, "lstat /tmp/testlink failed\n");
     return;
   }
-  dprintf(1, "lstat /tmp/testlink: type=%d size=%d\n", st_link.st_type, st_link.st_size);
+  dprintf(1, "lstat /tmp/testlink: mode=%o size=%d\n", st_link.st_mode, st_link.st_size);
 
-  if(st_link.st_type == T_SYMLINK){
+  if(S_ISLNK(st_link.st_mode)){
     dprintf(1, "✓ lstat correctly returned T_SYMLINK\n");
   } else {
-    dprintf(2, "✗ lstat returned type %d instead of T_SYMLINK\n", st_link.st_type);
+    dprintf(2, "✗ lstat returned non-symlink mode %o\n", st_link.st_mode);
   }
 
   // Test reading through symlink
@@ -222,10 +222,10 @@ void test_symlink_loop_detection(void)
     dprintf(2, "lstat /tmp/loop_a failed\n");
     return;
   }
-  if(st.st_type == T_SYMLINK)
+  if(S_ISLNK(st.st_mode))
     dprintf(1, "✓ lstat works on loop member\n");
   else
-    dprintf(2, "✗ lstat type mismatch on loop member: %d\n", st.st_type);
+    dprintf(2, "✗ lstat type mismatch on loop member: mode=%o\n", st.st_mode);
 
   // Following should fail because this is an infinite loop.
   if(stat("/tmp/loop_a", &st) < 0){

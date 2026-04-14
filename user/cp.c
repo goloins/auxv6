@@ -1,5 +1,5 @@
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "fcntl.h"
 #include "dirent.h"
 #include "errno.h"
@@ -175,7 +175,7 @@ copy_file(const char *src, const char *dst, const struct stat *st,
   int fail_errno;
 
   dst_exists = (stat(dst, &dstst) == 0);
-  if(dst_exists && dstst.st_type == T_DIR) {
+  if(dst_exists && S_ISDIR(dstst.st_mode)) {
     dprintf(2, "cp: %s is a directory\n", dst);
     return -1;
   }
@@ -253,7 +253,7 @@ copy_symlink(const char *src, const char *dst, const struct stat *st,
   int n;
 
   dst_exists = (lstat(dst, &dstst) == 0);
-  if(dst_exists && dstst.st_type == T_DIR) {
+  if(dst_exists && S_ISDIR(dstst.st_mode)) {
     dprintf(2, "cp: %s is a directory\n", dst);
     return -1;
   }
@@ -290,7 +290,7 @@ copy_device(const char *src, const char *dst, const struct stat *st,
   int dst_exists;
 
   dst_exists = (stat(dst, &dstst) == 0);
-  if(dst_exists && dstst.st_type == T_DIR) {
+  if(dst_exists && S_ISDIR(dstst.st_mode)) {
     dprintf(2, "cp: %s is a directory\n", dst);
     return -1;
   }
@@ -301,7 +301,7 @@ copy_device(const char *src, const char *dst, const struct stat *st,
   if(opts->force && dst_exists)
     unlink(dst);
 
-  if(mknod(dst, st->st_mode, st->st_major, st->st_minor) < 0) {
+  if(mknod(dst, st->st_mode, major(st->st_rdev), minor(st->st_rdev)) < 0) {
     dprintf(2, "cp: cannot create device %s\n", dst);
     return -1;
   }
@@ -333,7 +333,7 @@ copy_dir(const char *src, const char *dst, const struct stat *st,
   int status;
 
   dst_exists = (stat(dst, &dstst) == 0);
-  if(dst_exists && dstst.st_type != T_DIR) {
+  if(dst_exists && !S_ISDIR(dstst.st_mode)) {
     dprintf(2, "cp: %s is not a directory\n", dst);
     return -1;
   }
@@ -409,7 +409,7 @@ copy_entry(const char *src, const char *dst, const struct cp_options *opts)
     }
   }
 
-  if(st.st_type == T_DIR) {
+  if(S_ISDIR(st.st_mode)) {
     if(!opts->recursive) {
       dprintf(2, "cp: %s is a directory\n", src);
       return -1;
@@ -417,10 +417,10 @@ copy_entry(const char *src, const char *dst, const struct cp_options *opts)
     return copy_dir(src, dst, &st, opts);
   }
 
-  if(st.st_type == T_SYMLINK && opts->no_deref)
+  if(S_ISLNK(st.st_mode) && opts->no_deref)
     return copy_symlink(src, dst, &st, opts);
 
-  if(st.st_type == T_DEV)
+  if((S_ISCHR(st.st_mode) || S_ISBLK(st.st_mode)))
     return copy_device(src, dst, &st, opts);
 
   return copy_file(src, dst, &st, opts);
@@ -492,7 +492,7 @@ main(int argc, char *argv[])
     usage();
 
   dest = argv[argc - 1];
-  dest_is_dir = (stat(dest, &dstst) == 0 && dstst.st_type == T_DIR);
+  dest_is_dir = (stat(dest, &dstst) == 0 && S_ISDIR(dstst.st_mode));
 
   if(src_count > 2 && !dest_is_dir) {
     dprintf(2, "cp: %s is not a directory\n", dest);

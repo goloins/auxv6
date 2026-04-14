@@ -1,5 +1,5 @@
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "auxv6/user.h"
 
 #define VMRESERVETEST_PROFILE "2026-04-11-r1"

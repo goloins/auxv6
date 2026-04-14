@@ -1,6 +1,6 @@
 #include "types.h"
 #include "fcntl.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "auxv6/user.h"
 
 #define PROBE_SIZE 4096
@@ -122,15 +122,15 @@ report_path(const char *path)
     return;
   }
 
-  if(st.st_type == T_DIR){
+  if(S_ISDIR(st.st_mode)){
     dprintf(1, "%s: directory\n", path);
     return;
   }
-  if(st.st_type == T_DEV){
+  if((S_ISCHR(st.st_mode) || S_ISBLK(st.st_mode))){
     dprintf(1, "%s: device\n", path);
     return;
   }
-  if(st.st_type == T_SYMLINK){
+  if(S_ISLNK(st.st_mode)){
     dprintf(1, "%s: symbolic link\n", path);
     return;
   }

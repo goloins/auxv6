@@ -1,6 +1,6 @@
 #include "types.h"
 #include "auxv6/user.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "fcntl.h"
 
 static int parse_int(const char *s);
@@ -17,8 +17,8 @@ parse_dev_token(const char *tok)
   struct stat st;
 
   if(s[0] == '/' && stat((char*)s, &st) == 0) {
-    if(st.st_type == T_DEV)
-      return st.st_minor;
+    if((S_ISCHR(st.st_mode) || S_ISBLK(st.st_mode)))
+      return minor(st.st_rdev);
   }
 
   if(s[0] == '/' && s[1] == 'd' && s[2] == 'e' && s[3] == 'v' && s[4] == '/')

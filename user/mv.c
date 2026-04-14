@@ -1,5 +1,5 @@
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "fcntl.h"
 #include "errno.h"
 #include "limits.h"
@@ -187,7 +187,7 @@ main(int argc, char *argv[])
   }
   dest = argv[argc - 1];
 
-  dest_is_dir = (stat(dest, &destst) == 0 && destst.st_type == T_DIR);
+  dest_is_dir = (stat(dest, &destst) == 0 && S_ISDIR(destst.st_mode));
 
   if(nsrcs > 1 && !dest_is_dir) {
     dprintf(2, "mv: target '%s' is not a directory\n", dest);

@@ -1,7 +1,7 @@
 // v6init: Legacy init without rc-script/runlevel support
 
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
 
@@ -17,8 +17,8 @@ ensure_node(const char *path, int mode, short major, short minor)
   fd = open(path, O_RDONLY);
   if(fd >= 0){
     close(fd);
-    if(stat(path, &st) == 0 && st.st_type == T_DEV &&
-       st.st_major == major && st.st_minor == minor &&
+    if(stat(path, &st) == 0 && (S_ISCHR(st.st_mode) || S_ISBLK(st.st_mode)) &&
+       major(st.st_rdev) == major && minor(st.st_rdev) == minor &&
        (st.st_mode & M_IFMT) == (mode & M_IFMT))
       return;
     unlink(path);

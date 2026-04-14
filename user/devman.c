@@ -12,7 +12,7 @@
  */
 
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
 #include "string.h"
@@ -635,7 +635,7 @@ devman_create_node(const char *path, int type, short major, short minor, uint mo
 
   /* Check if node exists and is correct */
   if(stat((char*)path, &st) == 0) {
-    if(st.st_type == T_DEV && st.st_major == major && st.st_minor == minor) {
+    if((S_ISCHR(st.st_mode) || S_ISBLK(st.st_mode)) && major(st.st_rdev) == major && minor(st.st_rdev) == minor) {
       /* Node exists and is correct */
       return 0;
     }
@@ -788,7 +788,7 @@ devman_cleanup_stale(void)
 
     if(stat(path, &st) < 0)
       continue;
-    if(st.st_type != T_DEV)
+    if(!(S_ISCHR(st.st_mode) || S_ISBLK(st.st_mode)))
       continue;
 
     found = 0;
@@ -820,7 +820,7 @@ devman_cleanup_stale(void)
 
     if(stat(path, &st) < 0)
       continue;
-    if(st.st_type != T_DEV)
+    if(!(S_ISCHR(st.st_mode) || S_ISBLK(st.st_mode)))
       continue;
 
     found = 0;

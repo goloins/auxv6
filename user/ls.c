@@ -1,7 +1,7 @@
 #include "types.h"
 #include "grp.h"
 #include "pwd.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
 #include "fs.h"
@@ -517,13 +517,13 @@ entry_is_dir(const struct ls_entry *e)
 {
   if(!e->stat_ok)
     return 0;
-  if(e->st.st_type == T_DIR)
+  if(S_ISDIR(e->st.st_mode))
     return 1;
   {
     int r;
     r = (e->st.st_mode & M_IFMT) == M_IFDIR;
-    LSDBG("ls[dbg]: entry_is_dir name='%s' type=%d mode=%o -> %d\n",
-          e->name, e->st.st_type, e->st.st_mode, r);
+    LSDBG("ls[dbg]: entry_is_dir name='%s' mode=%o -> %d\n",
+          e->name, e->st.st_mode, r);
     return r;
   }
 }
@@ -713,10 +713,10 @@ list_path(const char *path, int show_header)
     LSDBG("ls[dbg]: list_path stat failed path='%s'\n", path);
     return;
   }
-  LSDBG("ls[dbg]: list_path stat ok path='%s' type=%d mode=%o size=%u\n",
-        path, st.st_type, st.st_mode, st.st_size);
+    LSDBG("ls[dbg]: list_path stat ok path='%s' mode=%o size=%u\n",
+      path, st.st_mode, st.st_size);
 
-  if((st.st_type == T_DIR || (st.st_mode & M_IFMT) == M_IFDIR) &&
+  if((S_ISDIR(st.st_mode) || (st.st_mode & M_IFMT) == M_IFDIR) &&
      !g_opts.list_dir_itself) {
     LSDBG("ls[dbg]: list_path treat as directory path='%s'\n", path);
     list_directory(path, show_header);

@@ -1,7 +1,7 @@
 #include "types.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "sys/ioctl.h"
 #include "graphics/drm_ioctls.h"
 #include "graphics/input_events.h"

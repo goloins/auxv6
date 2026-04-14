@@ -3,7 +3,7 @@
 #include "auxv6/gzip.h"
 #include "auxv6/bzip2.h"
 #include "dirent.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "fcntl.h"
 #include "unistd.h"
 #include "errno.h"
@@ -376,10 +376,10 @@ tar_write_entry(int afd, const char *path, const char *store)
   h.version[0] = '0';
   h.version[1] = '0';
 
-  if(st.st_type == T_DIR) {
+  if(S_ISDIR(st.st_mode)) {
     h.typeflag = '5';
     octal_write(h.size, sizeof(h.size), 0);
-  } else if(st.st_type == T_SYMLINK) {
+  } else if(S_ISLNK(st.st_mode)) {
     char target[100];
     int n;
 
@@ -401,7 +401,7 @@ tar_write_entry(int afd, const char *path, const char *store)
   if(write_all(afd, &h, sizeof(h)) < 0)
     return -1;
 
-  if(st.st_type == T_FILE)
+  if(S_ISREG(st.st_mode))
     return tar_write_file_data(afd, path, st.st_size);
 
   return 0;
@@ -417,7 +417,7 @@ tar_add_path(int afd, const char *path, const char *store)
     return -1;
   }
 
-  if(st.st_type == T_DIR) {
+  if(S_ISDIR(st.st_mode)) {
     DIR *dp;
     struct dirent *de;
 
@@ -456,7 +456,7 @@ tar_add_path(int afd, const char *path, const char *store)
     return 0;
   }
 
-  if(st.st_type == T_FILE || st.st_type == T_SYMLINK)
+  if(S_ISREG(st.st_mode) || S_ISLNK(st.st_mode))
     return tar_write_entry(afd, path, store);
 
   return 0;

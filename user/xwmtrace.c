@@ -1,7 +1,7 @@
 #include "types.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "string.h"
 #include "stdio.h"
 

@@ -4,7 +4,7 @@
 
 #include "types.h"
 #include "fcntl.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "dirent.h"
 #include "errno.h"
 #include "stdarg.h"
@@ -38,13 +38,38 @@
 uid_t geteuid(void);
 gid_t getegid(void);
 
+/*
+ * Kernel syscall ABI struct for stat-family calls.
+ * This mirrors include/stat.h layout and stays private to libc.
+ */
+struct auxv6_kstat {
+  short st_type;
+  int st_dev;
+  uint st_ino;
+  short st_major;
+  short st_minor;
+  short st_nlink;
+  short st_uid;
+  short st_gid;
+  ushort st_mode;
+  uint64_t st_size;
+  long st_atime;
+  long st_mtime;
+  long st_ctime;
+};
+
+#define AUX_T_DIR 1
+#define AUX_T_FILE 2
+#define AUX_T_DEV 3
+#define AUX_T_SYMLINK 4
+
 int __auxv6_sys_open(const char *path, int flags);
 ssize_t __auxv6_sys_read(int fd, void *buf, size_t count);
 ssize_t __auxv6_sys_write(int fd, const void *buf, size_t count);
 int __auxv6_sys_close(int fd);
-int __auxv6_sys_fstat(int fd, struct stat *st);
-int __auxv6_sys_stat(const char *path, struct stat *st);
-int __auxv6_sys_lstat(const char *path, struct stat *st);
+int __auxv6_sys_fstat(int fd, struct auxv6_kstat *st);
+int __auxv6_sys_stat(const char *path, struct auxv6_kstat *st);
+int __auxv6_sys_lstat(const char *path, struct auxv6_kstat *st);
 int __auxv6_sys_chdir(const char *path);
 int __auxv6_sys_dup(int fd);
 int __auxv6_sys_dup2(int oldfd, int newfd);
@@ -228,30 +253,61 @@ ioctl(int fd, int request, ...)
 }
 
 static void
-posix_fixup_mode_from_type(struct stat *st)
+posix_fill_mode_from_aux(struct stat *dst, const struct auxv6_kstat *src)
 {
-  int ftype;
+  mode_t ftype;
 
-  if(st == 0)
+  if(dst == 0 || src == 0)
     return;
-  if((st->st_mode & M_IFMT) != 0)
+
+  if((src->st_mode & S_IFMT) != 0) {
+    dst->st_mode = src->st_mode;
     return;
+  }
 
   ftype = 0;
-  switch(st->st_type) {
-  case T_FILE:
-    ftype = M_IFREG;
+  switch(src->st_type) {
+  case AUX_T_FILE:
+    ftype = S_IFREG;
     break;
-  case T_DIR:
-    ftype = M_IFDIR;
+  case AUX_T_DIR:
+    ftype = S_IFDIR;
     break;
-  case T_DEV:
-    ftype = M_IFCHR;
+  case AUX_T_DEV:
+    ftype = S_IFCHR;
+    break;
+  case AUX_T_SYMLINK:
+    ftype = S_IFLNK;
     break;
   default:
     break;
   }
-  st->st_mode = (st->st_mode & 07777) | ftype;
+
+  dst->st_mode = (src->st_mode & 07777) | ftype;
+}
+
+static void
+posix_from_aux_kstat(struct stat *dst, const struct auxv6_kstat *src)
+{
+  if(dst == 0 || src == 0)
+    return;
+
+  memset(dst, 0, sizeof(*dst));
+
+  dst->st_dev = (dev_t)src->st_dev;
+  dst->st_ino = (ino_t)src->st_ino;
+  dst->st_nlink = (nlink_t)src->st_nlink;
+  dst->st_uid = (uid_t)src->st_uid;
+  dst->st_gid = (gid_t)src->st_gid;
+  dst->st_rdev = makedev((unsigned)major(src->st_rdev), (unsigned)minor(src->st_rdev));
+  dst->st_size = (off_t)src->st_size;
+  dst->st_atime = (time_t)src->st_atime;
+  dst->st_mtime = (time_t)src->st_mtime;
+  dst->st_ctime = (time_t)src->st_ctime;
+  dst->st_blksize = 512;
+  dst->st_blocks = (blkcnt_t)((src->st_size + 511ULL) / 512ULL);
+
+  posix_fill_mode_from_aux(dst, src);
 }
 
 static int
@@ -265,8 +321,8 @@ posix_exec_access_mode(const struct stat *st, int mode)
     return 0;
 
   if(geteuid() == 0) {
-    if((mode & X_OK) && ((st->st_mode & M_IFMT) != M_IFDIR) &&
-       (st->st_mode & (M_IXUSR | M_IXGRP | M_IXOTH)) == 0)
+    if((mode & X_OK) && ((st->st_mode & S_IFMT) != S_IFDIR) &&
+       (st->st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) == 0)
       return -1;
     return 0;
   }
@@ -290,45 +346,50 @@ posix_exec_access_mode(const struct stat *st, int mode)
 int
 __posix_stat(const char *path, struct stat *buf)
 {
-  struct stat lst;
+  struct auxv6_kstat kst;
+  struct auxv6_kstat lst;
 
   errno = 0;
-  if(__auxv6_sys_stat(path, buf) < 0) {
+  if(__auxv6_sys_stat(path, &kst) < 0) {
     if(errno == 0) {
-      if(__auxv6_sys_lstat(path, &lst) == 0 && lst.st_type == T_SYMLINK)
+      if(__auxv6_sys_lstat(path, &lst) == 0 && lst.st_type == AUX_T_SYMLINK)
         errno = ELOOP;
       else
         errno = ENOENT;
     }
     return -1;
   }
-  posix_fixup_mode_from_type(buf);
+  posix_from_aux_kstat(buf, &kst);
   return 0;
 }
 
 int
 __posix_fstat(int fd, struct stat *buf)
 {
+  struct auxv6_kstat kst;
+
   errno = 0;
-  if(__auxv6_sys_fstat(fd, buf) < 0) {
+  if(__auxv6_sys_fstat(fd, &kst) < 0) {
     if(errno == 0)
       errno = EBADF;
     return -1;
   }
-  posix_fixup_mode_from_type(buf);
+  posix_from_aux_kstat(buf, &kst);
   return 0;
 }
 
 int
 __posix_lstat(const char *path, struct stat *buf)
 {
+  struct auxv6_kstat kst;
+
   errno = 0;
-  if(__auxv6_sys_lstat(path, buf) < 0) {
+  if(__auxv6_sys_lstat(path, &kst) < 0) {
     if(errno == 0)
       errno = ENOENT;
     return -1;
   }
-  posix_fixup_mode_from_type(buf);
+  posix_from_aux_kstat(buf, &kst);
   return 0;
 }
 
@@ -424,7 +485,7 @@ rmdir(const char *path)
 
   if(__posix_lstat(path, &st) < 0)
     return -1;
-  if(st.st_type != T_DIR) {
+  if(!S_ISDIR(st.st_mode)) {
     errno = ENOTDIR;
     return -1;
   }
@@ -479,7 +540,7 @@ readlink(const char *path, char *buf, size_t bufsiz)
 int
 mkfifo(const char *path, mode_t mode)
 {
-  return mknod(path, M_IFIFO | (mode & 0777), 0, 0);
+  return mknod(path, S_IFIFO | (mode & 0777), 0, 0);
 }
 
 int

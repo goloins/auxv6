@@ -1,7 +1,7 @@
 #include "types.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "auxv6/img.h"
 #include "auxv6/img_png.h"
 #include "auxv6/img_jpg.h"

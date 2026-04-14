@@ -10,7 +10,7 @@
  */
 
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "fs.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
@@ -47,7 +47,7 @@ is_directory(char *path)
   struct stat st;
   if(stat(path, &st) < 0)
     return 0;
-  return st.st_type == T_DIR;
+  return S_ISDIR(st.st_mode);
 }
 
 static int

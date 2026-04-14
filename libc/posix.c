@@ -7,7 +7,7 @@
  */
 
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "errno.h"
 #include "stdarg.h"
 #include "unistd.h"

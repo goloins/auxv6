@@ -8,7 +8,7 @@
  */
 
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
 
@@ -94,7 +94,7 @@ setup_loop(int loopnum, char *file)
     return -1;
   }
   
-  if(st.st_type != T_FILE){
+  if(!S_ISREG(st.st_mode)){
     dprintf(2, "losetup: '%s' is not a regular file\n", file);
     return -1;
   }

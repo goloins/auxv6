@@ -2,7 +2,7 @@
 #include "auxv6/user.h"
 #include "fcntl.h"
 #include "unistd.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "string.h"
 #include "stdlib.h"
 #include "stdio.h"

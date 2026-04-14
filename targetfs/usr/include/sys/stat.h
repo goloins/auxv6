@@ -45,6 +45,31 @@
 #define S_IWOTH    0002   /* Other write permission */
 #define S_IXOTH    0001   /* Other execute permission */
 
+/*
+ * auxv6 compatibility aliases.
+ * Keep legacy userspace code building while migrating call sites to S_* names.
+ */
+#define M_IFMT  S_IFMT
+#define M_IFREG S_IFREG
+#define M_IFDIR S_IFDIR
+#define M_IFCHR S_IFCHR
+#define M_IFBLK S_IFBLK
+#define M_IFIFO S_IFIFO
+#define M_IFLNK S_IFLNK
+
+#define M_ISUID S_ISUID
+#define M_ISGID S_ISGID
+#define M_ISVTX S_ISVTX
+#define M_IRUSR S_IRUSR
+#define M_IWUSR S_IWUSR
+#define M_IXUSR S_IXUSR
+#define M_IRGRP S_IRGRP
+#define M_IWGRP S_IWGRP
+#define M_IXGRP S_IXGRP
+#define M_IROTH S_IROTH
+#define M_IWOTH S_IWOTH
+#define M_IXOTH S_IXOTH
+
 /* POSIX-compatible stat structure with 64-bit time_t (Tranche 1)
  *
  * Key improvements (Tranche 1):

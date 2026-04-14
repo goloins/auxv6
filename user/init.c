@@ -1,7 +1,7 @@
 // init: The initial user-level program
 
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
 #include "signal.h"

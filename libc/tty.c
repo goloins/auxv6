@@ -3,7 +3,7 @@
  */
 
 #include "types.h"
-#include "stat.h"
+#include "sys/stat.h"
 #include "fcntl.h"
 #include "errno.h"
 #include "auxv6/user.h"
@@ -97,21 +97,21 @@ ttyname(int fd)
   if(!isatty(fd))
     return 0;
 
-  if(fstat(fd, &st) < 0 || st.st_type != T_DEV)
+  if(fstat(fd, &st) < 0 || !S_ISCHR(st.st_mode))
     return 0;
 
-  if(st.st_major == 1) {
+  if(major(st.st_rdev) == 1) {
     memmove(name, "/dev/console", 13);
     return name;
   }
 
-  if(st.st_major == 3 && st.st_minor == 0) {
+  if(major(st.st_rdev) == 3 && minor(st.st_rdev) == 0) {
     memmove(name, "/dev/ptmx", 10);
     return name;
   }
 
-  if(st.st_major == 3 && st.st_minor >= 1) {
-    n = st.st_minor - 1;
+  if(major(st.st_rdev) == 3 && minor(st.st_rdev) >= 1) {
+    n = (int)minor(st.st_rdev) - 1;
     if(n < 10) {
       name[0] = '/'; name[1] = 'd'; name[2] = 'e'; name[3] = 'v';
       name[4] = '/'; name[5] = 'p'; name[6] = 't'; name[7] = 's';
@@ -127,7 +127,7 @@ ttyname(int fd)
     }
   }
 
-  if(st.st_major == 3 && ioctl(fd, TIOCGPTN, &ptn) == 0) {
+  if(major(st.st_rdev) == 3 && ioctl(fd, TIOCGPTN, &ptn) == 0) {
     if(ptn < 0 || ptn >= 100)
       return 0;
     if(ptn < 10) {
