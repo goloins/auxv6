@@ -38,9 +38,16 @@ typedef unsigned long   u_long;
 
 /* Time types */
 typedef long            time_t;     /* Time in seconds since epoch (64-bit for RFC 5280 cert dates) */
+#ifndef _SUSECONDS_T_DEFINED
+#define _SUSECONDS_T_DEFINED
 typedef long            suseconds_t;/* Microseconds (64-bit for symmetry with timeval) */
+#endif
+#ifndef _USECONDS_T_DEFINED
+#define _USECONDS_T_DEFINED
 typedef unsigned int    useconds_t; /* Microseconds (unsigned) */
+#endif
 typedef int             clock_t;    /* Clock ticks */
+typedef unsigned int    speed_t;    /* Terminal speed type */
 
 /* IPC types */
 typedef int             key_t;      /* IPC key */

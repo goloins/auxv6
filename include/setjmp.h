@@ -22,7 +22,15 @@ typedef struct {
 int  setjmp(jmp_buf env);
 void longjmp(jmp_buf env, int val) __attribute__((noreturn));
 
-int  sigsetjmp(sigjmp_buf env, int savemask);
+/*
+ * sigsetjmp must be a macro so setjmp captures the caller's frame.
+ * A function wrapper would save the wrong context and make siglongjmp unsafe.
+ */
+#define sigsetjmp(env, savemask) \
+	( ((env)[0].__savemask = ((savemask) != 0)), \
+		((env)[0].__savemask ? sigprocmask(SIG_SETMASK, (const sigset_t *)0, &((env)[0].__mask)) : 0), \
+		setjmp((env)[0].__jb) )
+
 void siglongjmp(sigjmp_buf env, int val) __attribute__((noreturn));
 
 #endif /* _SETJMP_H */

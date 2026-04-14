@@ -242,9 +242,7 @@ int     chroot(const char *path);
 int     kill(pid_t pid, int sig);
 
 /* killpg — send signal to all members of a process group */
-static inline int killpg(int pgid, int sig) {
-  return kill(-pgid, sig);
-}
+int     killpg(int pgrp, int sig);
 
 /*
  * tcsetpgrp / tcgetpgrp — POSIX 2-argument wrappers over the auxv6
