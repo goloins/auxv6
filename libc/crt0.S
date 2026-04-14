@@ -5,6 +5,8 @@
 _start:
   movl 4(%esp), %eax
   movl 8(%esp), %edx
+  movl 12(%esp), %ecx
+  pushl %ecx
   pushl %edx
   pushl %eax
   call main
