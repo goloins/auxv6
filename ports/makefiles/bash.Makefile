@@ -55,6 +55,9 @@ first-pass: | $(BUILDDIR)
 				--build=$$(../support/config.guess 2>/dev/null || ../config.guess 2>/dev/null || echo x86_64-unknown-linux-gnu) \
 				--prefix=/usr \
 				--without-bash-malloc \
+				--disable-readline \
+				--disable-history \
+				--disable-bang-history \
 				--disable-nls \
 				>>"$(LOG)" 2>&1
 	@cd "$(BUILDDIR)" && \
@@ -62,31 +65,6 @@ first-pass: | $(BUILDDIR)
 		s@/\* #undef HAVE_GETHOSTNAME \*/@#define HAVE_GETHOSTNAME 1@g; \
 		s@/\* #undef HAVE_GETTIMEOFDAY \*/@#define HAVE_GETTIMEOFDAY 1@g; \
 		s@/\* #undef HAVE_ISBLANK \*/@#define HAVE_ISBLANK 1@g; \
-		s@/\* #undef HAVE_TIMES \*/@#define HAVE_TIMES 1@g; \
-		s@/\* #undef HAVE_TCGETATTR \*/@#define HAVE_TCGETATTR 1@g; \
-		s@/\* #undef HAVE_KILLPG \*/@#define HAVE_KILLPG 1@g; \
-		s@/\* #undef HAVE_STRPBRK \*/@#define HAVE_STRPBRK 1@g; \
-		s@/\* #undef HAVE_STRTOD \*/@#define HAVE_STRTOD 1@g; \
-		s@/\* #undef HAVE_STRTOLL \*/@#define HAVE_STRTOLL 1@g; \
-		s@/\* #undef HAVE_STRTOUL \*/@#define HAVE_STRTOUL 1@g; \
-		s@/\* #undef HAVE_STRTOULL \*/@#define HAVE_STRTOULL 1@g; \
-		s@/\* #undef HAVE_STRTOIMAX \*/@#define HAVE_STRTOIMAX 1@g; \
-		s@/\* #undef HAVE_STRTOUMAX \*/@#define HAVE_STRTOUMAX 1@g; \
-		s@/\* #undef HAVE_STRFTIME \*/@#define HAVE_STRFTIME 1@g; \
-		s@/\* #undef HAVE_POSIX_SIGNALS \*/@#define HAVE_POSIX_SIGNALS 1@g; \
-		s@/\* #undef HAVE_STRCHR \*/@#define HAVE_STRCHR 1@g; \
-		s@/\* #undef HAVE_BCOPY \*/@#define HAVE_BCOPY 1@g; \
-		s@/\* #undef HAVE_DUP2 \*/@#define HAVE_DUP2 1@g; \
-		s@/\* #undef HAVE_MKFIFO \*/@#define HAVE_MKFIFO 1@g; \
-		s@/\* #undef HAVE_SELECT \*/@#define HAVE_SELECT 1@g; \
-		s@/\* #undef HAVE_LONG_LONG_INT \*/@#define HAVE_LONG_LONG_INT 1@g; \
-		s@/\* #undef HAVE_UNSIGNED_LONG_LONG_INT \*/@#define HAVE_UNSIGNED_LONG_LONG_INT 1@g; \
-		s@/\* #undef HAVE_TZSET \*/@#define HAVE_TZSET 1@g; \
-		s@/\* #undef HAVE_TZNAME \*/@#define HAVE_TZNAME 1@g; \
-		s@/\* #undef HAVE_SETREUID \*/@#define HAVE_SETREUID 1@g; \
-		s@/\* #undef HAVE_SETREGID \*/@#define HAVE_SETREGID 1@g; \
-		s@/\* #undef HAVE_STRTOLD \*/@#define HAVE_STRTOLD 1@g; \
-		s@/\* #undef HAVE_PUTCHAR \*/@#define HAVE_PUTCHAR 1@g; \
 		s@#define HAVE_ULIMIT_H 1@/* #undef HAVE_ULIMIT_H */@g; \
 		s@#define HAVE_SYS_RANDOM_H 1@/* #undef HAVE_SYS_RANDOM_H */@g;' config.h
 	# Avoid top-level "all" because it forces host-side doc helpers (man2html).
@@ -97,7 +75,7 @@ first-pass: | $(BUILDDIR)
 	@set +e; \
 	$(MAKE) -C "$(BUILDDIR)" -j1 \
 		CC_FOR_BUILD="$(BUILD_CC)" CFLAGS_FOR_BUILD="$(BUILD_CFLAGS)" \
-		LDFLAGS="-m32 -nostdlib -static -Wl,--allow-multiple-definition $(AUXV6_CRT0_OBJ)" \
+		LDFLAGS="-m32 -no-pie -nostdlib -static -Wl,--allow-multiple-definition $(AUXV6_CRT0_OBJ)" \
 		LOCAL_LIBS="$(AUXV6_AUXRT_A) $(LIBC_LINK_A) $(LIBGCC)" \
 		bash >>"$(LOG)" 2>&1; \
 	rc=$$?; \

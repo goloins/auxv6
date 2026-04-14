@@ -89,7 +89,8 @@ first-pass: | $(BUILDDIR)
 				--enable-static \
 				--disable-nc \
 				--disable-tests \
-				--without-openssldir \
+				--with-openssldir=/etc/ssl \
+				--sysconfdir=/etc \
 				--prefix=/usr \
 				>>"$(LOG)" 2>&1 || \
 		echo "libressl: configure failed (non-fatal in staging lane)" >>"$(LOG)"

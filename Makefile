@@ -1039,8 +1039,20 @@ ports-progs:
 		fi; \
 		stamp="$$portdir/built.auxv6"; \
 		legacy_stamp="$$portdir/.auxv6-built.stamp"; \
+		expected_sig="$$({ \
+			sha256sum "$$portdir/Makefile.auxv6"; \
+			sha256sum "$(CRT0_OBJ)"; \
+			sha256sum "$(AUXRT_A)"; \
+			sha256sum "$(LIBC_A)"; \
+		} 2>/dev/null | sha256sum | awk '{print $$1}')"; \
+		stored_sig=""; \
+		if [ -f "$$stamp" ]; then \
+			stored_sig="$$(sed -n '1p' "$$stamp")"; \
+		elif [ -f "$$legacy_stamp" ]; then \
+			stored_sig="legacy-marker"; \
+		fi; \
 		rebuild=1; \
-		if [ -f "$$stamp" ] || [ -f "$$legacy_stamp" ]; then \
+		if [ -n "$$expected_sig" ] && [ -n "$$stored_sig" ] && [ "$$stored_sig" = "$$expected_sig" ]; then \
 			rebuild=0; \
 		fi; \
 		if [ "$$rebuild" = "1" ]; then \
@@ -1049,7 +1061,8 @@ ports-progs:
 				echo "ports: build failed for $$name" | tee -a $(PORTS_BUILD_LOG); \
 				continue; \
 			fi; \
-			touch "$$stamp" "$$legacy_stamp"; \
+			echo "$$expected_sig" > "$$stamp"; \
+			touch "$$legacy_stamp"; \
 		else \
 			echo "ports: up-to-date $$name (skipping build)" | tee -a $(PORTS_BUILD_LOG); \
 		fi; \
