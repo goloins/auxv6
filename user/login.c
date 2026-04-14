@@ -14,7 +14,7 @@
 #define LOGIN_HOST_MAX   64
 
 /* Toggle to 1 for built-in step tracing without build flags. */
-#define LOGIN_DEBUG      1
+#define LOGIN_DEBUG      0
 
 #define NOLOGIN_PATH "/etc/nologin"
 #define UTMP_PATH    "/var/run/utmp"
