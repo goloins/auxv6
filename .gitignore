@@ -105,6 +105,13 @@ user/v6dhcpd
 user/ntpd
 user/v6init
 user/passwd
+user/useradd
+user/usermod
+user/userdel
+user/groupadd
+user/groupmod
+user/groupdel
+user/groups
 user/chmod
 user/chown
 user/chgrp

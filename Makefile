@@ -410,6 +410,22 @@ user/%: user/%.o $(CRT0_OBJ) $(LIBC_A) $(AUXRT_A) | toolchain-check
 	$(OBJDUMP) -S $@ > $(basename $@).asm
 	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(basename $@).sym
 
+ACCOUNT_MGMT_BINS = \
+	user/useradd \
+	user/usermod \
+	user/userdel \
+	user/groupadd \
+	user/groupmod \
+	user/groupdel \
+	user/groups
+
+$(ACCOUNT_MGMT_BINS): user/%: user/%.o user/accountdb.o $(CRT0_OBJ) $(LIBC_A) $(AUXRT_A) | toolchain-check
+	$(LD) $(LDFLAGS) -N -e _start -Ttext 0 -o $@ $(CRT0_OBJ) user/$*.o user/accountdb.o $(AUXRT_A) $(LIBC_A) $(LIBGCC)
+	@$(OBJDUMP) -f $@ | grep -q 'file format elf32-i386' || \
+		(echo "ERROR: $@ is not elf32-i386." 1>&2; exit 1)
+	$(OBJDUMP) -S $@ > $(basename $@).asm
+	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(basename $@).sym
+
 $(USER_STAGE_DIR):
 	mkdir -p $(USER_STAGE_DIR)
 
@@ -648,6 +664,27 @@ _ntpd: user/ntpd
 
 _passwd: user/passwd
 	cp user/passwd _passwd
+
+_useradd: user/useradd
+	cp user/useradd _useradd
+
+_usermod: user/usermod
+	cp user/usermod _usermod
+
+_userdel: user/userdel
+	cp user/userdel _userdel
+
+_groupadd: user/groupadd
+	cp user/groupadd _groupadd
+
+_groupmod: user/groupmod
+	cp user/groupmod _groupmod
+
+_groupdel: user/groupdel
+	cp user/groupdel _groupdel
+
+_groups: user/groups
+	cp user/groups _groups
 
 _chmod: user/chmod
 	cp user/chmod _chmod
@@ -1127,6 +1164,13 @@ UPROGS=\
 	_v6dhcpd\
 	_ntpd\
 	_passwd\
+	_useradd\
+	_usermod\
+	_userdel\
+	_groupadd\
+	_groupmod\
+	_groupdel\
+	_groups\
 	_chmod\
 	_chown\
 	_chgrp\
@@ -1326,6 +1370,7 @@ clean:
 	user/top \
 	user/date user/ddate user/time user/killall user/halt user/wallpaper \
 	user/passwd user/pwd user/chmod user/chown user/chgrp user/rm user/reset user/clear user/sh user/sigtest user/stackgrowtest user/sockettest user/su user/whoami user/tcptest user/ping user/netinfo user/stressfs user/usertests user/wc user/zombie user/login user/getty user/chvt user/termdemo user/termcheck user/dmesg user/tail user/lspci user/v6init user/testdaemon \
+	user/useradd user/usermod user/userdel user/groupadd user/groupmod user/groupdel user/groups \
 	user/cowsay \
 	user/schedperf user/fsperf user/gfxperf user/kallocstress user/kernperf user/bcachestress user/kmemstress \
 	libc/libc.a
@@ -1925,7 +1970,7 @@ EXTRA=\
 	libc/stdio.c libc/regex.c libc/calloc.c\
 	user/date.c user/time.c user/killall.c user/halt.c\
 	user/lsof.c user/which.c user/file.c\
-	user/id.c user/login.c user/ln.c user/ls.c user/free.c user/df.c user/ps.c user/fsregress.c user/mkdir.c user/mount.c user/mounts.c user/mounttest.c user/umount.c user/passwd.c user/pwd.c user/chmod.c user/chown.c user/chgrp.c user/rm.c user/netinfo.c user/stressfs.c user/su.c user/usertests.c user/vblktest.c user/ahcitest.c user/wc.c user/whoami.c user/zombie.c\
+	user/id.c user/login.c user/ln.c user/ls.c user/free.c user/df.c user/ps.c user/fsregress.c user/mkdir.c user/mount.c user/mounts.c user/mounttest.c user/umount.c user/passwd.c user/useradd.c user/usermod.c user/userdel.c user/groupadd.c user/groupmod.c user/groupdel.c user/groups.c user/accountdb.c user/pwd.c user/chmod.c user/chown.c user/chgrp.c user/rm.c user/netinfo.c user/stressfs.c user/su.c user/usertests.c user/vblktest.c user/ahcitest.c user/wc.c user/whoami.c user/zombie.c\
 	libc/printf.c libc/umalloc.c\
 	README targetfs/etc/hosts targetfs/etc/fstab targetfs/etc/profile targetfs/etc/termcap targetfs/etc/passwd targetfs/etc/hostname config/dot-bochsrc tools/*.pl tools/toc.* tools/runoff tools/runoff1 tools/runoff.list\
 	config/.gdbinit.tmpl gdbutil\
