@@ -232,5 +232,5 @@ user/libc.a
 tools/ports/ports-sync.log
 targetfs/usr/bin/openssl
 targetfs/usr/lib/
-targetfs/usr/include/
 ports/lacc-master
+targetfs/usr/bin/lacc

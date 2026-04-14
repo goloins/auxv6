@@ -49,6 +49,7 @@ first-pass: | $(BUILDDIR)
 	@cd "$(BUILDDIR)" && \
 		env \
 			CC="$(CC)" AR="$(AR)" RANLIB="$(RANLIB)" STRIP="$(STRIP)" \
+			ac_cv_func_getrusage=yes \
 			CPPFLAGS="$(CONFIGURE_CPPFLAGS)" CFLAGS="$(COMMON_CFLAGS)" LDFLAGS="$(CONFIGURE_LDFLAGS)" \
 			../configure \
 				--host=i386-jos-elf \
@@ -63,6 +64,7 @@ first-pass: | $(BUILDDIR)
 	@cd "$(BUILDDIR)" && \
 		perl -0pi -e 's@/\* #undef HAVE_DPRINTF \*/@#define HAVE_DPRINTF 1@g; \
 		s@/\* #undef HAVE_GETHOSTNAME \*/@#define HAVE_GETHOSTNAME 1@g; \
+		s@/\* #undef HAVE_GETRUSAGE \*/@#define HAVE_GETRUSAGE 1@g; \
 		s@/\* #undef HAVE_GETTIMEOFDAY \*/@#define HAVE_GETTIMEOFDAY 1@g; \
 		s@/\* #undef HAVE_ISBLANK \*/@#define HAVE_ISBLANK 1@g; \
 		s@#define HAVE_ULIMIT_H 1@/* #undef HAVE_ULIMIT_H */@g; \
