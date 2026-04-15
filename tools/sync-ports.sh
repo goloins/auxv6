@@ -137,6 +137,14 @@ while IFS='|' read -r name url pclass srcdir binname; do
   else
     echo "ports-sync: missing custom makefile ${custom_mk} for ${name}" | tee -a "${log_file}"
   fi
+
+  # Canonical auxv6 postinstall hook template for ports.
+  custom_postinstall="${makefiles_dir}/${name}.postinstall"
+  dst_postinstall="${src_path}/pkg-postinstall.local"
+  if [ -f "${custom_postinstall}" ]; then
+    cp "${custom_postinstall}" "${dst_postinstall}"
+    echo "ports-sync: installed ${dst_postinstall}" >> "${log_file}"
+  fi
 done < "${manifest}"
 
 echo "ports-sync: complete (see ${log_file})"

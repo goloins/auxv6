@@ -1,0 +1,23 @@
+cat >> postinstall << '_EOF'
+# auxv6 runtime account setup: only create sshd user/group during install.
+{
+	group_file="${PKG_INSTALL_ROOT}/etc/group"
+	passwd_file="${PKG_INSTALL_ROOT}/etc/passwd"
+
+	if [ -f "$group_file" ] && ! grep -Eq '^sshd:' "$group_file"; then
+		printf '%s\n' 'sshd:x:33:' >> "$group_file"
+		echo 'openssh postinstall: added sshd group (gid 33)'
+	fi
+
+	if [ -f "$passwd_file" ] && ! grep -Eq '^sshd:' "$passwd_file"; then
+		printf '%s\n' 'sshd:x:33:33:sshd:/var/empty:/bin/nologin' >> "$passwd_file"
+		echo 'openssh postinstall: added sshd user (uid 33, gid 33)'
+	fi
+
+	if [ -d "${PKG_INSTALL_ROOT}/var" ] && [ ! -d "${PKG_INSTALL_ROOT}/var/empty" ]; then
+		mkdir -p "${PKG_INSTALL_ROOT}/var/empty"
+		chmod 0755 "${PKG_INSTALL_ROOT}/var/empty"
+		echo 'openssh postinstall: created /var/empty'
+	fi
+}
+_EOF

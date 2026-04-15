@@ -1054,6 +1054,15 @@ ports-progs:
 				continue; \
 			fi; \
 		fi; \
+		canon_postinstall="ports/makefiles/$$name.postinstall"; \
+		if [ -f "$$canon_postinstall" ] && { [ ! -f "$$portdir/pkg-postinstall.local" ] || ! cmp -s "$$canon_postinstall" "$$portdir/pkg-postinstall.local"; }; then \
+			if cp "$$canon_postinstall" "$$portdir/pkg-postinstall.local"; then \
+				echo "ports: synced canonical postinstall hook for $$name" >> $(PORTS_BUILD_LOG); \
+			else \
+				echo "ports: failed to sync canonical postinstall hook for $$name from $$canon_postinstall" | tee -a $(PORTS_BUILD_LOG); \
+				continue; \
+			fi; \
+		fi; \
 		stamp="$$portdir/built.auxv6"; \
 		legacy_stamp="$$portdir/.auxv6-built.stamp"; \
 		expected_sig="$$({ \

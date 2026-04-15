@@ -31,10 +31,6 @@ TARGETFS_DIR ?= $(ROOT)/targetfs
 TARGETFS_USR_INCLUDE := $(TARGETFS_DIR)/usr/include
 TARGETFS_USR_LIB := $(TARGETFS_DIR)/usr/lib
 TARGETFS_ETC_SSH := $(TARGETFS_DIR)/etc/ssh
-TARGETFS_PRIVSEP := $(TARGETFS_DIR)/var/empty
-TARGETFS_RC3 := $(TARGETFS_DIR)/etc/rc.3
-TARGETFS_PASSWD := $(TARGETFS_DIR)/etc/passwd
-TARGETFS_GROUP := $(TARGETFS_DIR)/etc/group
 
 SSHD_CONF_SRC := $(SRCDIR)/sshd_config
 SSH_CONF_SRC := $(SRCDIR)/ssh_config
@@ -172,21 +168,7 @@ check-host-contamination:
 		exit 1)
 
 install-targetfs:
-	@install -d "$(TARGETFS_ETC_SSH)" "$(TARGETFS_PRIVSEP)" "$(TARGETFS_DIR)/var/run"
-	@if [ -f "$(TARGETFS_GROUP)" ]; then \
-		if grep -Eq '^sshd:' "$(TARGETFS_GROUP)"; then \
-			sed -i -E 's|^sshd:[^:]*:[0-9]+:.*|sshd:x:33:|' "$(TARGETFS_GROUP)"; \
-		elif ! grep -Eq '^[^:]+:[^:]*:33:' "$(TARGETFS_GROUP)"; then \
-			echo 'sshd:x:33:' >> "$(TARGETFS_GROUP)"; \
-		fi; \
-	fi
-	@if [ -f "$(TARGETFS_PASSWD)" ]; then \
-		if grep -Eq '^sshd:' "$(TARGETFS_PASSWD)"; then \
-			sed -i -E 's|^sshd:[^:]*:[0-9]+:[0-9]+:[^:]*:[^:]*:[^:]*|sshd:x:33:33:sshd:/var/empty:/bin/nologin|' "$(TARGETFS_PASSWD)"; \
-		elif ! grep -Eq '^[^:]+:[^:]*:33:' "$(TARGETFS_PASSWD)"; then \
-			echo 'sshd:x:33:33:sshd:/var/empty:/bin/nologin' >> "$(TARGETFS_PASSWD)"; \
-		fi; \
-	fi
+	@install -d "$(TARGETFS_ETC_SSH)"
 	@if [ -f "$(SSHD_CONF_SRC)" ] && [ ! -f "$(TARGETFS_ETC_SSH)/sshd_config" ]; then \
 		install -m 0644 "$(SSHD_CONF_SRC)" "$(TARGETFS_ETC_SSH)/sshd_config"; \
 	fi
@@ -256,18 +238,10 @@ install-targetfs:
 			echo 'PasswordAuthentication yes' >> "$$conf"; \
 		fi; \
 	fi
-	@if [ -f "$(TARGETFS_ETC_SSH)/sshd_config" ] && [ ! -f "$(TARGETFS_DIR)/etc/sshd_config" ]; then \
-		ln -sf ssh/sshd_config "$(TARGETFS_DIR)/etc/sshd_config"; \
-	fi
-	@if [ -f "$(TARGETFS_RC3)" ] && ! grep -Fq 'Starting sshd (OpenSSH)' "$(TARGETFS_RC3)"; then \
-		printf '\n' >> "$(TARGETFS_RC3)"; \
-		printf '%s\n' 'echo "Starting sshd (OpenSSH)"' >> "$(TARGETFS_RC3)"; \
-		printf '%s\n' '#generate keys if they don'\''t exist already' >> "$(TARGETFS_RC3)"; \
-		printf '%s\n' '/usr/bin/ssh-keygen -A' >> "$(TARGETFS_RC3)"; \
-		printf '%s\n' '#start sshd itself' >> "$(TARGETFS_RC3)"; \
-		printf '%s\n' '/usr/sbin/sshd &' >> "$(TARGETFS_RC3)"; \
-	fi
-	@chmod 0755 "$(TARGETFS_PRIVSEP)"
+	@for k in "$(TARGETFS_ETC_SSH)/ssh_host_rsa_key" "$(TARGETFS_ETC_SSH)/ssh_host_ecdsa_key" "$(TARGETFS_ETC_SSH)/ssh_host_ed25519_key"; do \
+		if [ -f "$$k" ]; then chmod 0600 "$$k"; fi; \
+		if [ -f "$$k.pub" ]; then chmod 0644 "$$k.pub"; fi; \
+	done
 
 clean:
 	rm -rf "$(BUILDDIR)" "$(OUT)" "$(OUT_KEYGEN)" "$(OUT_SSHD)"

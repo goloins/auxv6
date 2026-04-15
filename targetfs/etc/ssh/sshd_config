@@ -97,7 +97,6 @@ KbdInteractiveAuthentication no
 #UseDNS no
 PidFile /var/run/sshd.pid
 
-#UsePrivilegeSeparation no
 #MaxStartups 10:30:100
 #PermitTunnel no
 #ChrootDirectory none
