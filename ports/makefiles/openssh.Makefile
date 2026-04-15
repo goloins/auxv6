@@ -30,6 +30,12 @@ TOOL_GCC_INCLUDE := $(shell $(CC) -print-file-name=include)
 TARGETFS_DIR ?= $(ROOT)/targetfs
 TARGETFS_USR_INCLUDE := $(TARGETFS_DIR)/usr/include
 TARGETFS_USR_LIB := $(TARGETFS_DIR)/usr/lib
+TARGETFS_ETC_SSH := $(TARGETFS_DIR)/etc/ssh
+TARGETFS_PRIVSEP := $(TARGETFS_DIR)/var/empty
+
+SSHD_CONF_SRC := $(SRCDIR)/sshd_config
+SSH_CONF_SRC := $(SRCDIR)/ssh_config
+MODULI_SRC := $(SRCDIR)/moduli
 
 COMMON_CPPFLAGS := -nostdinc -I$(ROOT)/include -I$(ROOT)/include/posix -I$(ROOT)/include/posix/sys -I$(TARGETFS_USR_INCLUDE) -isystem $(TOOL_GCC_INCLUDE)
 COMMON_CFLAGS := -fno-pic -static -fno-builtin -fno-strict-aliasing -O2 -Wall -m32 -fno-stack-protector -std=gnu17 -Wno-error=implicit-function-declaration -Wno-error=implicit-int
@@ -76,7 +82,7 @@ CONFIGURE_ARGS := \
 	--without-retpoline \
 	--without-pie
 
-.PHONY: all clean first-pass check-host-contamination
+.PHONY: all clean first-pass check-host-contamination install-targetfs
 
 all: first-pass $(OUT) check-host-contamination
 
@@ -160,6 +166,19 @@ check-host-contamination:
 		(echo "ERROR: host header path detected in OpenSSH port build log" >&2; \
 		echo "Inspect $(LOG) for details." >&2; \
 		exit 1)
+
+install-targetfs: $(OUT)
+	@install -d "$(TARGETFS_ETC_SSH)" "$(TARGETFS_PRIVSEP)"
+	@if [ -f "$(SSHD_CONF_SRC)" ] && [ ! -f "$(TARGETFS_ETC_SSH)/sshd_config" ]; then \
+		install -m 0644 "$(SSHD_CONF_SRC)" "$(TARGETFS_ETC_SSH)/sshd_config"; \
+	fi
+	@if [ -f "$(SSH_CONF_SRC)" ] && [ ! -f "$(TARGETFS_ETC_SSH)/ssh_config" ]; then \
+		install -m 0644 "$(SSH_CONF_SRC)" "$(TARGETFS_ETC_SSH)/ssh_config"; \
+	fi
+	@if [ -f "$(MODULI_SRC)" ] && [ ! -f "$(TARGETFS_ETC_SSH)/moduli" ]; then \
+		install -m 0644 "$(MODULI_SRC)" "$(TARGETFS_ETC_SSH)/moduli"; \
+	fi
+	@chmod 0755 "$(TARGETFS_PRIVSEP)"
 
 clean:
 	rm -rf "$(BUILDDIR)" "$(OUT)" "$(OUT_KEYGEN)" "$(OUT_SSHD)"

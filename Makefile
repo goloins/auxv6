@@ -1105,6 +1105,12 @@ ports-progs:
 		install -d "$$destdir"; \
 		install -m 0755 "$$portbin" "$$destdir/$$binname"; \
 		echo "ports: installed $$name -> $$destdir/$$binname" | tee -a $(PORTS_BUILD_LOG); \
+		if grep -Eq '^[[:space:]]*install-targetfs:' "$$portdir/Makefile.auxv6"; then \
+			if ! $(MAKE) -C "$$portdir" -f Makefile.auxv6 install-targetfs; then \
+				echo "ports: install-targetfs hook failed for $$name" | tee -a $(PORTS_BUILD_LOG); \
+				continue; \
+			fi; \
+		fi; \
 	done < "$(PORTS_MANIFEST)"
 
 ifeq ($(LEGACY_XV6FS),1)
