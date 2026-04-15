@@ -731,6 +731,7 @@ int             sys_loopstatus(void);
 int             sys_select(void);
 int             sys_poll(void);
 int             sys_date(void);
+int             sys_utimensat(void);
 
 // timer.c
 void            timerinit(void);

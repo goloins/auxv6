@@ -169,6 +169,8 @@ int __auxv6_sys_clock_gettime(int clock_id, struct timespec *tp);
 int __auxv6_sys_clock_settime(int clock_id, const struct timespec *tp);
 int __auxv6_sys_getrlimit(int resource, struct rlimit *rlp);
 int __auxv6_sys_setrlimit(int resource, const struct rlimit *rlp);
+int __auxv6_sys_utimensat(int dirfd, const char *path,
+						  const struct timespec *times, int flags);
 #ifndef _UNISTD_H
 int tcsetpgrp(pid_t pgid);
 pid_t tcgetpgrp(void);

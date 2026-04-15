@@ -12,6 +12,18 @@
 #define O_NOCTTY  0x4000
 #define O_CLOEXEC 0x8000
 
+#ifndef AT_FDCWD
+#define AT_FDCWD (-100)
+#endif
+
+#ifndef AT_SYMLINK_NOFOLLOW
+#define AT_SYMLINK_NOFOLLOW 0x100
+#endif
+
+#ifndef AT_EACCESS
+#define AT_EACCESS 0x200
+#endif
+
 // fcntl() commands
 #define F_DUPFD   0   // Duplicate file descriptor
 #define F_GETFD   1   // Get file descriptor flags

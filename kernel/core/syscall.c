@@ -227,6 +227,7 @@ extern int sys_getrandom(void);
 extern int sys_umask(void);
 extern int sys_setreuid(void);
 extern int sys_setregid(void);
+extern int sys_utimensat(void);
 
 static int (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -329,9 +330,12 @@ static int (*syscalls[])(void) = {
 [SYS_truncate]  sys_truncate,
 [SYS_ftruncate] sys_ftruncate,
 [SYS_vmreserve] sys_vmreserve,
-[SYS_getrandom] sys_getrandom,  [SYS_umask]     sys_umask,
-  [SYS_setreuid]  sys_setreuid,
-  [SYS_setregid]  sys_setregid,};
+[SYS_getrandom] sys_getrandom,
+[SYS_umask]     sys_umask,
+[SYS_setreuid]  sys_setreuid,
+[SYS_setregid]  sys_setregid,
+[SYS_utimensat] sys_utimensat,
+};
 
 void
 syscall(void)

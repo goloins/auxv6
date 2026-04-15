@@ -77,6 +77,16 @@ off_t __auxv6_sys_lseek(int fd, off_t offset, int whence);
 int __auxv6_sys_fcntl(int fd, int cmd, int arg);
 int __auxv6_sys_ioctl(int fd, int request, void *argp);
 ssize_t __auxv6_sys_readlink(const char *path, char *buf, size_t bufsiz);
+int __auxv6_sys_utimensat(int dirfd, const char *path,
+                          const struct timespec *times, int flags);
+
+static int
+posix_valid_utimens_nsec(long nsec)
+{
+  if(nsec == UTIME_NOW || nsec == UTIME_OMIT)
+    return 1;
+  return (nsec >= 0 && nsec < NSEC_PER_SEC);
+}
 
 static int
 posix_fail_errno(int fallback)
@@ -105,6 +115,12 @@ open(const char *path, int flags, ...)
   if(rc < 0)
     return posix_fail_errno(ENOENT);
   return rc;
+}
+
+int
+creat(const char *path, int mode)
+{
+  return open(path, O_CREAT | O_WRONLY | O_TRUNC, mode);
 }
 
 ssize_t
@@ -550,4 +566,50 @@ fchmod(int fd, mode_t mode)
   (void)fd;
   (void)mode;
   return 0;
+}
+
+int
+utimensat(int dirfd, const char *path, const struct timespec times[2], int flags)
+{
+  int rc;
+
+  if(path == 0) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  if((flags & ~AT_SYMLINK_NOFOLLOW) != 0) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  if(times) {
+    if(!posix_valid_utimens_nsec(times[0].tv_nsec) ||
+       !posix_valid_utimens_nsec(times[1].tv_nsec)) {
+      errno = EINVAL;
+      return -1;
+    }
+  }
+
+  errno = 0;
+  rc = __auxv6_sys_utimensat(dirfd, path, times, flags);
+  if(rc < 0) {
+    if(errno == 0) {
+      if(dirfd != AT_FDCWD)
+        errno = ENOSYS;
+      else
+        errno = ENOENT;
+    }
+    return -1;
+  }
+  return 0;
+}
+
+int
+futimens(int fd, const struct timespec times[2])
+{
+  errno = ENOSYS;
+  (void)fd;
+  (void)times;
+  return -1;
 }

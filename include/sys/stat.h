@@ -12,6 +12,7 @@
 #define _SYS_STAT_H
 
 #include "sys/types.h"
+#include "sys/time.h"
 
 /* File type and mode bits */
 #define S_IFMT      0170000  /* File type mask */
@@ -101,6 +102,8 @@ int fstat(int fd, struct stat *buf);
 int lstat(const char *restrict path, struct stat *restrict buf);
 int chmod(const char *path, mode_t mode);
 int fchmod(int fd, mode_t mode);
+int utimensat(int dirfd, const char *path, const struct timespec times[2], int flags);
+int futimens(int fd, const struct timespec times[2]);
 mode_t umask(mode_t mask);
 int mkdir(const char *path, mode_t mode);
 int mkfifo(const char *path, mode_t mode);

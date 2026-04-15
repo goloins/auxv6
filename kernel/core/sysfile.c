@@ -24,6 +24,23 @@
 #define DEFAULT_CREATE_DEV_MODE (M_IRUSR | M_IWUSR | M_IRGRP | M_IWGRP | M_IROTH | M_IWOTH)
 #define GETCWD_MAX_DEPTH 32
 
+#ifndef NSEC_PER_SEC
+#define NSEC_PER_SEC 1000000000L
+#endif
+
+#ifndef UTIME_NOW
+#define UTIME_NOW  ((long)1073741823L)
+#endif
+
+#ifndef UTIME_OMIT
+#define UTIME_OMIT ((long)1073741822L)
+#endif
+
+struct aux_utimenspec {
+  long tv_sec;
+  long tv_nsec;
+};
+
 static int create_default_mode(short type);
 static int create_device_mode(int mode);
 static int inode_dir_read(struct inode *dp, struct dirent *de, uint64_t off);
@@ -1892,6 +1909,107 @@ sys_chown(void)
       ip->gid = gid;
     iupdate(ip);
   }
+  iunlockput(ip);
+  end_op();
+  return 0;
+}
+
+int
+sys_utimensat(void)
+{
+  int dirfd;
+  int path_addr;
+  int times_addr;
+  int flags;
+  char path[256];
+  struct aux_utimenspec times[2];
+  struct inode *ip;
+  const struct vnode_ops *ops;
+  int set_atime;
+  int set_mtime;
+  uint atime_sec;
+  uint mtime_sec;
+  uint now_sec;
+
+  if(argint(0, &dirfd) < 0 || argint(1, &path_addr) < 0 ||
+     argint(2, &times_addr) < 0 || argint(3, &flags) < 0)
+    return -1;
+
+  if(dirfd != AT_FDCWD)
+    return -1;
+  if((flags & ~AT_SYMLINK_NOFOLLOW) != 0)
+    return -1;
+  if(copyinstr_user((uint)path_addr, path, sizeof(path)) < 0)
+    return -1;
+
+  set_atime = 1;
+  set_mtime = 1;
+  if(times_addr != 0){
+    struct proc *p;
+
+    p = myproc();
+    if(p == 0 || proc_pgdir(p) == 0)
+      return -1;
+    if(copyin(proc_pgdir(p), (char*)times, (uint)times_addr, sizeof(times)) < 0)
+      return -1;
+
+    if((times[0].tv_nsec != UTIME_NOW && times[0].tv_nsec != UTIME_OMIT &&
+        (times[0].tv_nsec < 0 || times[0].tv_nsec >= NSEC_PER_SEC)) ||
+       (times[1].tv_nsec != UTIME_NOW && times[1].tv_nsec != UTIME_OMIT &&
+        (times[1].tv_nsec < 0 || times[1].tv_nsec >= NSEC_PER_SEC)))
+      return -1;
+
+    set_atime = (times[0].tv_nsec != UTIME_OMIT);
+    set_mtime = (times[1].tv_nsec != UTIME_OMIT);
+  }
+
+  if(!set_atime && !set_mtime)
+    return 0;
+
+  acquire(&tickslock);
+  now_sec = ticks;
+  release(&tickslock);
+  atime_sec = now_sec;
+  mtime_sec = now_sec;
+
+  if(times_addr != 0){
+    if(set_atime && times[0].tv_nsec != UTIME_NOW){
+      if(times[0].tv_sec < 0)
+        return -1;
+      atime_sec = (uint)times[0].tv_sec;
+    }
+    if(set_mtime && times[1].tv_nsec != UTIME_NOW){
+      if(times[1].tv_sec < 0)
+        return -1;
+      mtime_sec = (uint)times[1].tv_sec;
+    }
+  }
+
+  begin_op();
+  if(flags & AT_SYMLINK_NOFOLLOW)
+    ip = vfs_namei(path);
+  else
+    ip = vfs_resolve(path);
+  if(ip == 0){
+    end_op();
+    return -1;
+  }
+
+  ilock(ip);
+  if(!inode_is_owner_or_root(ip)){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  ops = vfs_dev_vops(ip->dev);
+  if(ops == 0 || ops->settimes == 0 ||
+     ops->settimes(ip, set_atime, atime_sec, set_mtime, mtime_sec) < 0){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
   iunlockput(ip);
   end_op();
   return 0;

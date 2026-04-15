@@ -2359,6 +2359,38 @@ ext2_setattr(struct inode *ip,
   return 0;
 }
 
+static int
+ext2_settimes(struct inode *ip,
+              int set_atime, uint atime_sec,
+              int set_mtime, uint mtime_sec)
+{
+  struct ext2_mount_data *data;
+  struct ext2_inode dip;
+
+  if(ip == 0)
+    return -1;
+
+  data = ext2_data_for_dev(ip->dev);
+  if(data == 0)
+    return -1;
+  if(ext2_read_disk_inode(data, ip->inum, &dip) < 0)
+    return -1;
+
+  if(set_atime)
+    dip.i_atime = atime_sec;
+  if(set_mtime)
+    dip.i_mtime = mtime_sec;
+
+  acquire(&tickslock);
+  dip.i_ctime = ticks;
+  release(&tickslock);
+
+  if(ext2_write_disk_inode(data, ip->inum, &dip) < 0)
+    return -1;
+
+  return 0;
+}
+
 // Read the target of a symbolic link
 // Returns number of bytes read, or -1 on error
 static int
@@ -3041,6 +3073,7 @@ vfs_ext2_init(struct vfs *fs)
   fs->vnode_ops.truncate = ext2_truncate;
   fs->vnode_ops.stat = ext2_stat;
   fs->vnode_ops.setattr = ext2_setattr;
+  fs->vnode_ops.settimes = ext2_settimes;
   fs->vnode_ops.access = ext2_access;
   fs->vnode_ops.dirlookup = ext2_dirlookup;
   fs->vnode_ops.dirlink = ext2_dirlink;
