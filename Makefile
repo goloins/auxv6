@@ -832,6 +832,9 @@ _true: user/boolean
 _false: user/boolean
 	cp user/boolean _false
 
+_nologin: user/nologin
+	cp user/nologin _nologin
+
 _sync: user/sync
 	cp user/sync _sync
 
@@ -1135,7 +1138,7 @@ ports-progs:
 				fi; \
 				if [ -f "$$postinstall_tmp/postinstall" ]; then \
 					echo "ports: running postinstall hook for $$name" | tee -a $(PORTS_BUILD_LOG); \
-					if ! (cd "$$postinstall_tmp" && PKG_INSTALL_ROOT="$(TARGETFS_DIR)" /bin/sh ./postinstall >> "$(CURDIR)/$(PORTS_BUILD_LOG)" 2>&1); then \
+					if ! (cd "$$postinstall_tmp" && PKG_INSTALL_ROOT="$(CURDIR)/$(TARGETFS_DIR)" /bin/sh ./postinstall >> "$(CURDIR)/$(PORTS_BUILD_LOG)" 2>&1); then \
 						echo "ports: postinstall hook failed for $$name" | tee -a $(PORTS_BUILD_LOG); \
 						continue; \
 					fi; \
@@ -1293,6 +1296,7 @@ UPROGS=\
 	_yes\
 	_true\
 	_false\
+	_nologin\
 	_sync\
 	_touch\
 	_md5sum\
@@ -1442,6 +1446,7 @@ clean:
 	user/abrowse \
 	user/lsof user/which user/file user/ar user/bzip2 user/bunzip2 \
 	user/uniq user/sort user/sum user/sleep user/yes user/boolean user/sync user/touch user/hashsum user/baseenc user/asroot \
+	user/nologin \
 	user/audioctl user/audiostat user/audiotest user/audiotone user/audiopollstress user/audiod user/audiodctl \
 	user/server7 user/xwmselftest \
 	user/top \
@@ -2057,6 +2062,7 @@ EXTRA=\
 	user/date.c user/time.c user/killall.c user/halt.c\
 	user/lsof.c user/which.c user/file.c\
 	user/id.c user/login.c user/ln.c user/ls.c user/free.c user/df.c user/ps.c user/fsregress.c user/mkdir.c user/mount.c user/mounts.c user/mounttest.c user/umount.c user/passwd.c user/useradd.c user/usermod.c user/userdel.c user/groupadd.c user/groupmod.c user/groupdel.c user/groups.c user/accountdb.c user/pwd.c user/chmod.c user/chown.c user/chgrp.c user/rm.c user/netinfo.c user/stressfs.c user/su.c user/usertests.c user/vblktest.c user/ahcitest.c user/wc.c user/whoami.c user/zombie.c\
+	user/nologin.c \
 	libc/printf.c libc/umalloc.c\
 	README targetfs/etc/hosts targetfs/etc/fstab targetfs/etc/profile targetfs/etc/termcap targetfs/etc/passwd targetfs/etc/hostname config/dot-bochsrc tools/*.pl tools/toc.* tools/runoff tools/runoff1 tools/runoff.list\
 	config/.gdbinit.tmpl gdbutil\

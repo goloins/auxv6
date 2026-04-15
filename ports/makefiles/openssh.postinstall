@@ -1,48 +1,44 @@
 cat >> postinstall << '_EOF'
-# auxv6 runtime account setup: only create sshd user/group during install.
-{
-	group_file="${PKG_INSTALL_ROOT}/etc/group"
-	passwd_file="${PKG_INSTALL_ROOT}/etc/passwd"
+group_file="${PKG_INSTALL_ROOT}/etc/group"
+passwd_file="${PKG_INSTALL_ROOT}/etc/passwd"
+rc3_file="${PKG_INSTALL_ROOT}/etc/rc.3"
 
-	if [ -f "$group_file" ] && ! grep -Eq '^sshd:' "$group_file"; then
-		printf '%s\n' 'sshd:x:33:' >> "$group_file"
-		echo 'openssh postinstall: added sshd group (gid 33)'
-	fi
+mkdir -p "${PKG_INSTALL_ROOT}/etc"
+mkdir -p "${PKG_INSTALL_ROOT}/var/empty"
+touch "$group_file"
+touch "$passwd_file"
+touch "$rc3_file"
 
-	if [ -f "$passwd_file" ] && ! grep -Eq '^sshd:' "$passwd_file"; then
-		printf '%s\n' 'sshd:x:33:33:sshd:/var/empty:/bin/nologin' >> "$passwd_file"
-		echo 'openssh postinstall: added sshd user (uid 33, gid 33)'
-	fi
+if ! grep -q '^sshd:' "$group_file"; then
+	/usr/bin/awk '1; END { print "sshd:x:33:" }' "$group_file" > "${group_file}.tmp"
+	/bin/mv "${group_file}.tmp" "$group_file"
+	echo 'openssh postinstall: added sshd group (gid 33)'
+fi
 
-	if [ -d "${PKG_INSTALL_ROOT}/var" ] && [ ! -d "${PKG_INSTALL_ROOT}/var/empty" ]; then
-		mkdir -p "${PKG_INSTALL_ROOT}/var/empty"
-		chmod 0755 "${PKG_INSTALL_ROOT}/var/empty"
-		echo 'openssh postinstall: created /var/empty'
-	fi
+if ! grep -q '^sshd:' "$passwd_file"; then
+	/usr/bin/awk '1; END { print "sshd:x:33:33:sshd:/var/empty:/bin/nologin" }' "$passwd_file" > "${passwd_file}.tmp"
+	/bin/mv "${passwd_file}.tmp" "$passwd_file"
+	echo 'openssh postinstall: added sshd user (uid 33, gid 33)'
+fi
 
-	rc3_file=""
-	if [ -f "${PKG_INSTALL_ROOT}/etc/rc.d/rc.3" ]; then
-		rc3_file="${PKG_INSTALL_ROOT}/etc/rc.d/rc.3"
-	elif [ -f "${PKG_INSTALL_ROOT}/etc/rc.3" ]; then
-		rc3_file="${PKG_INSTALL_ROOT}/etc/rc.3"
-	fi
+chmod 0755 "${PKG_INSTALL_ROOT}/var/empty"
+echo 'openssh postinstall: ensured /var/empty'
 
-	if [ -n "$rc3_file" ] && ! grep -Fq '# BEGIN auxv6-openssh' "$rc3_file"; then
-		cat >> "$rc3_file" << 'EOF_AUXV6_SSHD_RC3'
+if ! grep -Fq '# BEGIN auxv6-openssh' "$rc3_file"; then
+	cat >> "$rc3_file" << 'EOF_AUXV6_SSHD_RC3'
 
 # BEGIN auxv6-openssh
 /bin/echo "rc.3: starting sshd (OpenSSH)"
 /usr/bin/ssh-keygen -A
-/bin/chmod 0600 /etc/ssh/ssh_host_rsa_key
-/bin/chmod 0600 /etc/ssh/ssh_host_ecdsa_key
-/bin/chmod 0600 /etc/ssh/ssh_host_ed25519_key
-/bin/chmod 0644 /etc/ssh/ssh_host_rsa_key.pub
-/bin/chmod 0644 /etc/ssh/ssh_host_ecdsa_key.pub
-/bin/chmod 0644 /etc/ssh/ssh_host_ed25519_key.pub
-/usr/sbin/sshd &
+/sbin/chmod 0600 /etc/ssh/ssh_host_rsa_key
+/sbin/chmod 0600 /etc/ssh/ssh_host_ecdsa_key
+/sbin/chmod 0600 /etc/ssh/ssh_host_ed25519_key
+/sbin/chmod 0644 /etc/ssh/ssh_host_rsa_key.pub
+/sbin/chmod 0644 /etc/ssh/ssh_host_ecdsa_key.pub
+/sbin/chmod 0644 /etc/ssh/ssh_host_ed25519_key.pub
+#/usr/sbin/sshd &
 # END auxv6-openssh
 EOF_AUXV6_SSHD_RC3
-		echo "openssh postinstall: added sshd startup block to ${rc3_file#${PKG_INSTALL_ROOT}}"
-	fi
-}
+	echo "openssh postinstall: added sshd startup block to /etc/rc.3"
+fi
 _EOF

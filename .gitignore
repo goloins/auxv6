@@ -162,6 +162,7 @@ user/sum
 user/sleep
 user/yes
 user/boolean
+user/nologin
 user/sync
 user/touch
 user/hashsum
