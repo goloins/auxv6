@@ -15,8 +15,11 @@
 #include "auxv6/user.h"
 #include "stdlib.h"
 #include "sys/resource.h"
+#include "sys/socket.h"
+#include "sys/utsname.h"
 
 int __posix_stat(const char *path, struct stat *buf);
+int __auxv6_sys_uname(char *buf, size_t size);
 uid_t __auxv6_sys_geteuid(void);
 gid_t __auxv6_sys_getegid(void);
 int __auxv6_sys_setuid(uid_t uid);
@@ -195,6 +198,90 @@ int
 setegid(gid_t egid)
 {
   return setresgid((gid_t)-1, egid, (gid_t)-1);
+}
+
+static void
+uname_copy_field(char *dst, int dstsz, const char *src)
+{
+  int i;
+
+  if(dst == 0 || dstsz <= 0)
+    return;
+  if(src == 0)
+    src = "";
+
+  i = 0;
+  while(i < dstsz - 1 && src[i] && src[i] != ' ') {
+    dst[i] = src[i];
+    i++;
+  }
+  dst[i] = 0;
+}
+
+static const char*
+uname_next_token(const char *s)
+{
+  while(*s && *s != ' ')
+    s++;
+  while(*s == ' ')
+    s++;
+  return s;
+}
+
+int
+__auxv6_posix_uname(struct utsname *name)
+{
+  char raw[64];
+  const char *p;
+
+  if(name == 0) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  if(__auxv6_sys_uname(raw, sizeof(raw)) < 0) {
+    if(errno == 0)
+      errno = EIO;
+    return -1;
+  }
+  raw[sizeof(raw) - 1] = 0;
+
+  p = raw;
+  uname_copy_field(name->sysname, sizeof(name->sysname), p);
+  p = uname_next_token(p);
+  uname_copy_field(name->release, sizeof(name->release), p);
+  p = uname_next_token(p);
+  uname_copy_field(name->machine, sizeof(name->machine), p);
+
+  name->nodename[0] = 0;
+  name->version[0] = 0;
+  return 0;
+}
+
+int
+getpeereid(int s, uid_t *euid, gid_t *egid)
+{
+  struct ucred cred;
+  socklen_t len;
+
+  if(euid == 0 || egid == 0) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  len = (socklen_t)sizeof(cred);
+  if(getsockopt(s, SOL_SOCKET, SO_PEERCRED, &cred, &len) < 0) {
+    errno = ENOTCONN;
+    return -1;
+  }
+  if(len < (socklen_t)sizeof(cred)) {
+    errno = EIO;
+    return -1;
+  }
+
+  *euid = cred.uid;
+  *egid = cred.gid;
+  return 0;
 }
 
 int

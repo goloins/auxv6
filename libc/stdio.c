@@ -60,6 +60,44 @@ FILE *stdin = &g_stdin;
 FILE *stdout = &g_stdout;
 FILE *stderr = &g_stderr;
 
+#define POPEN_SLOTS 32
+struct popen_entry {
+  FILE *fp;
+  int pid;
+};
+static struct popen_entry g_popen[POPEN_SLOTS];
+
+static int
+popen_register(FILE *fp, int pid)
+{
+  int i;
+
+  for(i = 0; i < POPEN_SLOTS; i++) {
+    if(g_popen[i].fp == 0) {
+      g_popen[i].fp = fp;
+      g_popen[i].pid = pid;
+      return 0;
+    }
+  }
+  return -1;
+}
+
+static int
+popen_unregister(FILE *fp)
+{
+  int i;
+
+  for(i = 0; i < POPEN_SLOTS; i++) {
+    if(g_popen[i].fp == fp) {
+      int pid = g_popen[i].pid;
+      g_popen[i].fp = 0;
+      g_popen[i].pid = 0;
+      return pid;
+    }
+  }
+  return -1;
+}
+
 static int
 mode_flags(const char *mode, int *open_flags, int *caps)
 {
@@ -626,6 +664,108 @@ tmpfile(void)
   }
 
   return fp;
+}
+
+FILE *
+popen(const char *command, const char *type)
+{
+  int pfd[2];
+  int pid;
+  FILE *fp;
+  int parent_fd;
+  int mode_read;
+  char *argv[4];
+
+  if(command == 0 || type == 0 || type[0] == 0) {
+    errno = EINVAL;
+    return 0;
+  }
+  if(type[0] != 'r' && type[0] != 'w') {
+    errno = EINVAL;
+    return 0;
+  }
+  mode_read = (type[0] == 'r');
+
+  if(pipe(pfd) < 0)
+    return 0;
+
+  pid = fork();
+  if(pid < 0) {
+    close(pfd[0]);
+    close(pfd[1]);
+    return 0;
+  }
+
+  if(pid == 0) {
+    if(mode_read) {
+      close(pfd[0]);
+      if(dup2(pfd[1], 1) < 0)
+        _Exit(127);
+      close(pfd[1]);
+    } else {
+      close(pfd[1]);
+      if(dup2(pfd[0], 0) < 0)
+        _Exit(127);
+      close(pfd[0]);
+    }
+
+    argv[0] = "sh";
+    argv[1] = "-c";
+    argv[2] = (char*)command;
+    argv[3] = 0;
+    exec("/bin/sh", argv);
+    _Exit(127);
+  }
+
+  if(mode_read) {
+    close(pfd[1]);
+    parent_fd = pfd[0];
+    fp = fdopen(parent_fd, "r");
+  } else {
+    close(pfd[0]);
+    parent_fd = pfd[1];
+    fp = fdopen(parent_fd, "w");
+  }
+
+  if(fp == 0) {
+    close(parent_fd);
+    kill(pid, SIGKILL);
+    waitpid(pid, 0, 0);
+    return 0;
+  }
+
+  if(popen_register(fp, pid) < 0) {
+    fclose(fp);
+    kill(pid, SIGKILL);
+    waitpid(pid, 0, 0);
+    errno = EMFILE;
+    return 0;
+  }
+
+  return fp;
+}
+
+int
+pclose(FILE *stream)
+{
+  int pid;
+  int status;
+
+  if(stream == 0) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  pid = popen_unregister(stream);
+  if(pid < 0) {
+    errno = ECHILD;
+    return -1;
+  }
+
+  fclose(stream);
+  if(waitpid(pid, &status, 0) < 0)
+    return -1;
+  return status;
 }
 
 int

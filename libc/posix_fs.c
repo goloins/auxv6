@@ -5,10 +5,13 @@
 #include "types.h"
 #include "fcntl.h"
 #include "sys/stat.h"
+#include "sys/uio.h"
 #include "dirent.h"
 #include "errno.h"
 #include "stdarg.h"
 #include "string.h"
+#include "time.h"
+#include "utime.h"
 #include "auxv6/user.h"
 
 #ifndef AT_FDCWD
@@ -145,6 +148,60 @@ write(int fd, const void *buf, size_t count)
   if(rc < 0)
     return posix_fail_errno(EBADF);
   return rc;
+}
+
+ssize_t
+readv(int fd, const struct iovec *iov, int iovcnt)
+{
+  int i;
+  ssize_t total;
+
+  if(iov == 0 || iovcnt < 0) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  total = 0;
+  for(i = 0; i < iovcnt; i++) {
+    ssize_t n;
+
+    if(iov[i].iov_len == 0)
+      continue;
+    n = read(fd, iov[i].iov_base, iov[i].iov_len);
+    if(n < 0)
+      return (total > 0) ? total : -1;
+    total += n;
+    if((size_t)n < iov[i].iov_len)
+      break;
+  }
+  return total;
+}
+
+ssize_t
+writev(int fd, const struct iovec *iov, int iovcnt)
+{
+  int i;
+  ssize_t total;
+
+  if(iov == 0 || iovcnt < 0) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  total = 0;
+  for(i = 0; i < iovcnt; i++) {
+    ssize_t n;
+
+    if(iov[i].iov_len == 0)
+      continue;
+    n = write(fd, iov[i].iov_base, iov[i].iov_len);
+    if(n < 0)
+      return (total > 0) ? total : -1;
+    total += n;
+    if((size_t)n < iov[i].iov_len)
+      break;
+  }
+  return total;
 }
 
 int
@@ -612,4 +669,24 @@ futimens(int fd, const struct timespec times[2])
   (void)fd;
   (void)times;
   return -1;
+}
+
+int
+utime(const char *filename, const struct utimbuf *times)
+{
+  struct timespec ts[2];
+
+  if(filename == 0) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  if(times == 0)
+    return utimensat(AT_FDCWD, filename, 0, 0);
+
+  ts[0].tv_sec = times->actime;
+  ts[0].tv_nsec = 0;
+  ts[1].tv_sec = times->modtime;
+  ts[1].tv_nsec = 0;
+  return utimensat(AT_FDCWD, filename, ts, 0);
 }

@@ -21,6 +21,7 @@ include $(dir $(abspath $(PORTS_COMMON_CALLER)))../../config/ports-common.mk
 SRCDIR := $(realpath $(dir $(abspath $(PORTS_COMMON_CALLER))))
 BUILDDIR := $(SRCDIR)/.auxv6-build
 OUT := $(SRCDIR)/ssh
+OUT_KEYGEN := $(SRCDIR)/ssh-keygen
 LOG := $(BUILDDIR)/first-pass.log
 
 TOOL_GCC_INCLUDE := $(shell $(CC) -print-file-name=include)
@@ -79,6 +80,8 @@ CONFIGURE_ARGS := \
 all: first-pass $(OUT) check-host-contamination
 
 first-pass: | $(BUILDDIR)
+	@rm -rf "$(BUILDDIR)"
+	@mkdir -p "$(BUILDDIR)"
 	@echo "openssh: starting first configure/build pass" > "$(LOG)"
 	@if [ -z "$(LIBC_LINK_A)" ]; then \
 		echo "openssh: missing libc archive; expected $(AUXV6_LIBC_A) or $(LIBC_FALLBACK_A)" | tee -a "$(LOG)" >&2; \
@@ -98,18 +101,18 @@ first-pass: | $(BUILDDIR)
 			CPPFLAGS="$(CONFIGURE_CPPFLAGS)" CFLAGS="$(COMMON_CFLAGS)" LDFLAGS="$(CONFIGURE_LDFLAGS)" LIBS="$(CONFIGURE_LIBS)" \
 			ac_cv_file__dev_ptmx=no \
 			ac_cv_file__dev_ptc=no \
-				ac_cv_func_seteuid=yes \
-				ac_cv_func_setegid=yes \
-				ac_cv_func_setgroups=yes \
-				ac_cv_func_setresuid=yes \
-				ac_cv_func_setresgid=yes \
-			ac_cv_func_socketpair=no \
-			ac_cv_func_sendmsg=no \
-			ac_cv_func_recvmsg=no \
-				ac_cv_func_getspnam=yes \
-			ac_cv_func_crypt=no \
+			ac_cv_func_seteuid=yes \
+			ac_cv_func_setegid=yes \
+			ac_cv_func_setgroups=yes \
+			ac_cv_func_setresuid=yes \
+			ac_cv_func_setresgid=yes \
+			ac_cv_func_socketpair=yes \
+			ac_cv_func_sendmsg=yes \
+			ac_cv_func_recvmsg=yes \
+			ac_cv_func_getspnam=yes \
+			ac_cv_func_crypt=yes \
 			ac_cv_func_daemon=no \
-				ac_cv_func_closefrom=yes \
+			ac_cv_func_closefrom=yes \
 			ac_cv_func_openpty=yes \
 			ac_cv_func_tcgetpgrp=yes \
 			ac_cv_func_poll=yes \
@@ -120,7 +123,7 @@ first-pass: | $(BUILDDIR)
 		echo "openssh: configure failed (non-fatal in staging lane)" >>"$(LOG)"
 	@set +e; \
 	$(MAKE) -C "$(BUILDDIR)" -j1 \
-		LDFLAGS="$(COMMON_LDFLAGS)" \
+		LDFLAGS="$(COMMON_LDFLAGS) -L$(BUILDDIR) -L$(BUILDDIR)/openbsd-compat" \
 		LIBS="$(CONFIGURE_LIBS)" \
 		ssh ssh-keygen >>"$(LOG)" 2>&1; \
 	rc=$$?; \
@@ -141,6 +144,10 @@ $(OUT): first-pass
 		echo "openssh: no usable ELF binary at $(BUILDDIR)/ssh" >&2; \
 		exit 1; \
 	fi
+	@if [ -f "$(BUILDDIR)/ssh-keygen" ] && $(OBJDUMP) -f "$(BUILDDIR)/ssh-keygen" 2>/dev/null | grep -q 'file format elf32-i386'; then \
+		cp "$(BUILDDIR)/ssh-keygen" "$(OUT_KEYGEN)"; \
+		chmod 0755 "$(OUT_KEYGEN)"; \
+	fi
 
 check-host-contamination:
 	@! grep -En '(^|[[:space:]])(cc|gcc|clang|i386-jos-elf-gcc)([[:space:]].*)?(-I|-isystem)[[:space:]]*(/usr/include|/usr/local/include|/opt/homebrew/include|/Library/Developer/CommandLineTools/usr/include|/Applications/Xcode.*/usr/include)' "$(LOG)" >/dev/null || \
@@ -149,4 +156,4 @@ check-host-contamination:
 		exit 1)
 
 clean:
-	rm -rf "$(BUILDDIR)" "$(OUT)"
+	rm -rf "$(BUILDDIR)" "$(OUT)" "$(OUT_KEYGEN)"

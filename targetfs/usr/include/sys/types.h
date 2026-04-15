@@ -35,6 +35,7 @@ typedef unsigned int    u_int;
 typedef unsigned short  u_short;
 typedef unsigned char   u_char;
 typedef unsigned long   u_long;
+typedef char           *caddr_t;
 
 /* Time types */
 typedef long            time_t;     /* Time in seconds since epoch (64-bit for RFC 5280 cert dates) */

@@ -83,10 +83,30 @@ struct sigframe {
 };
 
 /* POSIX sigset manipulation — inline, locale-safe, no header dependency */
-static inline void sigemptyset(sigset_t *s)              { *s = 0; }
-static inline void sigfillset(sigset_t *s)               { *s = ~0U; }
-static inline void sigaddset(sigset_t *s, int sig)       { *s |= SIGBIT(sig); }
-static inline void sigdelset(sigset_t *s, int sig)       { *s &= ~SIGBIT(sig); }
+static inline int sigemptyset(sigset_t *s) {
+  if(s == 0)
+    return -1;
+  *s = 0;
+  return 0;
+}
+static inline int sigfillset(sigset_t *s) {
+  if(s == 0)
+    return -1;
+  *s = ~0U;
+  return 0;
+}
+static inline int sigaddset(sigset_t *s, int sig) {
+  if(s == 0 || sig <= 0 || sig >= NSIG)
+    return -1;
+  *s |= SIGBIT(sig);
+  return 0;
+}
+static inline int sigdelset(sigset_t *s, int sig) {
+  if(s == 0 || sig <= 0 || sig >= NSIG)
+    return -1;
+  *s &= ~SIGBIT(sig);
+  return 0;
+}
 static inline int  sigismember(const sigset_t *s, int sig) { return !!(*s & SIGBIT(sig)); }
 
 /* sigprocmask is declared in unistd.h / user.h; prototype here for kernel use */

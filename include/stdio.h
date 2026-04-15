@@ -32,6 +32,8 @@ FILE *fopen(const char *path, const char *mode);
 FILE *fdopen(int fd, const char *mode);
 FILE *fmemopen(void *buf, size_t size, const char *mode);
 FILE *tmpfile(void);
+FILE *popen(const char *command, const char *type);
+int pclose(FILE *stream);
 int fclose(FILE *fp);
 int fflush(FILE *fp);
 int setvbuf(FILE *fp, char *buf, int mode, size_t size);

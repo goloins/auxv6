@@ -101,6 +101,22 @@ socket_fdalloc(struct file *f)
 }
 
 static void
+socket_set_owner(struct socket *s, struct proc *p)
+{
+  if(s == 0)
+    return;
+  if(p == 0) {
+    s->owner_pid = -1;
+    s->owner_uid = -1;
+    s->owner_gid = -1;
+    return;
+  }
+  s->owner_pid = p->pid;
+  s->owner_uid = p->uid;
+  s->owner_gid = p->gid;
+}
+
+static void
 socket_reset_locked(struct socket *s)
 {
   int i;
@@ -148,6 +164,9 @@ socket_reset_locked(struct socket *s)
   s->reuseaddr = 0;
   s->shut_rd = 0;
   s->shut_wr = 0;
+  s->owner_pid = -1;
+  s->owner_uid = -1;
+  s->owner_gid = -1;
 }
 
 static void
@@ -768,9 +787,12 @@ struct socket*
 socket_alloc(void)
 {
   struct socket *s;
+  struct proc *p;
   
   acquire(&socket_lock);
   s = socket_alloc_locked();
+  p = myproc();
+  socket_set_owner(s, p);
   release(&socket_lock);
   return s;
 }
@@ -1828,6 +1850,9 @@ sys_connect(void)
     accepted->state = SOCK_ESTAB;
     accepted->tcp.state = TCPS_ESTABLISHED;
     memmove(accepted->unix_path, listener->unix_path, sizeof(accepted->unix_path));
+    accepted->owner_pid = listener->owner_pid;
+    accepted->owner_uid = listener->owner_uid;
+    accepted->owner_gid = listener->owner_gid;
     accepted->peer = s;
 
     prev_state = s->state;
@@ -2884,6 +2909,7 @@ sys_getsockopt(void)
   uint optlenp_u;
   int optlen;
   int outv;
+  struct ucred cred;
   struct socket *s;
   struct proc *p;
   pde_t *pgdir;
@@ -2924,6 +2950,30 @@ sys_getsockopt(void)
   }
 
   if(level == SOL_SOCKET) {
+    if(optname == SO_PEERCRED) {
+      if(optlen < (int)sizeof(struct ucred))
+        return -1;
+
+      acquire(&socket_lock);
+      if(s->family != AF_UNIX || s->type != SOCK_STREAM || s->peer == 0) {
+        release(&socket_lock);
+        return -1;
+      }
+      cred.pid = (pid_t)s->peer->owner_pid;
+      cred.uid = (uid_t)s->peer->owner_uid;
+      cred.gid = (gid_t)s->peer->owner_gid;
+      release(&socket_lock);
+
+      if(cred.pid < 0)
+        return -1;
+      if(copyout(pgdir, optval_u, &cred, sizeof(cred)) < 0)
+        return -1;
+      optlen = sizeof(cred);
+      if(copyout(pgdir, optlenp_u, &optlen, sizeof(int)) < 0)
+        return -1;
+      return 0;
+    }
+
     if(optname == SO_REUSEADDR) {
       acquire(&socket_lock);
       outv = (int)s->reuseaddr;

@@ -54,6 +54,10 @@ struct sockaddr_in6 {
 #define INADDR_NONE       0xffffffffU   /* error sentinel for inet_addr() */
 #endif
 
+#ifndef IN_LOOPBACKNET
+#define IN_LOOPBACKNET    127
+#endif
+
 /* Well-known port boundary. */
 #define IPPORT_RESERVED   1024
 

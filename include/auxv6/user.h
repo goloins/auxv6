@@ -168,6 +168,7 @@ int setresuid(uid_t ruid, uid_t euid, uid_t suid);
 int setresgid(gid_t rgid, gid_t egid, gid_t sgid);
 int getgroups(int gidsetsize, gid_t grouplist[]);
 int setgroups(size_t size, const gid_t *list);
+int getpeereid(int s, uid_t *euid, gid_t *egid);
 int sigsend(int pid, int signo);
 int sigaction(int signo, const struct sigaction *act, struct sigaction *oldact);
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);

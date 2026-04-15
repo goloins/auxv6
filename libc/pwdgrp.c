@@ -5,6 +5,7 @@
 #include "pwd.h"
 #include "shadow.h"
 #include "string.h"
+#include "limits.h"
 #include "auxv6/user.h"
 
 #define ACCOUNT_DB_MAX    4096
@@ -150,6 +151,79 @@ accountdb_split_fields(char *line, int linelen, char **fields, int *lengths, int
     }
   }
   return nf;
+}
+
+static char pw_iter_buf[ACCOUNT_DB_MAX];
+static int pw_iter_n = -1;
+static int pw_iter_off = 0;
+
+void
+setpwent(void)
+{
+  pw_iter_n = accountdb_read("/etc/passwd", 0, pw_iter_buf, sizeof(pw_iter_buf));
+  pw_iter_off = 0;
+}
+
+void
+endpwent(void)
+{
+  pw_iter_n = -1;
+  pw_iter_off = 0;
+}
+
+struct passwd *
+getpwent(void)
+{
+  static struct passwd pw;
+  static char namebuf[ACCOUNT_FIELD_MAX];
+  static char passbuf[ACCOUNT_FIELD_MAX];
+  static char gecosbuf[ACCOUNT_FIELD_MAX];
+  static char dirbuf[ACCOUNT_FIELD_MAX];
+  static char shellbuf[ACCOUNT_FIELD_MAX];
+
+  if(pw_iter_n < 0)
+    setpwent();
+  if(pw_iter_n < 0)
+    return 0;
+
+  while(pw_iter_off < pw_iter_n) {
+    char *fields[8];
+    int lengths[8];
+    char *line;
+    int linelen;
+    int nf;
+    uint uidval;
+    uint gidval;
+
+    if(!accountdb_next_line(pw_iter_buf, pw_iter_n, &pw_iter_off, &line, &linelen))
+      break;
+    nf = accountdb_split_fields(line, linelen, fields, lengths, 8);
+    if(nf < 7)
+      continue;
+    if(accountdb_parse_uint(fields[2], lengths[2], &uidval) < 0 ||
+       accountdb_parse_uint(fields[3], lengths[3], &gidval) < 0)
+      continue;
+
+    accountdb_copy(namebuf, sizeof(namebuf), fields[0], lengths[0]);
+    accountdb_copy(passbuf, sizeof(passbuf), fields[1], lengths[1]);
+    accountdb_copy(gecosbuf, sizeof(gecosbuf), fields[4], lengths[4]);
+    accountdb_copy(dirbuf, sizeof(dirbuf), fields[5], lengths[5]);
+    if(lengths[6] > 0)
+      accountdb_copy(shellbuf, sizeof(shellbuf), fields[6], lengths[6]);
+    else
+      accountdb_copy(shellbuf, sizeof(shellbuf), "/bin/sh", strlen("/bin/sh"));
+
+    pw.pw_name = namebuf;
+    pw.pw_passwd = passbuf;
+    pw.pw_uid = (uid_t)uidval;
+    pw.pw_gid = (gid_t)gidval;
+    pw.pw_gecos = gecosbuf;
+    pw.pw_dir = dirbuf;
+    pw.pw_shell = shellbuf;
+    return &pw;
+  }
+
+  return 0;
 }
 
 struct passwd *
@@ -622,4 +696,48 @@ getgrent(void)
     return &gr;
   }
   return 0;
+}
+
+int
+initgroups(const char *user, gid_t group)
+{
+  gid_t gids[NGROUPS_MAX];
+  int ngids;
+  struct group *gr;
+  int i;
+
+  if(user == 0 || *user == 0) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  ngids = 0;
+  if(group >= 0)
+    gids[ngids++] = group;
+
+  setgrent();
+  while((gr = getgrent()) != 0) {
+    if(gr->gr_mem) {
+      for(i = 0; gr->gr_mem[i] != 0; i++) {
+        if(strcmp(gr->gr_mem[i], user) == 0) {
+          int j;
+          int exists;
+
+          exists = 0;
+          for(j = 0; j < ngids; j++) {
+            if(gids[j] == gr->gr_gid) {
+              exists = 1;
+              break;
+            }
+          }
+          if(!exists && ngids < NGROUPS_MAX)
+            gids[ngids++] = gr->gr_gid;
+          break;
+        }
+      }
+    }
+  }
+  endgrent();
+
+  return setgroups((size_t)ngids, gids);
 }

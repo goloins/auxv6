@@ -336,3 +336,43 @@ tcsendbreak(int fd, int duration)
   /* Break is not meaningful on a PTY or virtual console; nothing to do. */
   return 0;
 }
+
+speed_t
+cfgetispeed(const struct termios *termios_p)
+{
+  if(termios_p == 0)
+    return (speed_t)0;
+  return (speed_t)(termios_p->c_cflag & 0010017U);
+}
+
+speed_t
+cfgetospeed(const struct termios *termios_p)
+{
+  if(termios_p == 0)
+    return (speed_t)0;
+  return (speed_t)(termios_p->c_cflag & 0010017U);
+}
+
+int
+cfsetispeed(struct termios *termios_p, speed_t speed)
+{
+  if(termios_p == 0) {
+    errno = EINVAL;
+    return -1;
+  }
+  termios_p->c_cflag &= ~0010017U;
+  termios_p->c_cflag |= ((uint)speed & 0010017U);
+  return 0;
+}
+
+int
+cfsetospeed(struct termios *termios_p, speed_t speed)
+{
+  if(termios_p == 0) {
+    errno = EINVAL;
+    return -1;
+  }
+  termios_p->c_cflag &= ~0010017U;
+  termios_p->c_cflag |= ((uint)speed & 0010017U);
+  return 0;
+}

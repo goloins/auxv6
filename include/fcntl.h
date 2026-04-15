@@ -1,3 +1,8 @@
+#ifndef _FCNTL_H_
+#define _FCNTL_H_
+
+#include "sys/types.h"
+
 #define O_RDONLY  0x000
 #define O_WRONLY  0x001
 #define O_RDWR    0x002
@@ -34,6 +39,19 @@
 #define F_SETLK   6   // Set record locking info
 #define F_SETLKW  7   // Set record locking info; wait if blocked
 #define F_DUPFD_CLOEXEC 1030  // Duplicate fd with close-on-exec
+
+// Record lock types (for struct flock / fcntl locks)
+#define F_RDLCK   0
+#define F_WRLCK   1
+#define F_UNLCK   2
+
+struct flock {
+	short l_type;    // F_RDLCK, F_WRLCK, or F_UNLCK
+	short l_whence;  // SEEK_SET, SEEK_CUR, SEEK_END
+	off_t l_start;   // Relative starting offset
+	off_t l_len;     // Number of bytes; 0 means to EOF
+	int   l_pid;     // PID of lock owner (for F_GETLK)
+};
 
 // File descriptor flags (for F_GETFD/F_SETFD)
 #define FD_CLOEXEC 1  // Close-on-exec flag
@@ -79,3 +97,5 @@
 int open(const char *path, int oflag, ...);
 int creat(const char *path, int mode);
 int fcntl(int fd, int cmd, ...);
+
+#endif /* _FCNTL_H_ */

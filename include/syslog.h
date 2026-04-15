@@ -14,6 +14,8 @@
 
 #define LOG_KERN    (0 << 3)
 #define LOG_USER    (1 << 3)
+#define LOG_DAEMON  (3 << 3)
+#define LOG_AUTH    (4 << 3)
 #define LOG_LOCAL0  (16 << 3)
 #define LOG_LOCAL1  (17 << 3)
 #define LOG_LOCAL2  (18 << 3)

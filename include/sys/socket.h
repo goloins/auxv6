@@ -57,6 +57,12 @@ struct msghdr {
   int           msg_flags;
 };
 
+struct ucred {
+  pid_t pid;
+  uid_t uid;
+  gid_t gid;
+};
+
 #define __CMSG_ALIGN(len) (((len) + sizeof(size_t) - 1) & ~(sizeof(size_t) - 1))
 #define CMSG_SPACE(len)   (__CMSG_ALIGN(sizeof(struct cmsghdr)) + __CMSG_ALIGN(len))
 #define CMSG_LEN(len)     (__CMSG_ALIGN(sizeof(struct cmsghdr)) + (len))

@@ -19,5 +19,8 @@ struct passwd {
 
 struct passwd *getpwnam(const char *name);
 struct passwd *getpwuid(uid_t uid);
+void setpwent(void);
+struct passwd *getpwent(void);
+void endpwent(void);
 
 #endif /* _PWD_H */

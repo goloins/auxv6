@@ -22,3 +22,4 @@ p7zip|https://github.com/ip7z/7zip/archive/refs/tags/26.00.zip|user|7zip-26.00|p
 
 # Non-first-class SSH preparation lane: first configure/build pass only.
 openssh|https://mirror.planetunix.net/pub/OpenBSD/OpenSSH/portable/openssh-10.3p1.tar.gz|user|openssh-10.3p1|ssh
+openssh|https://mirror.planetunix.net/pub/OpenBSD/OpenSSH/portable/openssh-10.3p1.tar.gz|user|openssh-10.3p1|ssh-keygen

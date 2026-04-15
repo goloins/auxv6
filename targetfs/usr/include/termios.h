@@ -3,6 +3,8 @@
 
 #include "types.h"
 
+typedef uchar cc_t;
+
 /* Number of control characters */
 #define NCCS 19
 
@@ -11,7 +13,7 @@ struct termios {
   uint  c_oflag;       /* output mode flags */
   uint  c_cflag;       /* control mode flags */
   uint  c_lflag;       /* local mode flags */
-  uchar c_cc[NCCS];    /* control characters */
+  cc_t c_cc[NCCS];     /* control characters */
 };
 
 /* Terminal window size (also visible to kernel via this header) */
@@ -134,5 +136,9 @@ int tcsendbreak(int fd, int duration);
 int tcgetattr(int fd, struct termios *termios_p);
 int tcsetattr(int fd, int optional_actions, const struct termios *termios_p);
 int tcflush(int fd, int queue_selector);
+speed_t cfgetispeed(const struct termios *termios_p);
+speed_t cfgetospeed(const struct termios *termios_p);
+int cfsetispeed(struct termios *termios_p, speed_t speed);
+int cfsetospeed(struct termios *termios_p, speed_t speed);
 
 #endif /* XV6_TERMIOS_H */

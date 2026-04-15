@@ -72,6 +72,7 @@ struct sockaddr_in {
 #define SO_KEEPALIVE   9    // Enable keep-alive on TCP connections
 #define SO_ERROR       4    // Get and clear pending socket error
 #define SO_BROADCAST   6    // Allow broadcast sends
+#define SO_PEERCRED    17   // Retrieve peer credentials for AF_UNIX sockets
 
 // IP-level socket options (level = IPPROTO_IP)
 #define IP_TTL         2    // Time-to-live on outgoing packets
@@ -176,6 +177,11 @@ struct socket {
   uchar reuseaddr;      // SO_REUSEADDR: allow rebinding a used port
   uchar shut_rd;        // SHUT_RD: read side shut down
   uchar shut_wr;        // SHUT_WR: write side shut down
+
+  // Creating process credentials, used for AF_UNIX peer credential queries.
+  int owner_pid;
+  int owner_uid;
+  int owner_gid;
 };
 
 /*

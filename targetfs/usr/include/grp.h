@@ -19,5 +19,6 @@ struct group *getgrgid(gid_t gid);
 struct group *getgrent(void);
 void          setgrent(void);
 void          endgrent(void);
+int           initgroups(const char *user, gid_t group);
 
 #endif /* _GRP_H */

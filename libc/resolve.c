@@ -3,6 +3,8 @@
 #include "fcntl.h"
 #include "socket.h"
 #include "net.h"
+#include "netdb.h"
+#include "resolv.h"
 
 #define DNS_PORT 53
 #define DNS_MAX_SERVERS 3
@@ -25,6 +27,138 @@ struct dns_hdr {
   ushort nscount;
   ushort arcount;
 } __attribute__((packed));
+
+struct __res_state _res = {
+  .retrans = 5,
+  .retry = 2,
+  .options = 0,
+  .nscount = 0,
+};
+
+int
+res_init(void)
+{
+  uint servers[MAXNS];
+  int i;
+  int n;
+
+  n = dns_nameservers(servers, MAXNS);
+  if(n < 0)
+    n = 0;
+
+  _res.nscount = n;
+  for(i = 0; i < n; i++) {
+    _res.nsaddr_list[i].addr.s_addr = servers[i];
+    _res.nsaddr_list[i].port = 53;
+  }
+  _res.options |= RES_INIT;
+  return 0;
+}
+
+int
+res_query(const char *dname, int class, int type, unsigned char *answer, int anslen)
+{
+  (void)dname;
+  (void)answer;
+  (void)anslen;
+
+  if(class != 1 || type != 1) {
+    h_errno = NO_DATA;
+    return -1;
+  }
+
+  /*
+   * DNS wire-format query/answer synthesis is not implemented yet for the
+   * resolver compatibility layer. Returning failure keeps behavior truthful
+   * while allowing OpenSSH compatibility objects to link.
+   */
+  h_errno = NO_RECOVERY;
+  return -1;
+}
+
+int
+dn_expand(const unsigned char *msg, const unsigned char *eomorig,
+          const unsigned char *comp_dn, char *exp_dn, int length)
+{
+  const unsigned char *cp;
+  int consumed;
+  int out;
+  int jumped;
+  int loops;
+
+  if(msg == 0 || eomorig == 0 || comp_dn == 0 || exp_dn == 0 || length <= 0)
+    return -1;
+  if(comp_dn >= eomorig)
+    return -1;
+
+  cp = comp_dn;
+  consumed = 0;
+  out = 0;
+  jumped = 0;
+  loops = 0;
+
+  while(cp < eomorig) {
+    uint8_t c;
+    int i;
+
+    if(++loops > 128)
+      return -1;
+
+    c = *cp;
+    if(c == 0) {
+      if(!jumped)
+        consumed++;
+      if(out == 0) {
+        if(length < 2)
+          return -1;
+        exp_dn[0] = '.';
+        exp_dn[1] = 0;
+      } else {
+        if(out >= length)
+          return -1;
+        exp_dn[out] = 0;
+      }
+      return consumed;
+    }
+
+    if((c & 0xc0) == 0xc0) {
+      int off;
+      if(cp + 1 >= eomorig)
+        return -1;
+      off = ((int)(c & 0x3f) << 8) | (int)cp[1];
+      if(msg + off >= eomorig)
+        return -1;
+      if(!jumped)
+        consumed += 2;
+      cp = msg + off;
+      jumped = 1;
+      continue;
+    }
+
+    if((c & 0xc0) != 0)
+      return -1;
+    if(cp + 1 + c > eomorig)
+      return -1;
+
+    if(out != 0) {
+      if(out + 1 >= length)
+        return -1;
+      exp_dn[out++] = '.';
+    }
+    if(out + c >= length)
+      return -1;
+
+    cp++;
+    for(i = 0; i < c; i++)
+      exp_dn[out++] = (char)cp[i];
+
+    if(!jumped)
+      consumed += 1 + c;
+    cp += c;
+  }
+
+  return -1;
+}
 
 static int
 is_space(char c)
