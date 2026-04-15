@@ -413,9 +413,21 @@ sys_getuid(void)
 }
 
 int
+sys_geteuid(void)
+{
+  return proc_geteuid();
+}
+
+int
 sys_getgid(void)
 {
   return proc_getgid();
+}
+
+int
+sys_getegid(void)
+{
+  return proc_getegid();
 }
 
 int
@@ -453,6 +465,100 @@ sys_setgid(void)
   if(argint(0, &gid) < 0)
     return -1;
   return proc_setgid(gid);
+}
+
+int
+sys_getgroups(void)
+{
+  int size;
+  int groups_raw;
+  uint groups_u;
+  gid_t kgroups[PROC_NGROUPS_MAX];
+  int n;
+  struct proc *p;
+  pde_t *pgdir;
+
+  if(argint(0, &size) < 0)
+    return -1;
+  if(size < 0)
+    return -1;
+
+  n = proc_getgroups(0, 0);
+  if(n < 0)
+    return -1;
+  if(size == 0)
+    return n;
+  if(argint(1, &groups_raw) < 0)
+    return -1;
+  groups_u = (uint)groups_raw;
+
+  n = proc_getgroups(kgroups, PROC_NGROUPS_MAX);
+  if(n < 0)
+    return -1;
+  if(size < n)
+    return -1;
+
+  p = myproc();
+  pgdir = proc_pgdir(p);
+  if(p == 0 || pgdir == 0)
+    return -1;
+  if(copyout(pgdir, groups_u, kgroups, (uint)(n * sizeof(gid_t))) < 0)
+    return -1;
+  return n;
+}
+
+int
+sys_setgroups(void)
+{
+  int size;
+  int groups_raw;
+  uint groups_u;
+  gid_t kgroups[PROC_NGROUPS_MAX];
+  struct proc *p;
+  pde_t *pgdir;
+
+  if(argint(0, &size) < 0)
+    return -1;
+  if(size < 0 || size > PROC_NGROUPS_MAX)
+    return -1;
+
+  if(size > 0) {
+    if(argint(1, &groups_raw) < 0)
+      return -1;
+    groups_u = (uint)groups_raw;
+    p = myproc();
+    pgdir = proc_pgdir(p);
+    if(p == 0 || pgdir == 0)
+      return -1;
+    if(copyin(pgdir, kgroups, groups_u, (uint)(size * sizeof(gid_t))) < 0)
+      return -1;
+  }
+
+  return proc_setgroups(kgroups, size);
+}
+
+int
+sys_setresuid(void)
+{
+  int ruid;
+  int euid;
+  int suid;
+
+  if(argint(0, &ruid) < 0 || argint(1, &euid) < 0 || argint(2, &suid) < 0)
+    return -1;
+  return proc_setresuid(ruid, euid, suid);
+}
+
+int
+sys_setresgid(void)
+{
+  int rgid;
+  int egid;
+  int sgid;
+
+  if(argint(0, &rgid) < 0 || argint(1, &egid) < 0 || argint(2, &sgid) < 0)
+    return -1;
+  return proc_setresgid(rgid, egid, sgid);
 }
 
 int
@@ -691,7 +797,7 @@ sys_clock_settime(void)
     return -1;
 
   /* Kernel-side privilege hardening: only root uid/gid may set realtime. */
-  if(proc_getuid() != 0 || proc_getgid() != 0)
+  if(proc_geteuid() != 0 || proc_getegid() != 0)
     return -1;
 
   /* Defensive pointer/range validation before touching kernel timebase. */
@@ -1173,39 +1279,19 @@ sys_setrlimit(void)
 int
 sys_setreuid(void)
 {
-  struct proc *p;
   int ruid, euid;
 
-  p = myproc();
-  if(p == 0)
-    return -1;
   if(argint(0, &ruid) < 0 || argint(1, &euid) < 0)
     return -1;
-  /* auxv6 has a single uid field (effective).  Honour standard
-   * semantics: -1 means leave unchanged; otherwise set if allowed. */
-  if(euid != -1) {
-    if(p->uid != 0 && euid != p->uid && euid != ruid)
-      return -1;
-    p->uid = euid;
-  }
-  return 0;
+  return proc_setresuid(ruid, euid, -1);
 }
 
 int
 sys_setregid(void)
 {
-  struct proc *p;
   int rgid, egid;
 
-  p = myproc();
-  if(p == 0)
-    return -1;
   if(argint(0, &rgid) < 0 || argint(1, &egid) < 0)
     return -1;
-  if(egid != -1) {
-    if(p->uid != 0 && egid != p->gid && egid != rgid)
-      return -1;
-    p->gid = egid;
-  }
-  return 0;
+  return proc_setresgid(rgid, egid, -1);
 }

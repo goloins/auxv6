@@ -264,7 +264,7 @@ fd_get(int fd)
 // Set file in current process's fdtable at fd.
 // Assumes fd is valid (0 <= fd < nfds).
 static inline void
-fd_set(int fd, struct file *f)
+fd_put(int fd, struct file *f)
 {
   struct proc *curproc = myproc();
   

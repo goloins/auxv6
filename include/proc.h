@@ -1,6 +1,7 @@
 // Shared signal constants/types used by kernel and user ABI.
 #include "stdint.h"
 #include "signal.h"
+#include "sys/types.h"
 #include "mmu.h"     // For struct taskstate, NSEGS
 // Forward declare struct taskstate to avoid double-inclusion
 
@@ -99,6 +100,8 @@ struct procfdlimitinfo_k {
   char name[16];
 };
 
+#define PROC_NGROUPS_MAX 16
+
 // Per-process state
 struct proc {
   uint sz;                     // Size of process memory (bytes)
@@ -112,6 +115,12 @@ struct proc {
   int tty;                     // Controlling terminal index (-1 means none)
   int uid;                     // Effective user ID
   int gid;                     // Effective group ID
+  int ruid;                    // Real user ID
+  int rgid;                    // Real group ID
+  int suid;                    // Saved set-user-ID
+  int sgid;                    // Saved set-group-ID
+  int ngroups;                 // Number of supplementary groups
+  gid_t groups[PROC_NGROUPS_MAX]; // Supplementary groups
   int umask;                   // File creation mask
   uint rlimit_nofile_cur;      // Soft RLIMIT_NOFILE for this process
   uint rlimit_nofile_max;      // Hard RLIMIT_NOFILE for this process

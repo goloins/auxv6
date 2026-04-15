@@ -140,6 +140,14 @@ found:
   p->tty = -1;
   p->uid = 0;
   p->gid = 0;
+  p->ruid = 0;
+  p->rgid = 0;
+  p->suid = 0;
+  p->sgid = 0;
+  p->ngroups = 1;
+  p->groups[0] = 0;
+  for(i = 1; i < PROC_NGROUPS_MAX; i++)
+    p->groups[i] = 0;
   p->umask = 022;
   p->rlimit_nofile_cur = NOFILE_DEFAULT;
   p->rlimit_nofile_max = NOFILE_HARD;
@@ -191,6 +199,7 @@ found:
 void
 userinit(void)
 {
+  int i;
   struct address_space *initas;
   struct proc *p;
 
@@ -220,6 +229,14 @@ userinit(void)
   p->tty = 0;
   p->uid = 0;
   p->gid = 0;
+  p->ruid = 0;
+  p->rgid = 0;
+  p->suid = 0;
+  p->sgid = 0;
+  p->ngroups = 1;
+  p->groups[0] = 0;
+  for(i = 1; i < PROC_NGROUPS_MAX; i++)
+    p->groups[i] = 0;
   p->umask = 022;
   p->rlimit_nofile_cur = NOFILE_DEFAULT;
   p->rlimit_nofile_max = NOFILE_HARD;
@@ -267,6 +284,13 @@ fork(void)
   np->tty = curproc->tty;
   np->uid = curproc->uid;
   np->gid = curproc->gid;
+  np->ruid = curproc->ruid;
+  np->rgid = curproc->rgid;
+  np->suid = curproc->suid;
+  np->sgid = curproc->sgid;
+  np->ngroups = curproc->ngroups;
+  for(i = 0; i < PROC_NGROUPS_MAX; i++)
+    np->groups[i] = curproc->groups[i];
   np->umask = curproc->umask;
   np->rlimit_nofile_cur = curproc->rlimit_nofile_cur;
   np->rlimit_nofile_max = curproc->rlimit_nofile_max;
@@ -361,6 +385,7 @@ wait(void)
 int
 proc_waitpid(int pid, int *status, int options)
 {
+  int i;
   struct proc *p;
   int havekids;
   int foundpid;
@@ -420,6 +445,13 @@ proc_waitpid(int pid, int *status, int options)
         p->tty = -1;
         p->uid = 0;
         p->gid = 0;
+        p->ruid = 0;
+        p->rgid = 0;
+        p->suid = 0;
+        p->sgid = 0;
+        p->ngroups = 0;
+        for(i = 0; i < PROC_NGROUPS_MAX; i++)
+          p->groups[i] = 0;
         p->umask = 022;
         p->rlimit_nofile_cur = 0;
         p->rlimit_nofile_max = 0;

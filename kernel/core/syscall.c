@@ -138,7 +138,9 @@ extern int sys_getppid(void);
 extern int sys_getpgrp(void);
 extern int sys_getsid(void);
 extern int sys_getuid(void);
+extern int sys_geteuid(void);
 extern int sys_getgid(void);
+extern int sys_getegid(void);
 extern int sys_getcwd(void);
 extern int sys_setpgid(void);
 extern int sys_setsid(void);
@@ -228,6 +230,10 @@ extern int sys_umask(void);
 extern int sys_setreuid(void);
 extern int sys_setregid(void);
 extern int sys_utimensat(void);
+extern int sys_getgroups(void);
+extern int sys_setgroups(void);
+extern int sys_setresuid(void);
+extern int sys_setresgid(void);
 
 static int (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -248,7 +254,9 @@ static int (*syscalls[])(void) = {
 [SYS_getpgrp] sys_getpgrp,
 [SYS_getsid]  sys_getsid,
 [SYS_getuid]  sys_getuid,
+[SYS_geteuid] sys_geteuid,
 [SYS_getgid]  sys_getgid,
+[SYS_getegid] sys_getegid,
 [SYS_getcwd]  sys_getcwd,
 [SYS_setpgid] sys_setpgid,
 [SYS_setsid]  sys_setsid,
@@ -335,6 +343,10 @@ static int (*syscalls[])(void) = {
 [SYS_setreuid]  sys_setreuid,
 [SYS_setregid]  sys_setregid,
 [SYS_utimensat] sys_utimensat,
+[SYS_getgroups] sys_getgroups,
+[SYS_setgroups] sys_setgroups,
+[SYS_setresuid] sys_setresuid,
+[SYS_setresgid] sys_setresgid,
 };
 
 void

@@ -1,6 +1,8 @@
 #include "types.h"
+#include "crypt.h"
 #include "sys/stat.h"
 #include "pwd.h"
+#include "shadow.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
 #include "stdlib.h"
@@ -188,6 +190,51 @@ lookup_user_local(const char *name, struct session_user *u)
   }
 
   return -1;
+}
+
+static const char *
+lookup_shadow_password(const char *name)
+{
+  struct spwd *sp;
+
+  if(name == 0 || name[0] == 0)
+    return 0;
+
+  sp = getspnam(name);
+  if(sp == 0 || sp->sp_pwdp == 0 || sp->sp_pwdp[0] == 0)
+    return 0;
+
+  if(strcmp(sp->sp_pwdp, "x") == 0 || strcmp(sp->sp_pwdp, "*") == 0 ||
+     strcmp(sp->sp_pwdp, "!") == 0)
+    return 0;
+  return sp->sp_pwdp;
+}
+
+static int
+is_locked_password(const char *stored)
+{
+  if(stored == 0)
+    return 1;
+  if(stored[0] == 0)
+    return 0;
+  return (strcmp(stored, "*") == 0 || strcmp(stored, "!") == 0 ||
+          strcmp(stored, "x") == 0);
+}
+
+static int
+verify_password(const char *input, const char *stored)
+{
+  char *calc;
+
+  if(input == 0 || stored == 0)
+    return 0;
+  if(is_locked_password(stored))
+    return 0;
+  if(strncmp(stored, "$aux$", 5) == 0) {
+    calc = crypt(input, stored);
+    return (calc != 0 && strcmp(calc, stored) == 0);
+  }
+  return strcmp(input, stored) == 0;
 }
 
 static void
@@ -574,10 +621,24 @@ main(int argc, char *argv[])
     logdbg("after trim password");
 
     logdbg("before lookup_user_local");
-    if(lookup_user_local(user, &su) < 0 || strcmp(pass, su.pass) != 0) {
-      logdbg("auth failed");
-      dprintf(1, "Login incorrect\n");
-      continue;
+    {
+      const char *auth_pass;
+
+      if(lookup_user_local(user, &su) < 0) {
+        logdbg("auth failed");
+        dprintf(1, "Login incorrect\n");
+        continue;
+      }
+
+      auth_pass = lookup_shadow_password(user);
+      if(auth_pass == 0)
+        auth_pass = su.pass;
+
+      if(!verify_password(pass, auth_pass)) {
+        logdbg("auth failed");
+        dprintf(1, "Login incorrect\n");
+        continue;
+      }
     }
     logdbg("auth success");
 
@@ -585,13 +646,18 @@ main(int argc, char *argv[])
     show_nologin_and_exit_if_needed(&su);
     logdbg("after nologin check");
 
-    logdbg("before setgid/setuid");
-    if(setgid(su.gid) < 0 || setuid(su.uid) < 0) {
-      logdbg("setgid/setuid failed");
-      dprintf(1, "login: permission denied\n");
-      continue;
+    logdbg("before setgroups/setgid/setuid");
+    {
+      gid_t groups[1];
+
+      groups[0] = (gid_t)su.gid;
+      if(setgroups(1, groups) < 0 || setgid(su.gid) < 0 || setuid(su.uid) < 0) {
+        logdbg("setgroups/setgid/setuid failed");
+        dprintf(1, "login: permission denied\n");
+        continue;
+      }
     }
-    logdbg("after setgid/setuid");
+    logdbg("after setgroups/setgid/setuid");
 
     set_session_env(&su);
     logdbg("after set_session_env");

@@ -1,8 +1,11 @@
 #include "types.h"
+#include "crypt.h"
 #include "pwd.h"
+#include "shadow.h"
 #include "sys/stat.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
+#include "stdio.h"
 
 #define USER_MAX 32
 #define PASSWD_BUF_MAX 4096
@@ -52,13 +55,35 @@ append_bytes(char *dst, int *cur, int max, char *src, int n)
 }
 
 static int
-update_password(const char *user, const char *newpass)
+write_file_atomic(const char *path, const char *tmp, char *buf, int n)
+{
+  int fd;
+
+  unlink(tmp);
+  fd = open(tmp, O_CREATE | O_WRONLY);
+  if(fd < 0)
+    return -1;
+  if(write(fd, buf, n) != n) {
+    close(fd);
+    return -1;
+  }
+  close(fd);
+
+  if(unlink(path) < 0)
+    return -1;
+  if(link(tmp, path) < 0)
+    return -1;
+  unlink(tmp);
+  return 0;
+}
+
+static int
+update_passwd_shadow_marker(const char *user)
 {
   int i;
   int n;
   int outn;
   int replaced;
-  int fd;
   char inbuf[PASSWD_BUF_MAX];
   char outbuf[PASSWD_BUF_MAX];
 
@@ -110,7 +135,7 @@ update_password(const char *user, const char *newpass)
         return -1;
       if(append_bytes(outbuf, &outn, sizeof(outbuf), ":", 1) < 0)
         return -1;
-      if(append_bytes(outbuf, &outn, sizeof(outbuf), (char*)newpass, strlen(newpass)) < 0)
+      if(append_bytes(outbuf, &outn, sizeof(outbuf), "x", 1) < 0)
         return -1;
       if(append_bytes(outbuf, &outn, sizeof(outbuf), ":", 1) < 0)
         return -1;
@@ -130,23 +155,182 @@ update_password(const char *user, const char *newpass)
   if(!replaced)
     return -1;
 
-  unlink("/etc/passwd.tmp");
-  fd = open("/etc/passwd.tmp", O_CREATE | O_WRONLY);
-  if(fd < 0)
-    return -1;
-  if(write(fd, outbuf, outn) != outn) {
-    close(fd);
-    return -1;
+  return write_file_atomic("/etc/passwd", "/etc/passwd.tmp", outbuf, outn);
+}
+
+static int
+read_shadow(char *buf, int bufsz, int *n_out)
+{
+  int fd;
+  int n;
+
+  fd = open("/etc/shadow", O_RDONLY);
+  if(fd < 0) {
+    buf[0] = 0;
+    *n_out = 0;
+    return 0;
   }
+
+  n = read(fd, buf, bufsz - 1);
   close(fd);
-
-  if(unlink("/etc/passwd") < 0)
+  if(n < 0)
     return -1;
-  if(link("/etc/passwd.tmp", "/etc/passwd") < 0)
-    return -1;
-  unlink("/etc/passwd.tmp");
-
+  buf[n] = 0;
+  *n_out = n;
   return 0;
+}
+
+static int
+update_shadow_password(const char *user, const char *hash)
+{
+  int i;
+  int n;
+  int outn;
+  int replaced;
+  char inbuf[PASSWD_BUF_MAX];
+  char outbuf[PASSWD_BUF_MAX];
+
+  if(read_shadow(inbuf, sizeof(inbuf), &n) < 0)
+    return -1;
+
+  outn = 0;
+  replaced = 0;
+  i = 0;
+
+  while(i <= n) {
+    int j;
+    int line_start;
+    int line_end;
+    int fstart[9];
+    int flen[9];
+    int nf;
+
+    if(i == n)
+      break;
+
+    if(inbuf[i] == '\n' || inbuf[i] == '\r') {
+      i++;
+      continue;
+    }
+
+    line_start = i;
+    while(i < n && inbuf[i] != '\n' && inbuf[i] != '\r')
+      i++;
+    line_end = i;
+    i++;
+
+    nf = 0;
+    fstart[0] = line_start;
+    for(j = line_start; j <= line_end; j++) {
+      if(j == line_end || inbuf[j] == ':') {
+        if(nf < 9) {
+          flen[nf] = j - fstart[nf];
+          nf++;
+        }
+        if(j < line_end && nf < 9)
+          fstart[nf] = j + 1;
+      }
+    }
+
+    if(nf >= 2 && flen[0] == (int)strlen(user) &&
+       strncmp(inbuf + fstart[0], user, flen[0]) == 0) {
+      if(append_bytes(outbuf, &outn, sizeof(outbuf), inbuf + fstart[0], flen[0]) < 0)
+        return -1;
+      if(append_bytes(outbuf, &outn, sizeof(outbuf), ":", 1) < 0)
+        return -1;
+      if(append_bytes(outbuf, &outn, sizeof(outbuf), (char*)hash, strlen(hash)) < 0)
+        return -1;
+      if(nf >= 3) {
+        if(append_bytes(outbuf, &outn, sizeof(outbuf), ":", 1) < 0)
+          return -1;
+        if(append_bytes(outbuf, &outn, sizeof(outbuf), inbuf + fstart[2], line_end - fstart[2]) < 0)
+          return -1;
+      } else {
+        if(append_bytes(outbuf, &outn, sizeof(outbuf), ":0:0:99999:7:::", 15) < 0)
+          return -1;
+      }
+      if(append_bytes(outbuf, &outn, sizeof(outbuf), "\n", 1) < 0)
+        return -1;
+      replaced = 1;
+    } else {
+      if(append_bytes(outbuf, &outn, sizeof(outbuf), inbuf + line_start, line_end - line_start) < 0)
+        return -1;
+      if(append_bytes(outbuf, &outn, sizeof(outbuf), "\n", 1) < 0)
+        return -1;
+    }
+  }
+
+  if(!replaced) {
+    if(append_bytes(outbuf, &outn, sizeof(outbuf), (char*)user, strlen(user)) < 0)
+      return -1;
+    if(append_bytes(outbuf, &outn, sizeof(outbuf), ":", 1) < 0)
+      return -1;
+    if(append_bytes(outbuf, &outn, sizeof(outbuf), (char*)hash, strlen(hash)) < 0)
+      return -1;
+    if(append_bytes(outbuf, &outn, sizeof(outbuf), ":0:0:99999:7:::\n", 16) < 0)
+      return -1;
+  }
+
+  return write_file_atomic("/etc/shadow", "/etc/shadow.tmp", outbuf, outn);
+}
+
+static int
+is_locked_password(const char *stored)
+{
+  if(stored == 0)
+    return 1;
+  if(stored[0] == 0)
+    return 0;
+  return (strcmp(stored, "*") == 0 || strcmp(stored, "!") == 0);
+}
+
+static int
+verify_password(const char *input, const char *stored)
+{
+  char *calc;
+
+  if(input == 0 || stored == 0)
+    return 0;
+  if(is_locked_password(stored))
+    return 0;
+  if(strncmp(stored, "$aux$", 5) == 0) {
+    calc = crypt(input, stored);
+    return (calc != 0 && strcmp(calc, stored) == 0);
+  }
+  return strcmp(input, stored) == 0;
+}
+
+static const char *
+auth_password_for_user(const char *name, struct passwd *target)
+{
+  struct spwd *sp;
+
+  if(name == 0 || target == 0)
+    return 0;
+
+  sp = getspnam(name);
+  if(sp && sp->sp_pwdp && sp->sp_pwdp[0] &&
+     strcmp(sp->sp_pwdp, "x") != 0)
+    return sp->sp_pwdp;
+  return target->pw_passwd;
+}
+
+static int
+update_password(const char *user, const char *newpass)
+{
+  char salt[32];
+  char *hash;
+  int pid;
+
+  pid = (int)getpid();
+  snprintf(salt, sizeof(salt), "%s%u%x", user, (uint)pid, (uint)uptime());
+  hash = crypt(newpass, salt);
+  if(hash == 0)
+    return -1;
+
+  if(update_shadow_password(user, hash) < 0)
+    return -1;
+  return update_passwd_shadow_marker(user);
 }
 
 int
@@ -155,6 +339,7 @@ main(int argc, char *argv[])
   int uid;
   struct passwd *cur;
   struct passwd *target;
+  const char *auth_pass;
   char oldpw[USER_MAX];
   char newpw[USER_MAX];
   char confpw[USER_MAX];
@@ -194,7 +379,8 @@ main(int argc, char *argv[])
       exit(0);
     trim_trailing_ws(oldpw);
 
-    if(strcmp(oldpw, target->pw_passwd) != 0) {
+    auth_pass = auth_password_for_user(target->pw_name, target);
+    if(auth_pass == 0 || !verify_password(oldpw, auth_pass)) {
       dprintf(2, "passwd: authentication failed\n");
       exit(0);
     }

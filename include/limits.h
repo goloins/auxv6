@@ -15,7 +15,7 @@
 #endif
 
 /* Filesystem/process limits */
-#define NGROUPS_MAX  1
+#define NGROUPS_MAX  16
 #define ARG_MAX      4096
 #define OPEN_MAX     16
 #define CHILD_MAX    64

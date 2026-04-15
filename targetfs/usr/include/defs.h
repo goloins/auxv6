@@ -1,4 +1,5 @@
 #include "stdint.h"  /* uint64_t for file-offset parameters */
+#include "sys/types.h" /* gid_t/uid_t for credential helpers */
 struct buf;
 struct console_gfx_debug_info;
 struct context;
@@ -597,10 +598,17 @@ int             proc_getpgrp(void);
 int             proc_getsid(int pid);
 int             proc_getuid(void);
 int             proc_getgid(void);
+int             proc_geteuid(void);
+int             proc_getegid(void);
 int             proc_setpgid(int pid, int pgid);
 int             proc_setsid(void);
 int             proc_setuid(int uid);
 int             proc_setgid(int gid);
+int             proc_setresuid(int ruid, int euid, int suid);
+int             proc_setresgid(int rgid, int egid, int sgid);
+int             proc_getgroups(gid_t *groups, int max);
+int             proc_setgroups(const gid_t *groups, int n);
+int             proc_in_group(struct proc *p, gid_t gid);
 int             proc_waitpid(int pid, int *status, int options);
 int             proc_wait4(int pid, int *status, int options, uint rusage_addr);
 int             proc_waitid(int idtype, int id, int *infop, int options);

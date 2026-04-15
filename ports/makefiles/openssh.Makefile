@@ -98,18 +98,18 @@ first-pass: | $(BUILDDIR)
 			CPPFLAGS="$(CONFIGURE_CPPFLAGS)" CFLAGS="$(COMMON_CFLAGS)" LDFLAGS="$(CONFIGURE_LDFLAGS)" LIBS="$(CONFIGURE_LIBS)" \
 			ac_cv_file__dev_ptmx=no \
 			ac_cv_file__dev_ptc=no \
-			ac_cv_func_seteuid=no \
-			ac_cv_func_setegid=no \
-			ac_cv_func_setgroups=no \
-			ac_cv_func_setresuid=no \
-			ac_cv_func_setresgid=no \
+				ac_cv_func_seteuid=yes \
+				ac_cv_func_setegid=yes \
+				ac_cv_func_setgroups=yes \
+				ac_cv_func_setresuid=yes \
+				ac_cv_func_setresgid=yes \
 			ac_cv_func_socketpair=no \
 			ac_cv_func_sendmsg=no \
 			ac_cv_func_recvmsg=no \
-			ac_cv_func_getspnam=no \
+				ac_cv_func_getspnam=yes \
 			ac_cv_func_crypt=no \
 			ac_cv_func_daemon=no \
-			ac_cv_func_closefrom=no \
+				ac_cv_func_closefrom=yes \
 			ac_cv_func_openpty=yes \
 			ac_cv_func_tcgetpgrp=yes \
 			ac_cv_func_poll=yes \

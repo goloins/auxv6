@@ -3,6 +3,7 @@
 #include "fcntl.h"
 #include "grp.h"
 #include "pwd.h"
+#include "shadow.h"
 #include "string.h"
 #include "auxv6/user.h"
 
@@ -39,6 +40,30 @@ accountdb_parse_uint(const char *src, int len, uint *value)
     if(src[i] < '0' || src[i] > '9')
       return -1;
     out = out * 10 + (uint)(src[i] - '0');
+  }
+
+  *value = out;
+  return 0;
+}
+
+static int
+accountdb_parse_long(const char *src, int len, long *value)
+{
+  long out;
+  int i;
+
+  if(src == 0 || value == 0)
+    return -1;
+  if(len == 0) {
+    *value = -1;
+    return 0;
+  }
+
+  out = 0;
+  for(i = 0; i < len; i++) {
+    if(src[i] < '0' || src[i] > '9')
+      return -1;
+    out = out * 10 + (long)(src[i] - '0');
   }
 
   *value = out;
@@ -254,6 +279,96 @@ getpwuid(uid_t uid)
     pw.pw_dir = dirbuf;
     pw.pw_shell = shellbuf;
     return &pw;
+  }
+
+  errno = ENOENT;
+  return 0;
+}
+
+struct spwd *
+getspnam(const char *name)
+{
+  static char buf[ACCOUNT_DB_MAX];
+  static struct spwd sp;
+  static char namebuf[ACCOUNT_FIELD_MAX];
+  static char passbuf[ACCOUNT_FIELD_MAX];
+  int n;
+  int off;
+
+  if(name == 0 || *name == 0) {
+    errno = EINVAL;
+    return 0;
+  }
+
+  n = accountdb_read("/etc/shadow", 0, buf, sizeof(buf));
+  if(n < 0)
+    return 0;
+
+  off = 0;
+  while(off < n) {
+    char *fields[9];
+    int lengths[9];
+    char *line;
+    int linelen;
+    int nf;
+
+    if(!accountdb_next_line(buf, n, &off, &line, &linelen))
+      break;
+    nf = accountdb_split_fields(line, linelen, fields, lengths, 9);
+    if(nf < 2)
+      continue;
+    if(lengths[0] != (int)strlen(name))
+      continue;
+    if(strncmp(fields[0], name, lengths[0]) != 0)
+      continue;
+
+    accountdb_copy(namebuf, sizeof(namebuf), fields[0], lengths[0]);
+    accountdb_copy(passbuf, sizeof(passbuf), fields[1], lengths[1]);
+
+    sp.sp_namp = namebuf;
+    sp.sp_pwdp = passbuf;
+    sp.sp_lstchg = -1;
+    sp.sp_min = -1;
+    sp.sp_max = -1;
+    sp.sp_warn = -1;
+    sp.sp_inact = -1;
+    sp.sp_expire = -1;
+    sp.sp_flag = 0;
+
+    if(nf > 2 && accountdb_parse_long(fields[2], lengths[2], &sp.sp_lstchg) < 0) {
+      errno = EINVAL;
+      return 0;
+    }
+    if(nf > 3 && accountdb_parse_long(fields[3], lengths[3], &sp.sp_min) < 0) {
+      errno = EINVAL;
+      return 0;
+    }
+    if(nf > 4 && accountdb_parse_long(fields[4], lengths[4], &sp.sp_max) < 0) {
+      errno = EINVAL;
+      return 0;
+    }
+    if(nf > 5 && accountdb_parse_long(fields[5], lengths[5], &sp.sp_warn) < 0) {
+      errno = EINVAL;
+      return 0;
+    }
+    if(nf > 6 && accountdb_parse_long(fields[6], lengths[6], &sp.sp_inact) < 0) {
+      errno = EINVAL;
+      return 0;
+    }
+    if(nf > 7 && accountdb_parse_long(fields[7], lengths[7], &sp.sp_expire) < 0) {
+      errno = EINVAL;
+      return 0;
+    }
+    if(nf > 8) {
+      long flag;
+      if(accountdb_parse_long(fields[8], lengths[8], &flag) < 0) {
+        errno = EINVAL;
+        return 0;
+      }
+      sp.sp_flag = (unsigned long)flag;
+    }
+
+    return &sp;
   }
 
   errno = ENOENT;

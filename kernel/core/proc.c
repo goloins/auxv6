@@ -998,11 +998,33 @@ proc_getuid(void)
   p = myproc();
   if(p == 0)
     return 0;
-  return p->uid;
+  return p->ruid;
 }
 
 int
 proc_getgid(void)
+{
+  struct proc *p;
+
+  p = myproc();
+  if(p == 0)
+    return 0;
+  return p->rgid;
+}
+
+int
+proc_geteuid(void)
+{
+  struct proc *p;
+
+  p = myproc();
+  if(p == 0)
+    return 0;
+  return p->uid;
+}
+
+int
+proc_getegid(void)
 {
   struct proc *p;
 
@@ -1097,31 +1119,148 @@ proc_setsid(void)
 int
 proc_setuid(int uid)
 {
-  struct proc *p;
+  int euid;
 
   if(uid < 0)
     return -1;
-
-  p = myproc();
-  if(p == 0)
-    return -1;
-
-  acquire(&ptable.lock);
-  if(p->uid != 0 && uid != p->uid) {
-    release(&ptable.lock);
-    return -1;
-  }
-  p->uid = uid;
-  release(&ptable.lock);
-  return 0;
+  euid = proc_geteuid();
+  if(euid == 0)
+    return proc_setresuid(uid, uid, uid);
+  return proc_setresuid(-1, uid, -1);
 }
 
 int
 proc_setgid(int gid)
 {
-  struct proc *p;
+  int euid;
 
   if(gid < 0)
+    return -1;
+  euid = proc_geteuid();
+  if(euid == 0)
+    return proc_setresgid(gid, gid, gid);
+  return proc_setresgid(-1, gid, -1);
+}
+
+static int
+cred_matches_current_uid(struct proc *p, int id)
+{
+  return (id == p->ruid || id == p->uid || id == p->suid);
+}
+
+static int
+cred_matches_current_gid(struct proc *p, int id)
+{
+  return (id == p->rgid || id == p->gid || id == p->sgid);
+}
+
+int
+proc_setresuid(int ruid, int euid, int suid)
+{
+  struct proc *p;
+  int new_ruid;
+  int new_euid;
+  int new_suid;
+
+  p = myproc();
+  if(p == 0)
+    return -1;
+
+  if(ruid < -1 || euid < -1 || suid < -1)
+    return -1;
+
+  acquire(&ptable.lock);
+  new_ruid = (ruid == -1) ? p->ruid : ruid;
+  new_euid = (euid == -1) ? p->uid : euid;
+  new_suid = (suid == -1) ? p->suid : suid;
+
+  if(p->uid != 0) {
+    if(!cred_matches_current_uid(p, new_ruid) ||
+       !cred_matches_current_uid(p, new_euid) ||
+       !cred_matches_current_uid(p, new_suid)) {
+      release(&ptable.lock);
+      return -1;
+    }
+  }
+
+  p->ruid = new_ruid;
+  p->uid = new_euid;
+  p->suid = new_suid;
+  release(&ptable.lock);
+  return 0;
+}
+
+int
+proc_setresgid(int rgid, int egid, int sgid)
+{
+  struct proc *p;
+  int new_rgid;
+  int new_egid;
+  int new_sgid;
+
+  p = myproc();
+  if(p == 0)
+    return -1;
+
+  if(rgid < -1 || egid < -1 || sgid < -1)
+    return -1;
+
+  acquire(&ptable.lock);
+  new_rgid = (rgid == -1) ? p->rgid : rgid;
+  new_egid = (egid == -1) ? p->gid : egid;
+  new_sgid = (sgid == -1) ? p->sgid : sgid;
+
+  if(p->uid != 0) {
+    if(!cred_matches_current_gid(p, new_rgid) ||
+       !cred_matches_current_gid(p, new_egid) ||
+       !cred_matches_current_gid(p, new_sgid)) {
+      release(&ptable.lock);
+      return -1;
+    }
+  }
+
+  p->rgid = new_rgid;
+  p->gid = new_egid;
+  p->sgid = new_sgid;
+  if(p->ngroups > 0)
+    p->groups[0] = (gid_t)p->gid;
+  release(&ptable.lock);
+  return 0;
+}
+
+int
+proc_getgroups(gid_t *groups, int max)
+{
+  struct proc *p;
+  int i;
+  int n;
+
+  p = myproc();
+  if(p == 0)
+    return -1;
+
+  acquire(&ptable.lock);
+  n = p->ngroups;
+  if(groups != 0) {
+    if(max < n) {
+      release(&ptable.lock);
+      return -1;
+    }
+    for(i = 0; i < n; i++)
+      groups[i] = p->groups[i];
+  }
+  release(&ptable.lock);
+
+  return n;
+}
+
+int
+proc_setgroups(const gid_t *groups, int n)
+{
+  struct proc *p;
+  int i;
+
+  if(n < 0 || n > PROC_NGROUPS_MAX)
     return -1;
 
   p = myproc();
@@ -1129,12 +1268,42 @@ proc_setgid(int gid)
     return -1;
 
   acquire(&ptable.lock);
-  if(p->uid != 0 && gid != p->gid) {
+  if(p->uid != 0) {
     release(&ptable.lock);
     return -1;
   }
-  p->gid = gid;
+
+  if(n == 0) {
+    p->ngroups = 1;
+    p->groups[0] = (gid_t)p->gid;
+    for(i = 1; i < PROC_NGROUPS_MAX; i++)
+      p->groups[i] = 0;
+    release(&ptable.lock);
+    return 0;
+  }
+
+  p->ngroups = n;
+  for(i = 0; i < n; i++)
+    p->groups[i] = groups[i];
+  for(i = n; i < PROC_NGROUPS_MAX; i++)
+    p->groups[i] = 0;
   release(&ptable.lock);
+  return 0;
+}
+
+int
+proc_in_group(struct proc *p, gid_t gid)
+{
+  int i;
+
+  if(p == 0)
+    return 0;
+  if(p->gid == gid)
+    return 1;
+  for(i = 0; i < p->ngroups && i < PROC_NGROUPS_MAX; i++) {
+    if(p->groups[i] == gid)
+      return 1;
+  }
   return 0;
 }
 

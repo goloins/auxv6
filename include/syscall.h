@@ -104,3 +104,9 @@
 #define SYS_setreuid  103
 #define SYS_setregid  104
 #define SYS_utimensat 105
+#define SYS_geteuid   106
+#define SYS_getegid   107
+#define SYS_getgroups 108
+#define SYS_setgroups 109
+#define SYS_setresuid 110
+#define SYS_setresgid 111

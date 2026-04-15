@@ -14,27 +14,214 @@
 #include "../include/signal.h"
 #include "auxv6/user.h"
 #include "stdlib.h"
+#include "sys/resource.h"
 
 int __posix_stat(const char *path, struct stat *buf);
+uid_t __auxv6_sys_geteuid(void);
+gid_t __auxv6_sys_getegid(void);
+int __auxv6_sys_setuid(uid_t uid);
+int __auxv6_sys_setgid(gid_t gid);
+int __auxv6_sys_setreuid(uid_t ruid, uid_t euid);
+int __auxv6_sys_setregid(gid_t rgid, gid_t egid);
+int __auxv6_sys_setresuid(uid_t ruid, uid_t euid, uid_t suid);
+int __auxv6_sys_setresgid(gid_t rgid, gid_t egid, gid_t sgid);
+int __auxv6_sys_getgroups(int gidsetsize, gid_t grouplist[]);
+int __auxv6_sys_setgroups(size_t size, const gid_t *list);
 
 /* malloc/free/open/close/etc. all come from user.h above */
 
 /* -------------------------------------------------------------------------
- * Process / identity stubs
- *
- * auxv6 has getuid/getgid but not euid/egid/groups.  In this single-user
- * kernel there is no difference between real and effective IDs.
+ * Process / identity wrappers
  * ------------------------------------------------------------------------- */
 
-uid_t geteuid(void) { return getuid(); }
-gid_t getegid(void) { return getgid(); }
+uid_t
+geteuid(void)
+{
+  return __auxv6_sys_geteuid();
+}
+
+gid_t
+getegid(void)
+{
+  return __auxv6_sys_getegid();
+}
 
 int
-getgroups(int n, gid_t *groups)
+setuid(uid_t uid)
 {
-  /* Only one group: the primary gid. */
-  if(n >= 1) groups[0] = getgid();
-  return (n >= 1) ? 1 : 0;
+  if(uid < 0) {
+    errno = EINVAL;
+    return -1;
+  }
+  if(__auxv6_sys_setuid(uid) < 0) {
+    errno = EPERM;
+    return -1;
+  }
+  return 0;
+}
+
+int
+setgid(gid_t gid)
+{
+  if(gid < 0) {
+    errno = EINVAL;
+    return -1;
+  }
+  if(__auxv6_sys_setgid(gid) < 0) {
+    errno = EPERM;
+    return -1;
+  }
+  return 0;
+}
+
+int
+setreuid(uid_t ruid, uid_t euid)
+{
+  if((int)ruid < -1 || (int)euid < -1) {
+    errno = EINVAL;
+    return -1;
+  }
+  if(__auxv6_sys_setreuid(ruid, euid) < 0) {
+    errno = EPERM;
+    return -1;
+  }
+  return 0;
+}
+
+int
+setregid(gid_t rgid, gid_t egid)
+{
+  if((int)rgid < -1 || (int)egid < -1) {
+    errno = EINVAL;
+    return -1;
+  }
+  if(__auxv6_sys_setregid(rgid, egid) < 0) {
+    errno = EPERM;
+    return -1;
+  }
+  return 0;
+}
+
+int
+setresuid(uid_t ruid, uid_t euid, uid_t suid)
+{
+  if((int)ruid < -1 || (int)euid < -1 || (int)suid < -1) {
+    errno = EINVAL;
+    return -1;
+  }
+  if(__auxv6_sys_setresuid(ruid, euid, suid) < 0) {
+    errno = EPERM;
+    return -1;
+  }
+  return 0;
+}
+
+int
+setresgid(gid_t rgid, gid_t egid, gid_t sgid)
+{
+  if((int)rgid < -1 || (int)egid < -1 || (int)sgid < -1) {
+    errno = EINVAL;
+    return -1;
+  }
+  if(__auxv6_sys_setresgid(rgid, egid, sgid) < 0) {
+    errno = EPERM;
+    return -1;
+  }
+  return 0;
+}
+
+int
+getgroups(int gidsetsize, gid_t grouplist[])
+{
+  int n;
+
+  if(gidsetsize < 0) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  n = __auxv6_sys_getgroups(0, 0);
+  if(n < 0) {
+    errno = EPERM;
+    return -1;
+  }
+
+  if(gidsetsize == 0)
+    return n;
+
+  if(grouplist == 0) {
+    errno = EINVAL;
+    return -1;
+  }
+  if(gidsetsize < n) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  n = __auxv6_sys_getgroups(gidsetsize, grouplist);
+  if(n < 0) {
+    errno = EFAULT;
+    return -1;
+  }
+  return n;
+}
+
+int
+setgroups(size_t size, const gid_t *list)
+{
+  if(size > NGROUPS_MAX) {
+    errno = EINVAL;
+    return -1;
+  }
+  if(size > 0 && list == 0) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  if(__auxv6_sys_setgroups(size, list) < 0) {
+    errno = EPERM;
+    return -1;
+  }
+  return 0;
+}
+
+int
+seteuid(uid_t euid)
+{
+  return setresuid((uid_t)-1, euid, (uid_t)-1);
+}
+
+int
+setegid(gid_t egid)
+{
+  return setresgid((gid_t)-1, egid, (gid_t)-1);
+}
+
+int
+closefrom(int lowfd)
+{
+  struct rlimit rl;
+  int fd;
+  int maxfd;
+
+  if(lowfd < 0) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  if(getrlimit(RLIMIT_NOFILE, &rl) < 0)
+    maxfd = OPEN_MAX;
+  else if((unsigned long)rl.rlim_cur > 0x7fffffffUL)
+    maxfd = OPEN_MAX;
+  else
+    maxfd = (int)rl.rlim_cur;
+
+  if(maxfd < lowfd)
+    return 0;
+
+  for(fd = lowfd; fd < maxfd; fd++)
+    close(fd);
+  return 0;
 }
 
 /* -------------------------------------------------------------------------

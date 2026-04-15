@@ -140,6 +140,8 @@ int     setgid(gid_t gid);
 int     setegid(gid_t gid);
 int     setreuid(uid_t ruid, uid_t euid);
 int     setregid(gid_t rgid, gid_t egid);
+int     setresuid(uid_t ruid, uid_t euid, uid_t suid);
+int     setresgid(gid_t rgid, gid_t egid, gid_t sgid);
 int     getgroups(int gidsetsize, gid_t grouplist[]);
 int     setgroups(size_t size, const gid_t *list);
 char   *getlogin(void);
@@ -147,6 +149,7 @@ int     getlogin_r(char *buf, size_t bufsize);
 
 /* File operations */
 int     close(int fd);
+int     closefrom(int lowfd);
 ssize_t read(int fd, void *buf, size_t count);
 ssize_t write(int fd, const void *buf, size_t count);
 ssize_t pread(int fd, void *buf, size_t count, off_t offset);

@@ -424,7 +424,7 @@ inode_allowed_bits(struct inode *ip, struct proc *p)
 
   if(p->uid == ip->uid)
     return (mode >> 6) & 7;
-  if(p->gid == ip->gid)
+  if(proc_in_group(p, (gid_t)ip->gid))
     return (mode >> 3) & 7;
   return mode & 7;
 }
