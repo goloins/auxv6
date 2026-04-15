@@ -171,6 +171,72 @@ procfs_buf_putu(char *buf, uint max, uint *len, uint v)
 }
 
 static int
+procfs_buf_putnsp(char *buf, uint max, uint *len, uint n)
+{
+  uint i;
+
+  for(i = 0; i < n; i++){
+    if(procfs_buf_putc(buf, max, len, ' ') < 0)
+      return -1;
+  }
+  return 0;
+}
+
+static int
+procfs_buf_putu_rjust(char *buf, uint max, uint *len, uint v, uint width)
+{
+  char tmp[16];
+  uint n;
+  uint i;
+
+  n = procfs_write_uint(tmp, v);
+  if(width > n){
+    if(procfs_buf_putnsp(buf, max, len, width - n) < 0)
+      return -1;
+  }
+  for(i = 0; i < n; i++){
+    if(procfs_buf_putc(buf, max, len, tmp[i]) < 0)
+      return -1;
+  }
+  return 0;
+}
+
+static int
+procfs_buf_puts_ljust(char *buf, uint max, uint *len, const char *s, uint width)
+{
+  uint n;
+
+  if(procfs_buf_puts(buf, max, len, s) < 0)
+    return -1;
+
+  n = 0;
+  while(s[n])
+    n++;
+  if(width > n){
+    if(procfs_buf_putnsp(buf, max, len, width - n) < 0)
+      return -1;
+  }
+  return 0;
+}
+
+static int
+procfs_buf_puts_rjust(char *buf, uint max, uint *len, const char *s, uint width)
+{
+  uint n;
+
+  n = 0;
+  while(s[n])
+    n++;
+  if(width > n){
+    if(procfs_buf_putnsp(buf, max, len, width - n) < 0)
+      return -1;
+  }
+  if(procfs_buf_puts(buf, max, len, s) < 0)
+    return -1;
+  return 0;
+}
+
+static int
 procfs_buf_putkv_u(char *buf, uint max, uint *len, const char *key, uint v)
 {
   if(procfs_buf_puts(buf, max, len, key) < 0)
@@ -1115,53 +1181,110 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     return procfs_copy_data(dst, off, n, buf, len);
   }
   if(ip->inum == PROCFS_PS_INO){
+    enum {
+      PS_PID_W = 4,
+      PS_PPID_W = 4,
+      PS_PGID_W = 4,
+      PS_SID_W = 4,
+      PS_TTY_W = 10,
+      PS_UID_W = 5,
+      PS_GID_W = 5,
+      PS_STAT_W = 8,
+      PS_SZ_W = 10,
+      PS_CTICKS_W = 8
+    };
+
     pm = proc_snapshot(pinfo, NPROC);
     if(pm < 0)
       return -1;
 
     len = 0;
-    if(procfs_buf_puts(buf, sizeof(buf), &len,
-                       "PID PPID PGID SID TTY UID GID STAT SZ CTICKS NAME\n") < 0)
+    if(procfs_buf_puts_rjust(buf, sizeof(buf), &len, "PID", PS_PID_W) < 0)
+      return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+      return -1;
+    if(procfs_buf_puts_rjust(buf, sizeof(buf), &len, "PPID", PS_PPID_W) < 0)
+      return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+      return -1;
+    if(procfs_buf_puts_rjust(buf, sizeof(buf), &len, "PGID", PS_PGID_W) < 0)
+      return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+      return -1;
+    if(procfs_buf_puts_rjust(buf, sizeof(buf), &len, "SID", PS_SID_W) < 0)
+      return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+      return -1;
+    if(procfs_buf_puts_rjust(buf, sizeof(buf), &len, "TTY", PS_TTY_W) < 0)
+      return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+      return -1;
+    if(procfs_buf_puts_rjust(buf, sizeof(buf), &len, "UID", PS_UID_W) < 0)
+      return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+      return -1;
+    if(procfs_buf_puts_rjust(buf, sizeof(buf), &len, "GID", PS_GID_W) < 0)
+      return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+      return -1;
+    if(procfs_buf_puts_ljust(buf, sizeof(buf), &len, "STAT", PS_STAT_W) < 0)
+      return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+      return -1;
+    if(procfs_buf_puts_rjust(buf, sizeof(buf), &len, "SZ", PS_SZ_W) < 0)
+      return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+      return -1;
+    if(procfs_buf_puts_rjust(buf, sizeof(buf), &len, "CTICKS", PS_CTICKS_W) < 0)
+      return -1;
+    if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+      return -1;
+    if(procfs_buf_puts(buf, sizeof(buf), &len, "NAME\n") < 0)
       return -1;
 
     for(i = 0; i < pm; i++){
-      if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)pinfo[i].pid) < 0)
+      if(procfs_buf_putu_rjust(buf, sizeof(buf), &len, (uint)pinfo[i].pid, PS_PID_W) < 0)
         break;
       if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
         break;
-      if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)pinfo[i].ppid) < 0)
+      if(procfs_buf_putu_rjust(buf, sizeof(buf), &len, (uint)pinfo[i].ppid, PS_PPID_W) < 0)
         break;
       if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
         break;
-      if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)pinfo[i].pgid) < 0)
+      if(procfs_buf_putu_rjust(buf, sizeof(buf), &len, (uint)pinfo[i].pgid, PS_PGID_W) < 0)
         break;
       if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
         break;
-      if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)pinfo[i].sid) < 0)
+      if(procfs_buf_putu_rjust(buf, sizeof(buf), &len, (uint)pinfo[i].sid, PS_SID_W) < 0)
         break;
       if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
         break;
-      if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)pinfo[i].tty) < 0)
+      if(pinfo[i].tty < 0){
+        if(procfs_buf_puts_rjust(buf, sizeof(buf), &len, "-", PS_TTY_W) < 0)
+          break;
+      } else {
+        if(procfs_buf_putu_rjust(buf, sizeof(buf), &len, (uint)pinfo[i].tty, PS_TTY_W) < 0)
+          break;
+      }
+      if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
+        break;
+      if(procfs_buf_putu_rjust(buf, sizeof(buf), &len, (uint)pinfo[i].uid, PS_UID_W) < 0)
         break;
       if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
         break;
-      if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)pinfo[i].uid) < 0)
+      if(procfs_buf_putu_rjust(buf, sizeof(buf), &len, (uint)pinfo[i].gid, PS_GID_W) < 0)
         break;
       if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
         break;
-      if(procfs_buf_putu(buf, sizeof(buf), &len, (uint)pinfo[i].gid) < 0)
+      if(procfs_buf_puts_ljust(buf, sizeof(buf), &len, procfs_state_name(pinfo[i].state), PS_STAT_W) < 0)
         break;
       if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
         break;
-      if(procfs_buf_puts(buf, sizeof(buf), &len, procfs_state_name(pinfo[i].state)) < 0)
+      if(procfs_buf_putu_rjust(buf, sizeof(buf), &len, pinfo[i].sz, PS_SZ_W) < 0)
         break;
       if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
         break;
-      if(procfs_buf_putu(buf, sizeof(buf), &len, pinfo[i].sz) < 0)
-        break;
-      if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
-        break;
-      if(procfs_buf_putu(buf, sizeof(buf), &len, pinfo[i].cticks) < 0)
+      if(procfs_buf_putu_rjust(buf, sizeof(buf), &len, pinfo[i].cticks, PS_CTICKS_W) < 0)
         break;
       if(procfs_buf_putc(buf, sizeof(buf), &len, ' ') < 0)
         break;
