@@ -147,6 +147,7 @@ extern int sys_setsid(void);
 extern int sys_setuid(void);
 extern int sys_setgid(void);
 extern int sys_chmod(void);
+extern int sys_fchmod(void);
 extern int sys_chown(void);
 extern int sys_mountinfo(void);
 extern int sys_mount(void);
@@ -275,6 +276,7 @@ static int (*syscalls[])(void) = {
 [SYS_uptime]  sys_uptime,
 [SYS_open]    sys_open,
 [SYS_chmod]   sys_chmod,
+[SYS_fchmod]  sys_fchmod,
 [SYS_chown]   sys_chown,
 [SYS_mountinfo] sys_mountinfo,
 [SYS_mount]   sys_mount,

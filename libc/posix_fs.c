@@ -82,6 +82,7 @@ int __auxv6_sys_ioctl(int fd, int request, void *argp);
 ssize_t __auxv6_sys_readlink(const char *path, char *buf, size_t bufsiz);
 int __auxv6_sys_utimensat(int dirfd, const char *path,
                           const struct timespec *times, int flags);
+int __auxv6_sys_fchmod(int fd, mode_t mode);
 
 static int
 posix_valid_utimens_nsec(long nsec)
@@ -619,9 +620,9 @@ mkfifo(const char *path, mode_t mode)
 int
 fchmod(int fd, mode_t mode)
 {
-  /* auxv6 has no fchmod syscall; no-op returning success. */
-  (void)fd;
-  (void)mode;
+  errno = 0;
+  if(__auxv6_sys_fchmod(fd, mode) < 0)
+    return posix_fail_errno(EPERM);
   return 0;
 }
 

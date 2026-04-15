@@ -1870,6 +1870,46 @@ sys_chmod(void)
 }
 
 int
+sys_fchmod(void)
+{
+  int fd;
+  int mode;
+  struct file *f;
+  struct inode *ip;
+  const struct vnode_ops *ops;
+
+  if(argint(0, &fd) < 0 || argint(1, &mode) < 0)
+    return -1;
+  if(argfd(fd, 0, &f) < 0)
+    return -1;
+  if(f->type != FD_INODE || f->ip == 0)
+    return -1;
+
+  ip = f->ip;
+  begin_op();
+  ilock(ip);
+  if(!inode_is_owner_or_root(ip)){
+    iunlock(ip);
+    end_op();
+    return -1;
+  }
+  ops = vfs_dev_vops(ip->dev);
+  if(ops && ops->setattr){
+    if(ops->setattr(ip, 1, mode, 0, 0, 0, 0) < 0){
+      iunlock(ip);
+      end_op();
+      return -1;
+    }
+  } else {
+    ip->mode = (ip->mode & M_IFMT) | (mode & 07777);
+    iupdate(ip);
+  }
+  iunlock(ip);
+  end_op();
+  return 0;
+}
+
+int
 sys_chown(void)
 {
   int path_addr;
