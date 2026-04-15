@@ -211,7 +211,7 @@ main(void)
     int status;
     while((wpid=wait(&status)) >= 0 && wpid != pid){
       maybe_process_runlevel_change(&pid, &cur_runlevel);
-      dprintf(1, "zombie! wpid=%d pid=%d\n", wpid, pid);
+      //dprintf(1, "zombie! wpid=%d pid=%d\n", wpid, pid);
     }
     pid = -1;
     maybe_process_runlevel_change(&pid, &cur_runlevel);
