@@ -46,6 +46,10 @@
 #define S_IWOTH    0002   /* Other write permission */
 #define S_IXOTH    0001   /* Other execute permission */
 
+#define S_IRWXU   (S_IRUSR | S_IWUSR | S_IXUSR) /* User read/write/execute */
+#define S_IRWXG   (S_IRGRP | S_IWGRP | S_IXGRP) /* Group read/write/execute */
+#define S_IRWXO   (S_IROTH | S_IWOTH | S_IXOTH) /* Other read/write/execute */
+
 /*
  * auxv6 compatibility aliases.
  * Keep legacy userspace code building while migrating call sites to S_* names.

@@ -241,3 +241,4 @@ targetfs/usr/bin/p7zip
 targetfs/usr/bin/ssh-keygen
 targetfs/usr/bin/ssh
 targetfs/usr/bin/sshd
+targetfs/usr/sbin/sshd
