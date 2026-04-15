@@ -4,6 +4,7 @@
 #include "string.h"
 #include "stdint.h"
 #include "checksum.h"
+#include "errno.h"
 
 #define GZIP_INBUF_SZ 4096
 #define GZIP_OUTBUF_SZ 4096
@@ -44,6 +45,19 @@ struct huff_tree {
   short sym[HUFF_MAX_NODES];
   int nodes;
 };
+
+/*
+ * Keep large inflate scratch buffers out of the user stack.
+ * Dynamic-Huffman decode needs three trees (~78 KB total), and the
+ * member window adds another 32 KB. Putting all of that on the stack
+ * can corrupt caller locals in auxv6 userspace.
+ */
+static uchar gzip_member_window[GZIP_WINSZ];
+static uchar gzip_dyn_cl_lens[19];
+static uchar gzip_dyn_ll_lens[288 + 32];
+static struct huff_tree gzip_dyn_cl_tree;
+static struct huff_tree gzip_dyn_ll_tree;
+static struct huff_tree gzip_dyn_dist_tree;
 
 static const int len_base[29] = {
   3, 4, 5, 6, 7, 8, 9, 10,
@@ -261,7 +275,7 @@ huff_build(struct huff_tree *t, const uchar *lens, int nsym)
     cur = next_code[len]++;
     node = 0;
 
-    for(i = 0; i < len; i++) {
+    for(i = len - 1; i >= 0; i--) {
       int bit = (cur >> i) & 1;
       int child;
 
@@ -540,11 +554,11 @@ inflate_dynamic(struct bit_stream *bs,
   static const uchar cl_order[19] = {
     16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15
   };
-  uchar cl_lens[19];
-  uchar ll_lens[288 + 32];
-  struct huff_tree cl_tree;
-  struct huff_tree ll_tree;
-  struct huff_tree dist_tree;
+  uchar *cl_lens;
+  uchar *ll_lens;
+  struct huff_tree *cl_tree;
+  struct huff_tree *ll_tree;
+  struct huff_tree *dist_tree;
   uint hlit_raw;
   uint hdist_raw;
   uint hclen_raw;
@@ -553,6 +567,12 @@ inflate_dynamic(struct bit_stream *bs,
   int hclen;
   int total;
   int i;
+
+  cl_lens = gzip_dyn_cl_lens;
+  ll_lens = gzip_dyn_ll_lens;
+  cl_tree = &gzip_dyn_cl_tree;
+  ll_tree = &gzip_dyn_ll_tree;
+  dist_tree = &gzip_dyn_dist_tree;
 
   if(bits_read(bs, 5, &hlit_raw) < 0) return -1;
   if(bits_read(bs, 5, &hdist_raw) < 0) return -1;
@@ -576,13 +596,13 @@ inflate_dynamic(struct bit_stream *bs,
     cl_lens[cl_order[i]] = (uchar)v;
   }
 
-  if(huff_build(&cl_tree, cl_lens, 19) < 0)
+  if(huff_build(cl_tree, cl_lens, 19) < 0)
     return -1;
 
   for(i = 0; i < total; ) {
     int sym;
 
-    if(huff_decode(bs, &cl_tree, &sym) < 0)
+    if(huff_decode(bs, cl_tree, &sym) < 0)
       return -1;
 
     if(sym <= 15) {
@@ -623,12 +643,12 @@ inflate_dynamic(struct bit_stream *bs,
     }
   }
 
-  if(huff_build(&ll_tree, ll_lens, hlit) < 0)
+  if(huff_build(ll_tree, ll_lens, hlit) < 0)
     return -1;
-  if(huff_build(&dist_tree, ll_lens + hlit, hdist) < 0)
+  if(huff_build(dist_tree, ll_lens + hlit, hdist) < 0)
     return -1;
 
-  return inflate_codes(bs, &ll_tree, &dist_tree, out, win, wpos, crc, usize);
+  return inflate_codes(bs, ll_tree, dist_tree, out, win, wpos, crc, usize);
 }
 
 int
@@ -638,15 +658,19 @@ aux_gzip_inflate_fd(int in_fd, int out_fd)
   struct out_stream out;
   struct bit_stream bs;
   uchar trailer[8];
-  uchar win[GZIP_WINSZ];
+  uchar *win;
   uint crc;
   uint usize;
   uint got_crc;
   uint got_size;
   uint wpos;
   uint last;
+  int first_member;
+
+  errno = 0;
 
   aux_crc32_init();
+  win = gzip_member_window;
 
   in.fd = in_fd;
   in.pos = 0;
@@ -659,57 +683,115 @@ aux_gzip_inflate_fd(int in_fd, int out_fd)
   bs.bitbuf = 0;
   bs.bitcnt = 0;
 
-  crc = 0xffffffffU;
-  usize = 0;
-  wpos = 0;
+  first_member = 1;
+  while(1) {
+    int c;
 
-  if(gzip_skip_header(&in) < 0)
-    return -1;
-
-  do {
-    uint btype;
-
-    if(bits_read(&bs, 1, &last) < 0)
-      return -1;
-    if(bits_read(&bs, 2, &btype) < 0)
-      return -1;
-
-    if(btype == 0) {
-      if(inflate_stored(&bs, &out, win, &wpos, &crc, &usize) < 0)
+    while(1) {
+      c = in_next_byte(&in);
+      if(c < 0)
+        break;
+      if(c != 0)
+        break;
+    }
+    if(c < 0) {
+      if(first_member) {
+        errno = ENODATA;
         return -1;
-    } else if(btype == 1) {
-      if(inflate_fixed(&bs, &out, win, &wpos, &crc, &usize) < 0)
-        return -1;
-    } else if(btype == 2) {
-      if(inflate_dynamic(&bs, &out, win, &wpos, &crc, &usize) < 0)
-        return -1;
-    } else {
+      }
+      break;
+    }
+    if(c != 0x1f) {
+      errno = EBADMSG;
       return -1;
     }
-  } while(!last);
+    in.pos--;
 
-  if(out_flush(&out) < 0)
+    bs.bitbuf = 0;
+    bs.bitcnt = 0;
+    crc = 0xffffffffU;
+    usize = 0;
+    wpos = 0;
+
+    if(gzip_skip_header(&in) < 0) {
+      if(errno == 0)
+        errno = EBADMSG;
+      return -1;
+    }
+
+    do {
+      uint btype;
+
+      if(bits_read(&bs, 1, &last) < 0) {
+        if(errno == 0)
+          errno = EILSEQ;
+        return -1;
+      }
+      if(bits_read(&bs, 2, &btype) < 0) {
+        if(errno == 0)
+          errno = EILSEQ;
+        return -1;
+      }
+
+      if(btype == 0) {
+        if(inflate_stored(&bs, &out, win, &wpos, &crc, &usize) < 0) {
+          if(errno == 0)
+            errno = EILSEQ;
+          return -1;
+        }
+      } else if(btype == 1) {
+        if(inflate_fixed(&bs, &out, win, &wpos, &crc, &usize) < 0) {
+          if(errno == 0)
+            errno = EILSEQ;
+          return -1;
+        }
+      } else if(btype == 2) {
+        if(inflate_dynamic(&bs, &out, win, &wpos, &crc, &usize) < 0) {
+          if(errno == 0)
+            errno = EILSEQ;
+          return -1;
+        }
+      } else {
+        errno = EILSEQ;
+        return -1;
+      }
+    } while(!last);
+
+    bits_align_byte(&bs);
+    if(in_read_bytes(&in, trailer, sizeof(trailer)) < 0) {
+      if(errno == 0)
+        errno = EILSEQ;
+      return -1;
+    }
+
+    got_crc = (uint)trailer[0] |
+              ((uint)trailer[1] << 8) |
+              ((uint)trailer[2] << 16) |
+              ((uint)trailer[3] << 24);
+    got_size = (uint)trailer[4] |
+               ((uint)trailer[5] << 8) |
+               ((uint)trailer[6] << 16) |
+               ((uint)trailer[7] << 24);
+
+    crc = aux_crc32_finish(crc);
+
+    if(got_crc != crc) {
+      errno = EBADMSG;
+      return -1;
+    }
+    if(got_size != (usize & 0xffffffffU)) {
+      errno = EBADMSG;
+      return -1;
+    }
+
+    first_member = 0;
+  }
+
+  if(out_flush(&out) < 0) {
+    if(errno == 0)
+      errno = EIO;
     return -1;
-
-  bits_align_byte(&bs);
-  if(in_read_bytes(&in, trailer, sizeof(trailer)) < 0)
-    return -1;
-
-  got_crc = (uint)trailer[0] |
-            ((uint)trailer[1] << 8) |
-            ((uint)trailer[2] << 16) |
-            ((uint)trailer[3] << 24);
-  got_size = (uint)trailer[4] |
-             ((uint)trailer[5] << 8) |
-             ((uint)trailer[6] << 16) |
-             ((uint)trailer[7] << 24);
-
-  crc = aux_crc32_finish(crc);
-
-  if(got_crc != crc)
-    return -1;
-  if(got_size != (usize & 0xffffffffU))
-    return -1;
+  }
 
   return 0;
 }

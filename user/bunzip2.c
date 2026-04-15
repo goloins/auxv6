@@ -1,5 +1,6 @@
 #include "types.h"
 #include "auxv6/user.h"
+#include "auxv6/bzip2.h"
 #include "fcntl.h"
 #include "unistd.h"
 #include "errno.h"
@@ -18,8 +19,16 @@ usage(void)
 static int
 bunzip2_stream(int in_fd, int out_fd, const char *name)
 {
-  dprintf(2, "bunzip2: bzip2 decompression not yet implemented\n");
-  return -1;
+  if(aux_bzip2_inflate_fd(in_fd, out_fd) < 0) {
+    if(errno == EOPNOTSUPP)
+      dprintf(2, "bunzip2: bzip2 support is not available in this build\n");
+    else if(name)
+      dprintf(2, "bunzip2: %s: invalid or unsupported bzip2 stream\n", name);
+    else
+      dprintf(2, "bunzip2: invalid or unsupported bzip2 stream\n");
+    return -1;
+  }
+  return 0;
 }
 
 int
@@ -82,12 +91,11 @@ main(int argc, char *argv[])
       char out_path[256];
       int out_fd;
 
-      if(strlen(argv[i]) >= 4 && strcmp(argv[i] + strlen(argv[i]) - 4, ".bz2") == 0) {
-        snprintf(out_path, sizeof(out_path), "%.*s", (int)(strlen(argv[i]) - 4), argv[i]);
-      } else if(strlen(argv[i]) >= 8 && strcmp(argv[i] + strlen(argv[i]) - 8, ".tar.bz2") == 0) {
-        snprintf(out_path, sizeof(out_path), "%.*s.tar", (int)(strlen(argv[i]) - 4), argv[i]);
-      } else {
-        snprintf(out_path, sizeof(out_path), "%s.out", argv[i]);
+      if(aux_bzip2_output_name(argv[i], out_path, sizeof(out_path)) < 0) {
+        dprintf(2, "bunzip2: %s: output path too long\n", argv[i]);
+        close(in_fd);
+        rc = 1;
+        continue;
       }
 
       out_fd = open(out_path, O_CREATE | O_WRONLY | O_TRUNC);

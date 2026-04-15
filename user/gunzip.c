@@ -3,6 +3,25 @@
 #include "auxv6/gzip.h"
 #include "fcntl.h"
 #include "unistd.h"
+#include "errno.h"
+#include "sys/stat.h"
+
+static const char*
+gzip_errno_detail(int err)
+{
+  switch(err) {
+  case ENODATA:
+    return "no gzip member found in input";
+  case EBADMSG:
+    return "gzip header/trailer checksum mismatch or malformed member";
+  case EILSEQ:
+    return "invalid deflate bitstream";
+  case EIO:
+    return "I/O error while reading or writing compressed data";
+  default:
+    return "invalid or unsupported gzip stream";
+  }
+}
 
 static void
 usage(void)
@@ -15,10 +34,12 @@ static int
 gunzip_stream(int in_fd, int out_fd, const char *name)
 {
   if(aux_gzip_inflate_fd(in_fd, out_fd) < 0) {
+    int err = errno;
+
     if(name)
-      dprintf(2, "gunzip: %s: invalid or unsupported gzip stream\n", name);
+      dprintf(2, "gunzip: %s: %s (errno=%d)\n", name, gzip_errno_detail(err), err);
     else
-      dprintf(2, "gunzip: invalid or unsupported gzip stream\n");
+      dprintf(2, "gunzip: %s (errno=%d)\n", gzip_errno_detail(err), err);
     return -1;
   }
   return 0;
@@ -82,6 +103,7 @@ main(int argc, char *argv[])
     } else {
       char out_path[256];
       int out_fd;
+      struct stat in_st;
 
       if(aux_gzip_output_name(argv[i], out_path, sizeof(out_path)) < 0) {
         dprintf(2, "gunzip: %s: output path too long\n", argv[i]);
@@ -98,12 +120,37 @@ main(int argc, char *argv[])
         continue;
       }
 
-      if(gunzip_stream(in_fd, out_fd, argv[i]) < 0) {
+      memset(&in_st, 0, sizeof(in_st));
+      if(fstat(in_fd, &in_st) < 0) {
+        dprintf(2, "gunzip: %s: cannot stat input\n", argv[i]);
+        close(out_fd);
+        close(in_fd);
         unlink(out_path);
         rc = 1;
+        continue;
+      }
+
+      if(gunzip_stream(in_fd, out_fd, argv[i]) < 0) {
+        if(unlink(out_path) < 0)
+          dprintf(2, "gunzip: warning: unable to remove failed output %s\n", out_path);
+        rc = 1;
       } else if(!keep_input) {
-        if(unlink(argv[i]) < 0)
+        struct stat out_st;
+
+        memset(&out_st, 0, sizeof(out_st));
+        if(fstat(out_fd, &out_st) < 0) {
+          dprintf(2, "gunzip: %s: cannot stat output %s\n", argv[i], out_path);
+          if(unlink(out_path) < 0)
+            dprintf(2, "gunzip: warning: unable to remove failed output %s\n", out_path);
+          rc = 1;
+        } else if(in_st.st_size > 0 && out_st.st_size == 0) {
+          dprintf(2, "gunzip: %s: decompressor produced empty output from non-empty input\n", argv[i]);
+          if(unlink(out_path) < 0)
+            dprintf(2, "gunzip: warning: unable to remove failed output %s\n", out_path);
+          rc = 1;
+        } else if(unlink(argv[i]) < 0) {
           dprintf(2, "gunzip: warning: unable to remove %s\n", argv[i]);
+        }
       }
 
       close(out_fd);

@@ -1,5 +1,6 @@
 #include "types.h"
 #include "auxv6/user.h"
+#include "auxv6/bzip2.h"
 #include "fcntl.h"
 #include "unistd.h"
 #include "errno.h"
@@ -18,8 +19,16 @@ usage(void)
 static int
 bzip2_stream(int in_fd, int out_fd, const char *name, int blocksize)
 {
-  dprintf(2, "bzip2: bzip2 compression not yet implemented\n");
-  return -1;
+  (void)name;
+  (void)blocksize;
+  if(aux_bzip2_deflate_fd(in_fd, out_fd) < 0) {
+    if(errno == EOPNOTSUPP)
+      dprintf(2, "bzip2: bzip2 support is not available in this build\n");
+    else
+      dprintf(2, "bzip2: compression failed\n");
+    return -1;
+  }
+  return 0;
 }
 
 int
