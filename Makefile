@@ -1014,7 +1014,9 @@ ports-progs:
 		echo "ports: enabled-list $(PORTS_ENABLED_LIST) not found; skipping" | tee -a $(PORTS_BUILD_LOG); \
 		exit 0; \
 	fi
-	@while IFS='|' read -r name url pclass srcdir binname; do \
+	@hooks_seen="ports/.ports-install-hooks.seen"; \
+	: > "$$hooks_seen"; \
+	while IFS='|' read -r name url pclass srcdir binname; do \
 		case "$$name" in ''|'#'*) continue ;; esac; \
 		skip=0; \
 		for builtin in $(PORTS_SKIP_LIST); do \
@@ -1105,13 +1107,18 @@ ports-progs:
 		install -d "$$destdir"; \
 		install -m 0755 "$$portbin" "$$destdir/$$binname"; \
 		echo "ports: installed $$name -> $$destdir/$$binname" | tee -a $(PORTS_BUILD_LOG); \
-		if grep -Eq '^[[:space:]]*install-targetfs:' "$$portdir/Makefile.auxv6"; then \
-			if ! $(MAKE) -C "$$portdir" -f Makefile.auxv6 install-targetfs; then \
-				echo "ports: install-targetfs hook failed for $$name" | tee -a $(PORTS_BUILD_LOG); \
-				continue; \
+		hook_key="$$name|$$srcdir"; \
+		if ! grep -Fxq "$$hook_key" "$$hooks_seen"; then \
+			if grep -Eq '^[[:space:]]*install-targetfs:' "$$portdir/Makefile.auxv6"; then \
+				if ! $(MAKE) -C "$$portdir" -f Makefile.auxv6 install-targetfs; then \
+					echo "ports: install-targetfs hook failed for $$name" | tee -a $(PORTS_BUILD_LOG); \
+					continue; \
+				fi; \
 			fi; \
+			echo "$$hook_key" >> "$$hooks_seen"; \
 		fi; \
-	done < "$(PORTS_MANIFEST)"
+	done < "$(PORTS_MANIFEST)"; \
+	rm -f "$$hooks_seen"
 
 ifeq ($(LEGACY_XV6FS),1)
 mkfs: tools/mkfs.c include/fs.h

@@ -167,7 +167,7 @@ check-host-contamination:
 		echo "Inspect $(LOG) for details." >&2; \
 		exit 1)
 
-install-targetfs: $(OUT)
+install-targetfs:
 	@install -d "$(TARGETFS_ETC_SSH)" "$(TARGETFS_PRIVSEP)"
 	@if [ -f "$(SSHD_CONF_SRC)" ] && [ ! -f "$(TARGETFS_ETC_SSH)/sshd_config" ]; then \
 		install -m 0644 "$(SSHD_CONF_SRC)" "$(TARGETFS_ETC_SSH)/sshd_config"; \
