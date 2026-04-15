@@ -223,11 +223,7 @@ install-targetfs:
 		else \
 			echo 'KbdInteractiveAuthentication no' >> "$$conf"; \
 		fi; \
-		if grep -Eq '^[#[:space:]]*UsePAM[[:space:]]+' "$$conf"; then \
-			sed -i -E 's|^[#[:space:]]*UsePAM[[:space:]]+.*|UsePAM no|' "$$conf"; \
-		else \
-			echo 'UsePAM no' >> "$$conf"; \
-		fi; \
+		sed -i -E '/^[#[:space:]]*UsePAM[[:space:]]+/d' "$$conf"; \
 		if grep -Eq '^[#[:space:]]*UsePrivilegeSeparation[[:space:]]+' "$$conf"; then \
 			sed -i -E 's|^[#[:space:]]*UsePrivilegeSeparation[[:space:]]+.*|UsePrivilegeSeparation no|' "$$conf"; \
 		else \

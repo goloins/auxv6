@@ -113,3 +113,4 @@
 #define SYS_socketpair 112
 #define SYS_sendmsg 113
 #define SYS_recvmsg 114
+#define SYS_fchmod 115

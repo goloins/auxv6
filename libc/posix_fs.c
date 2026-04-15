@@ -68,7 +68,7 @@ struct auxv6_kstat {
 #define AUX_T_DEV 3
 #define AUX_T_SYMLINK 4
 
-int __auxv6_sys_open(const char *path, int flags);
+int __auxv6_sys_open(const char *path, int flags, int mode);
 ssize_t __auxv6_sys_read(int fd, void *buf, size_t count);
 ssize_t __auxv6_sys_write(int fd, const void *buf, size_t count);
 int __auxv6_sys_close(int fd);
@@ -106,9 +106,13 @@ int
 open(const char *path, int flags, ...)
 {
   va_list ap;
+  int mode;
   int rc;
 
   va_start(ap, flags);
+  mode = 0;
+  if(flags & O_CREAT)
+    mode = va_arg(ap, int);
   va_end(ap);
 
   if(path == 0) {
@@ -117,7 +121,7 @@ open(const char *path, int flags, ...)
   }
 
   errno = 0;
-  rc = __auxv6_sys_open(path, flags);
+  rc = __auxv6_sys_open(path, flags, mode);
   if(rc < 0)
     return posix_fail_errno(ENOENT);
   return rc;

@@ -1573,6 +1573,7 @@ sys_open(void)
   int path_addr;
   char path[256];
   int fd, omode;
+  int cmode;
   int must_write;
   uint64_t startoff;  /* O_APPEND: set to ip->size; otherwise 0 */
   struct file *f;
@@ -1581,6 +1582,13 @@ sys_open(void)
 
   if(argint(0, &path_addr) < 0 || argint(1, &omode) < 0)
     return -1;
+  cmode = 0;
+  if(omode & O_CREATE){
+    if(argint(2, &cmode) < 0)
+      cmode = 0;
+    cmode &= 0777;
+    cmode &= ~myproc()->umask;
+  }
   if(copyinstr_user((uint)path_addr, path, sizeof(path)) < 0)
     return -1;
 
@@ -1590,7 +1598,7 @@ sys_open(void)
     // O_CREATE should still open an existing vnode when present.
     ip = vfs_resolve(path);
     if(ip == 0){
-      ip = create(path, T_FILE, 0, 0, 0);
+      ip = create(path, T_FILE, 0, 0, cmode);
       if(ip == 0){
         end_op();
         return -1;
