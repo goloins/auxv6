@@ -12,6 +12,7 @@
 #include "../../include/fs.h"
 #include "../../include/file.h"
 #include "../../include/socket.h"
+#include "../../include/sys/socket.h"
 #include "../../include/net.h"
 
 struct socket sockets[NSOCKET];
@@ -19,6 +20,9 @@ struct spinlock socket_lock;
 static ushort next_ephemeral = 40000;
 uint tcp_iss = 1000;   // Shared ISN counter; also used by tcp.c via extern
 static ushort alloc_ephemeral_port_locked(void);
+
+#define SOCKET_MSG_IOV_MAX 16
+#define SOCKET_MSG_BYTES_MAX 65536
 
 // Allocate a file descriptor in the current process.
 // Mirrors sysfile.c's internal fdalloc helper.
@@ -81,12 +85,18 @@ socket_reset_locked(struct socket *s)
   s->tcp.unacked_buf = 0;
   s->tcp.unacked_len = 0;
   s->tcp.unacked_seq = 0;
+  s->peer = 0;
   s->backlog = 0;
   s->qhead = 0;
   s->qtail = 0;
   s->qlen = 0;
   for(i = 0; i < SOCKET_LISTENQ_MAX; i++)
     s->listenq[i] = 0;
+  s->rights_head = 0;
+  s->rights_tail = 0;
+  s->rights_len = 0;
+  for(i = 0; i < SOCKET_RIGHTS_QMAX; i++)
+    s->rights_q[i] = 0;
   s->ttl = 64;
   s->reuseaddr = 0;
   s->shut_rd = 0;
@@ -98,6 +108,7 @@ socket_free_locked(struct socket *s)
 {
   uint i;
   struct socket *child;
+  struct file *rf;
 
   for(i = 0; i < s->qlen; i++) {
     child = s->listenq[(s->qhead + i) % SOCKET_LISTENQ_MAX];
@@ -123,6 +134,19 @@ socket_free_locked(struct socket *s)
     kfree(s->recv_buf);
     s->recv_buf = 0;
   }
+
+  while(s->rights_len > 0) {
+    rf = s->rights_q[s->rights_head];
+    s->rights_q[s->rights_head] = 0;
+    s->rights_head = (s->rights_head + 1) % SOCKET_RIGHTS_QMAX;
+    s->rights_len--;
+    if(rf)
+      fileclose(rf);
+  }
+
+  if(s->peer)
+    s->peer->peer = 0;
+
   socket_reset_locked(s);
 }
 
@@ -251,6 +275,8 @@ socket_stream_eof_locked(struct socket *s)
     return 0;
   if(s->recv_len != 0)
     return 0;
+  if(s->family == AF_UNIX)
+    return (s->peer == 0 || s->peer->state == SOCK_CLOSED);
   if(s->state == SOCK_CLOSED)
     return 1;
   return s->tcp.state == TCPS_CLOSE_WAIT || s->tcp.state == TCPS_CLOSED;
@@ -274,6 +300,142 @@ socket_recv_copy_locked(struct socket *s, char *buf, int len, struct sockaddr_in
   if(peer)
     memmove(peer, &s->remote_addr, sizeof(*peer));
 
+  return n;
+}
+
+static struct file*
+fd_get_file_ref(int fd)
+{
+  struct proc *p;
+  struct file *f;
+
+  p = myproc();
+  if(p == 0 || p->fdtable == 0)
+    return 0;
+  if(fd < 0 || fd >= p->fdtable->nfds)
+    return 0;
+
+  f = p->fdtable->entries[fd];
+  if(f == 0)
+    return 0;
+
+  filedup(f);
+  return f;
+}
+
+static void
+fd_close_local(int fd)
+{
+  struct proc *p;
+  struct file *f;
+
+  p = myproc();
+  if(p == 0 || p->fdtable == 0)
+    return;
+  if(fd < 0 || fd >= p->fdtable->nfds)
+    return;
+
+  f = p->fdtable->entries[fd];
+  if(f == 0)
+    return;
+
+  p->fdtable->entries[fd] = 0;
+  p->fdtable->fdflags[fd] = 0;
+  fileclose(f);
+}
+
+static int
+socket_rights_enqueue_locked(struct socket *s, struct file *rf)
+{
+  if(s == 0 || rf == 0)
+    return -1;
+  if(s->rights_len >= SOCKET_RIGHTS_QMAX)
+    return -1;
+
+  s->rights_q[s->rights_tail] = rf;
+  s->rights_tail = (s->rights_tail + 1) % SOCKET_RIGHTS_QMAX;
+  s->rights_len++;
+  return 0;
+}
+
+static struct file*
+socket_rights_dequeue_locked(struct socket *s)
+{
+  struct file *rf;
+
+  if(s == 0 || s->rights_len == 0)
+    return 0;
+
+  rf = s->rights_q[s->rights_head];
+  s->rights_q[s->rights_head] = 0;
+  s->rights_head = (s->rights_head + 1) % SOCKET_RIGHTS_QMAX;
+  s->rights_len--;
+  return rf;
+}
+
+static void
+socket_rights_drop_locked(struct socket *s, int n)
+{
+  struct file *rf;
+
+  if(s == 0 || n <= 0)
+    return;
+
+  while(n > 0 && s->rights_len > 0) {
+    rf = socket_rights_dequeue_locked(s);
+    if(rf)
+      fileclose(rf);
+    n--;
+  }
+}
+
+static int
+socket_local_stream_send_locked(struct socket *s, const char *buf, int len,
+                                struct file **rfs, int rcount)
+{
+  struct socket *peer;
+  uint free_space;
+  int n;
+  int i;
+
+  if(s == 0 || s->family != AF_UNIX || s->type != SOCK_STREAM)
+    return -1;
+  if(s->shut_wr)
+    return -1;
+
+  peer = s->peer;
+  if(peer == 0 || peer->state == SOCK_CLOSED || peer->shut_rd)
+    return -1;
+
+  if(rcount < 0 || rcount > SOCKET_RIGHTS_QMAX)
+    return -1;
+  if(peer->rights_len + (uint)rcount > SOCKET_RIGHTS_QMAX)
+    return -1;
+
+  free_space = peer->recv_cap - peer->recv_len;
+  if(free_space == 0)
+    return -1;
+
+  n = len;
+  if((uint)n > free_space)
+    n = (int)free_space;
+  if(n > 0)
+    memmove(peer->recv_buf + peer->recv_len, buf, (uint)n);
+  peer->recv_len += (uint)n;
+
+  for(i = 0; i < rcount; i++) {
+    if(rfs[i] && socket_rights_enqueue_locked(peer, rfs[i]) < 0) {
+      if((uint)n <= peer->recv_len)
+        peer->recv_len -= (uint)n;
+      while(i > 0) {
+        i--;
+        socket_rights_drop_locked(peer, 1);
+      }
+      return -1;
+    }
+  }
+
+  wakeup(peer);
   return n;
 }
 
@@ -786,6 +948,15 @@ socket_filewrite(struct file *f, char *src_buf, int n)
   if(s == 0)
     return -1;
 
+  if(s->family == AF_UNIX && s->type == SOCK_STREAM) {
+    int sent;
+
+    acquire(&socket_lock);
+    sent = socket_local_stream_send_locked(s, src_buf, n, 0, 0);
+    release(&socket_lock);
+    return sent;
+  }
+
   acquire(&socket_lock);
   if(s->shut_wr) {
     release(&socket_lock);
@@ -929,6 +1100,496 @@ sys_socket(void)
   NETDBG("socket: created fd=%d family=%d type=%d\n", fd, family, type);
   
   return fd;
+}
+
+int
+sys_socketpair(void)
+{
+  int domain;
+  int type;
+  int protocol;
+  int sv_raw;
+  int sv[2];
+  int fd0;
+  int fd1;
+  struct socket *a;
+  struct socket *b;
+  struct file *fa;
+  struct file *fb;
+  struct proc *p;
+  pde_t *pgdir;
+
+  if(argint(0, &domain) < 0 || argint(1, &type) < 0 ||
+     argint(2, &protocol) < 0 || argint(3, &sv_raw) < 0)
+    return -1;
+
+  if(domain != AF_UNIX)
+    return -1;
+  if(type != SOCK_STREAM)
+    return -1;
+  if(protocol != 0)
+    return -1;
+
+  a = socket_alloc();
+  if(a == 0)
+    return -1;
+  b = socket_alloc();
+  if(b == 0) {
+    socket_deref(a);
+    return -1;
+  }
+
+  if(socket_buffers_init(a) < 0 || socket_buffers_init(b) < 0) {
+    socket_deref(a);
+    socket_deref(b);
+    return -1;
+  }
+
+  acquire(&socket_lock);
+  a->family = AF_UNIX;
+  a->type = SOCK_STREAM;
+  a->protocol = 0;
+  a->state = SOCK_ESTAB;
+  a->tcp.state = TCPS_ESTABLISHED;
+  a->peer = b;
+
+  b->family = AF_UNIX;
+  b->type = SOCK_STREAM;
+  b->protocol = 0;
+  b->state = SOCK_ESTAB;
+  b->tcp.state = TCPS_ESTABLISHED;
+  b->peer = a;
+  release(&socket_lock);
+
+  fa = filealloc();
+  if(fa == 0) {
+    socket_deref(a);
+    socket_deref(b);
+    return -1;
+  }
+  fb = filealloc();
+  if(fb == 0) {
+    fileclose(fa);
+    socket_deref(a);
+    socket_deref(b);
+    return -1;
+  }
+
+  fa->type = FD_SOCKET;
+  fa->socket = a;
+  fa->readable = 1;
+  fa->writable = 1;
+  fb->type = FD_SOCKET;
+  fb->socket = b;
+  fb->readable = 1;
+  fb->writable = 1;
+
+  fd0 = socket_fdalloc(fa);
+  if(fd0 < 0) {
+    fileclose(fa);
+    fileclose(fb);
+    return -1;
+  }
+  fd1 = socket_fdalloc(fb);
+  if(fd1 < 0) {
+    fd_close_local(fd0);
+    fileclose(fb);
+    return -1;
+  }
+
+  sv[0] = fd0;
+  sv[1] = fd1;
+
+  p = myproc();
+  pgdir = p ? proc_pgdir(p) : 0;
+  if(pgdir == 0 || copyout(pgdir, (uint)sv_raw, sv, sizeof(sv)) < 0) {
+    fd_close_local(fd0);
+    fd_close_local(fd1);
+    return -1;
+  }
+
+  return 0;
+}
+
+int
+sys_sendmsg(void)
+{
+  int sockfd;
+  int msg_raw;
+  int flags;
+  struct socket *s;
+  struct msghdr msg;
+  struct iovec *iov;
+  char *kbuf;
+  int i;
+  int total;
+  int copied;
+  struct proc *p;
+  pde_t *pgdir;
+  struct file *right_files[SOCKET_RIGHTS_QMAX];
+  int right_count;
+  int sent;
+
+  if(argint(0, &sockfd) < 0 || argint(1, &msg_raw) < 0 || argint(2, &flags) < 0)
+    return -1;
+  if(flags & ~(MSG_NOSIGNAL | MSG_DONTWAIT))
+    return -1;
+
+  p = myproc();
+  pgdir = p ? proc_pgdir(p) : 0;
+  if(pgdir == 0)
+    return -1;
+
+  if(copyin(pgdir, &msg, (uint)msg_raw, sizeof(msg)) < 0)
+    return -1;
+  if(msg.msg_iovlen <= 0 || msg.msg_iovlen > SOCKET_MSG_IOV_MAX)
+    return -1;
+
+  iov = (struct iovec*)kmalloc((uint)msg.msg_iovlen * sizeof(*iov));
+  if(iov == 0)
+    return -1;
+  if(copyin(pgdir, iov, (uint)msg.msg_iov,
+            (uint)msg.msg_iovlen * sizeof(*iov)) < 0) {
+    kmalloc_free(iov);
+    return -1;
+  }
+
+  total = 0;
+  for(i = 0; i < msg.msg_iovlen; i++) {
+    if(iov[i].iov_len > (size_t)(SOCKET_MSG_BYTES_MAX - total)) {
+      kmalloc_free(iov);
+      return -1;
+    }
+    total += (int)iov[i].iov_len;
+  }
+
+  if(total > 0) {
+    kbuf = (char*)kmalloc((uint)total);
+    if(kbuf == 0) {
+      kmalloc_free(iov);
+      return -1;
+    }
+  } else {
+    kbuf = 0;
+  }
+
+  copied = 0;
+  for(i = 0; i < msg.msg_iovlen; i++) {
+    if(iov[i].iov_len == 0)
+      continue;
+    if(copyin(pgdir, kbuf + copied, (uint)iov[i].iov_base, (uint)iov[i].iov_len) < 0) {
+      if(kbuf)
+        kmalloc_free(kbuf);
+      kmalloc_free(iov);
+      return -1;
+    }
+    copied += (int)iov[i].iov_len;
+  }
+
+  right_count = 0;
+  memset(right_files, 0, sizeof(right_files));
+  if(msg.msg_control && msg.msg_controllen >= CMSG_LEN(sizeof(int))) {
+    struct cmsghdr cmsg;
+    int send_fds[SOCKET_RIGHTS_QMAX];
+    int fd_bytes;
+    int nfd;
+
+    if(copyin(pgdir, &cmsg, (uint)msg.msg_control, sizeof(cmsg)) < 0) {
+      if(kbuf)
+        kmalloc_free(kbuf);
+      kmalloc_free(iov);
+      return -1;
+    }
+    if(cmsg.cmsg_level == SOL_SOCKET && cmsg.cmsg_type == SCM_RIGHTS &&
+       cmsg.cmsg_len >= CMSG_LEN(sizeof(int)) &&
+       msg.msg_controllen >= cmsg.cmsg_len) {
+      fd_bytes = (int)cmsg.cmsg_len - (int)CMSG_LEN(0);
+      if(fd_bytes <= 0 || (fd_bytes % (int)sizeof(int)) != 0) {
+        if(kbuf)
+          kmalloc_free(kbuf);
+        kmalloc_free(iov);
+        return -1;
+      }
+      nfd = fd_bytes / (int)sizeof(int);
+      if(nfd > SOCKET_RIGHTS_QMAX) {
+        if(kbuf)
+          kmalloc_free(kbuf);
+        kmalloc_free(iov);
+        return -1;
+      }
+      if(copyin(pgdir, send_fds,
+                (uint)msg.msg_control + (uint)CMSG_LEN(0), (uint)fd_bytes) < 0) {
+        if(kbuf)
+          kmalloc_free(kbuf);
+        kmalloc_free(iov);
+        return -1;
+      }
+      for(i = 0; i < nfd; i++) {
+        right_files[right_count] = fd_get_file_ref(send_fds[i]);
+        if(right_files[right_count] == 0) {
+          while(right_count > 0) {
+            right_count--;
+            fileclose(right_files[right_count]);
+            right_files[right_count] = 0;
+          }
+          if(kbuf)
+            kmalloc_free(kbuf);
+          kmalloc_free(iov);
+          return -1;
+        }
+        right_count++;
+      }
+    }
+  }
+
+  s = getfd_socket(sockfd);
+  if(s == 0) {
+    while(right_count > 0) {
+      right_count--;
+      fileclose(right_files[right_count]);
+    }
+    if(kbuf)
+      kmalloc_free(kbuf);
+    kmalloc_free(iov);
+    return -1;
+  }
+
+  if(s->family != AF_UNIX || s->type != SOCK_STREAM) {
+    while(right_count > 0) {
+      right_count--;
+      fileclose(right_files[right_count]);
+    }
+    if(kbuf)
+      kmalloc_free(kbuf);
+    kmalloc_free(iov);
+    return -1;
+  }
+
+  acquire(&socket_lock);
+  sent = socket_local_stream_send_locked(s, kbuf, total, right_files, right_count);
+  release(&socket_lock);
+
+  if(sent < 0) {
+    while(right_count > 0) {
+      right_count--;
+      fileclose(right_files[right_count]);
+    }
+  }
+
+  if(kbuf)
+    kmalloc_free(kbuf);
+  kmalloc_free(iov);
+  return sent;
+}
+
+int
+sys_recvmsg(void)
+{
+  int sockfd;
+  int msg_raw;
+  int flags;
+  struct socket *s;
+  struct msghdr msg;
+  struct iovec *iov;
+  char *kbuf;
+  int i;
+  int total;
+  int n;
+  int copied;
+  struct proc *p;
+  pde_t *pgdir;
+  int out_flags;
+  int control_used;
+  char cbuf[CMSG_SPACE(sizeof(int) * SOCKET_RIGHTS_QMAX)];
+  int recv_fds[SOCKET_RIGHTS_QMAX];
+  struct file *rf;
+
+  if(argint(0, &sockfd) < 0 || argint(1, &msg_raw) < 0 || argint(2, &flags) < 0)
+    return -1;
+  if(flags & ~(MSG_PEEK | MSG_DONTWAIT))
+    return -1;
+
+  p = myproc();
+  pgdir = p ? proc_pgdir(p) : 0;
+  if(pgdir == 0)
+    return -1;
+
+  if(copyin(pgdir, &msg, (uint)msg_raw, sizeof(msg)) < 0)
+    return -1;
+  if(msg.msg_iovlen <= 0 || msg.msg_iovlen > SOCKET_MSG_IOV_MAX)
+    return -1;
+
+  iov = (struct iovec*)kmalloc((uint)msg.msg_iovlen * sizeof(*iov));
+  if(iov == 0)
+    return -1;
+  if(copyin(pgdir, iov, (uint)msg.msg_iov,
+            (uint)msg.msg_iovlen * sizeof(*iov)) < 0) {
+    kmalloc_free(iov);
+    return -1;
+  }
+
+  total = 0;
+  for(i = 0; i < msg.msg_iovlen; i++) {
+    if(iov[i].iov_len > (size_t)(SOCKET_MSG_BYTES_MAX - total)) {
+      kmalloc_free(iov);
+      return -1;
+    }
+    total += (int)iov[i].iov_len;
+  }
+
+  if(total > 0) {
+    kbuf = (char*)kmalloc((uint)total);
+    if(kbuf == 0) {
+      kmalloc_free(iov);
+      return -1;
+    }
+  } else {
+    kbuf = 0;
+  }
+
+  s = getfd_socket(sockfd);
+  if(s == 0 || s->family != AF_UNIX || s->type != SOCK_STREAM) {
+    if(kbuf)
+      kmalloc_free(kbuf);
+    kmalloc_free(iov);
+    return -1;
+  }
+
+  out_flags = 0;
+  control_used = 0;
+  rf = 0;
+
+  acquire(&socket_lock);
+  if(flags & MSG_DONTWAIT) {
+    if(s->recv_len == 0) {
+      if(socket_stream_eof_locked(s)) {
+        release(&socket_lock);
+        if(kbuf)
+          kmalloc_free(kbuf);
+        kmalloc_free(iov);
+        return 0;
+      }
+      release(&socket_lock);
+      if(kbuf)
+        kmalloc_free(kbuf);
+      kmalloc_free(iov);
+      return -1;
+    }
+  } else {
+    while(s->recv_len == 0) {
+      if(socket_stream_eof_locked(s)) {
+        release(&socket_lock);
+        if(kbuf)
+          kmalloc_free(kbuf);
+        kmalloc_free(iov);
+        return 0;
+      }
+      sleep(s, &socket_lock);
+    }
+  }
+
+  n = total;
+  if((uint)n > s->recv_len)
+    n = (int)s->recv_len;
+  if(n > 0)
+    memmove(kbuf, s->recv_buf, (uint)n);
+  if((uint)n < s->recv_len)
+    memmove(s->recv_buf, s->recv_buf + n, s->recv_len - (uint)n);
+  s->recv_len -= (uint)n;
+
+  if(s->rights_len > 0) {
+    int pending;
+    int maxfds;
+    int take;
+    int ok;
+
+    pending = (int)s->rights_len;
+    if(msg.msg_control == 0 || msg.msg_controllen < CMSG_SPACE(sizeof(int))) {
+      socket_rights_drop_locked(s, pending);
+      out_flags |= MSG_CTRUNC;
+    } else {
+      struct cmsghdr *cmsg;
+
+      maxfds = ((int)msg.msg_controllen - (int)CMSG_LEN(0)) / (int)sizeof(int);
+      if(maxfds <= 0) {
+        socket_rights_drop_locked(s, pending);
+        out_flags |= MSG_CTRUNC;
+      } else {
+        take = pending;
+        if(take > maxfds) {
+          out_flags |= MSG_CTRUNC;
+          take = maxfds;
+        }
+
+        ok = 0;
+        for(i = 0; i < take; i++) {
+          rf = socket_rights_dequeue_locked(s);
+          if(rf == 0)
+            break;
+          recv_fds[ok] = socket_fdalloc(rf);
+          if(recv_fds[ok] < 0) {
+            fileclose(rf);
+            out_flags |= MSG_CTRUNC;
+            continue;
+          }
+          ok++;
+        }
+
+        if(pending > take)
+          socket_rights_drop_locked(s, pending - take);
+
+        if(ok > 0) {
+        cmsg = (struct cmsghdr*)cbuf;
+          cmsg->cmsg_len = CMSG_LEN((size_t)ok * sizeof(int));
+        cmsg->cmsg_level = SOL_SOCKET;
+        cmsg->cmsg_type = SCM_RIGHTS;
+          memmove(CMSG_DATA(cmsg), recv_fds, (uint)(ok * (int)sizeof(int)));
+          control_used = CMSG_SPACE((size_t)ok * sizeof(int));
+        }
+      }
+    }
+  }
+  release(&socket_lock);
+
+  copied = 0;
+  for(i = 0; i < msg.msg_iovlen && copied < n; i++) {
+    int chunk;
+
+    chunk = n - copied;
+    if((size_t)chunk > iov[i].iov_len)
+      chunk = (int)iov[i].iov_len;
+    if(chunk > 0 && copyout(pgdir, (uint)iov[i].iov_base, kbuf + copied, (uint)chunk) < 0) {
+      if(kbuf)
+        kmalloc_free(kbuf);
+      kmalloc_free(iov);
+      return -1;
+    }
+    copied += chunk;
+  }
+
+  if(control_used > 0) {
+    if(copyout(pgdir, (uint)msg.msg_control, cbuf, (uint)control_used) < 0) {
+      if(kbuf)
+        kmalloc_free(kbuf);
+      kmalloc_free(iov);
+      return -1;
+    }
+  }
+
+  msg.msg_namelen = 0;
+  msg.msg_controllen = (socklen_t)control_used;
+  msg.msg_flags = out_flags;
+  if(copyout(pgdir, (uint)msg_raw, &msg, sizeof(msg)) < 0) {
+    if(kbuf)
+      kmalloc_free(kbuf);
+    kmalloc_free(iov);
+    return -1;
+  }
+
+  if(kbuf)
+    kmalloc_free(kbuf);
+  kmalloc_free(iov);
+  return n;
 }
 
 // bind(sockfd, addr, addrlen) syscall
@@ -1224,6 +1885,16 @@ sys_send(void)
   {
     kmalloc_free(kbuf);
     return -1;
+  }
+
+  if(s->family == AF_UNIX && s->type == SOCK_STREAM) {
+    int sent;
+
+    acquire(&socket_lock);
+    sent = socket_local_stream_send_locked(s, kbuf, len, 0, 0);
+    release(&socket_lock);
+    kmalloc_free(kbuf);
+    return sent;
   }
 
   acquire(&socket_lock);
@@ -1951,7 +2622,13 @@ socket_close(struct socket *s)
     }
   } else {
     acquire(&socket_lock);
+    if(s->family == AF_UNIX && s->peer) {
+      s->peer->peer = 0;
+      wakeup(s->peer);
+      s->peer = 0;
+    }
     s->state = SOCK_CLOSED;
+    wakeup(s);
     release(&socket_lock);
   }
   
@@ -2283,7 +2960,9 @@ socket_poll_events(struct socket *s, int *readable, int *writable, int *error)
     rd = (s->recv_len > 0);
 
   if(s->type == SOCK_STREAM)
-    wr = (s->state == SOCK_ESTAB && s->tcp.state == TCPS_ESTABLISHED);
+    wr = (s->family == AF_UNIX)
+           ? (s->state == SOCK_ESTAB && s->peer != 0 && s->peer->state != SOCK_CLOSED)
+           : (s->state == SOCK_ESTAB && s->tcp.state == TCPS_ESTABLISHED);
   else if(s->type == SOCK_DGRAM)
     wr = (s->state == SOCK_BOUND || s->state == SOCK_CONNECT || s->state == SOCK_ESTAB);
   else if(s->type == SOCK_RAW)

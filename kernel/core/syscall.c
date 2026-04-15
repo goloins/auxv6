@@ -178,10 +178,13 @@ extern int sys_wait(void);
 extern int sys_write(void);
 extern int sys_uptime(void);
 extern int sys_socket(void);
+extern int sys_socketpair(void);
 extern int sys_bind(void);
 extern int sys_connect(void);
 extern int sys_send(void);
 extern int sys_recv(void);
+extern int sys_sendmsg(void);
+extern int sys_recvmsg(void);
 extern int sys_listen(void);
 extern int sys_accept(void);
 extern int sys_recvtimeout(void);
@@ -287,10 +290,13 @@ static int (*syscalls[])(void) = {
 [SYS_mkdir]   sys_mkdir,
 [SYS_close]   sys_close,
 [SYS_socket]  sys_socket,
+[SYS_socketpair] sys_socketpair,
 [SYS_bind]    sys_bind,
 [SYS_connect] sys_connect,
 [SYS_send]    sys_send,
 [SYS_recv]    sys_recv,
+[SYS_sendmsg] sys_sendmsg,
+[SYS_recvmsg] sys_recvmsg,
 [SYS_listen]  sys_listen,
 [SYS_accept]  sys_accept,
 [SYS_recvtimeout] sys_recvtimeout,

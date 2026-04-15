@@ -1,6 +1,124 @@
 #include "types.h"
 #include "auxv6/user.h"
+#include "sys/socket.h"
 #include "socket.h"
+
+static int
+test_socketpair_rights_multi(void)
+{
+  int sv[2];
+  int p1[2], p2[2];
+  struct iovec iov;
+  struct msghdr msg;
+  struct cmsghdr *cmsg;
+  int sendfds[2];
+  int recvfds[2];
+  int n;
+  char payload = 'R';
+  char out = 0;
+  char cbuf[CMSG_SPACE(sizeof(sendfds))];
+  char rcbuf[CMSG_SPACE(sizeof(recvfds))];
+
+  if(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) < 0) {
+    dprintf(1, "sockettest: socketpair() failed\n");
+    return -1;
+  }
+
+  if(pipe(p1) < 0 || pipe(p2) < 0) {
+    dprintf(1, "sockettest: pipe setup for rights test failed\n");
+    close(sv[0]);
+    close(sv[1]);
+    return -1;
+  }
+
+  memset(&msg, 0, sizeof(msg));
+  memset(cbuf, 0, sizeof(cbuf));
+  iov.iov_base = &payload;
+  iov.iov_len = 1;
+  msg.msg_iov = &iov;
+  msg.msg_iovlen = 1;
+  msg.msg_control = cbuf;
+  msg.msg_controllen = sizeof(cbuf);
+
+  sendfds[0] = p1[0];
+  sendfds[1] = p2[0];
+  cmsg = (struct cmsghdr *)cbuf;
+  cmsg->cmsg_level = SOL_SOCKET;
+  cmsg->cmsg_type = SCM_RIGHTS;
+  cmsg->cmsg_len = CMSG_LEN(sizeof(sendfds));
+  memmove(CMSG_DATA(cmsg), sendfds, sizeof(sendfds));
+
+  n = sendmsg(sv[0], &msg, 0);
+  if(n != 1) {
+    dprintf(1, "sockettest: sendmsg rights failed n=%d\n", n);
+    close(p1[0]); close(p1[1]); close(p2[0]); close(p2[1]);
+    close(sv[0]); close(sv[1]);
+    return -1;
+  }
+
+  close(p1[0]);
+  close(p2[0]);
+
+  memset(&msg, 0, sizeof(msg));
+  memset(rcbuf, 0, sizeof(rcbuf));
+  out = 0;
+  iov.iov_base = &out;
+  iov.iov_len = 1;
+  msg.msg_iov = &iov;
+  msg.msg_iovlen = 1;
+  msg.msg_control = rcbuf;
+  msg.msg_controllen = sizeof(rcbuf);
+
+  n = recvmsg(sv[1], &msg, 0);
+  if(n != 1 || out != 'R') {
+    dprintf(1, "sockettest: recvmsg payload failed n=%d out=%c\n", n, out);
+    close(p1[1]); close(p2[1]);
+    close(sv[0]); close(sv[1]);
+    return -1;
+  }
+
+  cmsg = (struct cmsghdr *)rcbuf;
+  if(msg.msg_controllen < CMSG_SPACE(sizeof(recvfds)) ||
+     cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS) {
+    dprintf(1, "sockettest: recvmsg missing SCM_RIGHTS\n");
+    close(p1[1]); close(p2[1]);
+    close(sv[0]); close(sv[1]);
+    return -1;
+  }
+
+  memmove(recvfds, CMSG_DATA(cmsg), sizeof(recvfds));
+
+  if(write(p1[1], "A", 1) != 1 || write(p2[1], "B", 1) != 1) {
+    dprintf(1, "sockettest: write to source pipes failed\n");
+    close(recvfds[0]); close(recvfds[1]);
+    close(p1[1]); close(p2[1]);
+    close(sv[0]); close(sv[1]);
+    return -1;
+  }
+
+  {
+    char a = 0;
+    char b = 0;
+    if(read(recvfds[0], &a, 1) != 1 || read(recvfds[1], &b, 1) != 1 ||
+       a != 'A' || b != 'B') {
+      dprintf(1, "sockettest: received fds not usable a=%c b=%c\n", a, b);
+      close(recvfds[0]); close(recvfds[1]);
+      close(p1[1]); close(p2[1]);
+      close(sv[0]); close(sv[1]);
+      return -1;
+    }
+  }
+
+  close(recvfds[0]);
+  close(recvfds[1]);
+  close(p1[1]);
+  close(p2[1]);
+  close(sv[0]);
+  close(sv[1]);
+
+  dprintf(1, "sockettest: PASS socketpair sendmsg/recvmsg SCM_RIGHTS multi-fd\n");
+  return 0;
+}
 
 int
 main(int argc, char *argv[])
@@ -149,5 +267,9 @@ main(int argc, char *argv[])
   close(rfd);
 
   dprintf(1, "sockettest: PASS send/recv over lo0\n");
+
+  if(test_socketpair_rights_multi() < 0)
+    exit(1);
+
   exit(0);
 }

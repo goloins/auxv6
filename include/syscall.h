@@ -110,3 +110,6 @@
 #define SYS_setgroups 109
 #define SYS_setresuid 110
 #define SYS_setresgid 111
+#define SYS_socketpair 112
+#define SYS_sendmsg 113
+#define SYS_recvmsg 114

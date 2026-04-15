@@ -2,8 +2,9 @@
  * <sys/un.h> - UNIX domain socket address definitions
  *
  * This provides the POSIX sockaddr_un type used by software that references
- * AF_UNIX paths. auxv6 does not yet implement the full UNIX-domain ancillary
- * messaging surface (sendmsg/recvmsg, SCM_RIGHTS, etc.).
+ * AF_UNIX paths. auxv6 currently supports local AF_UNIX stream socket pairs
+ * with sendmsg/recvmsg SCM_RIGHTS transfer, but pathname-bound UNIX sockets
+ * are still not implemented.
  */
 
 #ifndef _SYS_UN_H

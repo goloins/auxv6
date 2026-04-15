@@ -3,6 +3,8 @@
 
 #include "types.h"
 
+struct file;
+
 // Socket address family
 #define AF_INET       2
 #define AF_UNIX       1
@@ -119,6 +121,7 @@ struct tcpcb {
 #define TCP_MAX_RETRANSMIT 5  // Max retransmits before giving up
 
 #define SOCKET_LISTENQ_MAX 16
+#define SOCKET_RIGHTS_QMAX 16
 
 // Socket structure (kernel side)
 struct socket {
@@ -142,12 +145,21 @@ struct socket {
   // Transport control state.
   struct tcpcb tcp;
 
+  // Local socketpair peer linkage (AF_UNIX stream pairs).
+  struct socket *peer;
+
   // Stream listen queue for pending accepted sockets.
   uint backlog;
   uint qhead;
   uint qtail;
   uint qlen;
   struct socket *listenq[SOCKET_LISTENQ_MAX];
+
+  // Queued file references for SCM_RIGHTS transfer.
+  uint rights_head;
+  uint rights_tail;
+  uint rights_len;
+  struct file *rights_q[SOCKET_RIGHTS_QMAX];
 
   // Ref count for cleanup
   uint ref;

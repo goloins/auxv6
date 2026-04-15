@@ -845,10 +845,13 @@ void            socket_close(struct socket*);
 struct socket*  getfd_socket(int fd);
 ushort          socket_alloc_port_locked(void);  // allocate ephemeral port (socket_lock held)
 int             sys_socket(void);
+int             sys_socketpair(void);
 int             sys_bind(void);
 int             sys_connect(void);
 int             sys_send(void);
 int             sys_recv(void);
+int             sys_sendmsg(void);
+int             sys_recvmsg(void);
 int             sys_recvtimeout(void);
 int             sys_sendto(void);
 int             sys_recvfrom(void);

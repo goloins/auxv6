@@ -109,3 +109,8 @@ Validation order recommendation:
   - shell startup (`/etc/profile`, `~/.bashrc` sourcing)
   - directory detection (`ls`, `cp`, `mv`, `rm`, `find`)
   - device-node behavior (`devman`, `mount`, regress suites)
+
+## Regressions:
+- dash seems to fail due to hacks for our old stat layout.
+    everything else seems to work fine. That needs to be
+    fixed at some point, adding TODO/FIXME here
