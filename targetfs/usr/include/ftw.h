@@ -5,7 +5,7 @@
 #ifndef _FTW_H
 #define _FTW_H
 
-#include "stat.h"
+#include "sys/stat.h"
 
 struct FTW {
   int base;

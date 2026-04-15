@@ -397,6 +397,7 @@ USER_STAGE_DIR = user/.stage
 USER_PROG_JOBS ?= $(shell nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 PORTS ?= 1
 PORTS_MANIFEST ?= ports/ports.list
+PORTS_ENABLED_LIST ?= ports/ports-enabled.list
 PORTS_SYNC_SCRIPT ?= tools/sync-ports.sh
 PORTS_BUILD_LOG ?= ports/ports-build.log
 PORTS_SKIP_LIST ?= dash dwm st dmenu
@@ -996,7 +997,7 @@ strip-uprogs-oldinit: userprogs-oldinit
 
 .PHONY: ports-sync ports-progs
 ports-sync:
-	$(PORTS_SYNC_SCRIPT) $(PORTS_MANIFEST)
+	$(PORTS_SYNC_SCRIPT) $(PORTS_MANIFEST) $(PORTS_ENABLED_LIST)
 
 ports-progs:
 	@if [ "$(PORTS)" != "1" ]; then \
@@ -1007,6 +1008,10 @@ ports-progs:
 	@: > $(PORTS_BUILD_LOG)
 	@if [ ! -f "$(PORTS_MANIFEST)" ]; then \
 		echo "ports: manifest $(PORTS_MANIFEST) not found; skipping" | tee -a $(PORTS_BUILD_LOG); \
+		exit 0; \
+	fi
+	@if [ ! -f "$(PORTS_ENABLED_LIST)" ]; then \
+		echo "ports: enabled-list $(PORTS_ENABLED_LIST) not found; skipping" | tee -a $(PORTS_BUILD_LOG); \
 		exit 0; \
 	fi
 	@while IFS='|' read -r name url pclass srcdir binname; do \
@@ -1020,6 +1025,10 @@ ports-progs:
 		done; \
 		if [ "$$skip" = "1" ]; then \
 			echo "ports: skipping in-tree port $$name" >> $(PORTS_BUILD_LOG); \
+			continue; \
+		fi; \
+		if ! sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' "$(PORTS_ENABLED_LIST)" | grep -v '^$$' | grep -Fxq "$$name"; then \
+			echo "ports: skipping disabled port $$name" >> $(PORTS_BUILD_LOG); \
 			continue; \
 		fi; \
 		if [ -z "$$pclass" ]; then pclass=user; fi; \

@@ -3,6 +3,7 @@
 # source_dir defaults to name when omitted.
 # binary_name defaults to name when omitted.
 # In-tree ports dash,dwm,st are ignored by sync/build automation.
+# Granular selection is controlled by ports/ports-enabled.list.
 
 # Example:
 # icewm|https://github.com/ice-wm/icewm/releases/download/3.8.0/icewm-3.8.0.tar.gz|user|icewm-3.8.0|icewm
@@ -15,3 +16,6 @@ libressl|https://github.com/libressl/portable/releases/download/v4.2.1/libressl-
 
 # Non-first-class C compiler preparation lane: first configure/build pass only.
 lacc|https://github.com/larmel/lacc/archive/refs/heads/master.zip|user|lacc-master|lacc
+
+# Non-first-class archive utility preparation lane: first configure/build pass only.
+p7zip|https://github.com/ip7z/7zip/archive/refs/tags/26.00.zip|user|7zip-26.00|p7zip

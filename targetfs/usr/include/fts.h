@@ -7,7 +7,7 @@
 
 #include "types.h"
 #include "sys/types.h"
-#include "stat.h"
+#include "sys/stat.h"
 
 typedef struct _ftsent {
   struct _ftsent *fts_cycle;

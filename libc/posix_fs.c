@@ -299,7 +299,7 @@ posix_from_aux_kstat(struct stat *dst, const struct auxv6_kstat *src)
   dst->st_nlink = (nlink_t)src->st_nlink;
   dst->st_uid = (uid_t)src->st_uid;
   dst->st_gid = (gid_t)src->st_gid;
-  dst->st_rdev = makedev((unsigned)major(src->st_rdev), (unsigned)minor(src->st_rdev));
+  dst->st_rdev = makedev((unsigned)src->st_major, (unsigned)src->st_minor);
   dst->st_size = (off_t)src->st_size;
   dst->st_atime = (time_t)src->st_atime;
   dst->st_mtime = (time_t)src->st_mtime;

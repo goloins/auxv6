@@ -2,6 +2,7 @@
 set -eu
 
 manifest="${1:-ports/ports.list}"
+enabled_list="${2:-ports/ports-enabled.list}"
 ports_root="ports"
 makefiles_dir="${ports_root}/makefiles"
 archives_dir="${ports_root}/dist"
@@ -15,6 +16,30 @@ if [ ! -f "${manifest}" ]; then
   echo "ports-sync: manifest not found: ${manifest}" | tee -a "${log_file}" >&2
   exit 1
 fi
+
+if [ ! -f "${enabled_list}" ]; then
+  echo "ports-sync: enabled-list not found: ${enabled_list}" | tee -a "${log_file}" >&2
+  exit 1
+fi
+
+is_enabled_port() {
+  port_name="$1"
+  awk '
+    {
+      line = $0
+      sub(/#.*/, "", line)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+      if (line == "") {
+        next
+      }
+      if (line == needle) {
+        found = 1
+        exit
+      }
+    }
+    END { if (!found) exit 1 }
+  ' needle="${port_name}" "${enabled_list}"
+}
 
 extract_archive() {
   archive_path="$1"
@@ -47,6 +72,11 @@ while IFS='|' read -r name url pclass srcdir binname; do
       continue
       ;;
   esac
+
+  if ! is_enabled_port "${name}"; then
+    echo "ports-sync: skip disabled port ${name}" >> "${log_file}"
+    continue
+  fi
 
   if [ -z "${url}" ]; then
     echo "ports-sync: missing URL for ${name}" | tee -a "${log_file}" >&2
