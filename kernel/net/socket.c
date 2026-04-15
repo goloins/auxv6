@@ -13,6 +13,7 @@
 #include "../../include/file.h"
 #include "../../include/socket.h"
 #include "../../include/sys/socket.h"
+#include "../../include/sys/un.h"
 #include "../../include/net.h"
 
 struct socket sockets[NSOCKET];
@@ -23,6 +24,51 @@ static ushort alloc_ephemeral_port_locked(void);
 
 #define SOCKET_MSG_IOV_MAX 16
 #define SOCKET_MSG_BYTES_MAX 65536
+
+static int
+sockaddr_un_copyin_path(pde_t *pgdir, uint addr_u, int addrlen, char out[UNIX_PATH_MAX])
+{
+  struct sockaddr_un un;
+  int i;
+  int path_bytes;
+  int nul_found;
+
+  if(pgdir == 0 || out == 0)
+    return -1;
+  if(addrlen < (int)sizeof(ushort) + 1)
+    return -1;
+
+  memset(&un, 0, sizeof(un));
+  if(addrlen > (int)sizeof(un))
+    addrlen = (int)sizeof(un);
+  if(copyin(pgdir, &un, addr_u, (uint)addrlen) < 0)
+    return -1;
+  if(un.sun_family != AF_UNIX)
+    return -1;
+
+  path_bytes = addrlen - (int)sizeof(un.sun_family);
+  if(path_bytes <= 0)
+    return -1;
+  if(path_bytes > UNIX_PATH_MAX)
+    path_bytes = UNIX_PATH_MAX;
+
+  if(un.sun_path[0] == 0)
+    return -1;
+
+  nul_found = 0;
+  for(i = 0; i < path_bytes; i++) {
+    if(un.sun_path[i] == 0) {
+      nul_found = 1;
+      break;
+    }
+  }
+  if(!nul_found)
+    return -1;
+
+  memset(out, 0, UNIX_PATH_MAX);
+  memmove(out, un.sun_path, (uint)(i + 1));
+  return 0;
+}
 
 // Allocate a file descriptor in the current process.
 // Mirrors sysfile.c's internal fdalloc helper.
@@ -65,6 +111,7 @@ socket_reset_locked(struct socket *s)
   s->family = 0;
   memset(&s->local_addr, 0, sizeof(s->local_addr));
   memset(&s->remote_addr, 0, sizeof(s->remote_addr));
+  memset(s->unix_path, 0, sizeof(s->unix_path));
   s->send_buf = 0;
   s->recv_buf = 0;
   s->send_len = 0;
@@ -1049,18 +1096,20 @@ sys_socket(void)
     return -1;
   
   // Validate arguments
-  if(family != AF_INET) {
+  if(family == AF_INET) {
+    if(type != SOCK_STREAM && type != SOCK_DGRAM && type != SOCK_RAW) {
+      cprintf("socket: invalid type %d\n", type);
+      return -1;
+    }
+    if(type == SOCK_RAW && protocol < 0)
+      return -1;
+  } else if(family == AF_UNIX) {
+    if(type != SOCK_STREAM || protocol != 0)
+      return -1;
+  } else {
     cprintf("socket: unsupported family %d\n", family);
     return -1;
   }
-  
-  if(type != SOCK_STREAM && type != SOCK_DGRAM && type != SOCK_RAW) {
-    cprintf("socket: invalid type %d\n", type);
-    return -1;
-  }
-
-  if(type == SOCK_RAW && protocol < 0)
-    return -1;
   
   // Allocate socket
   s = socket_alloc();
@@ -1600,33 +1649,65 @@ sys_bind(void)
   int i;
   struct socket *s;
   struct sockaddr_in addr;
+  char unix_path[UNIX_PATH_MAX];
   struct proc *p;
   pde_t *pgdir;
   
   if(argint(0, &sockfd) < 0 || argint(2, &addrlen) < 0)
     return -1;
   
-  if(addrlen < (int)sizeof(struct sockaddr_in)) {
-    cprintf("bind: invalid address length\n");
-    return -1;
-  }
-  
   if(argint(1, &addr_raw) < 0)
     return -1;
 
-  p = myproc();
-  pgdir = p ? proc_pgdir(p) : 0;
-  if(pgdir == 0)
-    return -1;
-  if(copyin(pgdir, &addr, (uint)addr_raw, sizeof(addr)) < 0)
-    return -1;
-  
   // Get socket from fd
   s = getfd_socket(sockfd);
   if(!s) {
     cprintf("bind: invalid socket fd %d\n", sockfd);
     return -1;
   }
+
+  p = myproc();
+  pgdir = p ? proc_pgdir(p) : 0;
+  if(pgdir == 0)
+    return -1;
+
+  if(s->family == AF_UNIX) {
+    if(s->type != SOCK_STREAM)
+      return -1;
+    if(sockaddr_un_copyin_path(pgdir, (uint)addr_raw, addrlen, unix_path) < 0)
+      return -1;
+
+    acquire(&socket_lock);
+    if(s->state != SOCK_CLOSED) {
+      release(&socket_lock);
+      return -1;
+    }
+    for(i = 0; i < NSOCKET; i++) {
+      if(&sockets[i] == s)
+        continue;
+      if(sockets[i].ref == 0)
+        continue;
+      if(sockets[i].family != AF_UNIX)
+        continue;
+      if(sockets[i].unix_path[0] == 0)
+        continue;
+      if(strcmp(sockets[i].unix_path, unix_path) == 0) {
+        release(&socket_lock);
+        return -1;
+      }
+    }
+    memmove(s->unix_path, unix_path, sizeof(s->unix_path));
+    s->state = SOCK_BOUND;
+    release(&socket_lock);
+    return 0;
+  }
+
+  if(addrlen < (int)sizeof(struct sockaddr_in)) {
+    cprintf("bind: invalid address length\n");
+    return -1;
+  }
+  if(copyin(pgdir, &addr, (uint)addr_raw, sizeof(addr)) < 0)
+    return -1;
 
   if(addr.sin_port == 0)
     return -1;
@@ -1673,14 +1754,18 @@ sys_connect(void)
   int sockfd, addrlen, addr_raw;
   struct socket *s;
   struct sockaddr_in addr;
+  char unix_path[UNIX_PATH_MAX];
+  struct socket *listener;
+  struct socket *accepted;
+  int prev_state;
+  uint prev_tcp_state;
+  int i;
   struct ifnet *ifp;
   uint route_src;
   struct proc *p;
   pde_t *pgdir;
 
   if(argint(0, &sockfd) < 0 || argint(2, &addrlen) < 0)
-    return -1;
-  if(addrlen < (int)sizeof(struct sockaddr_in))
     return -1;
   if(argint(1, &addr_raw) < 0)
     return -1;
@@ -1689,11 +1774,87 @@ sys_connect(void)
   pgdir = p ? proc_pgdir(p) : 0;
   if(pgdir == 0)
     return -1;
-  if(copyin(pgdir, &addr, (uint)addr_raw, sizeof(addr)) < 0)
-    return -1;
-
   s = getfd_socket(sockfd);
   if(!s)
+    return -1;
+
+  if(s->family == AF_UNIX) {
+    if(s->type != SOCK_STREAM)
+      return -1;
+    if(sockaddr_un_copyin_path(pgdir, (uint)addr_raw, addrlen, unix_path) < 0)
+      return -1;
+
+    accepted = socket_alloc();
+    if(accepted == 0)
+      return -1;
+    if(socket_buffers_init(accepted) < 0) {
+      socket_deref(accepted);
+      return -1;
+    }
+
+    acquire(&socket_lock);
+    if(s->peer != 0 || (s->state != SOCK_CLOSED && s->state != SOCK_BOUND)) {
+      release(&socket_lock);
+      socket_deref(accepted);
+      return -1;
+    }
+
+    listener = 0;
+    for(i = 0; i < NSOCKET; i++) {
+      if(sockets[i].ref == 0)
+        continue;
+      if(&sockets[i] == s)
+        continue;
+      if(sockets[i].family != AF_UNIX)
+        continue;
+      if(sockets[i].type != SOCK_STREAM)
+        continue;
+      if(sockets[i].state != SOCK_LISTEN)
+        continue;
+      if(strcmp(sockets[i].unix_path, unix_path) != 0)
+        continue;
+      listener = &sockets[i];
+      break;
+    }
+    if(listener == 0 || listener->qlen >= listener->backlog) {
+      release(&socket_lock);
+      socket_deref(accepted);
+      return -1;
+    }
+
+    accepted->family = AF_UNIX;
+    accepted->type = SOCK_STREAM;
+    accepted->protocol = 0;
+    accepted->state = SOCK_ESTAB;
+    accepted->tcp.state = TCPS_ESTABLISHED;
+    memmove(accepted->unix_path, listener->unix_path, sizeof(accepted->unix_path));
+    accepted->peer = s;
+
+    prev_state = s->state;
+    prev_tcp_state = s->tcp.state;
+    s->state = SOCK_ESTAB;
+    s->tcp.state = TCPS_ESTABLISHED;
+    s->peer = accepted;
+
+    if(socket_listenq_enqueue_locked(listener, accepted) < 0) {
+      s->peer = 0;
+      s->state = prev_state;
+      s->tcp.state = prev_tcp_state;
+      accepted->peer = 0;
+      release(&socket_lock);
+      socket_deref(accepted);
+      return -1;
+    }
+
+    wakeup(listener);
+    wakeup(s);
+    release(&socket_lock);
+    return 0;
+  }
+
+  if(addrlen < (int)sizeof(struct sockaddr_in))
+    return -1;
+  if(copyin(pgdir, &addr, (uint)addr_raw, sizeof(addr)) < 0)
     return -1;
   if(addr.sin_family != AF_INET)
     return -1;
@@ -1767,6 +1928,7 @@ sys_accept(void)
   struct proc *p;
   pde_t *pgdir;
   struct sockaddr_in peer;
+  struct sockaddr_un upeer;
   int outlen;
 
   if(argint(0, &sockfd) < 0)
@@ -1819,13 +1981,30 @@ sys_accept(void)
     pgdir = p ? proc_pgdir(p) : 0;
     if(pgdir != 0) {
       if(copyin(pgdir, &outlen, (uint)addrlenp_raw, sizeof(outlen)) == 0 &&
-         outlen >= (int)sizeof(struct sockaddr_in)) {
+         outlen > 0) {
         acquire(&socket_lock);
-        memmove(&peer, &accepted->remote_addr, sizeof(peer));
-        release(&socket_lock);
-        copyout(pgdir, (uint)addr_raw, &peer, sizeof(peer));
-        outlen = (int)sizeof(struct sockaddr_in);
-        copyout(pgdir, (uint)addrlenp_raw, &outlen, sizeof(outlen));
+        if(accepted->family == AF_UNIX) {
+          memset(&upeer, 0, sizeof(upeer));
+          upeer.sun_family = AF_UNIX;
+          if(accepted->peer)
+            memmove(upeer.sun_path, accepted->peer->unix_path, sizeof(upeer.sun_path));
+          release(&socket_lock);
+          if(outlen >= (int)sizeof(upeer)) {
+            copyout(pgdir, (uint)addr_raw, &upeer, sizeof(upeer));
+            outlen = (int)sizeof(upeer);
+            copyout(pgdir, (uint)addrlenp_raw, &outlen, sizeof(outlen));
+          }
+        } else {
+          if(outlen >= (int)sizeof(struct sockaddr_in)) {
+            memmove(&peer, &accepted->remote_addr, sizeof(peer));
+            release(&socket_lock);
+            copyout(pgdir, (uint)addr_raw, &peer, sizeof(peer));
+            outlen = (int)sizeof(struct sockaddr_in);
+            copyout(pgdir, (uint)addrlenp_raw, &outlen, sizeof(outlen));
+          } else {
+            release(&socket_lock);
+          }
+        }
       }
     }
   }
@@ -2831,6 +3010,7 @@ sys_getsockname(void)
   int addrlenp_raw;
   struct socket *s;
   struct sockaddr_in kaddr;
+  struct sockaddr_un kuaddr;
   int klen;
   struct proc *p;
   pde_t *pgdir;
@@ -2856,6 +3036,20 @@ sys_getsockname(void)
     return -1;
 
   acquire(&socket_lock);
+  if(s->family == AF_UNIX) {
+    memset(&kuaddr, 0, sizeof(kuaddr));
+    kuaddr.sun_family = AF_UNIX;
+    memmove(kuaddr.sun_path, s->unix_path, sizeof(kuaddr.sun_path));
+    release(&socket_lock);
+    if(klen < (int)sizeof(kuaddr))
+      return -1;
+    if(copyout(pgdir, (uint)addr_raw, &kuaddr, sizeof(kuaddr)) < 0)
+      return -1;
+    klen = (int)sizeof(kuaddr);
+    if(copyout(pgdir, (uint)addrlenp_raw, &klen, sizeof(klen)) < 0)
+      return -1;
+    return 0;
+  }
   memmove(&kaddr, &s->local_addr, sizeof(kaddr));
   release(&socket_lock);
 
@@ -2876,6 +3070,7 @@ sys_getpeername(void)
   int addrlenp_raw;
   struct socket *s;
   struct sockaddr_in kaddr;
+  struct sockaddr_un kuaddr;
   int klen;
   struct proc *p;
   pde_t *pgdir;
@@ -2901,6 +3096,25 @@ sys_getpeername(void)
     return -1;
 
   acquire(&socket_lock);
+  if(s->family == AF_UNIX) {
+    if(s->peer == 0) {
+      release(&socket_lock);
+      return -1;
+    }
+    memset(&kuaddr, 0, sizeof(kuaddr));
+    kuaddr.sun_family = AF_UNIX;
+    memmove(kuaddr.sun_path, s->peer->unix_path, sizeof(kuaddr.sun_path));
+    release(&socket_lock);
+    if(klen < (int)sizeof(kuaddr))
+      return -1;
+    if(copyout(pgdir, (uint)addr_raw, &kuaddr, sizeof(kuaddr)) < 0)
+      return -1;
+    klen = (int)sizeof(kuaddr);
+    if(copyout(pgdir, (uint)addrlenp_raw, &klen, sizeof(klen)) < 0)
+      return -1;
+    return 0;
+  }
+
   if(s->state != SOCK_ESTAB && s->state != SOCK_CONNECT) {
     release(&socket_lock);
     return -1;

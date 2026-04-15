@@ -9,6 +9,10 @@ struct file;
 #define AF_INET       2
 #define AF_UNIX       1
 
+#ifndef UNIX_PATH_MAX
+#define UNIX_PATH_MAX 108
+#endif
+
 // Socket types
 #define SOCK_STREAM   1     // TCP
 #define SOCK_DGRAM    2     // UDP
@@ -133,6 +137,7 @@ struct socket {
   // Addressing
   struct sockaddr_in local_addr;
   struct sockaddr_in remote_addr;
+  char unix_path[UNIX_PATH_MAX];
 
   // Data buffers
   char *send_buf;

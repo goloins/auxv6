@@ -1,6 +1,7 @@
 #include "types.h"
 #include "auxv6/user.h"
 #include "sys/socket.h"
+#include "sys/un.h"
 #include "socket.h"
 
 static int
@@ -117,6 +118,85 @@ test_socketpair_rights_multi(void)
   close(sv[1]);
 
   dprintf(1, "sockettest: PASS socketpair sendmsg/recvmsg SCM_RIGHTS multi-fd\n");
+  return 0;
+}
+
+static int
+test_unix_path_stream(void)
+{
+  int lfd;
+  int cfd;
+  int afd;
+  int n;
+  char in[32];
+  char *msg = "unix-path-ok";
+  struct sockaddr_un addr;
+
+  lfd = socket(AF_UNIX, SOCK_STREAM, 0);
+  if(lfd < 0) {
+    dprintf(1, "sockettest: unix-path listener socket failed\n");
+    return -1;
+  }
+
+  memset(&addr, 0, sizeof(addr));
+  addr.sun_family = AF_UNIX;
+  strcpy(addr.sun_path, "/tmp/sockettest.af_unix");
+
+  if(bind(lfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+    dprintf(1, "sockettest: unix-path bind failed\n");
+    close(lfd);
+    return -1;
+  }
+  if(listen(lfd, 4) < 0) {
+    dprintf(1, "sockettest: unix-path listen failed\n");
+    close(lfd);
+    return -1;
+  }
+
+  cfd = socket(AF_UNIX, SOCK_STREAM, 0);
+  if(cfd < 0) {
+    dprintf(1, "sockettest: unix-path client socket failed\n");
+    close(lfd);
+    return -1;
+  }
+  if(connect(cfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+    dprintf(1, "sockettest: unix-path connect failed\n");
+    close(cfd);
+    close(lfd);
+    return -1;
+  }
+
+  afd = accept(lfd);
+  if(afd < 0) {
+    dprintf(1, "sockettest: unix-path accept failed\n");
+    close(cfd);
+    close(lfd);
+    return -1;
+  }
+
+  n = send(cfd, msg, strlen(msg));
+  if(n != (int)strlen(msg)) {
+    dprintf(1, "sockettest: unix-path send failed n=%d\n", n);
+    close(afd);
+    close(cfd);
+    close(lfd);
+    return -1;
+  }
+
+  memset(in, 0, sizeof(in));
+  n = recv(afd, in, sizeof(in) - 1);
+  if(n != (int)strlen(msg) || strcmp(in, msg) != 0) {
+    dprintf(1, "sockettest: unix-path recv mismatch n=%d msg=%s\n", n, in);
+    close(afd);
+    close(cfd);
+    close(lfd);
+    return -1;
+  }
+
+  close(afd);
+  close(cfd);
+  close(lfd);
+  dprintf(1, "sockettest: PASS pathname AF_UNIX stream\n");
   return 0;
 }
 
@@ -269,6 +349,9 @@ main(int argc, char *argv[])
   dprintf(1, "sockettest: PASS send/recv over lo0\n");
 
   if(test_socketpair_rights_multi() < 0)
+    exit(1);
+
+  if(test_unix_path_stream() < 0)
     exit(1);
 
   exit(0);
