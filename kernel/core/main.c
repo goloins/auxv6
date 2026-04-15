@@ -54,12 +54,12 @@ main(void)
   loop_init();     // loop block devices
   netdev_init();   // network interfaces
   socket_init();   // socket table
+  lockdep_enable(); // enable lockdep before AP scheduler paths can run
   startothers();   // start other processors
   kinit2(P2V(BOOT_EARLY_PHYSTOP), P2V(PHYSTOP)); // must come after startothers()
   pagedb_init();   // initialize PFN descriptor backing after full-memory allocator is online
   pagealloc_init(); // initialize page allocation bridge/scaffold after pagedb comes online
   console_gfx_late_enable(); // framebuffer mirror can allocate after full memory is online
-  lockdep_enable(); // enable lockdep after early bring-up to avoid pre-console hard-fail
   userinit();      // first user process
   mpmain();        // finish this processor's setup
 }
