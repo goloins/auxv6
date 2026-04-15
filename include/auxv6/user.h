@@ -250,6 +250,7 @@ void* malloc(size_t);
 void free(void*);
 int atoi(const char*);
 char* readpass(char*, int);
+int write_lastlog(uid_t uid, const char *line, const char *host, time_t when);
 int isatty(int fd);
 char* ttyname(int fd);
 int ttyname_r(int fd, char *buf, size_t buflen);

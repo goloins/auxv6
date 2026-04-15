@@ -3,10 +3,12 @@
 #include "sys/stat.h"
 #include "pwd.h"
 #include "shadow.h"
+#include "utmpx.h"
 #include "auxv6/user.h"
 #include "fcntl.h"
 #include "stdlib.h"
 #include "stdio.h"
+#include "time.h"
 
 #define LOGIN_NAME_MAX   64
 #define LOGIN_PASS_MAX   64
@@ -359,32 +361,46 @@ ensure_log_dirs(void)
 }
 
 static void
-append_login_record(const char *path, const struct session_user *u)
+record_utmp_wtmp(const struct session_user *u)
 {
-  int fd;
-  char line[256];
-  char *tty;
+  struct utmpx utx;
   char ttybuf[LOGIN_PATH_MAX];
+  char *tty;
+
+  if(u == 0)
+    return;
+
+  ensure_log_dirs();
 
   tty = ttyname(0);
   if(tty == 0 && ttyname_r(0, ttybuf, sizeof(ttybuf)) == 0)
     tty = ttybuf;
 
-  fd = open(path, O_CREATE | O_WRONLY | O_APPEND);
-  if(fd < 0)
-    return;
+  memset(&utx, 0, sizeof(utx));
+  utx.ut_type = USER_PROCESS;
+  utx.ut_pid = getpid();
+  utx.ut_tv.tv_sec = time(0);
+  utx.ut_tv.tv_usec = 0;
 
-  snprintf(line, sizeof(line), "%s tty=%s\n", u->name, tty ? tty : "?");
-  write(fd, line, strlen(line));
-  close(fd);
-}
+  if(tty) {
+    char *line;
 
-static void
-record_utmp_wtmp(const struct session_user *u)
-{
-  ensure_log_dirs();
-  append_login_record(UTMP_PATH, u);
-  append_login_record(WTMP_PATH, u);
+    line = tty;
+    if(strncmp(line, "/dev/", 5) == 0)
+      line += 5;
+    snprintf(utx.ut_line, sizeof(utx.ut_line), "%s", line);
+  }
+
+  snprintf(utx.ut_user, sizeof(utx.ut_user), "%s", u->name);
+  utx.ut_id[0] = utx.ut_line[0];
+  utx.ut_id[1] = utx.ut_line[1];
+  utx.ut_id[2] = utx.ut_line[2];
+  utx.ut_id[3] = utx.ut_line[3];
+
+  pututxline(&utx);
+  endutxent();
+  updwtmpx(WTMP_PATH, &utx);
+  write_lastlog((uid_t)u->uid, utx.ut_line, utx.ut_host, utx.ut_tv.tv_sec);
 }
 
 static int

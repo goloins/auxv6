@@ -249,6 +249,9 @@ int     kill(pid_t pid, int sig);
 /* killpg — send signal to all members of a process group */
 int     killpg(int pgrp, int sig);
 
+/* auxv6 helper: persist /var/log/lastlog entry */
+int     write_lastlog(uid_t uid, const char *line, const char *host, time_t when);
+
 /*
  * tcsetpgrp / tcgetpgrp — POSIX 2-argument wrappers over the auxv6
  * 1-argument versions that ignore the fd (global tty pgrp).
