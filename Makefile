@@ -1124,6 +1124,26 @@ ports-progs:
 					continue; \
 				fi; \
 			fi; \
+			postinstall_local="$(CURDIR)/$$portdir/pkg-postinstall.local"; \
+			if [ -s "$$postinstall_local" ]; then \
+				postinstall_tmp="$(CURDIR)/$$portdir/.auxv6-postinstall"; \
+				rm -rf "$$postinstall_tmp"; \
+				mkdir -p "$$postinstall_tmp"; \
+				if ! (cd "$$postinstall_tmp" && /bin/sh "$$postinstall_local"); then \
+					echo "ports: failed to generate postinstall for $$name from $$postinstall_local" | tee -a $(PORTS_BUILD_LOG); \
+					continue; \
+				fi; \
+				if [ -f "$$postinstall_tmp/postinstall" ]; then \
+					echo "ports: running postinstall hook for $$name" | tee -a $(PORTS_BUILD_LOG); \
+					if ! (cd "$$postinstall_tmp" && PKG_INSTALL_ROOT="$(TARGETFS_DIR)" /bin/sh ./postinstall >> "$(CURDIR)/$(PORTS_BUILD_LOG)" 2>&1); then \
+						echo "ports: postinstall hook failed for $$name" | tee -a $(PORTS_BUILD_LOG); \
+						continue; \
+					fi; \
+				else \
+					echo "ports: postinstall hook missing generated script for $$name" | tee -a $(PORTS_BUILD_LOG); \
+					continue; \
+				fi; \
+			fi; \
 			echo "$$hook_key" >> "$$hooks_seen"; \
 		fi; \
 	done < "$(PORTS_MANIFEST)"; \
@@ -1430,7 +1450,8 @@ clean:
 	user/useradd user/usermod user/userdel user/groupadd user/groupmod user/groupdel user/groups \
 	user/cowsay \
 	user/schedperf user/fsperf user/gfxperf user/kallocstress user/kernperf user/bcachestress user/kmemstress \
-	libc/libc.a
+	libc/libc.a \
+	ports/*/built.auxv6 ports/*/.auxv6-built.stamp ports/*/.auxv6-postinstall/postinstall ports/*/.auxv6-postinstall
 
 # make a printout
 FILES = $(shell grep -v '^\#' tools/runoff.list)

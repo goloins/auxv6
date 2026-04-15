@@ -222,11 +222,6 @@ install-targetfs:
 			echo 'KbdInteractiveAuthentication no' >> "$$conf"; \
 		fi; \
 		sed -i -E '/^[#[:space:]]*UsePAM[[:space:]]+/d' "$$conf"; \
-		if grep -Eq '^[#[:space:]]*UsePrivilegeSeparation[[:space:]]+' "$$conf"; then \
-			sed -i -E 's|^[#[:space:]]*UsePrivilegeSeparation[[:space:]]+.*|UsePrivilegeSeparation no|' "$$conf"; \
-		else \
-			echo 'UsePrivilegeSeparation no' >> "$$conf"; \
-		fi; \
 		if grep -Eq '^[#[:space:]]*PidFile[[:space:]]+' "$$conf"; then \
 			sed -i -E 's|^[#[:space:]]*PidFile[[:space:]]+.*|PidFile /var/run/sshd.pid|' "$$conf"; \
 		else \

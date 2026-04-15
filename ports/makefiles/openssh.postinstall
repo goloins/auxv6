@@ -19,5 +19,30 @@ cat >> postinstall << '_EOF'
 		chmod 0755 "${PKG_INSTALL_ROOT}/var/empty"
 		echo 'openssh postinstall: created /var/empty'
 	fi
+
+	rc3_file=""
+	if [ -f "${PKG_INSTALL_ROOT}/etc/rc.d/rc.3" ]; then
+		rc3_file="${PKG_INSTALL_ROOT}/etc/rc.d/rc.3"
+	elif [ -f "${PKG_INSTALL_ROOT}/etc/rc.3" ]; then
+		rc3_file="${PKG_INSTALL_ROOT}/etc/rc.3"
+	fi
+
+	if [ -n "$rc3_file" ] && ! grep -Fq '# BEGIN auxv6-openssh' "$rc3_file"; then
+		cat >> "$rc3_file" << 'EOF_AUXV6_SSHD_RC3'
+
+# BEGIN auxv6-openssh
+/bin/echo "rc.3: starting sshd (OpenSSH)"
+/usr/bin/ssh-keygen -A
+/bin/chmod 0600 /etc/ssh/ssh_host_rsa_key
+/bin/chmod 0600 /etc/ssh/ssh_host_ecdsa_key
+/bin/chmod 0600 /etc/ssh/ssh_host_ed25519_key
+/bin/chmod 0644 /etc/ssh/ssh_host_rsa_key.pub
+/bin/chmod 0644 /etc/ssh/ssh_host_ecdsa_key.pub
+/bin/chmod 0644 /etc/ssh/ssh_host_ed25519_key.pub
+/usr/sbin/sshd &
+# END auxv6-openssh
+EOF_AUXV6_SSHD_RC3
+		echo "openssh postinstall: added sshd startup block to ${rc3_file#${PKG_INSTALL_ROOT}}"
+	fi
 }
 _EOF
