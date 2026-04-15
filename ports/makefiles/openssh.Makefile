@@ -32,6 +32,7 @@ TARGETFS_USR_INCLUDE := $(TARGETFS_DIR)/usr/include
 TARGETFS_USR_LIB := $(TARGETFS_DIR)/usr/lib
 TARGETFS_ETC_SSH := $(TARGETFS_DIR)/etc/ssh
 TARGETFS_PRIVSEP := $(TARGETFS_DIR)/var/empty
+TARGETFS_RC3 := $(TARGETFS_DIR)/etc/rc.3
 
 SSHD_CONF_SRC := $(SRCDIR)/sshd_config
 SSH_CONF_SRC := $(SRCDIR)/ssh_config
@@ -169,7 +170,7 @@ check-host-contamination:
 		exit 1)
 
 install-targetfs:
-	@install -d "$(TARGETFS_ETC_SSH)" "$(TARGETFS_PRIVSEP)"
+	@install -d "$(TARGETFS_ETC_SSH)" "$(TARGETFS_PRIVSEP)" "$(TARGETFS_DIR)/var/run"
 	@if [ -f "$(SSHD_CONF_SRC)" ] && [ ! -f "$(TARGETFS_ETC_SSH)/sshd_config" ]; then \
 		install -m 0644 "$(SSHD_CONF_SRC)" "$(TARGETFS_ETC_SSH)/sshd_config"; \
 	fi
@@ -178,6 +179,81 @@ install-targetfs:
 	fi
 	@if [ -f "$(MODULI_SRC)" ] && [ ! -f "$(TARGETFS_ETC_SSH)/moduli" ]; then \
 		install -m 0644 "$(MODULI_SRC)" "$(TARGETFS_ETC_SSH)/moduli"; \
+	fi
+	@conf="$(TARGETFS_ETC_SSH)/sshd_config"; \
+	if [ -f "$$conf" ]; then \
+		if grep -Eq '^[#[:space:]]*Port[[:space:]]+' "$$conf"; then \
+			sed -i -E 's|^[#[:space:]]*Port[[:space:]]+.*|Port 22|' "$$conf"; \
+		else \
+			echo 'Port 22' >> "$$conf"; \
+		fi; \
+		if grep -Eq '^[#[:space:]]*AddressFamily[[:space:]]+' "$$conf"; then \
+			sed -i -E 's|^[#[:space:]]*AddressFamily[[:space:]]+.*|AddressFamily inet|' "$$conf"; \
+		else \
+			echo 'AddressFamily inet' >> "$$conf"; \
+		fi; \
+		if grep -Eq '^[#[:space:]]*ListenAddress[[:space:]]+' "$$conf"; then \
+			sed -i -E 's|^[#[:space:]]*ListenAddress[[:space:]]+.*|ListenAddress 0.0.0.0|' "$$conf"; \
+		else \
+			echo 'ListenAddress 0.0.0.0' >> "$$conf"; \
+		fi; \
+		sed -i -E '/^[#[:space:]]*ListenAddress[[:space:]]+::[[:space:]]*$/d' "$$conf"; \
+		if grep -Eq '^[#[:space:]]*HostKey[[:space:]]+/etc/ssh/ssh_host_rsa_key' "$$conf"; then \
+			sed -i -E 's|^[#[:space:]]*HostKey[[:space:]]+/etc/ssh/ssh_host_rsa_key.*|HostKey /etc/ssh/ssh_host_rsa_key|' "$$conf"; \
+		else \
+			echo 'HostKey /etc/ssh/ssh_host_rsa_key' >> "$$conf"; \
+		fi; \
+		if grep -Eq '^[#[:space:]]*HostKey[[:space:]]+/etc/ssh/ssh_host_ecdsa_key' "$$conf"; then \
+			sed -i -E 's|^[#[:space:]]*HostKey[[:space:]]+/etc/ssh/ssh_host_ecdsa_key.*|HostKey /etc/ssh/ssh_host_ecdsa_key|' "$$conf"; \
+		else \
+			echo 'HostKey /etc/ssh/ssh_host_ecdsa_key' >> "$$conf"; \
+		fi; \
+		if grep -Eq '^[#[:space:]]*HostKey[[:space:]]+/etc/ssh/ssh_host_ed25519_key' "$$conf"; then \
+			sed -i -E 's|^[#[:space:]]*HostKey[[:space:]]+/etc/ssh/ssh_host_ed25519_key.*|HostKey /etc/ssh/ssh_host_ed25519_key|' "$$conf"; \
+		else \
+			echo 'HostKey /etc/ssh/ssh_host_ed25519_key' >> "$$conf"; \
+		fi; \
+		if grep -Eq '^[#[:space:]]*PermitRootLogin[[:space:]]+' "$$conf"; then \
+			sed -i -E 's|^[#[:space:]]*PermitRootLogin[[:space:]]+.*|PermitRootLogin yes|' "$$conf"; \
+		else \
+			echo 'PermitRootLogin yes' >> "$$conf"; \
+		fi; \
+		if grep -Eq '^[#[:space:]]*KbdInteractiveAuthentication[[:space:]]+' "$$conf"; then \
+			sed -i -E 's|^[#[:space:]]*KbdInteractiveAuthentication[[:space:]]+.*|KbdInteractiveAuthentication no|' "$$conf"; \
+		else \
+			echo 'KbdInteractiveAuthentication no' >> "$$conf"; \
+		fi; \
+		if grep -Eq '^[#[:space:]]*UsePAM[[:space:]]+' "$$conf"; then \
+			sed -i -E 's|^[#[:space:]]*UsePAM[[:space:]]+.*|UsePAM no|' "$$conf"; \
+		else \
+			echo 'UsePAM no' >> "$$conf"; \
+		fi; \
+		if grep -Eq '^[#[:space:]]*UsePrivilegeSeparation[[:space:]]+' "$$conf"; then \
+			sed -i -E 's|^[#[:space:]]*UsePrivilegeSeparation[[:space:]]+.*|UsePrivilegeSeparation no|' "$$conf"; \
+		else \
+			echo 'UsePrivilegeSeparation no' >> "$$conf"; \
+		fi; \
+		if grep -Eq '^[#[:space:]]*PidFile[[:space:]]+' "$$conf"; then \
+			sed -i -E 's|^[#[:space:]]*PidFile[[:space:]]+.*|PidFile /var/run/sshd.pid|' "$$conf"; \
+		else \
+			echo 'PidFile /var/run/sshd.pid' >> "$$conf"; \
+		fi; \
+		if grep -Eq '^[#[:space:]]*PasswordAuthentication[[:space:]]+' "$$conf"; then \
+			sed -i -E 's|^[#[:space:]]*PasswordAuthentication[[:space:]]+.*|PasswordAuthentication yes|' "$$conf"; \
+		else \
+			echo 'PasswordAuthentication yes' >> "$$conf"; \
+		fi; \
+	fi
+	@if [ -f "$(TARGETFS_ETC_SSH)/sshd_config" ] && [ ! -f "$(TARGETFS_DIR)/etc/sshd_config" ]; then \
+		ln -sf ssh/sshd_config "$(TARGETFS_DIR)/etc/sshd_config"; \
+	fi
+	@if [ -f "$(TARGETFS_RC3)" ] && ! grep -Fq 'Starting sshd (OpenSSH)' "$(TARGETFS_RC3)"; then \
+		printf '\n' >> "$(TARGETFS_RC3)"; \
+		printf '%s\n' 'echo "Starting sshd (OpenSSH)"' >> "$(TARGETFS_RC3)"; \
+		printf '%s\n' '#generate keys if they don'\''t exist already' >> "$(TARGETFS_RC3)"; \
+		printf '%s\n' '/usr/bin/ssh-keygen -A' >> "$(TARGETFS_RC3)"; \
+		printf '%s\n' '#start sshd itself' >> "$(TARGETFS_RC3)"; \
+		printf '%s\n' '/usr/sbin/sshd &' >> "$(TARGETFS_RC3)"; \
 	fi
 	@chmod 0755 "$(TARGETFS_PRIVSEP)"
 
