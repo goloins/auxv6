@@ -33,6 +33,8 @@ TARGETFS_USR_LIB := $(TARGETFS_DIR)/usr/lib
 TARGETFS_ETC_SSH := $(TARGETFS_DIR)/etc/ssh
 TARGETFS_PRIVSEP := $(TARGETFS_DIR)/var/empty
 TARGETFS_RC3 := $(TARGETFS_DIR)/etc/rc.3
+TARGETFS_PASSWD := $(TARGETFS_DIR)/etc/passwd
+TARGETFS_GROUP := $(TARGETFS_DIR)/etc/group
 
 SSHD_CONF_SRC := $(SRCDIR)/sshd_config
 SSH_CONF_SRC := $(SRCDIR)/ssh_config
@@ -171,6 +173,20 @@ check-host-contamination:
 
 install-targetfs:
 	@install -d "$(TARGETFS_ETC_SSH)" "$(TARGETFS_PRIVSEP)" "$(TARGETFS_DIR)/var/run"
+	@if [ -f "$(TARGETFS_GROUP)" ]; then \
+		if grep -Eq '^sshd:' "$(TARGETFS_GROUP)"; then \
+			sed -i -E 's|^sshd:[^:]*:[0-9]+:.*|sshd:x:33:|' "$(TARGETFS_GROUP)"; \
+		elif ! grep -Eq '^[^:]+:[^:]*:33:' "$(TARGETFS_GROUP)"; then \
+			echo 'sshd:x:33:' >> "$(TARGETFS_GROUP)"; \
+		fi; \
+	fi
+	@if [ -f "$(TARGETFS_PASSWD)" ]; then \
+		if grep -Eq '^sshd:' "$(TARGETFS_PASSWD)"; then \
+			sed -i -E 's|^sshd:[^:]*:[0-9]+:[0-9]+:[^:]*:[^:]*:[^:]*|sshd:x:33:33:sshd:/var/empty:/bin/nologin|' "$(TARGETFS_PASSWD)"; \
+		elif ! grep -Eq '^[^:]+:[^:]*:33:' "$(TARGETFS_PASSWD)"; then \
+			echo 'sshd:x:33:33:sshd:/var/empty:/bin/nologin' >> "$(TARGETFS_PASSWD)"; \
+		fi; \
+	fi
 	@if [ -f "$(SSHD_CONF_SRC)" ] && [ ! -f "$(TARGETFS_ETC_SSH)/sshd_config" ]; then \
 		install -m 0644 "$(SSHD_CONF_SRC)" "$(TARGETFS_ETC_SSH)/sshd_config"; \
 	fi
