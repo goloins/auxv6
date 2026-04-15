@@ -103,3 +103,4 @@
 #define SYS_umask     102
 #define SYS_setreuid  103
 #define SYS_setregid  104
+#define SYS_utimensat 105

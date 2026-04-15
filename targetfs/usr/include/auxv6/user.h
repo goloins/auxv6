@@ -110,7 +110,7 @@ int link(const char*, const char*);
 int rename(const char*, const char*);
 int ext2fail(int, int);
 int fsfault(int, int, int);
-int mkdir(const char*);
+int mkdir(const char*, mode_t);
 int chmod(const char*, mode_t);
 int chown(const char*, uid_t, gid_t);
 int mountinfo(struct mountinfo *out, int max);
@@ -169,6 +169,8 @@ int __auxv6_sys_clock_gettime(int clock_id, struct timespec *tp);
 int __auxv6_sys_clock_settime(int clock_id, const struct timespec *tp);
 int __auxv6_sys_getrlimit(int resource, struct rlimit *rlp);
 int __auxv6_sys_setrlimit(int resource, const struct rlimit *rlp);
+int __auxv6_sys_utimensat(int dirfd, const char *path,
+						  const struct timespec *times, int flags);
 #ifndef _UNISTD_H
 int tcsetpgrp(pid_t pgid);
 pid_t tcgetpgrp(void);
@@ -248,5 +250,22 @@ int openpty(int *amaster, int *aslave, char *name,
 			const struct winsize *winp);
 char* ptsname(int fd);
 int ptsname_r(int fd, char *buf, size_t buflen);
+
+/*
+ * Compatibility shim: legacy auxv6 code often called mkdir(path) while
+ * POSIX code uses mkdir(path, mode). Support both call forms.
+ */
+static inline int __auxv6_mkdir_compat1(const char *path)
+{
+	return (mkdir)(path, 0777);
+}
+
+static inline int __auxv6_mkdir_compat2(const char *path, mode_t mode)
+{
+	return (mkdir)(path, mode);
+}
+
+#define __AUXV6_MKDIR_SELECT(_1, _2, NAME, ...) NAME
+#define mkdir(...) __AUXV6_MKDIR_SELECT(__VA_ARGS__, __auxv6_mkdir_compat2, __auxv6_mkdir_compat1)(__VA_ARGS__)
 
 #endif /* AUXV6_USER_API_H */

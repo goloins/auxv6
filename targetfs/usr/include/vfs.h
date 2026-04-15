@@ -34,6 +34,9 @@ struct vnode_ops {
                  int set_mode, int mode,
                  int set_uid, int uid,
                  int set_gid, int gid);
+  int (*settimes)(struct inode *ip,
+                  int set_atime, uint atime_sec,
+                  int set_mtime, uint mtime_sec);
   int (*access)(struct inode *ip, int mode);
   struct inode* (*dirlookup)(struct inode *dp, char *name, uint *poff);
   int (*dirlink)(struct inode *dp, char *name, uint inum);

@@ -192,6 +192,8 @@ int     fchdir(int fd);
 char   *getcwd(char *buf, size_t size);
 int     truncate(const char *path, off_t length);
 int     ftruncate(int fd, off_t length);
+int     utimensat(int dirfd, const char *path, const struct timespec times[2], int flags);
+int     futimens(int fd, const struct timespec times[2]);
 int     fsync(int fd);
 int     fdatasync(int fd);
 void    sync(void);

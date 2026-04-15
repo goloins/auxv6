@@ -35,6 +35,14 @@ struct timespec {
 #define NSEC_PER_SEC 1000000000L
 #endif
 
+#ifndef UTIME_NOW
+#define UTIME_NOW  ((long)1073741823L)
+#endif
+
+#ifndef UTIME_OMIT
+#define UTIME_OMIT ((long)1073741822L)
+#endif
+
 #ifndef timerisset
 #define timerisset(tvp)      ((tvp)->tv_sec || (tvp)->tv_usec)
 #endif
