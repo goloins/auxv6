@@ -2,6 +2,8 @@
 #define _POLL_H_
 
 #include "sys/types.h"
+#include "time.h"
+#include "signal.h"
 
 #ifndef _NFDS_T
 #define _NFDS_T
@@ -22,5 +24,8 @@ struct pollfd {
 #define POLLNVAL 0x0020
 
 int poll(struct pollfd *fds, nfds_t nfds, int timeout);
+int ppoll(struct pollfd *fds, nfds_t nfds,
+          const struct timespec *timeout,
+          const sigset_t *sigmask);
 
 #endif

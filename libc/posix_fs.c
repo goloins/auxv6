@@ -6,12 +6,14 @@
 #include "fcntl.h"
 #include "sys/stat.h"
 #include "sys/uio.h"
+#include "poll.h"
 #include "dirent.h"
 #include "errno.h"
 #include "stdarg.h"
 #include "string.h"
 #include "time.h"
 #include "utime.h"
+#include "signal.h"
 #include "auxv6/user.h"
 
 #ifndef AT_FDCWD
@@ -624,6 +626,48 @@ fchmod(int fd, mode_t mode)
   if(__auxv6_sys_fchmod(fd, mode) < 0)
     return posix_fail_errno(EPERM);
   return 0;
+}
+
+int
+ppoll(struct pollfd *fds, nfds_t nfds, const struct timespec *timeout,
+      const sigset_t *sigmask)
+{
+  int timeout_ms;
+  int ret;
+  int saved_errno;
+  sigset_t oldmask;
+  int mask_changed;
+
+  timeout_ms = -1;
+  if(timeout != 0) {
+    if(timeout->tv_sec < 0 || timeout->tv_nsec < 0 || timeout->tv_nsec >= 1000000000L) {
+      errno = EINVAL;
+      return -1;
+    }
+
+    /* Clamp to poll(2) int timeout range in milliseconds. */
+    if(timeout->tv_sec > 2147483L)
+      timeout_ms = 2147483647;
+    else
+      timeout_ms = (int)(timeout->tv_sec * 1000L + timeout->tv_nsec / 1000000L);
+  }
+
+  mask_changed = 0;
+  if(sigmask != 0) {
+    if(sigprocmask(SIG_SETMASK, sigmask, &oldmask) < 0)
+      return -1;
+    mask_changed = 1;
+  }
+
+  errno = 0;
+  ret = poll(fds, nfds, timeout_ms);
+  saved_errno = errno;
+
+  if(mask_changed)
+    sigprocmask(SIG_SETMASK, &oldmask, 0);
+
+  errno = saved_errno;
+  return ret;
 }
 
 int

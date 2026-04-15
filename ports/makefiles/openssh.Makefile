@@ -123,6 +123,7 @@ first-pass: | $(BUILDDIR)
 			ac_cv_func_openpty=yes \
 			ac_cv_func_tcgetpgrp=yes \
 			ac_cv_func_poll=yes \
+			ac_cv_func_ppoll=yes \
 			ac_cv_func_select=yes \
 			ac_cv_func_getrandom=yes \
 			ac_cv_func_getentropy=yes \
