@@ -202,6 +202,9 @@ ports/dash-0.5.12/src/mkinit
 ports/dist/
 ports/ports-sync.log
 ports/*-[0-9]*/
+ports/openssh-10.3p1/ssh
+ports/openssh-10.3p1/ssh-keygen
+ports/openssh-10.3p1/sshd
 .vscode/
 user/vblktest
 user/netcat
@@ -235,3 +238,6 @@ targetfs/usr/lib/
 ports/lacc-master
 targetfs/usr/bin/lacc
 targetfs/usr/bin/p7zip
+targetfs/usr/bin/ssh-keygen
+targetfs/usr/bin/ssh
+targetfs/usr/bin/sshd

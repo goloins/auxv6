@@ -1099,7 +1099,8 @@ ports-progs:
 		case "$$pclass" in \
 			system|helper) destdir="$(TARGETFS_DIR)/bin" ;; \
 			user) destdir="$(TARGETFS_DIR)/usr/bin" ;; \
-			*) echo "ports: invalid class '$$pclass' for $$name (use system/helper/user)" | tee -a $(PORTS_BUILD_LOG); continue ;; \
+			sbin) destdir="$(TARGETFS_DIR)/usr/sbin" ;; \
+			*) echo "ports: invalid class '$$pclass' for $$name (use system/helper/user/sbin)" | tee -a $(PORTS_BUILD_LOG); continue ;; \
 		esac; \
 		install -d "$$destdir"; \
 		install -m 0755 "$$portbin" "$$destdir/$$binname"; \

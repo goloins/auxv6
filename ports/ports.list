@@ -1,5 +1,5 @@
 # name|url|class|source_dir|binary_name
-# class: system/helper -> /bin, user -> /usr/bin
+# class: system/helper -> /bin, user -> /usr/bin, sbin -> /usr/sbin
 # source_dir defaults to name when omitted.
 # binary_name defaults to name when omitted.
 # In-tree ports dash,dwm,st are ignored by sync/build automation.
@@ -23,3 +23,4 @@ p7zip|https://github.com/ip7z/7zip/archive/refs/tags/26.00.zip|user|7zip-26.00|p
 # Non-first-class SSH preparation lane: first configure/build pass only.
 openssh|https://mirror.planetunix.net/pub/OpenBSD/OpenSSH/portable/openssh-10.3p1.tar.gz|user|openssh-10.3p1|ssh
 openssh|https://mirror.planetunix.net/pub/OpenBSD/OpenSSH/portable/openssh-10.3p1.tar.gz|user|openssh-10.3p1|ssh-keygen
+openssh|https://mirror.planetunix.net/pub/OpenBSD/OpenSSH/portable/openssh-10.3p1.tar.gz|sbin|openssh-10.3p1|sshd

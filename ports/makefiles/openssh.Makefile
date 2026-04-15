@@ -22,6 +22,7 @@ SRCDIR := $(realpath $(dir $(abspath $(PORTS_COMMON_CALLER))))
 BUILDDIR := $(SRCDIR)/.auxv6-build
 OUT := $(SRCDIR)/ssh
 OUT_KEYGEN := $(SRCDIR)/ssh-keygen
+OUT_SSHD := $(SRCDIR)/sshd
 LOG := $(BUILDDIR)/first-pass.log
 
 TOOL_GCC_INCLUDE := $(shell $(CC) -print-file-name=include)
@@ -123,9 +124,10 @@ first-pass: | $(BUILDDIR)
 		echo "openssh: configure failed (non-fatal in staging lane)" >>"$(LOG)"
 	@set +e; \
 	$(MAKE) -C "$(BUILDDIR)" -j1 \
+		MAKEOVERRIDES= \
 		LDFLAGS="$(COMMON_LDFLAGS) -L$(BUILDDIR) -L$(BUILDDIR)/openbsd-compat" \
 		LIBS="$(CONFIGURE_LIBS)" \
-		ssh ssh-keygen >>"$(LOG)" 2>&1; \
+		ssh ssh-keygen sshd >>"$(LOG)" 2>&1; \
 	rc=$$?; \
 	echo "openssh: first-pass make rc=$$rc" >>"$(LOG)"; \
 	if [ $$rc -ne 0 ]; then \
@@ -148,6 +150,10 @@ $(OUT): first-pass
 		cp "$(BUILDDIR)/ssh-keygen" "$(OUT_KEYGEN)"; \
 		chmod 0755 "$(OUT_KEYGEN)"; \
 	fi
+	@if [ -f "$(BUILDDIR)/sshd" ] && $(OBJDUMP) -f "$(BUILDDIR)/sshd" 2>/dev/null | grep -q 'file format elf32-i386'; then \
+		cp "$(BUILDDIR)/sshd" "$(OUT_SSHD)"; \
+		chmod 0755 "$(OUT_SSHD)"; \
+	fi
 
 check-host-contamination:
 	@! grep -En '(^|[[:space:]])(cc|gcc|clang|i386-jos-elf-gcc)([[:space:]].*)?(-I|-isystem)[[:space:]]*(/usr/include|/usr/local/include|/opt/homebrew/include|/Library/Developer/CommandLineTools/usr/include|/Applications/Xcode.*/usr/include)' "$(LOG)" >/dev/null || \
@@ -156,4 +162,4 @@ check-host-contamination:
 		exit 1)
 
 clean:
-	rm -rf "$(BUILDDIR)" "$(OUT)" "$(OUT_KEYGEN)"
+	rm -rf "$(BUILDDIR)" "$(OUT)" "$(OUT_KEYGEN)" "$(OUT_SSHD)"
