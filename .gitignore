@@ -213,7 +213,6 @@ aux.bootkern
 .extra_cflags.stamp
 user/fdtest
 .btrfsroot/
-
 targetfs/usr/bin/st
 user/xwmtrace
 docs/.DS_Store
@@ -229,7 +228,6 @@ user/libX11.a
 user/libc.a
 user/libauxrt.a
 user/crt0.o
-.gitignore
 targetfs/usr/bin/bash
 config/.auxv6-build/first-pass.log
 user/libc.a
@@ -243,3 +241,14 @@ targetfs/usr/bin/ssh-keygen
 targetfs/usr/bin/ssh
 targetfs/usr/bin/sshd
 targetfs/usr/sbin/sshd
+targetfs/usr/bin/sftp
+targetfs/usr/bin/ssh-add
+targetfs/usr/bin/ssh-agent
+targetfs/usr/bin/scp
+targetfs/usr/bin/ssh-keyscan
+targetfs/usr/libexec/sftp-server
+targetfs/usr/libexec/ssh-keysign
+targetfs/usr/libexec/ssh-pkcs11-helper
+targetfs/usr/libexec/ssh-sk-helper
+targetfs/usr/libexec/sshd-auth
+targetfs/usr/libexec/sshd-session

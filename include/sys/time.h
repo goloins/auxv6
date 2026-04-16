@@ -27,6 +27,15 @@ struct timespec {
     long   tv_nsec;
 };
 
+struct itimerval {
+    struct timeval it_interval;
+    struct timeval it_value;
+};
+
+#define ITIMER_REAL    0
+#define ITIMER_VIRTUAL 1
+#define ITIMER_PROF    2
+
 #ifndef USEC_PER_SEC
 #define USEC_PER_SEC 1000000L
 #endif
@@ -81,5 +90,8 @@ struct timespec {
 #endif
 
 int gettimeofday(struct timeval *tv, struct timezone *tz);
+int getitimer(int which, struct itimerval *curr_value);
+int setitimer(int which, const struct itimerval *new_value,
+              struct itimerval *old_value);
 
 #endif /* AUXV6_SYS_TIME_H */

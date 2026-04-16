@@ -22,6 +22,7 @@
 #define S_IFBLK     0060000  /* Block device */
 #define S_IFIFO     0010000  /* FIFO/named pipe */
 #define S_IFLNK     0120000  /* Symbolic link */
+#define S_IFSOCK    0140000  /* Socket */
 
 /* File type test macros */
 #define S_ISREG(m)  (((m) & S_IFMT) == S_IFREG)
@@ -30,6 +31,7 @@
 #define S_ISBLK(m)  (((m) & S_IFMT) == S_IFBLK)
 #define S_ISFIFO(m) (((m) & S_IFMT) == S_IFIFO)
 #define S_ISLNK(m)  (((m) & S_IFMT) == S_IFLNK)
+#define S_ISSOCK(m) (((m) & S_IFMT) == S_IFSOCK)
 
 /* Permission mode bits */
 #define S_ISVTX    01000  /* Sticky bit */

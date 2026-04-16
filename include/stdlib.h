@@ -163,6 +163,9 @@ extern char **environ;
 uint32_t    arc4random(void);
 void        arc4random_buf(void *buf, size_t n);
 uint32_t    arc4random_uniform(uint32_t upper_bound);
+#ifdef arc4random_stir
+#undef arc4random_stir
+#endif
 void        arc4random_stir(void);
 
 #endif /* _STDLIB_H */

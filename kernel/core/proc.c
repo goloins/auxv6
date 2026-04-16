@@ -116,18 +116,25 @@ static void wakeup1(void *chan);
 // TODO(signal): add user-space signal frame/trampoline delivery.
 // TODO(jobctl): add full shell-oriented job tables and fg/bg builtins.
 
-// Set (or cancel) the alarm for p.  deadline_ticks==0 cancels.
-// Keeps active_alarm_count in sync so the timer ISR hotpath can skip
-// the ptable scan when no alarms are pending.
+// Set or cancel the SIGALRM deadline for p.
+// deadline_ticks==0 cancels the timer and clears any reload interval.
 void
-proc_set_alarm(struct proc *p, uint deadline_ticks)
+proc_set_alarm_state(struct proc *p, uint deadline_ticks, uint interval_ticks)
 {
   uint old = p->alarm_ticks;
+
   p->alarm_ticks = deadline_ticks;
+  p->alarm_interval_ticks = (deadline_ticks != 0) ? interval_ticks : 0;
   if(old == 0 && deadline_ticks != 0)
     __sync_fetch_and_add(&active_alarm_count, 1);
   else if(old != 0 && deadline_ticks == 0)
     __sync_fetch_and_sub(&active_alarm_count, 1);
+}
+
+void
+proc_set_alarm(struct proc *p, uint deadline_ticks)
+{
+  proc_set_alarm_state(p, deadline_ticks, 0);
 }
 
 // Check all processes for expired alarms and post SIGALRM.
@@ -144,13 +151,18 @@ proc_check_alarms(uint current_ticks)
 
   acquire(&ptable.lock);
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+    uint interval_ticks;
+
     if(p->state == UNUSED)
       continue;
     if(p->alarm_ticks == 0)
       continue;
     if(current_ticks >= p->alarm_ticks) {
-      p->alarm_ticks = 0;  // One-shot, clear the alarm
-      __sync_fetch_and_sub(&active_alarm_count, 1);
+      interval_ticks = p->alarm_interval_ticks;
+      if(interval_ticks != 0)
+        p->alarm_ticks = current_ticks + interval_ticks;
+      else
+        proc_set_alarm_state(p, 0, 0);
       p->sig_pending |= SIGBIT(SIGALRM);
       // Wake process if sleeping so it can receive the signal
       if(p->state == SLEEPING)

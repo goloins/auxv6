@@ -626,6 +626,8 @@ void            proc_maybe_stop_current(void);
 void            proc_check_alarms(uint current_ticks);
 int             pty_side_is_open(int pty_index, int side);
 void            proc_set_alarm(struct proc *p, uint deadline_ticks);
+void            proc_set_alarm_state(struct proc *p, uint deadline_ticks,
+									 uint interval_ticks);
 int             proc_try_grow_stack(struct proc *p, uint fault_addr);
 void            proc_tick_loadavg(void);
 void            proc_get_loadavg(uint *la1, uint *la5, uint *la15);
@@ -726,6 +728,8 @@ int             sys_sigaction(void);
 int             sys_sigprocmask(void);
 int             sys_sigreturn(void);
 int             sys_alarm(void);
+int             sys_getitimer(void);
+int             sys_setitimer(void);
 int             sys_tcsetpgrp(void);
 int             sys_tcgetpgrp(void);
 int             sys_tcgetattr(void);

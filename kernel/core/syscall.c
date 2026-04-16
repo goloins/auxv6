@@ -160,6 +160,8 @@ extern int sys_sigaction(void);
 extern int sys_sigprocmask(void);
 extern int sys_sigreturn(void);
 extern int sys_alarm(void);
+extern int sys_getitimer(void);
+extern int sys_setitimer(void);
 extern int sys_tcsetpgrp(void);
 extern int sys_tcgetpgrp(void);
 extern int sys_tcgetattr(void);
@@ -316,6 +318,8 @@ static int (*syscalls[])(void) = {
 [SYS_sigaction] sys_sigaction,
 [SYS_sigreturn] sys_sigreturn,
 [SYS_alarm] sys_alarm,
+[SYS_getitimer] sys_getitimer,
+[SYS_setitimer] sys_setitimer,
 [SYS_lseek] sys_lseek,
 [SYS_dup2] sys_dup2,
 [SYS_fcntl] sys_fcntl,

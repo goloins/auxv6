@@ -114,3 +114,5 @@
 #define SYS_sendmsg 113
 #define SYS_recvmsg 114
 #define SYS_fchmod 115
+#define SYS_getitimer 116
+#define SYS_setitimer 117

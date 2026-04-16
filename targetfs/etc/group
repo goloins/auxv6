@@ -6,3 +6,4 @@ sys:x:3:
 adm:x:4:
 wheel:x:10:root,aux
 aux:x:1000:
+sshd:x:33:

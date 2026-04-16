@@ -163,6 +163,8 @@ found:
     p->sig_actmask[i] = 0;
     p->sig_actflags[i] = 0;
   }
+  p->alarm_ticks = 0;
+  p->alarm_interval_ticks = 0;
 
   release(&ptable.lock);
 
@@ -301,6 +303,8 @@ fork(void)
   np->sig_caught = 0;
   np->sig_mask = curproc->sig_mask;
   np->sig_ignored = curproc->sig_ignored;
+  np->alarm_ticks = 0;
+  np->alarm_interval_ticks = 0;
   for(i = 0; i < NSIG; i++) {
     np->sig_handler[i] = curproc->sig_handler[i];
     np->sig_actmask[i] = curproc->sig_actmask[i];

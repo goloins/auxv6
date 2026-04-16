@@ -13,6 +13,7 @@
 #define AUXV6_HZ 100
 #define AUXV6_NSEC_PER_TICK 10000000L
 #define AUXV6_NSEC_PER_SEC  1000000000L
+#define AUXV6_USEC_PER_TICK (1000000L / AUXV6_HZ)
 
 static const char *const time_wday_short[] = {
   "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
@@ -558,6 +559,65 @@ gettimeofday(struct timeval *tv, struct timezone *tz)
 
   tv->tv_sec = seconds;
   tv->tv_usec = 0;
+  return 0;
+}
+
+static int
+time_timeval_valid(const struct timeval *tv)
+{
+  if(tv == 0)
+    return 0;
+  if(tv->tv_sec < 0)
+    return 0;
+  if(tv->tv_usec < 0 || tv->tv_usec >= USEC_PER_SEC)
+    return 0;
+  return 1;
+}
+
+int
+getitimer(int which, struct itimerval *curr_value)
+{
+  if(curr_value == 0) {
+    errno = EINVAL;
+    return -1;
+  }
+  if(which != ITIMER_REAL) {
+    errno = ENOSYS;
+    return -1;
+  }
+
+  errno = 0;
+  if(__auxv6_sys_getitimer(which, curr_value) < 0) {
+    if(errno == 0)
+      errno = EIO;
+    return -1;
+  }
+  return 0;
+}
+
+int
+setitimer(int which, const struct itimerval *new_value, struct itimerval *old_value)
+{
+  if(new_value == 0) {
+    errno = EINVAL;
+    return -1;
+  }
+  if(which != ITIMER_REAL) {
+    errno = ENOSYS;
+    return -1;
+  }
+  if(!time_timeval_valid(&new_value->it_value) ||
+     !time_timeval_valid(&new_value->it_interval)) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  errno = 0;
+  if(__auxv6_sys_setitimer(which, new_value, old_value) < 0) {
+    if(errno == 0)
+      errno = EINVAL;
+    return -1;
+  }
   return 0;
 }
 

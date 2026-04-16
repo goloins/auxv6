@@ -25,12 +25,37 @@ OUT_KEYGEN := $(SRCDIR)/ssh-keygen
 OUT_SSHD := $(SRCDIR)/sshd
 LOG := $(BUILDDIR)/first-pass.log
 
+OPENSSH_BUILD_TARGETS := \
+	ssh \
+	ssh-keygen \
+	sshd \
+	sshd-session \
+	sshd-auth \
+	ssh-add \
+	ssh-agent \
+	ssh-keyscan \
+	ssh-keysign \
+	scp \
+	sftp \
+	sftp-server \
+	ssh-pkcs11-helper \
+	ssh-sk-helper
+
+OPENSSH_CONFIGFILES := sshd_config.out ssh_config.out moduli.out
+
 TOOL_GCC_INCLUDE := $(shell $(CC) -print-file-name=include)
 
 TARGETFS_DIR ?= $(ROOT)/targetfs
+TARGETFS_USR_BIN := $(TARGETFS_DIR)/usr/bin
+TARGETFS_USR_SBIN := $(TARGETFS_DIR)/usr/sbin
+TARGETFS_USR_LIBEXEC := $(TARGETFS_DIR)/usr/libexec
 TARGETFS_USR_INCLUDE := $(TARGETFS_DIR)/usr/include
 TARGETFS_USR_LIB := $(TARGETFS_DIR)/usr/lib
 TARGETFS_ETC_SSH := $(TARGETFS_DIR)/etc/ssh
+
+TARGETFS_USER_BINS := ssh scp ssh-add ssh-agent ssh-keygen ssh-keyscan sftp
+TARGETFS_SBIN_BINS := sshd
+TARGETFS_LIBEXEC_BINS := sshd-session sshd-auth sftp-server ssh-keysign ssh-pkcs11-helper ssh-sk-helper
 
 SSHD_CONF_SRC := $(SRCDIR)/sshd_config
 SSH_CONF_SRC := $(SRCDIR)/ssh_config
@@ -48,7 +73,7 @@ CONFIGURE_LIBS := -lcrypto $(PORT_LIBS)
 # Configure links many probe executables. Link them with auxv6 crt/libc so
 # function probes reflect target libc rather than failing as unresolved.
 CONFIGURE_LDFLAGS := $(COMMON_LDFLAGS)
-CONFIGURE_CPPFLAGS := $(COMMON_CPPFLAGS) -D__linux__=1 -D_GNU_SOURCE=1 -D_BSD_SOURCE=1 -D_DEFAULT_SOURCE=1
+CONFIGURE_CPPFLAGS := $(COMMON_CPPFLAGS) -D__linux__=1 -D_GNU_SOURCE=1 -D_BSD_SOURCE=1 -D_DEFAULT_SOURCE=1 -D_POSIX_COMPAT_TC=1
 
 # OpenSSH can opportunistically enable many platform/auth integrations.
 # Keep first-pass strictly minimal and target-only.
@@ -63,18 +88,10 @@ CONFIGURE_ARGS := \
 	--without-selinux \
 	--without-libedit \
 	--without-ldns \
-	--without-shadow \
 	--without-security-key-builtin \
 	--disable-security-key \
 	--disable-pkcs11 \
-	--disable-lastlog \
-	--disable-utmp \
-	--disable-utmpx \
-	--disable-wtmp \
-	--disable-wtmpx \
 	--disable-libutil \
-	--disable-pututline \
-	--disable-pututxline \
 	--without-openssl-header-check \
 	--without-hardening \
 	--without-stackprotect \
@@ -129,11 +146,11 @@ first-pass: | $(BUILDDIR)
 			../configure $(CONFIGURE_ARGS) >>"$(LOG)" 2>&1 || \
 		echo "openssh: configure failed (non-fatal in staging lane)" >>"$(LOG)"
 	@set +e; \
-	$(MAKE) -C "$(BUILDDIR)" -j1 \
+	$(MAKE) -C "$(BUILDDIR)" -k -j1 \
 		MAKEOVERRIDES= \
 		LDFLAGS="$(COMMON_LDFLAGS) -L$(BUILDDIR) -L$(BUILDDIR)/openbsd-compat" \
 		LIBS="$(CONFIGURE_LIBS)" \
-		ssh ssh-keygen sshd >>"$(LOG)" 2>&1; \
+		$(OPENSSH_CONFIGFILES) $(OPENSSH_BUILD_TARGETS) >>"$(LOG)" 2>&1; \
 	rc=$$?; \
 	echo "openssh: first-pass make rc=$$rc" >>"$(LOG)"; \
 	if [ $$rc -ne 0 ]; then \
@@ -168,67 +185,108 @@ check-host-contamination:
 		exit 1)
 
 install-targetfs:
+	@install -d "$(TARGETFS_USR_BIN)" "$(TARGETFS_USR_SBIN)" "$(TARGETFS_USR_LIBEXEC)" "$(TARGETFS_ETC_SSH)"
+	@set -e; \
+	for prog in $(TARGETFS_USER_BINS); do \
+		src="$(BUILDDIR)/$$prog"; \
+		if [ -f "$$src" ] && $(OBJDUMP) -f "$$src" 2>/dev/null | grep -q 'file format elf32-i386'; then \
+			install -m 0755 "$$src" "$(TARGETFS_USR_BIN)/$$prog"; \
+		fi; \
+	done
+	@set -e; \
+	for prog in $(TARGETFS_SBIN_BINS); do \
+		src="$(BUILDDIR)/$$prog"; \
+		if [ -f "$$src" ] && $(OBJDUMP) -f "$$src" 2>/dev/null | grep -q 'file format elf32-i386'; then \
+			install -m 0755 "$$src" "$(TARGETFS_USR_SBIN)/$$prog"; \
+		fi; \
+	done
+	@set -e; \
+	for prog in $(TARGETFS_LIBEXEC_BINS); do \
+		src="$(BUILDDIR)/$$prog"; \
+		mode=0755; \
+		if [ "$$prog" = "ssh-keysign" ]; then mode=4711; fi; \
+		if [ -f "$$src" ] && $(OBJDUMP) -f "$$src" 2>/dev/null | grep -q 'file format elf32-i386'; then \
+			install -m "$$mode" "$$src" "$(TARGETFS_USR_LIBEXEC)/$$prog"; \
+		fi; \
+	done
 	@install -d "$(TARGETFS_ETC_SSH)"
-	@if [ -f "$(SSHD_CONF_SRC)" ] && [ ! -f "$(TARGETFS_ETC_SSH)/sshd_config" ]; then \
-		install -m 0644 "$(SSHD_CONF_SRC)" "$(TARGETFS_ETC_SSH)/sshd_config"; \
+	@if [ ! -f "$(TARGETFS_ETC_SSH)/sshd_config" ]; then \
+		if [ -f "$(BUILDDIR)/sshd_config.out" ]; then \
+			install -m 0644 "$(BUILDDIR)/sshd_config.out" "$(TARGETFS_ETC_SSH)/sshd_config"; \
+		elif [ -f "$(SSHD_CONF_SRC)" ]; then \
+			install -m 0644 "$(SSHD_CONF_SRC)" "$(TARGETFS_ETC_SSH)/sshd_config"; \
+		fi; \
 	fi
-	@if [ -f "$(SSH_CONF_SRC)" ] && [ ! -f "$(TARGETFS_ETC_SSH)/ssh_config" ]; then \
-		install -m 0644 "$(SSH_CONF_SRC)" "$(TARGETFS_ETC_SSH)/ssh_config"; \
+	@if [ ! -f "$(TARGETFS_ETC_SSH)/ssh_config" ]; then \
+		if [ -f "$(BUILDDIR)/ssh_config.out" ]; then \
+			install -m 0644 "$(BUILDDIR)/ssh_config.out" "$(TARGETFS_ETC_SSH)/ssh_config"; \
+		elif [ -f "$(SSH_CONF_SRC)" ]; then \
+			install -m 0644 "$(SSH_CONF_SRC)" "$(TARGETFS_ETC_SSH)/ssh_config"; \
+		fi; \
 	fi
-	@if [ -f "$(MODULI_SRC)" ] && [ ! -f "$(TARGETFS_ETC_SSH)/moduli" ]; then \
-		install -m 0644 "$(MODULI_SRC)" "$(TARGETFS_ETC_SSH)/moduli"; \
+	@if [ ! -f "$(TARGETFS_ETC_SSH)/moduli" ]; then \
+		if [ -f "$(BUILDDIR)/moduli.out" ]; then \
+			install -m 0644 "$(BUILDDIR)/moduli.out" "$(TARGETFS_ETC_SSH)/moduli"; \
+		elif [ -f "$(MODULI_SRC)" ]; then \
+			install -m 0644 "$(MODULI_SRC)" "$(TARGETFS_ETC_SSH)/moduli"; \
+		fi; \
 	fi
 	@conf="$(TARGETFS_ETC_SSH)/sshd_config"; \
 	if [ -f "$$conf" ]; then \
+		edit_conf() { \
+			expr="$$1"; \
+			tmp="$$conf.tmp"; \
+			sed -E "$$expr" "$$conf" > "$$tmp" && mv "$$tmp" "$$conf"; \
+		}; \
 		if grep -Eq '^[#[:space:]]*Port[[:space:]]+' "$$conf"; then \
-			sed -i -E 's|^[#[:space:]]*Port[[:space:]]+.*|Port 22|' "$$conf"; \
+			edit_conf 's|^[#[:space:]]*Port[[:space:]]+.*|Port 22|'; \
 		else \
 			echo 'Port 22' >> "$$conf"; \
 		fi; \
 		if grep -Eq '^[#[:space:]]*AddressFamily[[:space:]]+' "$$conf"; then \
-			sed -i -E 's|^[#[:space:]]*AddressFamily[[:space:]]+.*|AddressFamily inet|' "$$conf"; \
+			edit_conf 's|^[#[:space:]]*AddressFamily[[:space:]]+.*|AddressFamily inet|'; \
 		else \
 			echo 'AddressFamily inet' >> "$$conf"; \
 		fi; \
 		if grep -Eq '^[#[:space:]]*ListenAddress[[:space:]]+' "$$conf"; then \
-			sed -i -E 's|^[#[:space:]]*ListenAddress[[:space:]]+.*|ListenAddress 0.0.0.0|' "$$conf"; \
+			edit_conf 's|^[#[:space:]]*ListenAddress[[:space:]]+.*|ListenAddress 0.0.0.0|'; \
 		else \
 			echo 'ListenAddress 0.0.0.0' >> "$$conf"; \
 		fi; \
-		sed -i -E '/^[#[:space:]]*ListenAddress[[:space:]]+::[[:space:]]*$/d' "$$conf"; \
+		edit_conf '/^[#[:space:]]*ListenAddress[[:space:]]+::[[:space:]]*$$/d'; \
 		if grep -Eq '^[#[:space:]]*HostKey[[:space:]]+/etc/ssh/ssh_host_rsa_key' "$$conf"; then \
-			sed -i -E 's|^[#[:space:]]*HostKey[[:space:]]+/etc/ssh/ssh_host_rsa_key.*|HostKey /etc/ssh/ssh_host_rsa_key|' "$$conf"; \
+			edit_conf 's|^[#[:space:]]*HostKey[[:space:]]+/etc/ssh/ssh_host_rsa_key.*|HostKey /etc/ssh/ssh_host_rsa_key|'; \
 		else \
 			echo 'HostKey /etc/ssh/ssh_host_rsa_key' >> "$$conf"; \
 		fi; \
 		if grep -Eq '^[#[:space:]]*HostKey[[:space:]]+/etc/ssh/ssh_host_ecdsa_key' "$$conf"; then \
-			sed -i -E 's|^[#[:space:]]*HostKey[[:space:]]+/etc/ssh/ssh_host_ecdsa_key.*|HostKey /etc/ssh/ssh_host_ecdsa_key|' "$$conf"; \
+			edit_conf 's|^[#[:space:]]*HostKey[[:space:]]+/etc/ssh/ssh_host_ecdsa_key.*|HostKey /etc/ssh/ssh_host_ecdsa_key|'; \
 		else \
 			echo 'HostKey /etc/ssh/ssh_host_ecdsa_key' >> "$$conf"; \
 		fi; \
 		if grep -Eq '^[#[:space:]]*HostKey[[:space:]]+/etc/ssh/ssh_host_ed25519_key' "$$conf"; then \
-			sed -i -E 's|^[#[:space:]]*HostKey[[:space:]]+/etc/ssh/ssh_host_ed25519_key.*|HostKey /etc/ssh/ssh_host_ed25519_key|' "$$conf"; \
+			edit_conf 's|^[#[:space:]]*HostKey[[:space:]]+/etc/ssh/ssh_host_ed25519_key.*|HostKey /etc/ssh/ssh_host_ed25519_key|'; \
 		else \
 			echo 'HostKey /etc/ssh/ssh_host_ed25519_key' >> "$$conf"; \
 		fi; \
 		if grep -Eq '^[#[:space:]]*PermitRootLogin[[:space:]]+' "$$conf"; then \
-			sed -i -E 's|^[#[:space:]]*PermitRootLogin[[:space:]]+.*|PermitRootLogin yes|' "$$conf"; \
+			edit_conf 's|^[#[:space:]]*PermitRootLogin[[:space:]]+.*|PermitRootLogin yes|'; \
 		else \
 			echo 'PermitRootLogin yes' >> "$$conf"; \
 		fi; \
 		if grep -Eq '^[#[:space:]]*KbdInteractiveAuthentication[[:space:]]+' "$$conf"; then \
-			sed -i -E 's|^[#[:space:]]*KbdInteractiveAuthentication[[:space:]]+.*|KbdInteractiveAuthentication no|' "$$conf"; \
+			edit_conf 's|^[#[:space:]]*KbdInteractiveAuthentication[[:space:]]+.*|KbdInteractiveAuthentication no|'; \
 		else \
 			echo 'KbdInteractiveAuthentication no' >> "$$conf"; \
 		fi; \
-		sed -i -E '/^[#[:space:]]*UsePAM[[:space:]]+/d' "$$conf"; \
+		edit_conf '/^[#[:space:]]*UsePAM[[:space:]]+/d'; \
 		if grep -Eq '^[#[:space:]]*PidFile[[:space:]]+' "$$conf"; then \
-			sed -i -E 's|^[#[:space:]]*PidFile[[:space:]]+.*|PidFile /var/run/sshd.pid|' "$$conf"; \
+			edit_conf 's|^[#[:space:]]*PidFile[[:space:]]+.*|PidFile /var/run/sshd.pid|'; \
 		else \
 			echo 'PidFile /var/run/sshd.pid' >> "$$conf"; \
 		fi; \
 		if grep -Eq '^[#[:space:]]*PasswordAuthentication[[:space:]]+' "$$conf"; then \
-			sed -i -E 's|^[#[:space:]]*PasswordAuthentication[[:space:]]+.*|PasswordAuthentication yes|' "$$conf"; \
+			edit_conf 's|^[#[:space:]]*PasswordAuthentication[[:space:]]+.*|PasswordAuthentication yes|'; \
 		else \
 			echo 'PasswordAuthentication yes' >> "$$conf"; \
 		fi; \

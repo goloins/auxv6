@@ -36,11 +36,95 @@
 
 #define KTIME_CLOCK_REALTIME  0
 #define KTIME_CLOCK_MONOTONIC 1
+#define AUXV6_ITIMER_HZ 100U
+#define AUXV6_ITIMER_USEC_PER_TICK (1000000U / AUXV6_ITIMER_HZ)
 
 extern struct {
   struct spinlock lock;
   struct proc proc[NPROC];
 } ptable;
+extern struct spinlock tickslock;
+extern uint ticks;
+
+static uint
+itimer_now_ticks(void)
+{
+  uint now;
+
+  acquire(&tickslock);
+  now = ticks;
+  release(&tickslock);
+  return now;
+}
+
+static int
+itimer_timeval_valid(const struct timeval *tv)
+{
+  if(tv == 0)
+    return 0;
+  if(tv->tv_sec < 0)
+    return 0;
+  if(tv->tv_usec < 0 || tv->tv_usec >= 1000000L)
+    return 0;
+  return 1;
+}
+
+static uint
+itimer_timeval_to_ticks(const struct timeval *tv)
+{
+  unsigned long long total_usec;
+  unsigned long long ticks64;
+
+  if(tv == 0)
+    return 0;
+  total_usec = (unsigned long long)tv->tv_sec * 1000000ULL +
+               (unsigned long long)tv->tv_usec;
+  if(total_usec == 0)
+    return 0;
+
+  ticks64 = (total_usec + (unsigned long long)AUXV6_ITIMER_USEC_PER_TICK - 1ULL) /
+            (unsigned long long)AUXV6_ITIMER_USEC_PER_TICK;
+  if(ticks64 == 0)
+    ticks64 = 1;
+  if(ticks64 > 0xffffffffULL)
+    ticks64 = 0xffffffffULL;
+  return (uint)ticks64;
+}
+
+static void
+itimer_ticks_to_timeval(uint tick_count, struct timeval *tv)
+{
+  unsigned long long total_usec;
+
+  if(tv == 0)
+    return;
+  total_usec = (unsigned long long)tick_count * (unsigned long long)AUXV6_ITIMER_USEC_PER_TICK;
+  tv->tv_sec = (time_t)(total_usec / 1000000ULL);
+  tv->tv_usec = (suseconds_t)(total_usec % 1000000ULL);
+}
+
+static void
+itimer_snapshot_locked(struct proc *p, uint now_ticks, struct itimerval *itv)
+{
+  uint remaining_ticks;
+
+  if(itv == 0)
+    return;
+
+  timerclear(&itv->it_interval);
+  timerclear(&itv->it_value);
+
+  if(p == 0)
+    return;
+
+  itimer_ticks_to_timeval(p->alarm_interval_ticks, &itv->it_interval);
+
+  if(p->alarm_ticks == 0 || now_ticks >= p->alarm_ticks)
+    remaining_ticks = 0;
+  else
+    remaining_ticks = p->alarm_ticks - now_ticks;
+  itimer_ticks_to_timeval(remaining_ticks, &itv->it_value);
+}
 
 int
 sys_fork(void)
@@ -308,7 +392,7 @@ sys_alarm(void)
 {
   int seconds;
   struct proc *p;
-  uint old_alarm;
+  uint now_ticks;
   uint remaining;
 
   if(argint(0, &seconds) < 0)
@@ -318,25 +402,103 @@ sys_alarm(void)
     return -1;
 
   p = myproc();
-  old_alarm = p->alarm_ticks;
+  now_ticks = itimer_now_ticks();
   
   // Calculate remaining time on old alarm
-  if(old_alarm == 0) {
+  if(p->alarm_ticks == 0) {
     remaining = 0;
-  } else if(ticks >= old_alarm) {
+  } else if(now_ticks >= p->alarm_ticks) {
     remaining = 0;  // Already expired
   } else {
-    remaining = (old_alarm - ticks + 99) / 100;  // Round up to seconds
+    remaining = (p->alarm_ticks - now_ticks + (AUXV6_ITIMER_HZ - 1)) / AUXV6_ITIMER_HZ;
   }
   
   // Set new alarm (100 ticks per second)
   if(seconds == 0) {
-    proc_set_alarm(p, 0);  // Cancel alarm
+    proc_set_alarm_state(p, 0, 0);
   } else {
-    proc_set_alarm(p, ticks + (uint)seconds * 100);
+    proc_set_alarm_state(p, now_ticks + (uint)seconds * AUXV6_ITIMER_HZ, 0);
   }
   
   return remaining;
+}
+
+int
+sys_getitimer(void)
+{
+  int which;
+  int itvaddr;
+  struct itimerval itv;
+  struct proc *p;
+  pde_t *pgdir;
+  uint now_ticks;
+
+  if(argint(0, &which) < 0 || argint(1, &itvaddr) < 0)
+    return -1;
+  if(which != ITIMER_REAL || itvaddr == 0)
+    return -1;
+
+  p = myproc();
+  pgdir = proc_pgdir(p);
+  if(p == 0 || pgdir == 0)
+    return -1;
+
+  now_ticks = itimer_now_ticks();
+  acquire(&ptable.lock);
+  itimer_snapshot_locked(p, now_ticks, &itv);
+  release(&ptable.lock);
+
+  if(copyout(pgdir, (uint)itvaddr, &itv, sizeof(itv)) < 0)
+    return -1;
+  return 0;
+}
+
+int
+sys_setitimer(void)
+{
+  int which;
+  int newitvaddr;
+  int olditvaddr;
+  struct itimerval newitv;
+  struct itimerval olditv;
+  struct proc *p;
+  pde_t *pgdir;
+  uint now_ticks;
+  uint value_ticks;
+  uint interval_ticks;
+
+  if(argint(0, &which) < 0 || argint(1, &newitvaddr) < 0 || argint(2, &olditvaddr) < 0)
+    return -1;
+  if(which != ITIMER_REAL || newitvaddr == 0)
+    return -1;
+
+  p = myproc();
+  pgdir = proc_pgdir(p);
+  if(p == 0 || pgdir == 0)
+    return -1;
+  if(copyin(pgdir, &newitv, (uint)newitvaddr, sizeof(newitv)) < 0)
+    return -1;
+  if(!itimer_timeval_valid(&newitv.it_value) ||
+     !itimer_timeval_valid(&newitv.it_interval))
+    return -1;
+
+  now_ticks = itimer_now_ticks();
+  value_ticks = itimer_timeval_to_ticks(&newitv.it_value);
+  interval_ticks = itimer_timeval_to_ticks(&newitv.it_interval);
+
+  acquire(&ptable.lock);
+  itimer_snapshot_locked(p, now_ticks, &olditv);
+  release(&ptable.lock);
+
+  if(olditvaddr != 0 && copyout(pgdir, (uint)olditvaddr, &olditv, sizeof(olditv)) < 0)
+    return -1;
+
+  if(value_ticks == 0)
+    proc_set_alarm_state(p, 0, 0);
+  else
+    proc_set_alarm_state(p, now_ticks + value_ticks, interval_ticks);
+
+  return 0;
 }
 
 int
