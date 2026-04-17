@@ -21,6 +21,7 @@
 #include "stdio.h"
 #include "stdlib.h"
 #include "string.h"
+#include "X11/keysym.h"
 
 /* ------------------------------------------------------------------ *
  * Global state                                                        *
@@ -33,6 +34,73 @@ WmGlobal g_wm;
  * ------------------------------------------------------------------ */
 
 static int g_another_wm;
+
+#define WM_KEY_CYCLE_FWD XK_Tab
+#define WM_KEY_CLOSE     XK_q
+
+static Client *
+cycle_target(Client *from, int dir)
+{
+    Client *order[256];
+    int n = 0;
+    int i;
+    int idx = -1;
+    Client *scan;
+
+    for (scan = g_wm.clients; scan && n < 256; scan = scan->next) {
+        if (!scan->frame)
+            continue;
+        order[n++] = scan;
+    }
+
+    if (n == 0)
+        return NULL;
+
+    if (!from)
+        return order[0];
+
+    for (i = 0; i < n; i++) {
+        if (order[i] == from) {
+            idx = i;
+            break;
+        }
+    }
+
+    if (idx < 0)
+        return order[0];
+
+    if (dir >= 0)
+        return order[(idx + 1) % n];
+    return order[(idx + n - 1) % n];
+}
+
+static void
+grab_key_with_lock_variants(int keycode, unsigned int mods)
+{
+    XGrabKey(g_wm.dpy, keycode, mods,
+             g_wm.root, True, GrabModeAsync, GrabModeAsync);
+    XGrabKey(g_wm.dpy, keycode, mods | LockMask,
+             g_wm.root, True, GrabModeAsync, GrabModeAsync);
+}
+
+static void
+wm_grab_keys(void)
+{
+    int tab;
+    int q;
+
+    XUngrabKey(g_wm.dpy, AnyKey, AnyModifier, g_wm.root);
+
+    tab = (int)XKeysymToKeycode(g_wm.dpy, WM_KEY_CYCLE_FWD);
+    q = (int)XKeysymToKeycode(g_wm.dpy, WM_KEY_CLOSE);
+
+    if (tab > 0) {
+        grab_key_with_lock_variants(tab, Mod1Mask);
+        grab_key_with_lock_variants(tab, Mod1Mask | ShiftMask);
+    }
+    if (q > 0)
+        grab_key_with_lock_variants(q, Mod1Mask);
+}
 
 static int
 error_handler_check_wm(Display *dpy, XErrorEvent *e)
@@ -294,6 +362,38 @@ on_button_release(XButtonEvent *e)
     if (c && c->drag_mode != DRAG_NONE) {
         c->drag_mode = DRAG_NONE;
         XUngrabPointer(g_wm.dpy, CurrentTime);
+    }
+}
+
+/*
+ * KeyPress — WM keyboard action path (§10 baseline).
+ * Alt+Tab           : cycle focus forward
+ * Alt+Shift+Tab     : cycle focus backward
+ * Alt+Q             : close focused window
+ */
+static void
+on_key_press(XKeyEvent *e)
+{
+    KeySym ks;
+
+    if (!(e->state & Mod1Mask))
+        return;
+
+    ks = XKeycodeToKeysym(g_wm.dpy, e->keycode, 0);
+
+    if (ks == WM_KEY_CYCLE_FWD) {
+        Client *target;
+        int dir = (e->state & ShiftMask) ? -1 : 1;
+        target = cycle_target(g_wm.focused, dir);
+        if (target)
+            focus_set(target);
+        return;
+    }
+
+    if (ks == WM_KEY_CLOSE) {
+        if (g_wm.focused)
+            client_close(g_wm.focused);
+        return;
     }
 }
 
@@ -596,6 +696,9 @@ run(void)
         case ButtonPress:
             on_button_press(&ev.xbutton);
             break;
+        case KeyPress:
+            on_key_press(&ev.xkey);
+            break;
         case ButtonRelease:
             on_button_release(&ev.xbutton);
             break;
@@ -653,6 +756,7 @@ main(int argc, char **argv)
                  SubstructureRedirectMask
                  | SubstructureNotifyMask
                  | ButtonPressMask
+                 | KeyPressMask
                  | PropertyChangeMask);
     XSync(g_wm.dpy, False);
 
@@ -666,6 +770,7 @@ main(int argc, char **argv)
 
     atoms_init();
     draw_init();
+    wm_grab_keys();
 
     g_wm.running = 1;
 
