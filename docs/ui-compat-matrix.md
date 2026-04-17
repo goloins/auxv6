@@ -55,7 +55,7 @@ Phase 1 non-targets:
 | WM | Active/inactive frame states | Must | Partial | WM/Shell | Visual snapshots required |
 | WM | Drag move | Must | Partial | WM/Shell | Threshold and bounds tests pending |
 | WM | Resize | Must | Partial | WM/Shell | Per-role constraints pending |
-| WM | Modal transient blocking | Must | Partial | WM/Shell | App-scoped blocking plus explicit owner-window override hook are implemented; edge-policy refinement remains |
+| WM | Modal transient blocking | Must | Partial | WM/Shell | App-scoped blocking plus explicit owner-window override hook are implemented; owner-frame action leakage under modal redirection is now blocked; multi-modal precedence validation remains |
 | WM | Zoom toggle behavior | Should | Partial | WM/Shell | Basic maximize/restore toggle implemented; policy refinement pending |
 | WM | Utility/palette stacking policy | Should | Partial | WM/Shell | Family-aware raise improves owner-app utility ordering; full policy refinement still pending |
 | Menubar | Active app switch | Must | Partial | Shell/Menu | WM now publishes active window; menubar service integration still pending |
@@ -172,6 +172,13 @@ Phase 1A pass condition for this script:
 4. Zoom path is implemented at basic level (maximize/restore); advanced policy refinement remains a known limitation.
 5. Modal and utility policy may be partial if `st` baseline behavior is unaffected.
 
+### Phase 1A Near-Exit Checklist (Execution)
+
+1. Validate blocked-owner click behavior: when an app-modal is open, clicking owner frame controls must not trigger owner close/zoom/drag actions.
+2. Validate remap focus policy: remapped managed clients are re-focused/re-stacked deterministically.
+3. Run the `st` smoke script end-to-end and mark any remaining failures by exact interaction step.
+4. Keep deferred items explicit (font finalization, advanced zoom policy, menubar registration/dispatch hardening).
+
 ### Phase 1B Exit Gates
 
 1. Global menubar works for at least one adapter path.
@@ -244,3 +251,4 @@ Deferred until post-Phase-1 stability:
 16. Hardened WM key grabs for lock/numlock modifier combinations and made focus-cycle ordering deterministic by layer.
 17. Refined cycling policy for usability: document-first Alt+Tab, explicit all-window cycle paths via Alt+Ctrl+Tab and Alt+Escape.
 18. Implemented active title stripe rendering and updated draw/font policy notes (Montecarlo -> fixed -> server default) for current Phase 1A visuals.
+19. Refined modal input policy by preventing blocked-owner frame actions after modal focus redirection; documented Phase 1A near-exit validation checklist.

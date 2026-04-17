@@ -17,15 +17,19 @@
 
 /*
  * Check modal scope (§6.4): if another client blocks 'c', return the
- * blocking modal window instead.  v1 uses app-wide scope — any modal
- * window whose transient_for matches c (or shares the same app) wins.
+ * blocking modal window instead.
  *
- * This is the v1 default; owner-window fallback is deferred.
+ * Priority order:
+ *   1) explicit owner-window scope modal targeting this window
+ *   2) direct owner relationship (transient_for == c->win)
+ *   3) app-wide modal in the same app family
  */
 static Client *
 modal_constraint(Client *c)
 {
     Client *m;
+    Client *owner_match = NULL;
+    Client *app_match = NULL;
 
     if (!c) return NULL;
 
@@ -38,19 +42,28 @@ modal_constraint(Client *c)
             continue;
 
         if (m->modal_owner_scope) {
-            if (m->transient_for != None && m->transient_for == c->win)
-                return m;
+            if (m->transient_for != None && m->transient_for == c->win) {
+                owner_match = m;
+                break;
+            }
             continue;
         }
 
-        /* v1 default (§6.4): app-wide modal scope is authoritative. */
-        if (client_same_app(m, c))
-            return m;
+        /* Prefer direct owner relationship over broad app-wide matching. */
+        if (m->transient_for != None && m->transient_for == c->win) {
+            if (!owner_match)
+                owner_match = m;
+            continue;
+        }
 
-        /* Owner relationship always blocks owner window directly. */
-        if (m->transient_for != None && m->transient_for == c->win)
-            return m;
+        if (client_same_app(m, c) && !app_match)
+            app_match = m;
     }
+
+    if (owner_match)
+        return owner_match;
+    if (app_match)
+        return app_match;
     return NULL;
 }
 

@@ -263,6 +263,8 @@ on_map_request(XMapRequestEvent *e)
             return;
         XMapWindow(g_wm.dpy, c->frame);
         XMapWindow(g_wm.dpy, c->win);
+        focus_set(c);
+        stack_restack();
         return;
     }
 
@@ -385,6 +387,10 @@ on_button_press(XButtonEvent *e)
     /* Focus and raise on any click (§6.1) */
     if (c != g_wm.focused)
         focus_set(c);
+
+    /* If modal policy redirected focus away, ignore this click for WM actions. */
+    if (c != g_wm.focused)
+        return;
 
     /* Only handle button 1 for WM actions on the frame */
     if (e->window != c->frame || e->button != Button1)

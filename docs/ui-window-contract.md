@@ -275,6 +275,7 @@ Any contract change must include:
 3. Refine zoom policy details (for example multi-monitor/work-area policy and role-specific constraints) beyond basic maximize/restore behavior.
 4. Formalize menubar service registration protocol/atom handshake so WM reserves menubar band and binds service deterministically.
 5. Add WM-side ownership validation for menu command dispatch hardening before broader untrusted-client scenarios are considered.
+6. Validate and codify deterministic precedence when multiple simultaneous modals can match the same app family.
 
 ---
 
@@ -371,4 +372,5 @@ Utility-window hit regions:
 12. WM keyboard action path is implemented with document-first Alt+Tab cycling, explicit all-window cycling (Alt+Ctrl+Tab and Alt+Escape), and Alt+Q close.
 13. Active document title bars now render with alternating platinum-style stripes instead of a flat fill.
 14. Font loading now explicitly prefers Montecarlo, then fixed, then server default with runtime logging of selection.
-15. Modal policy remains partial because remaining edge cases still require refinement against Section 6.4.
+15. Modal input-path policy is tightened so blocked-owner frame clicks do not execute owner actions after modal focus redirection.
+16. Modal policy remains partial because multi-modal precedence edge cases still require refinement against Section 6.4.
