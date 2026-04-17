@@ -366,4 +366,6 @@ Utility-window hit regions:
 7. Modal/transient handling now includes app-scoped modal focus blocking and transient ownership inference from WM hints/properties.
 8. Owner-window override hook is implemented via `_AUX_MODAL_SCOPE_OWNER` for explicit narrower modal blocking where needed.
 9. Utility/modal family-aware raise behavior is implemented so same-app palettes/modals follow active app focus more coherently.
-10. Modal policy remains partial because remaining edge cases still require refinement against Section 6.4.
+10. Late property/hint updates on managed windows now refresh role/layer/app identity/modal-scope policy without requiring remap.
+11. Client-driven configure notifications are now synchronized back through WM frame geometry policy.
+12. Modal policy remains partial because remaining edge cases still require refinement against Section 6.4.

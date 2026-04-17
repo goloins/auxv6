@@ -373,18 +373,120 @@ static void
 on_property_notify(XPropertyEvent *e)
 {
     Client *c;
+    WmRole old_role;
+    WmLayer old_layer;
+    Window old_leader;
+    int old_modal_owner_scope;
+    int needs_restack;
+    int needs_redraw;
+    int needs_focus_recheck;
+    int title_h_old, title_h_new;
 
     c = client_find(e->window);
     if (!c) return;
 
+    if (e->window != c->win)
+        return;
+
+    needs_restack = 0;
+    needs_redraw = 0;
+    needs_focus_recheck = 0;
+
     if (e->atom == XA_WM_NAME) {
         client_update_title(c);
-        if (c->frame)
-            frame_draw(c);
+        needs_redraw = 1;
+    }
+
+    if (e->atom == g_wm.a_wm_protocols) {
+        client_check_protocols(c);
+    }
+
+    if (e->atom == XA_WM_HINTS
+        || e->atom == g_wm.a_wm_client_leader
+        || e->atom == g_wm.a_wm_transient_for
+        || e->atom == g_wm.a_net_wm_window_type
+        || e->atom == g_wm.a_net_wm_state
+        || e->atom == g_wm.a_aux_modal_scope_owner) {
+
+        old_role = c->role;
+        old_layer = c->layer;
+        old_leader = c->app_leader;
+        old_modal_owner_scope = c->modal_owner_scope;
+        title_h_old = (old_role == ROLE_UTILITY) ? TITLE_H_UTIL : TITLE_H;
+
+        XGetTransientForHint(g_wm.dpy, c->win, &c->transient_for);
+        client_update_app_identity(c);
+
+        {
+            WmRole new_role = client_classify_role(c->win);
+            if (new_role != ROLE_UNMANAGED) {
+                c->role = new_role;
+                c->layer = client_role_to_layer(new_role);
+            }
+        }
+
+        client_update_modal_scope(c);
+        title_h_new = (c->role == ROLE_UTILITY) ? TITLE_H_UTIL : TITLE_H;
+
+        if (c->role != old_role || title_h_new != title_h_old) {
+            c->zoomed = 0;
+            frame_configure(c, c->x, c->y, c->cw, c->ch);
+            needs_redraw = 1;
+        }
+
+        if (c->layer != old_layer
+            || c->app_leader != old_leader
+            || c->modal_owner_scope != old_modal_owner_scope) {
+            needs_restack = 1;
+        }
+
+        needs_focus_recheck = 1;
+    }
+
+    if (needs_restack) {
+        if (g_wm.focused)
+            stack_raise_family(g_wm.focused);
+        else
+            stack_restack();
+    }
+
+    if (needs_redraw && c->frame)
+        frame_draw(c);
+
+    if (needs_focus_recheck && g_wm.focused) {
+        Client *constraint = g_wm.focused;
+        focus_set(constraint);
     }
 
     /* Forward menu-related property changes to the menubar */
     menu_on_property(c, e);
+}
+
+/*
+ * ConfigureNotify — sync managed frame to client-driven size changes.
+ */
+static void
+on_configure_notify(XConfigureEvent *e)
+{
+    Client *c;
+
+    c = client_find(e->window);
+    if (!c)
+        return;
+
+    /* Only track client window configure notifications. */
+    if (e->window != c->win)
+        return;
+
+    if (e->width <= 0 || e->height <= 0)
+        return;
+
+    /* Ignore no-op geometry notifications. */
+    if (e->width == c->cw && e->height == c->ch)
+        return;
+
+    c->zoomed = 0;
+    frame_configure(c, c->x, c->y, e->width, e->height);
 }
 
 /*
@@ -508,6 +610,9 @@ run(void)
             break;
         case PropertyNotify:
             on_property_notify(&ev.xproperty);
+            break;
+        case ConfigureNotify:
+            on_configure_notify(&ev.xconfigure);
             break;
         case ClientMessage:
             on_client_message(&ev.xclient);

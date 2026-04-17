@@ -240,3 +240,4 @@ Deferred until post-Phase-1 stability:
 11. Updated WM zoom status from stubbed to partial after implementing a basic maximize/restore toggle path in `6wm`.
 12. Implemented app-scoped modal focus blocking using WM hints/property-derived app identity; kept status partial pending owner-window override refinement.
 13. Implemented explicit owner-window modal override hook (`_AUX_MODAL_SCOPE_OWNER`) and family-aware utility/modal raise behavior for active app focus.
+14. Added dynamic policy refresh on late property/hint updates and configure-notify synchronization for managed windows to improve lifecycle stability.
