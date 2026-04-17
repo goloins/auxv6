@@ -20,6 +20,13 @@ Non-goals (for this version):
 1. Pixel-perfect historical reproduction of every System 7-9 variant.
 2. Broad support for complex modern desktop effects.
 
+Execution note (Phase 1A, April 17, 2026):
+
+1. This file remains the normative v1 contract target.
+2. During Phase 1A `st` bootstrap, zoom behavior may be implemented at basic level before full policy refinement.
+3. During Phase 1A `st` bootstrap, modal/utility behaviors may be partial where they are non-blocking for `st` usability.
+4. Any temporary deltas must be tracked in the compatibility matrix as explicit limitations.
+
 ---
 
 ## 2. Window Taxonomy
@@ -196,6 +203,7 @@ Optional future states:
 
 2. Zoom box
 - Toggles between normal geometry and policy-defined zoomed geometry.
+- Phase 1A implementation status: basic maximize/restore toggle is implemented; advanced policy refinement remains deferred.
 
 3. Collapse box
 - Disabled in v1 baseline (reserved for future expansion).
@@ -264,7 +272,7 @@ Any contract change must include:
 
 1. Implement active title-bar stripe treatment for document windows to better match platinum-era appearance (currently solid fill in scaffold).
 2. Integrate Chicago-like bitmap UI font for title rendering; current fallback face is functional but not contract-accurate.
-3. Complete zoom-box behavior to toggle between normal and policy-defined zoomed geometry per Section 8 semantics.
+3. Refine zoom policy details (for example multi-monitor/work-area policy and role-specific constraints) beyond basic maximize/restore behavior.
 4. Formalize menubar service registration protocol/atom handshake so WM reserves menubar band and binds service deterministically.
 5. Add WM-side ownership validation for menu command dispatch hardening before broader untrusted-client scenarios are considered.
 
@@ -354,4 +362,5 @@ Utility-window hit regions:
 3. Active/inactive visual state switching is wired on focus transitions, with role-aware title text suppression for utility windows.
 4. Drag move and basic resize affordance paths are scaffolded and bounded to screen/menubar limits.
 5. Stacking uses explicit layer ordering (document, utility, modal) with per-focus raise behavior.
-6. Modal/transient policy remains partial and requires completion against Section 6.4 requirements.
+6. Basic zoom maximize/restore toggle path is implemented on the zoom box.
+7. Modal/transient policy remains partial and requires completion against Section 6.4 requirements.

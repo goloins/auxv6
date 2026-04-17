@@ -1,6 +1,6 @@
 # UI Compatibility Matrix
 **Date**: April 17, 2026  
-**Status**: Draft v1 (Phase 0 scaffold in progress)  
+**Status**: Draft v1 (Phase 1A execution focus active)  
 **Scope**: Curated compatibility subset for simple graphical application ports
 
 ---
@@ -26,6 +26,12 @@ Status legend:
 
 ## 2. Target Profiles (Phase 1)
 
+Current execution focus (April 17, 2026):
+
+1. Prioritize WM core infrastructure and usability before menubar completion.
+2. Keep visual style close to contract; defer non-blocking polish.
+3. Near-term success target: `st` rendered as a managed window with basic decorations.
+
 Phase 1 targets:
 
 1. Terminal emulator class
@@ -49,7 +55,8 @@ Phase 1 non-targets:
 | WM | Active/inactive frame states | Must | Partial | WM/Shell | Visual snapshots required |
 | WM | Drag move | Must | Partial | WM/Shell | Threshold and bounds tests pending |
 | WM | Resize | Must | Partial | WM/Shell | Per-role constraints pending |
-| WM | Modal transient blocking | Must | No | WM/Shell | Required for dialogs |
+| WM | Modal transient blocking | Must | Partial | WM/Shell | Phase 1A allows partial modal enforcement while `st` baseline is the primary gate |
+| WM | Zoom toggle behavior | Should | Partial | WM/Shell | Basic maximize/restore toggle implemented; policy refinement pending |
 | WM | Utility/palette stacking policy | Should | Partial | WM/Shell | Layer-based restack exists; owner-app policy still pending |
 | Menubar | Active app switch | Must | Partial | Shell/Menu | WM now publishes active window; menubar service integration still pending |
 | Menubar | Command dispatch callback | Must | No | Shell/Menu + Adapter | v1 protocol implementation |
@@ -71,8 +78,9 @@ Phase 1 non-targets:
 | Reparent + frame lifecycle | P0 | Yes | Yes | Partial | Core WM behavior |
 | Focus/set-focus/focus-events | P0 | Yes | Yes | Partial | Includes active visuals |
 | WM close protocol path | P0 | Yes | Yes | Partial | Graceful close preferred |
+| WM zoom toggle path | P1 | Should | Yes | Partial | Basic toggle path implemented; multi-head/policy refinement pending |
 | Menu publish/dispatch protocol | P0 | Yes | Yes | Partial | Atoms + focus/property bridge scaffolded in 6wm; adapter dispatch path pending |
-| Dialog/transient ownership | P1 | Yes | Yes | No | Needed for editor prompts |
+| Dialog/transient ownership | P1 | Yes | Yes | Partial | Partial is acceptable for `st` bring-up; full policy required before xedit gate |
 | Clipboard basic text | P1 | Should | Yes | No | Add once core stable |
 | Drag-and-drop | P2 | No | Optional | No | Deferred |
 | Rich accessibility semantics | P2 | No | Optional | No | Deferred |
@@ -86,7 +94,7 @@ This table tracks first concrete port targets.
 
 | App Candidate | Profile | Toolkit Class | Phase Target | Port Status | Blocking Gaps | Notes |
 |---|---|---|---|---|---|---|
-| st | Terminal | Xlib/lightweight | Phase 1 | In Progress | WM polish required | Baseline terminal target |
+| st | Terminal | Xlib/lightweight | Phase 1A | In Progress | Remaining WM interaction hardening | Baseline terminal target and immediate bring-up gate |
 | xedit | Editor | Xaw/Xlib | Phase 1 | Not Started | Dialog transients, menu dispatch, state sync | Spartan editor target with simple menu model |
 | xeyes | Utility | Xlib/lightweight | Phase 1 | Not Started | Utility role policy, unmanaged/popup policy validation | Doodad utility target for event/lifecycle coverage |
 | xfw | Utility | FOX toolkit | Deferred | Not Started | Toolkit subsystem maturity (FOX adapter work) | Deferred to avoid rushing toolkit integration layer |
@@ -104,6 +112,7 @@ Action required:
 | st | Keyboard focus and input reliability | P0 | Partial | No dropped focus after window raise/lower |
 | st | Resize behavior with live content redraw | P0 | Partial | Verify no geometry desync after repeated resize |
 | st | Close path (graceful then fallback) | P1 | Partial | WM close action should terminate cleanly |
+| st | Zoom behavior | P2 | Partial | Basic zoom toggle path exists; advanced policy refinement deferred |
 | xedit | Managed frame + title truncation behavior | P0 | Partial | Long filenames should ellipsize in title bar |
 | xedit | Menu publish/dispatch integration | P0 | No | File/Edit basics routed through global menubar |
 | xedit | Dialog transient + modal behavior | P0 | No | Open/Save/Confirm prompts block app scope correctly |
@@ -124,6 +133,11 @@ The following smoke scripts are intended for manual run/verification in a graphi
 3. Move, resize, and refocus repeatedly.
 4. Type continuously while switching focus between windows.
 5. Trigger close via WM control and verify clean exit.
+
+Phase 1A pass condition for this script:
+
+1. `st` is visible in a managed frame with basic WM decorations.
+2. Move/resize/focus interactions are stable enough for normal terminal use.
 
 #### xedit Smoke Script
 
@@ -149,6 +163,19 @@ The following smoke scripts are intended for manual run/verification in a graphi
 
 1. This matrix has owners for all P0 features.
 2. Every P0 feature has a test plan reference.
+
+### Phase 1A Exit Gates (Current)
+
+1. `st` launches in a managed reparented frame with basic decorations.
+2. Focus, drag-move, resize, and close paths are stable for routine use.
+3. Deferred visual-polish deltas are documented in this matrix or WM TODO backlog.
+4. Zoom path is implemented at basic level (maximize/restore); advanced policy refinement remains a known limitation.
+5. Modal and utility policy may be partial if `st` baseline behavior is unaffected.
+
+### Phase 1B Exit Gates
+
+1. Global menubar works for at least one adapter path.
+2. Command dispatch and state refresh are functional for that path.
 
 ### Phase 1 Exit Gates
 
@@ -182,9 +209,8 @@ Deferred until post-Phase-1 stability:
 
 1. `TODO(draw)`: replace active title solid fill with alternating platinum stripe treatment (`6wm/draw.h`).
 2. `TODO(draw)`: replace fallback font with Chicago-like bitmap UI font once available (`6wm/draw.h`).
-3. `TODO(zoom)`: implement zoom-box toggle between normal and policy-defined zoom geometry (`6wm/6wm.c`).
-4. `TODO(menu)`: define formal menubar registration atom/protocol between menubar service and WM (`6wm/6wm.c`).
-5. `TODO(menu)`: add WM-side ownership validation for `_AUX_MENU_COMMAND` dispatch hardening (`6wm/menu.c`).
+3. `TODO(menu)`: define formal menubar registration atom/protocol between menubar service and WM (`6wm/6wm.c`).
+4. `TODO(menu)`: add WM-side ownership validation for `_AUX_MENU_COMMAND` dispatch hardening (`6wm/menu.c`).
 
 ---
 
@@ -207,3 +233,8 @@ Deferred until post-Phase-1 stability:
 4. Marked `xfw` deferred until toolkit integration layer matures.
 5. Added per-app requirement checklist and manual smoke-test scripts for Phase 1 targets.
 6. Updated matrix statuses for the initial `6wm` scaffold and added an implementation TODO backlog sourced from in-tree code markers.
+7. Reframed active execution to Phase 1A WM bootstrap with `st` managed-frame bring-up as the immediate gate.
+8. Split gates into Phase 1A (WM usability baseline) and Phase 1B (menubar integration completion).
+9. Marked zoom as explicitly stubbed for Phase 1A and tracked as deferred WM behavior.
+10. Marked modal/transient ownership as acceptable partial coverage for `st`-first bring-up.
+11. Updated WM zoom status from stubbed to partial after implementing a basic maximize/restore toggle path in `6wm`.

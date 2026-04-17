@@ -39,13 +39,16 @@
 #define PLT_CTRL_SYMBOL     0x000000UL  /* glyph color when active     */
 
 /*
- * Font loaded at draw_init().  Attempts FONT_PRIMARY; falls back to
- * whatever the server's default provides.
+ * Font loaded at draw_init().  The runtime tries a small fallback chain,
+ * starting with auxv6's bitmap Montecarlo face, then fixed.
  *
  * TODO(draw): replace with a Chicago-style bitmap face once available
  * in the auxv6 font directory (§4.3).
  */
-#define FONT_PRIMARY  "fixed"
+#define FONT_PRIMARY_MONTECARLO_XLFD \
+    "-montecarlo-montecarlo-medium-r-normal--16-120-100-100-m-80-iso8859-1"
+#define FONT_PRIMARY_MONTECARLO_SHORT "montecarlo-8x16"
+#define FONT_FALLBACK_FIXED           "fixed"
 
 /* ------------------------------------------------------------------ *
  * Lifecycle                                                           *

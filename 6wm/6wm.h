@@ -85,6 +85,11 @@ typedef struct Client {
     int             w, h;            /* total frame size incl. chrome  */
     int             cw, ch;          /* client window size             */
 
+    /* Zoom bookkeeping (§8). Stores pre-zoom geometry in client coords. */
+    int             zoomed;
+    int             restore_x, restore_y;
+    int             restore_cw, restore_ch;
+
     char            title[256];      /* last known WM_NAME or empty    */
 
     /* Drag/resize scratch */

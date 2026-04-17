@@ -11,4 +11,4 @@ wallpaper '#4169E1'
 #elif [ -x /usr/bin/xwmtrace ]; then
 #	/usr/bin/xwmtrace &
 #fi
-exec /usr/bin/dwm
+exec /bin/6wm

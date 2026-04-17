@@ -1,7 +1,7 @@
 # UI Porting and Desktop Coherence Strategy
 **Date**: April 17, 2026  
 **Objective**: Make porting plausible while enforcing a coherent classic Mac-style desktop (System 7-9 inspired), without chasing broad mainstream app compatibility.  
-**Status**: Strategy baseline (ready to execute)
+**Status**: Strategy baseline (Phase 1A WM bootstrap in progress)
 
 ---
 
@@ -166,6 +166,40 @@ Toolkits are integration points, not desktop authorities.
 
 ## Phase 1: Simple Apps First (Primary Near-Term Target)
 
+Execution note (updated April 17, 2026):
+
+1. Immediate priority is WM core usability and infrastructure completion.
+2. Visual fidelity should stay close to the contract, but pixel-perfect polish is explicitly deferred.
+3. Menubar logic remains core, but WM infrastructure should be driven as far as possible before menubar completion becomes the blocker.
+
+### Phase 1A: WM Bootstrap Milestone (Current Focus)
+
+Goals:
+
+1. Finish core WM interaction and lifecycle paths needed for daily usability.
+2. Validate first real app bring-up with minimal coherent chrome.
+
+Deliverables:
+
+1. Stable managed window map/configure/unmap flow with reparented frames.
+2. Basic decorations rendered consistently (title bar, border, close/zoom affordances).
+3. Reliable focus, move, and resize behavior for the first app target.
+
+Exit criteria:
+
+1. `st` launches and renders in a managed frame with basic decorations.
+2. `st` remains usable under repeated focus, move, and resize operations.
+3. Known visual deltas versus contract are documented as deferred polish items.
+4. Zoom behavior may remain stubbed if it does not impact `st` baseline usability.
+5. Modal/utility policy may remain partial when not required by `st` bring-up; gaps must be documented.
+
+### Phase 1B: Menubar Integration Milestone
+
+Goals:
+
+1. Complete menubar protocol flow on top of stable WM core.
+2. Validate app command dispatch for at least one adapter path.
+
 ### Goals
 
 1. Make terminals and simple editors portable with coherent behavior.
@@ -286,11 +320,19 @@ No new compatibility feature lands without:
 
 ## Immediate Next Actions (Recommended)
 
-1. Create and fill `docs/ui-window-contract.md` with exact titlebar/control geometry and behavior rules.
-2. Draft `docs/ui-menu-protocol.md` with message schema and ownership/lifecycle semantics.
-3. Create initial `docs/ui-compat-matrix.md` with first target apps and required features.
-4. Pick first two applications (one terminal, one editor) and derive the minimal required subset.
-5. Convert missing subset items into a prioritized implementation backlog.
+1. Complete WM core interaction paths (focus, move, resize, close, lifecycle hardening).
+2. Validate Phase 1A bring-up with `st` as the first real target.
+3. Record any visual deltas as deferred polish, not blockers.
+4. Begin menubar completion work only when WM core stability reaches daily-usable baseline.
+5. After `st` baseline passes, proceed to `xedit` and `xeyes` smoke validation.
+
+## Execution Updates
+
+### 2026-04-17
+
+1. Prioritized WM infrastructure completion as the immediate execution focus.
+2. Defined Phase 1A bootstrap milestone (`st` with basic managed decorations) before full menubar completion.
+3. Clarified that close visual fidelity is desired, while non-blocking polish remains deferred.
 
 ---
 

@@ -176,6 +176,9 @@ client_manage(Window win)
 
     c->cw = attrs.width;
     c->ch = attrs.height;
+    c->zoomed = 0;
+    c->restore_x = c->restore_y = 0;
+    c->restore_cw = c->restore_ch = 0;
 
     /* Frame size = client size + chrome insets */
     title_h = (role == ROLE_UTILITY) ? TITLE_H_UTIL : TITLE_H;

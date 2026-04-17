@@ -17,16 +17,32 @@
 void
 draw_init(void)
 {
+    static const char *font_candidates[] = {
+        FONT_PRIMARY_MONTECARLO_XLFD,
+        FONT_PRIMARY_MONTECARLO_SHORT,
+        FONT_FALLBACK_FIXED,
+        0
+    };
+    int i;
+
     g_wm.gc = XCreateGC(g_wm.dpy, g_wm.root, 0, 0);
     if (!g_wm.gc) {
         dprintf(2, "6wm: draw_init: XCreateGC failed\n");
         return;
     }
 
-    g_wm.font = XLoadQueryFont(g_wm.dpy, FONT_PRIMARY);
+    g_wm.font = 0;
+    for (i = 0; font_candidates[i]; i++) {
+        g_wm.font = XLoadQueryFont(g_wm.dpy, font_candidates[i]);
+        if (g_wm.font) {
+            dprintf(2, "6wm: draw_init: using font '%s'\n", font_candidates[i]);
+            break;
+        }
+    }
+
     if (!g_wm.font) {
-        dprintf(2, "6wm: draw_init: font '%s' unavailable, "
-                   "using server default\n", FONT_PRIMARY);
+        dprintf(2, "6wm: draw_init: no preferred font available, "
+                   "using server default\n");
         g_wm.font = XQueryFont(g_wm.dpy, 0);
     }
 

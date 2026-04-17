@@ -136,24 +136,23 @@ frame_draw(Client *c)
     /* Vertically center controls within title bar */
     ctrl_y = FRAME_BORDER + (title_h - ctrl_sz) / 2;
 
-    /* Close box (§4.2, §14 hit regions) */
-    c->close_x = title_x + ctrl_margin;
-    c->close_y = ctrl_y;
-    draw_ctrl(c->frame, c->state, c->close_x, c->close_y, ctrl_sz, 'X');
-
-    /* Zoom box (§4.2) */
-    zoom_x     = c->close_x + ctrl_sz + CTRL_GAP;
-    c->zoom_x  = zoom_x;
-    c->zoom_y  = ctrl_y;
-    draw_ctrl(c->frame, c->state, c->zoom_x, c->zoom_y, ctrl_sz, '+');
-
     /* Title bar background + text.
      * ctrl_right is the x-coordinate of the right edge of the last control;
      * draw_title_bar uses this to compute the text centering region. */
+    c->close_x = title_x + ctrl_margin;
+    c->close_y = ctrl_y;
+    zoom_x     = c->close_x + ctrl_sz + CTRL_GAP;
+    c->zoom_x  = zoom_x;
+    c->zoom_y  = ctrl_y;
+
     draw_title_bar(c->frame, c->role, c->state,
                    title_x, title_y, title_w, title_h,
                    c->title,
                    c->zoom_x + ctrl_sz /* ctrl_right */);
+
+    /* Controls are drawn after title fill/text so they stay visible. */
+    draw_ctrl(c->frame, c->state, c->close_x, c->close_y, ctrl_sz, 'X');
+    draw_ctrl(c->frame, c->state, c->zoom_x, c->zoom_y, ctrl_sz, '+');
 
     XFlush(g_wm.dpy);
 }
@@ -165,11 +164,20 @@ frame_draw(Client *c)
 void
 frame_configure(Client *c, int x, int y, int w, int h)
 {
-    int title_h, cx, cy;
+    int title_h, cx, cy, min_w, min_h;
 
     if (!c) return;
 
     title_h = (c->role == ROLE_UTILITY) ? TITLE_H_UTIL : TITLE_H;
+    min_w = ((c->role == ROLE_UTILITY)
+                ? (CTRL_MARGIN_UTIL + 2 * CTRL_SIZE_UTIL + CTRL_GAP + CTRL_MARGIN_UTIL + 16)
+                : (CTRL_MARGIN + 2 * CTRL_SIZE + CTRL_GAP + CTRL_MARGIN + 16));
+    min_h = 16;
+
+    if (w < min_w) w = min_w;
+    if (h < min_h) h = min_h;
+
+    if (x < 0) x = 0;
 
     /* Clamp: do not obscure menubar */
     if (y < g_wm.menubar_h)
@@ -181,6 +189,19 @@ frame_configure(Client *c, int x, int y, int w, int h)
     c->ch = h;
     c->w  = w + 2 * FRAME_BORDER;
     c->h  = h + FRAME_BORDER + title_h + FRAME_BORDER;
+
+    if (c->w > g_wm.sw)
+        x = 0;
+    else if (x + c->w > g_wm.sw)
+        x = g_wm.sw - c->w;
+
+    if (c->h > g_wm.sh - g_wm.menubar_h)
+        y = g_wm.menubar_h;
+    else if (y + c->h > g_wm.sh)
+        y = g_wm.sh - c->h;
+
+    c->x = x;
+    c->y = y;
 
     cx = FRAME_BORDER;
     cy = FRAME_BORDER + title_h;
