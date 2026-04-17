@@ -40,6 +40,8 @@ struct aux_kbd_event;
 struct trapframe;
 struct page_descriptor;
 
+struct audio_hw_ops;
+
 struct kalloc_stats_k {
 	uint total_pages;
 	uint free_pages;
