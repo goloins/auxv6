@@ -242,3 +242,4 @@ Deferred until post-Phase-1 stability:
 13. Implemented explicit owner-window modal override hook (`_AUX_MODAL_SCOPE_OWNER`) and family-aware utility/modal raise behavior for active app focus.
 14. Added dynamic policy refresh on late property/hint updates and configure-notify synchronization for managed windows to improve lifecycle stability.
 15. Added WM keyboard action path baseline with Alt+Tab focus cycling and Alt+Q close for managed windows.
+16. Hardened WM key grabs for lock/numlock modifier combinations and made focus-cycle ordering deterministic by layer.

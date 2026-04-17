@@ -43,14 +43,20 @@ cycle_target(Client *from, int dir)
 {
     Client *order[256];
     int n = 0;
+    int layer;
     int i;
     int idx = -1;
     Client *scan;
 
-    for (scan = g_wm.clients; scan && n < 256; scan = scan->next) {
-        if (!scan->frame)
-            continue;
-        order[n++] = scan;
+    /* Deterministic cycle order: documents, then utilities, then modals. */
+    for (layer = (int)LAYER_DOCUMENT; layer <= (int)LAYER_MODAL; layer++) {
+        for (scan = g_wm.clients; scan && n < 256; scan = scan->next) {
+            if (!scan->frame)
+                continue;
+            if ((int)scan->layer != layer)
+                continue;
+            order[n++] = scan;
+        }
     }
 
     if (n == 0)
@@ -75,12 +81,53 @@ cycle_target(Client *from, int dir)
 }
 
 static void
-grab_key_with_lock_variants(int keycode, unsigned int mods)
+grab_key_variant_set(int keycode, unsigned int mods, unsigned int numlock_mask)
 {
-    XGrabKey(g_wm.dpy, keycode, mods,
-             g_wm.root, True, GrabModeAsync, GrabModeAsync);
-    XGrabKey(g_wm.dpy, keycode, mods | LockMask,
-             g_wm.root, True, GrabModeAsync, GrabModeAsync);
+    unsigned int v[4];
+    int i;
+
+    v[0] = mods;
+    v[1] = mods | LockMask;
+    v[2] = mods | numlock_mask;
+    v[3] = mods | LockMask | numlock_mask;
+
+    for (i = 0; i < 4; i++) {
+        XGrabKey(g_wm.dpy, keycode, v[i],
+                 g_wm.root, True, GrabModeAsync, GrabModeAsync);
+    }
+}
+
+static unsigned int
+wm_detect_numlock_mask(void)
+{
+    XModifierKeymap *modmap;
+    KeyCode numlock;
+    unsigned int mask = 0;
+    int mod;
+    int k;
+
+    numlock = XKeysymToKeycode(g_wm.dpy, XK_Num_Lock);
+    if (numlock == 0)
+        return 0;
+
+    modmap = XGetModifierMapping(g_wm.dpy);
+    if (!modmap)
+        return 0;
+
+    for (mod = 0; mod < 8; mod++) {
+        for (k = 0; k < modmap->max_keypermod; k++) {
+            KeyCode kc = modmap->modifiermap[mod * modmap->max_keypermod + k];
+            if (kc == numlock) {
+                mask = (unsigned int)(1U << mod);
+                break;
+            }
+        }
+        if (mask)
+            break;
+    }
+
+    XFreeModifiermap(modmap);
+    return mask;
 }
 
 static void
@@ -88,18 +135,21 @@ wm_grab_keys(void)
 {
     int tab;
     int q;
+    unsigned int numlock_mask;
 
     XUngrabKey(g_wm.dpy, AnyKey, AnyModifier, g_wm.root);
+
+    numlock_mask = wm_detect_numlock_mask();
 
     tab = (int)XKeysymToKeycode(g_wm.dpy, WM_KEY_CYCLE_FWD);
     q = (int)XKeysymToKeycode(g_wm.dpy, WM_KEY_CLOSE);
 
     if (tab > 0) {
-        grab_key_with_lock_variants(tab, Mod1Mask);
-        grab_key_with_lock_variants(tab, Mod1Mask | ShiftMask);
+        grab_key_variant_set(tab, Mod1Mask, numlock_mask);
+        grab_key_variant_set(tab, Mod1Mask | ShiftMask, numlock_mask);
     }
     if (q > 0)
-        grab_key_with_lock_variants(q, Mod1Mask);
+        grab_key_variant_set(q, Mod1Mask, numlock_mask);
 }
 
 static int
@@ -713,6 +763,9 @@ run(void)
             break;
         case PropertyNotify:
             on_property_notify(&ev.xproperty);
+            break;
+        case MappingNotify:
+            wm_grab_keys();
             break;
         case ConfigureNotify:
             on_configure_notify(&ev.xconfigure);
