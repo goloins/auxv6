@@ -180,6 +180,11 @@ typedef struct {
     /* Menubar service registration (menu.c) */
     Window          menubar_win;
     int             menubar_h;       /* px reserved at top for menubar */
+
+    /* In-WM dropdown popup (menu.c) */
+    Window          menu_popup;       /* open dropdown window, or None */
+    int             menu_popup_idx;   /* index of open menu, or -1     */
+    int             menu_popup_hover; /* hovered item index, or -1     */
 } WmGlobal;
 
 extern WmGlobal g_wm;

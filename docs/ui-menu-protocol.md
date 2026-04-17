@@ -30,13 +30,18 @@ Actors:
 - Extracts semantic menu tree from toolkit internals.
 - Publishes to protocol fields.
 
-3. Menubar Service (Shell)
-- Renders top menu bar.
-- Tracks active app/window.
-- Dispatches selected commands back to app.
+3. WM-Integrated Menubar
+- Rendered directly by the WM inside the reserved root chrome band.
+- No separate menubar service process.
+- Reads active window menu properties on focus change.
+- Dispatches selected commands back to the active app window.
+- A separate menubar service process may be added in a future phase
+  once the WM-integrated path is proven; the protocol atoms are
+  identical either way.
 
 4. WM Integration
-- Provides active-window/app transitions to menubar service.
+- Provides active-window/app transitions to menubar rendering.
+- Owns popup dropdown windows as override-redirect children of root.
 
 ---
 
@@ -266,5 +271,8 @@ Required tests:
 
 1. WM now interns all `_AUX_MENU_*` protocol atoms and tracks active app focus transitions.
 2. WM publishes active window via `_NET_ACTIVE_WINDOW` updates on focus change.
-3. WM has a property-change hook for `_AUX_MENU_MODEL`, `_AUX_MENU_STATE`, `_AUX_MENU_SERIAL`, and `_AUX_MENU_CAPS` to nudge menubar refresh.
-4. Menubar registration and ownership validation remain TODOs and are now tracked in Section 12.
+3. WM reads `_AUX_MENU_MODEL` and `_AUX_MENU_STATE` from the focused window and renders menu titles in the root chrome band.
+4. WM opens an override-redirect popup window for item selection on bar click.
+5. WM dispatches `_AUX_MENU_COMMAND_TEXT` + `_AUX_MENU_COMMAND` ClientMessage (data.l[0]=1) to the active client on item activation.
+6. App-side adapter library (`libauxmenu.a`, `include/auxv6/aux_menu.h`) provides standard helpers for publishing model/state and consuming dispatch events.
+7. Decision: menubar is WM-integrated for Phase 1; a separate service process is deferred until the integrated path is proven and the added complexity is justified.

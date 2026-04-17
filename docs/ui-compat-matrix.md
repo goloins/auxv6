@@ -215,8 +215,8 @@ Deferred until post-Phase-1 stability:
 ### 7.2 TODO Backlog From 6wm Scaffold
 
 1. `TODO(draw)`: replace Montecarlo/fixed fallback chain with Chicago-like bitmap UI font once available (`6wm/draw.h`).
-2. `TODO(menu)`: define formal menubar registration atom/protocol between menubar service and WM (`6wm/6wm.c`).
-3. `TODO(menu)`: add WM-side ownership validation for `_AUX_MENU_COMMAND` dispatch hardening (`6wm/menu.c`).
+2. `TODO(menu)`: add WM-side ownership validation for `_AUX_MENU_COMMAND` dispatch hardening (`6wm/menu.c`) — deferred per §9 of ui-menu-protocol.md.
+3. `TODO(menu)`: enforce `_AUX_MENU_COMMAND_TEXT` max-length cap on WM read path in `menu.c` — companion to adapter-side bounds already in `libauxmenu`.
 
 ---
 

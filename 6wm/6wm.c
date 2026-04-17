@@ -211,34 +211,7 @@ error_handler_default(Display *dpy, XErrorEvent *e)
 static void
 wm_draw_root_chrome(void)
 {
-    int h = g_wm.menubar_h;
-
-    if (h <= 0)
-        return;
-    if (h > g_wm.sh)
-        h = g_wm.sh;
-
-    draw_rect(g_wm.root, PLT_FRAME_BG, 0, 0, g_wm.sw, h);
-    draw_bevel(g_wm.root, 0, 0, g_wm.sw, h);
-
-    if (h >= 1)
-        draw_rect(g_wm.root, PLT_BLACK, 0, h - 1, g_wm.sw, 1);
-
-    if (g_wm.font) {
-        static const char *label = "auxv6";
-        int tw = XTextWidth(g_wm.font, label, 5);
-        int th = g_wm.font->ascent + g_wm.font->descent;
-        int tx = 8;
-        int ty = h / 2 + g_wm.font->ascent - th / 2;
-
-        if (tx + tw >= g_wm.sw)
-            tx = 2;
-
-        XSetForeground(g_wm.dpy, g_wm.gc, PLT_TEXT_ACTIVE);
-        XDrawString(g_wm.dpy, g_wm.root, g_wm.gc, tx, ty, label, 5);
-    }
-
-    XFlush(g_wm.dpy);
+    menu_redraw_bar();
 }
 
 static void
@@ -428,6 +401,18 @@ on_button_press(XButtonEvent *e)
 {
     Client *c;
     int     hit;
+
+    /* Bar click: open/close dropdown popup */
+    if (e->window == g_wm.root && e->y < g_wm.menubar_h) {
+        menu_handle_bar_press(e->x, e->y);
+        return;
+    }
+
+    /* Click outside popup while one is open: close it */
+    if (g_wm.menu_popup != None && e->window != g_wm.menu_popup) {
+        menu_popup_close();
+        /* fall through to normal WM button handling */
+    }
 
     c = client_find(e->window);
     if (!c) return;
@@ -887,18 +872,39 @@ run(void)
             on_key_press(&ev.xkey);
             break;
         case ButtonRelease:
+            if (g_wm.menu_popup != None &&
+                ev.xbutton.window == g_wm.menu_popup) {
+                menu_handle_popup_event(&ev);
+                break;
+            }
             on_button_release(&ev.xbutton);
             break;
         case MotionNotify:
             /* Coalesce: only process the latest motion event */
             while (XCheckTypedEvent(g_wm.dpy, MotionNotify, &ev))
                 ;
+            if (g_wm.menu_popup != None &&
+                ev.xmotion.window == g_wm.menu_popup) {
+                menu_handle_popup_event(&ev);
+                break;
+            }
             on_motion_notify(&ev.xmotion);
             break;
         case Expose:
             WM6DBG("Expose win=0x%lx count=%d",
                    (unsigned long)ev.xexpose.window, ev.xexpose.count);
+            if (g_wm.menu_popup != None &&
+                ev.xexpose.window == g_wm.menu_popup) {
+                menu_handle_popup_event(&ev);
+                break;
+            }
             on_expose(&ev.xexpose);
+            break;
+        case LeaveNotify:
+            if (g_wm.menu_popup != None &&
+                ev.xcrossing.window == g_wm.menu_popup) {
+                menu_handle_popup_event(&ev);
+            }
             break;
         case PropertyNotify:
             WM6DBG("PropertyNotify win=0x%lx atom=%lu",
@@ -966,7 +972,8 @@ main(int argc, char **argv)
                  | ExposureMask
                  | ButtonPressMask
                  | KeyPressMask
-                 | PropertyChangeMask);
+                 | PropertyChangeMask
+                 | LeaveWindowMask);
     XSync(g_wm.dpy, False);
 
     if (g_another_wm) {
@@ -990,6 +997,9 @@ main(int argc, char **argv)
 
     if (g_wm.menubar_h <= 0)
         g_wm.menubar_h = MENUBAR_H_DEFAULT;
+    g_wm.menu_popup       = None;
+    g_wm.menu_popup_idx   = -1;
+    g_wm.menu_popup_hover = -1;
     menu_publish_registration_to_root();
     WM6DBG("default menubar_h=%d", g_wm.menubar_h);
     wm_draw_root_chrome();

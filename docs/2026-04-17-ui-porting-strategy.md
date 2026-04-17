@@ -120,11 +120,15 @@ The WM is authoritative for:
 
 ### 2. Menu Ownership Model
 
-Global menubar is a system service.
+Global menubar is WM-integrated in Phase 1.
 
 1. Active application publishes menu model via integration adapter.
-2. Menubar service renders top-of-screen menu.
-3. Command dispatch routes back to the app/toolkit.
+2. WM reads model on focus change and renders titles in the reserved root chrome band.
+3. WM opens a dropdown popup on bar click and dispatches the selected command to the active app.
+4. A separate menubar service process is deferred: the added process management
+   complexity (startup ordering, crash resilience, IPC) outweighs the separation
+   benefit at current scale. The protocol atoms are designed to support a service
+   later without changes to the adapter layer.
 
 Important constraint:
 
@@ -333,6 +337,7 @@ No new compatibility feature lands without:
 1. Prioritized WM infrastructure completion as the immediate execution focus.
 2. Defined Phase 1A bootstrap milestone (`st` with basic managed decorations) before full menubar completion.
 3. Clarified that close visual fidelity is desired, while non-blocking polish remains deferred.
+4. Decided against a separate menubar service process for Phase 1: menubar rendering, popup, and dispatch are WM-integrated in `6wm/menu.c`. Separation deferred indefinitely until complexity is justified.
 
 ---
 
