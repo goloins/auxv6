@@ -78,6 +78,9 @@ static uint32_t audio_hw_count;
 static struct audio_stream audio_streams[AUDIO_STREAM_MAX];
 static uint16_t audio_hw_next_card;
 
+static struct audio_hw_device* audio_pick_default_hw_device(void);
+static void audio_fill_caps_for_profile(struct audio_hw_caps *caps, uint32_t profile);
+
 static int
 audio_validate_payload(uint32_t abi_version, uint32_t struct_size, uint32_t min_size)
 {
@@ -533,33 +536,6 @@ audio_pick_default_hw_device(void)
   if(audio_hw_count == 0)
     return 0;
   return &audio_hw_devs[0];
-}
-
-/*
- * audio_query_hw_pointer - Query real hardware DMA position.
- *
- * Calls the hardware pointer() callback if available.
- * Returns byte offset in ring buffer, or 0 if no device or unsupported.
- * Can be called from interrupt context (callback is expected to be fast).
- */
-static uint64_t
-audio_query_hw_pointer(struct audio_hw_device *hw, int aumode)
-{
-  uint32_t frames;
-  uint32_t frame_bytes;
-
-  if(hw == 0 || hw->ops == 0 || hw->ops->pointer == 0)
-    return 0;
-
-  frames = hw->ops->pointer(hw->hdl, aumode);
-  
-  /* Convert frames to bytes using current format */
-  frame_bytes = audio_bytes_per_sample(hw->current_format.sample_format);
-  if(frame_bytes == 0 || hw->current_format.channels == 0)
-    return 0;
-  frame_bytes *= hw->current_format.channels;
-  
-  return (uint64_t)frames * frame_bytes;
 }
 
 /*
