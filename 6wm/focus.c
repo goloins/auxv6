@@ -93,6 +93,7 @@ focus_set(Client *c)
 {
     Client *target;
 
+    WM6DBG("c=0x%lx", c ? (unsigned long)c->win : 0UL);
     /* Resolve modal constraints */
     if (c) {
         target = modal_constraint(c);
@@ -100,6 +101,8 @@ focus_set(Client *c)
     } else {
         target = NULL;
     }
+    WM6DBG("target=0x%lx (after modal constraint)",
+           target ? (unsigned long)target->win : 0UL);
 
     /* Deactivate previous */
     deactivate_current();
@@ -115,6 +118,7 @@ focus_set(Client *c)
     g_wm.focused  = target;
     target->state = STATE_ACTIVE;
 
+    WM6DBG("setting X input focus to win=0x%lx", (unsigned long)target->win);
     /* Raise active app family before setting focus (§6.2) */
     stack_raise_family(target);
 

@@ -10,6 +10,7 @@ atoms_init(void)
 {
     Display *dpy = g_wm.dpy;
 
+    WM6DBG("interning atoms");
     /* Standard WM */
     g_wm.a_wm_protocols       = XInternAtom(dpy, "WM_PROTOCOLS",       False);
     g_wm.a_wm_delete_window   = XInternAtom(dpy, "WM_DELETE_WINDOW",   False);
@@ -57,4 +58,9 @@ atoms_init(void)
         XInternAtom(dpy, "_AUX_MENU_COMMAND_TEXT",      False);
     g_wm.a_aux_modal_scope_owner =
         XInternAtom(dpy, "_AUX_MODAL_SCOPE_OWNER",      False);
+
+    WM6DBG("done: wm_protocols=%lu wm_delete=%lu net_wm_type=%lu",
+           (unsigned long)g_wm.a_wm_protocols,
+           (unsigned long)g_wm.a_wm_delete_window,
+           (unsigned long)g_wm.a_net_wm_window_type);
 }

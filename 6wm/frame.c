@@ -39,6 +39,8 @@ frame_create(Client *c)
     if (!c || c->frame)
         return;
 
+    WM6DBG("win=0x%lx role=%d x=%d y=%d w=%d h=%d",
+           (unsigned long)c->win, (int)c->role, c->x, c->y, c->w, c->h);
     /*
      * Create the frame window with a plain platinum background.
      * XCreateSimpleWindow takes (border_width, border_pixel, bg_pixel);
@@ -57,6 +59,8 @@ frame_create(Client *c)
                    "for win %lu\n", (unsigned long)c->win);
         return;
     }
+    WM6DBG("frame=0x%lx created for win=0x%lx",
+           (unsigned long)frame, (unsigned long)c->win);
 
     /* Select events on the frame */
     XSelectInput(g_wm.dpy, frame, frame_event_mask());
@@ -66,6 +70,8 @@ frame_create(Client *c)
     /* Reparent client into frame at the content inset position (§7.1.5) */
     client_content_rect(c, &cx, &cy, &cw, &ch);
     XReparentWindow(g_wm.dpy, c->win, frame, cx, cy);
+    WM6DBG("reparented win=0x%lx into frame=0x%lx at %d,%d",
+           (unsigned long)c->win, (unsigned long)frame, cx, cy);
 
     /* Select property and structure events on the client */
     XSelectInput(g_wm.dpy, c->win,
@@ -87,6 +93,8 @@ frame_destroy(Client *c)
     if (!c || !c->frame)
         return;
 
+    WM6DBG("win=0x%lx frame=0x%lx",
+           (unsigned long)c->win, (unsigned long)c->frame);
     /* Reparent client back to root before destroying the frame */
     XReparentWindow(g_wm.dpy, c->win, g_wm.root, c->x, c->y);
     XDestroyWindow(g_wm.dpy, c->frame);
@@ -166,6 +174,8 @@ frame_configure(Client *c, int x, int y, int w, int h)
 {
     int title_h, cx, cy, min_w, min_h;
 
+    WM6DBG("win=0x%lx x=%d y=%d w=%d h=%d",
+           (unsigned long)(c ? c->win : 0), x, y, w, h);
     if (!c) return;
 
     title_h = (c->role == ROLE_UTILITY) ? TITLE_H_UTIL : TITLE_H;

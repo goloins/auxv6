@@ -27,10 +27,13 @@ client_classify_role(Window win)
     unsigned long      ntype_items, ntype_after;
     Window             transient = None;
 
+    WM6DBG("win=0x%lx", (unsigned long)win);
     /* 1. Override-redirect → unmanaged (§2, §3.5) */
     if (XGetWindowAttributes(g_wm.dpy, win, &attrs) &&
-        attrs.override_redirect)
+        attrs.override_redirect) {
+        WM6DBG("win=0x%lx override_redirect => UNMANAGED", (unsigned long)win);
         return ROLE_UNMANAGED;
+    }
 
     /* 2. _NET_WM_WINDOW_TYPE hint */
     if (g_wm.a_net_wm_window_type &&
@@ -77,9 +80,13 @@ client_classify_role(Window win)
 
     /* 4. WM_TRANSIENT_FOR → dialog */
     if (XGetTransientForHint(g_wm.dpy, win, &transient)
-        && transient != None && transient != win)
+        && transient != None && transient != win) {
+        WM6DBG("win=0x%lx transient_for=0x%lx => DIALOG",
+               (unsigned long)win, (unsigned long)transient);
         return ROLE_DIALOG;
+    }
 
+    WM6DBG("win=0x%lx => DOCUMENT", (unsigned long)win);
     return ROLE_DOCUMENT;
 }
 
@@ -282,9 +289,13 @@ client_manage(Window win)
     WmRole             role;
     int                title_h;
 
+    WM6DBG("win=0x%lx", (unsigned long)win);
     role = client_classify_role(win);
-    if (role == ROLE_UNMANAGED)
+    WM6DBG("win=0x%lx role=%d", (unsigned long)win, (int)role);
+    if (role == ROLE_UNMANAGED) {
+        WM6DBG("win=0x%lx UNMANAGED — not managing", (unsigned long)win);
         return NULL;
+    }
 
     if (!XGetWindowAttributes(g_wm.dpy, win, &attrs))
         return NULL;
@@ -324,6 +335,9 @@ client_manage(Window win)
     client_update_app_identity(c);
     client_update_modal_scope(c);
 
+    WM6DBG("win=0x%lx managed ok: role=%d layer=%d x=%d y=%d cw=%d ch=%d title='%s'",
+           (unsigned long)win, (int)c->role, (int)c->layer,
+           c->x, c->y, c->cw, c->ch, c->title);
     /* Prepend to list */
     c->next      = g_wm.clients;
     g_wm.clients = c;

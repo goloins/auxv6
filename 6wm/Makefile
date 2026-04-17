@@ -20,7 +20,7 @@ INCS := \
 	-I$(ROOT)/include/posix \
 	-I$(ROOT)/include/posix/sys
 
-CPPFLAGS := -DAUXV6
+CPPFLAGS := -DAUXV6 -DWM6_DEBUG
 
 CFLAGS := \
 	-fno-pic -static -fno-builtin -fno-strict-aliasing -O2 \

@@ -15,6 +15,19 @@
 #include "X11/Xatom.h"
 
 /* ------------------------------------------------------------------ *
+ * Debug tracing — compile with -DWM6_DEBUG to enable                 *
+ * All output goes to fd 2 (console/serial) so it appears even when   *
+ * there is no display connection yet.                                 *
+ * ------------------------------------------------------------------ */
+#ifdef WM6_DEBUG
+#  include "stdio.h"
+#  define WM6DBG(fmt, ...) \
+       dprintf(2, "6wm:dbg %s: " fmt "\n", __func__, ##__VA_ARGS__)
+#else
+#  define WM6DBG(fmt, ...) ((void)0)
+#endif
+
+/* ------------------------------------------------------------------ *
  * Frame metrics (ui-window-contract.md §4, v1 locked)                *
  * ------------------------------------------------------------------ */
 

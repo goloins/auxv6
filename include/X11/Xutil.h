@@ -46,6 +46,7 @@ typedef struct {
 #define PAspect (1L << 7)
 
 #define InputHint (1L << 0)
+#define WindowGroupHint (1L << 6)
 #define XUrgencyHint (1L << 8)
 
 #define WithdrawnState 0

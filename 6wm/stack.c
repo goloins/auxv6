@@ -26,6 +26,7 @@ stack_restack(void)
     Client *c;
     int     layer;
 
+    WM6DBG("called");
     /*
      * Build the restacking array bottom-to-top:
      *   pass 0: LAYER_DOCUMENT
@@ -72,8 +73,12 @@ stack_restack(void)
         n += layer_n;
     }
 
-    if (n > 0)
+    if (n > 0) {
+        WM6DBG("restacking %d windows", n);
         XRestackWindows(g_wm.dpy, wins, n);
+    } else {
+        WM6DBG("no managed windows to restack");
+    }
 }
 
 /* ------------------------------------------------------------------ *

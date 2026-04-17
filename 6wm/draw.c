@@ -17,6 +17,7 @@
 void
 draw_init(void)
 {
+    WM6DBG("called");
     static const char *font_candidates[] = {
         FONT_PRIMARY_MONTECARLO_XLFD,
         FONT_PRIMARY_MONTECARLO_SHORT,

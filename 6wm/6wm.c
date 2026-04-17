@@ -21,6 +21,7 @@
 #include "stdio.h"
 #include "stdlib.h"
 #include "string.h"
+#include "unistd.h"
 #include "X11/keysym.h"
 
 /* ------------------------------------------------------------------ *
@@ -206,6 +207,31 @@ error_handler_default(Display *dpy, XErrorEvent *e)
     return 0;
 }
 
+/*
+ * spawn_startup — fork/exec a startup client so the WM has a window to
+ * manage immediately.  Called once after scan_existing_windows().
+ * This avoids relying on shell & backgrounding in .xinitrc.
+ */
+static void
+spawn_startup(void)
+{
+    char *argv[] = { "/usr/bin/st", NULL };
+    pid_t pid;
+
+    pid = fork();
+    if (pid < 0) {
+        dprintf(2, "6wm: spawn_startup: fork failed\n");
+        return;
+    }
+    if (pid == 0) {
+        setsid();
+        execv("/usr/bin/st", argv);
+        dprintf(2, "6wm: spawn_startup: execv failed\n");
+        exit(1);
+    }
+    dprintf(1, "6wm: spawn_startup: pid=%d\n", (int)pid);
+}
+
 static void
 toggle_zoom(Client *c)
 {
@@ -256,6 +282,7 @@ on_map_request(XMapRequestEvent *e)
 {
     Client *c;
 
+    WM6DBG("win=0x%lx", (unsigned long)e->window);
     /* Already managed? */
     c = client_find(e->window);
     if (c) {
@@ -269,22 +296,29 @@ on_map_request(XMapRequestEvent *e)
     }
 
     c = client_manage(e->window);
+    WM6DBG("client_manage => %s", c ? "managed" : "NULL/unmanaged");
 
     if (!c) {
         /* Unmanaged or classify failure: let it map directly */
+        WM6DBG("win=0x%lx unmanaged — mapping directly", (unsigned long)e->window);
         XMapWindow(g_wm.dpy, e->window);
         return;
     }
 
+    WM6DBG("calling frame_create for win=0x%lx", (unsigned long)c->win);
     frame_create(c);
+    WM6DBG("frame_create done: frame=0x%lx", (unsigned long)c->frame);
     if (!c->frame) {
         /* Frame creation failed; map client bare */
+        WM6DBG("frame=0 — mapping bare and unmanaging");
         XMapWindow(g_wm.dpy, c->win);
         client_unmanage(c);
         return;
     }
 
     /* §7.1 steps 6-7: map client then frame, set focus */
+    WM6DBG("mapping win=0x%lx and frame=0x%lx",
+           (unsigned long)c->win, (unsigned long)c->frame);
     XMapWindow(g_wm.dpy, c->win);
     XMapWindow(g_wm.dpy, c->frame);
 
@@ -301,6 +335,8 @@ on_configure_request(XConfigureRequestEvent *e)
 {
     Client        *c;
 
+    WM6DBG("win=0x%lx mask=0x%lx",
+           (unsigned long)e->window, (unsigned long)e->value_mask);
     c = client_find(e->window);
 
     if (c) {
@@ -334,6 +370,8 @@ on_unmap_notify(XUnmapEvent *e)
 {
     Client *c;
 
+    WM6DBG("win=0x%lx event=0x%lx send=%d",
+           (unsigned long)e->window, (unsigned long)e->event, e->send_event);
     c = client_find(e->window);
     if (!c) return;
 
@@ -362,6 +400,7 @@ on_destroy_notify(XDestroyWindowEvent *e)
 {
     Client *c;
 
+    WM6DBG("win=0x%lx", (unsigned long)e->window);
     c = client_find(e->window);
     if (!c) return;
 
@@ -725,10 +764,14 @@ scan_existing_windows(void)
     unsigned int  nchildren, i;
     XWindowAttributes attrs;
 
+    WM6DBG("XQueryTree on root=0x%lx", (unsigned long)g_wm.root);
     if (!XQueryTree(g_wm.dpy, g_wm.root,
                     &root_ret, &parent_ret,
-                    &children, &nchildren))
+                    &children, &nchildren)) {
+        WM6DBG("XQueryTree failed");
         return;
+    }
+    WM6DBG("nchildren=%u", nchildren);
 
     for (i = 0; i < nchildren; i++) {
         if (!XGetWindowAttributes(g_wm.dpy, children[i], &attrs))
@@ -736,6 +779,7 @@ scan_existing_windows(void)
         if (attrs.override_redirect || attrs.map_state != IsViewable)
             continue;
 
+        WM6DBG("adopting pre-existing win=0x%lx", (unsigned long)children[i]);
         /* Adopt as a managed client */
         {
             Client *c = client_manage(children[i]);
@@ -776,26 +820,38 @@ run(void)
 {
     XEvent ev;
 
+    WM6DBG("event loop started");
     while (g_wm.running) {
         XNextEvent(g_wm.dpy, &ev);
 
         switch (ev.type) {
         case MapRequest:
+            WM6DBG("MapRequest win=0x%lx", (unsigned long)ev.xmaprequest.window);
             on_map_request(&ev.xmaprequest);
             break;
         case ConfigureRequest:
+            WM6DBG("ConfigureRequest win=0x%lx", (unsigned long)ev.xconfigurerequest.window);
             on_configure_request(&ev.xconfigurerequest);
             break;
         case UnmapNotify:
+            WM6DBG("UnmapNotify win=0x%lx event=0x%lx send=%d",
+                   (unsigned long)ev.xunmap.window,
+                   (unsigned long)ev.xunmap.event,
+                   ev.xunmap.send_event);
             on_unmap_notify(&ev.xunmap);
             break;
         case DestroyNotify:
+            WM6DBG("DestroyNotify win=0x%lx", (unsigned long)ev.xdestroywindow.window);
             on_destroy_notify(&ev.xdestroywindow);
             break;
         case ButtonPress:
+            WM6DBG("ButtonPress win=0x%lx btn=%u",
+                   (unsigned long)ev.xbutton.window, ev.xbutton.button);
             on_button_press(&ev.xbutton);
             break;
         case KeyPress:
+            WM6DBG("KeyPress keycode=%u state=0x%x",
+                   ev.xkey.keycode, ev.xkey.state);
             on_key_press(&ev.xkey);
             break;
         case ButtonRelease:
@@ -808,24 +864,36 @@ run(void)
             on_motion_notify(&ev.xmotion);
             break;
         case Expose:
+            WM6DBG("Expose win=0x%lx count=%d",
+                   (unsigned long)ev.xexpose.window, ev.xexpose.count);
             on_expose(&ev.xexpose);
             break;
         case PropertyNotify:
+            WM6DBG("PropertyNotify win=0x%lx atom=%lu",
+                   (unsigned long)ev.xproperty.window,
+                   (unsigned long)ev.xproperty.atom);
             on_property_notify(&ev.xproperty);
             break;
         case MappingNotify:
+            WM6DBG("MappingNotify request=%d", ev.xmapping.request);
             wm_grab_keys();
             break;
         case ConfigureNotify:
+            WM6DBG("ConfigureNotify win=0x%lx", (unsigned long)ev.xconfigure.window);
             on_configure_notify(&ev.xconfigure);
             break;
         case ClientMessage:
+            WM6DBG("ClientMessage win=0x%lx type=%lu",
+                   (unsigned long)ev.xclient.window,
+                   (unsigned long)ev.xclient.message_type);
             on_client_message(&ev.xclient);
             break;
         default:
+            WM6DBG("unhandled event type=%d", ev.type);
             break;
         }
     }
+    WM6DBG("event loop exited (running=0)");
 }
 
 /* ------------------------------------------------------------------ *
@@ -840,16 +908,21 @@ main(int argc, char **argv)
 
     memset(&g_wm, 0, sizeof(g_wm));
 
+    dprintf(1, "6wm: starting\n");
+
     g_wm.dpy = XOpenDisplay(NULL);
     if (!g_wm.dpy) {
         dprintf(2, "6wm: cannot open display\n");
         return 1;
     }
+    dprintf(1, "6wm: display opened\n");
 
     g_wm.screen = DefaultScreen(g_wm.dpy);
     g_wm.root   = RootWindow(g_wm.dpy, g_wm.screen);
     g_wm.sw     = DisplayWidth(g_wm.dpy, g_wm.screen);
     g_wm.sh     = DisplayHeight(g_wm.dpy, g_wm.screen);
+    WM6DBG("screen=%d root=0x%lx sw=%d sh=%d",
+           g_wm.screen, (unsigned long)g_wm.root, g_wm.sw, g_wm.sh);
 
     /* Detect another running WM via BadAccess on SubstructureRedirectMask */
     g_another_wm = 0;
@@ -867,18 +940,36 @@ main(int argc, char **argv)
         XCloseDisplay(g_wm.dpy);
         return 1;
     }
+    dprintf(1, "6wm: redirect granted, running\n");
+    WM6DBG("SubstructureRedirectMask accepted — no other WM");
 
     XSetErrorHandler(error_handler_default);
 
+    WM6DBG("calling atoms_init");
     atoms_init();
+    WM6DBG("atoms_init done");
+
+    WM6DBG("calling draw_init");
     draw_init();
+    WM6DBG("draw_init done");
+
+    WM6DBG("calling wm_grab_keys");
     wm_grab_keys();
+    WM6DBG("wm_grab_keys done");
 
     g_wm.running = 1;
 
+    WM6DBG("calling scan_existing_windows");
     scan_existing_windows();
+    WM6DBG("scan_existing_windows done");
 
+    WM6DBG("calling spawn_startup");
+    spawn_startup();
+    WM6DBG("spawn_startup done");
+
+    WM6DBG("entering run()");
     run();
+    WM6DBG("run() returned — exiting");
 
     draw_fini();
     XCloseDisplay(g_wm.dpy);
