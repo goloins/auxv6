@@ -363,4 +363,5 @@ Utility-window hit regions:
 4. Drag move and basic resize affordance paths are scaffolded and bounded to screen/menubar limits.
 5. Stacking uses explicit layer ordering (document, utility, modal) with per-focus raise behavior.
 6. Basic zoom maximize/restore toggle path is implemented on the zoom box.
-7. Modal/transient policy remains partial and requires completion against Section 6.4 requirements.
+7. Modal/transient handling now includes app-scoped modal focus blocking and transient ownership inference from WM hints/properties.
+8. Modal policy remains partial because owner-window override behavior and remaining edge cases still require refinement against Section 6.4.

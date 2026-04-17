@@ -29,6 +29,12 @@ atoms_init(void)
         XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_MENU",    False);
     g_wm.a_net_wm_window_type_tooltip =
         XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_TOOLTIP", False);
+    g_wm.a_net_wm_state =
+        XInternAtom(dpy, "_NET_WM_STATE",               False);
+    g_wm.a_net_wm_state_modal =
+        XInternAtom(dpy, "_NET_WM_STATE_MODAL",         False);
+    g_wm.a_wm_client_leader =
+        XInternAtom(dpy, "WM_CLIENT_LEADER",            False);
 
     /* Focus reporting for menubar service */
     g_wm.a_net_active_window =

@@ -107,6 +107,7 @@ typedef struct Client {
 
     /* Transient/modal ownership */
     Window          transient_for;
+    Window          app_leader;      /* app identity (group leader)   */
 
     struct Client  *next;            /* intrusive singly-linked list  */
 } Client;
@@ -143,6 +144,9 @@ typedef struct {
     Atom            a_net_wm_window_type_utility;
     Atom            a_net_wm_window_type_menu;
     Atom            a_net_wm_window_type_tooltip;
+    Atom            a_net_wm_state;
+    Atom            a_net_wm_state_modal;
+    Atom            a_wm_client_leader;
 
     /* _NET_ACTIVE_WINDOW for menubar focus tracking */
     Atom            a_net_active_window;

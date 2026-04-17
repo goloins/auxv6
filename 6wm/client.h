@@ -49,6 +49,12 @@ void    client_update_title(Client *c);
 /* Query WM_PROTOCOLS; set c->has_wm_delete. */
 void    client_check_protocols(Client *c);
 
+/* Resolve and cache app leader identity (WM_HINTS / WM_CLIENT_LEADER). */
+void    client_update_app_identity(Client *c);
+
+/* Non-zero if both clients belong to the same app identity. */
+int     client_same_app(const Client *a, const Client *b);
+
 /*
  * Compute the client-area rectangle inside the frame (§4.1).
  * Frame coords; (cx,cy) is the top-left of the client origin.

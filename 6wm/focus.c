@@ -6,6 +6,7 @@
 
 #include "6wm.h"
 #include "focus.h"
+#include "client.h"
 #include "frame.h"
 #include "stack.h"
 #include "menu.h"
@@ -29,8 +30,19 @@ modal_constraint(Client *c)
     if (!c) return NULL;
 
     for (m = g_wm.clients; m; m = m->next) {
-        if (m->role == ROLE_MODAL
-            && m->transient_for == c->win)
+        if (m == c)
+            continue;
+        if (m->role != ROLE_MODAL)
+            continue;
+        if (!m->frame)
+            continue;
+
+        /* v1 default (§6.4): app-wide modal scope is authoritative. */
+        if (client_same_app(m, c))
+            return m;
+
+        /* Owner relationship always blocks owner window directly. */
+        if (m->transient_for != None && m->transient_for == c->win)
             return m;
     }
     return NULL;
@@ -109,20 +121,55 @@ focus_revert(void)
     Client *best = NULL;
     Client *c;
 
-    /*
-     * Find the topmost document-layer client as the revert target.
-     * List is in insertion order; scanning for a LAYER_DOCUMENT client
-     * gives a reasonable approximation until a proper Z-order list is
-     * maintained.
-     */
+    /* Prefer modal -> utility -> document for revert target. */
     for (c = g_wm.clients; c; c = c->next) {
-        if (c->layer == LAYER_DOCUMENT) {
+        if (c->layer == LAYER_MODAL && c->frame) {
             best = c;
             break;
         }
     }
+    if (!best) {
+        for (c = g_wm.clients; c; c = c->next) {
+            if (c->layer == LAYER_UTILITY && c->frame) {
+                best = c;
+                break;
+            }
+        }
+    }
+    if (!best) {
+        for (c = g_wm.clients; c; c = c->next) {
+            if (c->layer == LAYER_DOCUMENT && c->frame) {
+                best = c;
+                break;
+            }
+        }
+    }
 
-    focus_set(best);
+    if (!best) {
+        for (c = g_wm.clients; c; c = c->next) {
+            if (c->frame) {
+                best = c;
+                break;
+            }
+        }
+    }
+
+    if (best && best->role == ROLE_MODAL && best->transient_for != None) {
+        Client *owner = client_find(best->transient_for);
+        if (owner && !client_same_app(best, owner))
+            best = owner;
+    }
+
+    if (best) {
+        Client *constraint = modal_constraint(best);
+        if (constraint)
+            best = constraint;
+    }
+
+    if (best && best->frame)
+        focus_set(best);
+    else
+        focus_set(NULL);
 }
 
 /* ------------------------------------------------------------------ *

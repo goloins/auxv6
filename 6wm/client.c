@@ -16,10 +16,15 @@ WmRole
 client_classify_role(Window win)
 {
     XWindowAttributes  attrs;
-    Atom               actual_type;
-    int                actual_format;
+    Atom               actual;
+    int                fmt;
     unsigned long      nitems, bytes_after;
     unsigned char     *prop = NULL;
+    Atom              *states;
+    unsigned long      i;
+    Atom               actual_type;
+    int                actual_format;
+    unsigned long      ntype_items, ntype_after;
     Window             transient = None;
 
     /* 1. Override-redirect → unmanaged (§2, §3.5) */
@@ -33,13 +38,12 @@ client_classify_role(Window win)
                            g_wm.a_net_wm_window_type,
                            0, 32, False, XA_ATOM,
                            &actual_type, &actual_format,
-                           &nitems, &bytes_after, &prop) == Success
+                           &ntype_items, &ntype_after, &prop) == Success
         && prop) {
         Atom         *types = (Atom *)prop;
-        unsigned long i;
         WmRole        r = ROLE_DOCUMENT;
 
-        for (i = 0; i < nitems; i++) {
+        for (i = 0; i < ntype_items; i++) {
             if (types[i] == g_wm.a_net_wm_window_type_dialog)
                 { r = ROLE_DIALOG;    break; }
             if (types[i] == g_wm.a_net_wm_window_type_utility)
@@ -53,7 +57,25 @@ client_classify_role(Window win)
             return r;
     }
 
-    /* 3. WM_TRANSIENT_FOR → dialog */
+    /* 3. _NET_WM_STATE_MODAL => modal dialog role */
+    if (g_wm.a_net_wm_state && g_wm.a_net_wm_state_modal &&
+        XGetWindowProperty(g_wm.dpy, win,
+                           g_wm.a_net_wm_state,
+                           0, 64, False, XA_ATOM,
+                           &actual, &fmt,
+                           &nitems, &bytes_after, &prop) == Success
+        && prop) {
+        states = (Atom *)prop;
+        for (i = 0; i < nitems; i++) {
+            if (states[i] == g_wm.a_net_wm_state_modal) {
+                XFree(prop);
+                return ROLE_MODAL;
+            }
+        }
+        XFree(prop);
+    }
+
+    /* 4. WM_TRANSIENT_FOR → dialog */
     if (XGetTransientForHint(g_wm.dpy, win, &transient)
         && transient != None && transient != win)
         return ROLE_DIALOG;
@@ -126,6 +148,63 @@ client_check_protocols(Client *c)
     XFree(protocols);
 }
 
+void
+client_update_app_identity(Client *c)
+{
+    XWMHints       *hints;
+    Atom            actual;
+    int             fmt;
+    unsigned long   nitems, bytes_after;
+    unsigned char  *prop;
+
+    if (!c) return;
+
+    c->app_leader = c->win;
+
+    /* First preference: WM_HINTS.window_group */
+    hints = XGetWMHints(g_wm.dpy, c->win);
+    if (hints) {
+        if ((hints->flags & WindowGroupHint) && hints->window_group != None)
+            c->app_leader = hints->window_group;
+        XFree(hints);
+    }
+
+    /* Fallback: WM_CLIENT_LEADER property */
+    if (c->app_leader == c->win && g_wm.a_wm_client_leader &&
+        XGetWindowProperty(g_wm.dpy, c->win,
+                           g_wm.a_wm_client_leader,
+                           0, 1, False, XA_WINDOW,
+                           &actual, &fmt,
+                           &nitems, &bytes_after, &prop) == Success
+        && prop) {
+        if (actual == XA_WINDOW && fmt == 32 && nitems >= 1) {
+            Window *w = (Window *)prop;
+            if (w[0] != None)
+                c->app_leader = w[0];
+        }
+        XFree(prop);
+    }
+
+    /* If transient_for exists, inherit leader from owner if known. */
+    if (c->transient_for != None) {
+        Client *owner = client_find(c->transient_for);
+        if (owner && owner->app_leader != None)
+            c->app_leader = owner->app_leader;
+    }
+}
+
+int
+client_same_app(const Client *a, const Client *b)
+{
+    if (!a || !b)
+        return 0;
+    if (a == b)
+        return 1;
+    if (a->app_leader != None && b->app_leader != None)
+        return a->app_leader == b->app_leader;
+    return 0;
+}
+
 /* ------------------------------------------------------------------ *
  * Geometry helpers                                                    *
  * ------------------------------------------------------------------ */
@@ -196,6 +275,7 @@ client_manage(Window win)
     client_update_title(c);
     client_check_protocols(c);
     XGetTransientForHint(g_wm.dpy, win, &c->transient_for);
+    client_update_app_identity(c);
 
     /* Prepend to list */
     c->next      = g_wm.clients;
