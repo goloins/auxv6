@@ -8,6 +8,7 @@
 
 #include "6wm.h"
 #include "stack.h"
+#include "client.h"
 #include "stdlib.h"
 
 /* Maximum number of simultaneously managed windows for stack building. */
@@ -105,4 +106,45 @@ stack_raise(Client *c)
 
     /* Re-apply full stacking order */
     stack_restack();
+}
+
+void
+stack_raise_family(Client *c)
+{
+    Client *scan;
+    Client *related_util[STACK_MAX];
+    Client *related_modal[STACK_MAX];
+    int util_n = 0, modal_n = 0;
+    int i;
+
+    if (!c) return;
+
+    /* First raise the target itself in its own layer. */
+    stack_raise(c);
+
+    /* Collect app-related utility and modal windows. */
+    for (scan = g_wm.clients; scan; scan = scan->next) {
+        if (scan == c)
+            continue;
+        if (!scan->frame)
+            continue;
+        if (!client_same_app(scan, c))
+            continue;
+
+        if (scan->layer == LAYER_UTILITY) {
+            if (util_n < STACK_MAX)
+                related_util[util_n++] = scan;
+        } else if (scan->layer == LAYER_MODAL) {
+            if (modal_n < STACK_MAX)
+                related_modal[modal_n++] = scan;
+        }
+    }
+
+    /* Raise same-app utility windows near top of utility layer. */
+    for (i = 0; i < util_n; i++)
+        stack_raise(related_util[i]);
+
+    /* Ensure same-app modals remain top-most. */
+    for (i = 0; i < modal_n; i++)
+        stack_raise(related_modal[i]);
 }

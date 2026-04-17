@@ -364,4 +364,6 @@ Utility-window hit regions:
 5. Stacking uses explicit layer ordering (document, utility, modal) with per-focus raise behavior.
 6. Basic zoom maximize/restore toggle path is implemented on the zoom box.
 7. Modal/transient handling now includes app-scoped modal focus blocking and transient ownership inference from WM hints/properties.
-8. Modal policy remains partial because owner-window override behavior and remaining edge cases still require refinement against Section 6.4.
+8. Owner-window override hook is implemented via `_AUX_MODAL_SCOPE_OWNER` for explicit narrower modal blocking where needed.
+9. Utility/modal family-aware raise behavior is implemented so same-app palettes/modals follow active app focus more coherently.
+10. Modal policy remains partial because remaining edge cases still require refinement against Section 6.4.

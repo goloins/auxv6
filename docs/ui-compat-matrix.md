@@ -55,9 +55,9 @@ Phase 1 non-targets:
 | WM | Active/inactive frame states | Must | Partial | WM/Shell | Visual snapshots required |
 | WM | Drag move | Must | Partial | WM/Shell | Threshold and bounds tests pending |
 | WM | Resize | Must | Partial | WM/Shell | Per-role constraints pending |
-| WM | Modal transient blocking | Must | Partial | WM/Shell | App-scoped modal focus blocking is implemented; owner-window override refinement remains |
+| WM | Modal transient blocking | Must | Partial | WM/Shell | App-scoped blocking plus explicit owner-window override hook are implemented; edge-policy refinement remains |
 | WM | Zoom toggle behavior | Should | Partial | WM/Shell | Basic maximize/restore toggle implemented; policy refinement pending |
-| WM | Utility/palette stacking policy | Should | Partial | WM/Shell | Layer-based restack exists; owner-app policy still pending |
+| WM | Utility/palette stacking policy | Should | Partial | WM/Shell | Family-aware raise improves owner-app utility ordering; full policy refinement still pending |
 | Menubar | Active app switch | Must | Partial | Shell/Menu | WM now publishes active window; menubar service integration still pending |
 | Menubar | Command dispatch callback | Must | No | Shell/Menu + Adapter | v1 protocol implementation |
 | Menubar | Enabled/checked state refresh | Should | No | Shell/Menu + Adapter | Required for editor actions |
@@ -80,7 +80,7 @@ Phase 1 non-targets:
 | WM close protocol path | P0 | Yes | Yes | Partial | Graceful close preferred |
 | WM zoom toggle path | P1 | Should | Yes | Partial | Basic toggle path implemented; multi-head/policy refinement pending |
 | Menu publish/dispatch protocol | P0 | Yes | Yes | Partial | Atoms + focus/property bridge scaffolded in 6wm; adapter dispatch path pending |
-| Dialog/transient ownership | P1 | Yes | Yes | Partial | App identity + transient ownership inference implemented; edge-policy refinement still needed before xedit gate |
+| Dialog/transient ownership | P1 | Yes | Yes | Partial | App identity, transient ownership inference, and owner-scope modal override hook implemented; edge-policy refinement still needed before xedit gate |
 | Clipboard basic text | P1 | Should | Yes | No | Add once core stable |
 | Drag-and-drop | P2 | No | Optional | No | Deferred |
 | Rich accessibility semantics | P2 | No | Optional | No | Deferred |
@@ -239,3 +239,4 @@ Deferred until post-Phase-1 stability:
 10. Marked modal/transient ownership as acceptable partial coverage for `st`-first bring-up.
 11. Updated WM zoom status from stubbed to partial after implementing a basic maximize/restore toggle path in `6wm`.
 12. Implemented app-scoped modal focus blocking using WM hints/property-derived app identity; kept status partial pending owner-window override refinement.
+13. Implemented explicit owner-window modal override hook (`_AUX_MODAL_SCOPE_OWNER`) and family-aware utility/modal raise behavior for active app focus.

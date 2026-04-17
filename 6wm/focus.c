@@ -37,6 +37,12 @@ modal_constraint(Client *c)
         if (!m->frame)
             continue;
 
+        if (m->modal_owner_scope) {
+            if (m->transient_for != None && m->transient_for == c->win)
+                return m;
+            continue;
+        }
+
         /* v1 default (§6.4): app-wide modal scope is authoritative. */
         if (client_same_app(m, c))
             return m;
@@ -96,8 +102,8 @@ focus_set(Client *c)
     g_wm.focused  = target;
     target->state = STATE_ACTIVE;
 
-    /* Raise within layer before setting focus (§6.2) */
-    stack_raise(target);
+    /* Raise active app family before setting focus (§6.2) */
+    stack_raise_family(target);
 
     /* Deliver input focus to client window (§6.1) */
     XSetInputFocus(g_wm.dpy, target->win,

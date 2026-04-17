@@ -108,6 +108,7 @@ typedef struct Client {
     /* Transient/modal ownership */
     Window          transient_for;
     Window          app_leader;      /* app identity (group leader)   */
+    int             modal_owner_scope; /* modal override: owner-only   */
 
     struct Client  *next;            /* intrusive singly-linked list  */
 } Client;
@@ -159,6 +160,7 @@ typedef struct {
     Atom            a_aux_menu_caps;
     Atom            a_aux_menu_command;
     Atom            a_aux_menu_command_text;
+    Atom            a_aux_modal_scope_owner;
 
     /* Menubar service registration (menu.c) */
     Window          menubar_win;

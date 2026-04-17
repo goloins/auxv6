@@ -21,4 +21,11 @@ void stack_restack(void);
  */
 void stack_raise(Client *c);
 
+/*
+ * Raise focused client and related app-family utility/modal windows
+ * so utility windows remain above owning app documents and modals
+ * remain top-most for that app.
+ */
+void stack_raise_family(Client *c);
+
 #endif /* WM6_STACK_H */

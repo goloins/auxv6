@@ -52,6 +52,9 @@ void    client_check_protocols(Client *c);
 /* Resolve and cache app leader identity (WM_HINTS / WM_CLIENT_LEADER). */
 void    client_update_app_identity(Client *c);
 
+/* Resolve and cache owner-only modal override flag from window properties. */
+void    client_update_modal_scope(Client *c);
+
 /* Non-zero if both clients belong to the same app identity. */
 int     client_same_app(const Client *a, const Client *b);
 

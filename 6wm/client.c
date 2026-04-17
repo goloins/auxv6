@@ -205,6 +205,51 @@ client_same_app(const Client *a, const Client *b)
     return 0;
 }
 
+void
+client_update_modal_scope(Client *c)
+{
+    Atom            actual;
+    int             fmt;
+    unsigned long   nitems, bytes_after;
+    unsigned char  *prop = NULL;
+
+    if (!c) return;
+
+    c->modal_owner_scope = 0;
+    if (c->role != ROLE_MODAL)
+        return;
+
+    if (!g_wm.a_aux_modal_scope_owner)
+        return;
+
+    if (XGetWindowProperty(g_wm.dpy, c->win,
+                           g_wm.a_aux_modal_scope_owner,
+                           0, 1, False, XA_CARDINAL,
+                           &actual, &fmt,
+                           &nitems, &bytes_after, &prop) == Success
+        && prop) {
+        if (actual == XA_CARDINAL && fmt == 32 && nitems >= 1) {
+            unsigned long *vals = (unsigned long *)prop;
+            c->modal_owner_scope = (vals[0] != 0);
+        } else {
+            c->modal_owner_scope = 1;
+        }
+        XFree(prop);
+        return;
+    }
+
+    /* Presence-only fallback: property exists with any type => enable override. */
+    if (XGetWindowProperty(g_wm.dpy, c->win,
+                           g_wm.a_aux_modal_scope_owner,
+                           0, 1, False, 0,
+                           &actual, &fmt,
+                           &nitems, &bytes_after, &prop) == Success
+        && prop) {
+        c->modal_owner_scope = 1;
+        XFree(prop);
+    }
+}
+
 /* ------------------------------------------------------------------ *
  * Geometry helpers                                                    *
  * ------------------------------------------------------------------ */
@@ -258,6 +303,7 @@ client_manage(Window win)
     c->zoomed = 0;
     c->restore_x = c->restore_y = 0;
     c->restore_cw = c->restore_ch = 0;
+    c->modal_owner_scope = 0;
 
     /* Frame size = client size + chrome insets */
     title_h = (role == ROLE_UTILITY) ? TITLE_H_UTIL : TITLE_H;
@@ -276,6 +322,7 @@ client_manage(Window win)
     client_check_protocols(c);
     XGetTransientForHint(g_wm.dpy, win, &c->transient_for);
     client_update_app_identity(c);
+    client_update_modal_scope(c);
 
     /* Prepend to list */
     c->next      = g_wm.clients;
