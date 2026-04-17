@@ -1,6 +1,6 @@
 # UI Compatibility Matrix
 **Date**: April 17, 2026  
-**Status**: Draft v1 (Phase 0 baseline)  
+**Status**: Draft v1 (Phase 0 scaffold in progress)  
 **Scope**: Curated compatibility subset for simple graphical application ports
 
 ---
@@ -50,8 +50,8 @@ Phase 1 non-targets:
 | WM | Drag move | Must | Partial | WM/Shell | Threshold and bounds tests pending |
 | WM | Resize | Must | Partial | WM/Shell | Per-role constraints pending |
 | WM | Modal transient blocking | Must | No | WM/Shell | Required for dialogs |
-| WM | Utility/palette stacking policy | Should | No | WM/Shell | Needed for richer editors |
-| Menubar | Active app switch | Must | No | Shell/Menu | Protocol + focus integration required |
+| WM | Utility/palette stacking policy | Should | Partial | WM/Shell | Layer-based restack exists; owner-app policy still pending |
+| Menubar | Active app switch | Must | Partial | Shell/Menu | WM now publishes active window; menubar service integration still pending |
 | Menubar | Command dispatch callback | Must | No | Shell/Menu + Adapter | v1 protocol implementation |
 | Menubar | Enabled/checked state refresh | Should | No | Shell/Menu + Adapter | Required for editor actions |
 | Toolkit Adapter | Disable CSD path | Must | No | Adapter | Required for coherent frame ownership |
@@ -71,7 +71,7 @@ Phase 1 non-targets:
 | Reparent + frame lifecycle | P0 | Yes | Yes | Partial | Core WM behavior |
 | Focus/set-focus/focus-events | P0 | Yes | Yes | Partial | Includes active visuals |
 | WM close protocol path | P0 | Yes | Yes | Partial | Graceful close preferred |
-| Menu publish/dispatch protocol | P0 | Yes | Yes | No | Defined in ui-menu-protocol |
+| Menu publish/dispatch protocol | P0 | Yes | Yes | Partial | Atoms + focus/property bridge scaffolded in 6wm; adapter dispatch path pending |
 | Dialog/transient ownership | P1 | Yes | Yes | No | Needed for editor prompts |
 | Clipboard basic text | P1 | Should | Yes | No | Add once core stable |
 | Drag-and-drop | P2 | No | Optional | No | Deferred |
@@ -171,6 +171,21 @@ Deferred until post-Phase-1 stability:
 2. Complex compositing effects.
 3. High-churn toolkit parity features.
 
+### 7.1 Current Scaffold Snapshot (2026-04-17)
+
+1. A first-party `6wm` skeleton now exists with modular files for atoms, drawing, client/frame lifecycle, focus, stack policy, and menu bridge.
+2. Managed map/configure/unmap/destroy paths are wired with frame reparenting and synthetic configure notifications.
+3. Click-to-focus, drag move, and basic resize interaction paths are implemented at scaffold level.
+4. Menubar integration has initial `_NET_ACTIVE_WINDOW` publication and menu-property change nudge hooks.
+
+### 7.2 TODO Backlog From 6wm Scaffold
+
+1. `TODO(draw)`: replace active title solid fill with alternating platinum stripe treatment (`6wm/draw.h`).
+2. `TODO(draw)`: replace fallback font with Chicago-like bitmap UI font once available (`6wm/draw.h`).
+3. `TODO(zoom)`: implement zoom-box toggle between normal and policy-defined zoom geometry (`6wm/6wm.c`).
+4. `TODO(menu)`: define formal menubar registration atom/protocol between menubar service and WM (`6wm/6wm.c`).
+5. `TODO(menu)`: add WM-side ownership validation for `_AUX_MENU_COMMAND` dispatch hardening (`6wm/menu.c`).
+
 ---
 
 ## 8. Maintenance Rules
@@ -191,3 +206,4 @@ Deferred until post-Phase-1 stability:
 3. Selected concrete Phase 1 app targets: `st`, `xedit`, and `xeyes`.
 4. Marked `xfw` deferred until toolkit integration layer matures.
 5. Added per-app requirement checklist and manual smoke-test scripts for Phase 1 targets.
+6. Updated matrix statuses for the initial `6wm` scaffold and added an implementation TODO backlog sourced from in-tree code markers.

@@ -1,6 +1,6 @@
 # UI Window Contract
 **Date**: April 17, 2026  
-**Status**: Draft v1 (Phase 0 baseline)  
+**Status**: Draft v1 (Phase 0 scaffold in progress)  
 **Scope**: Managed toplevel windows in the auxv6 graphical desktop
 
 ---
@@ -262,7 +262,11 @@ Any contract change must include:
 
 ## 13. Open Items
 
-None for v1 baseline.
+1. Implement active title-bar stripe treatment for document windows to better match platinum-era appearance (currently solid fill in scaffold).
+2. Integrate Chicago-like bitmap UI font for title rendering; current fallback face is functional but not contract-accurate.
+3. Complete zoom-box behavior to toggle between normal and policy-defined zoomed geometry per Section 8 semantics.
+4. Formalize menubar service registration protocol/atom handshake so WM reserves menubar band and binds service deterministically.
+5. Add WM-side ownership validation for menu command dispatch hardening before broader untrusted-client scenarios are considered.
 
 ---
 
@@ -340,3 +344,14 @@ Utility-window hit regions:
 2. Utility windows must never render title text in v1.
 3. Active/inactive state transitions must preserve control placement and box sizes.
 4. Any geometry delta must update both Section 4 metrics and this appendix.
+
+---
+
+## 15. Implementation Status Snapshot (2026-04-17)
+
+1. Baseline frame metrics from Section 4 are wired into `6wm` constants and used by frame/content inset calculations.
+2. Managed map path is scaffolded through classify -> frame create -> reparent -> map -> synthetic configure notification.
+3. Active/inactive visual state switching is wired on focus transitions, with role-aware title text suppression for utility windows.
+4. Drag move and basic resize affordance paths are scaffolded and bounded to screen/menubar limits.
+5. Stacking uses explicit layer ordering (document, utility, modal) with per-focus raise behavior.
+6. Modal/transient policy remains partial and requires completion against Section 6.4 requirements.

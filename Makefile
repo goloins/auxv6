@@ -964,6 +964,10 @@ _dwm: ports/dwm-6.8/Makefile.auxv6 $(CRT0_OBJ) $(LIBC_A) $(AUXRT_A) $(X11_A)
 	$(MAKE) -f ports/dwm-6.8/Makefile.auxv6 all
 	cp ports/dwm-6.8/_dwm _dwm
 
+_6wm: 6wm/Makefile $(CRT0_OBJ) $(LIBC_A) $(AUXRT_A) $(X11_A)
+	$(MAKE) -f 6wm/Makefile all
+	cp 6wm/_6wm _6wm
+
 _st: ports/st-0.9.3/Makefile.auxv6 $(CRT0_OBJ) $(LIBC_A) $(AUXRT_A) $(X11_A)
 	$(MAKE) -f ports/st-0.9.3/Makefile.auxv6 all
 	cp ports/st-0.9.3/_st _st
@@ -1370,6 +1374,7 @@ UPROGS=\
 	_startx\
 	_x6test\
 	_wallpaper\
+		_6wm\
 	_dash\
 	_symlinktest\
 	_nftwtest\

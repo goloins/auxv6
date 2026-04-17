@@ -1,6 +1,6 @@
 # UI Menu Protocol
 **Date**: April 17, 2026  
-**Status**: Draft v1 (Phase 0 baseline)  
+**Status**: Draft v1 (Phase 0 scaffold in progress)  
 **Scope**: Global top menubar integration between applications/toolkit adapters and shell service
 
 ---
@@ -257,3 +257,14 @@ Required tests:
 2. Define max payload sizes and chunking rules.
 3. Decide whether per-window or per-app shared menu root is preferred in v1.
 4. Add optional accelerator/shortcut metadata fields.
+5. Define a formal menubar service registration protocol/atom handshake with WM.
+6. Add WM-side ownership validation requirements for `_AUX_MENU_COMMAND` dispatch (hardening path).
+
+---
+
+## 13. Implementation Status Snapshot (2026-04-17)
+
+1. WM now interns all `_AUX_MENU_*` protocol atoms and tracks active app focus transitions.
+2. WM publishes active window via `_NET_ACTIVE_WINDOW` updates on focus change.
+3. WM has a property-change hook for `_AUX_MENU_MODEL`, `_AUX_MENU_STATE`, `_AUX_MENU_SERIAL`, and `_AUX_MENU_CAPS` to nudge menubar refresh.
+4. Menubar registration and ownership validation remain TODOs and are now tracked in Section 12.
