@@ -86,14 +86,15 @@ This table tracks first concrete port targets.
 
 | App Candidate | Profile | Toolkit Class | Phase Target | Port Status | Blocking Gaps | Notes |
 |---|---|---|---|---|---|---|
-| st (or equivalent terminal) | Terminal | Xlib/lightweight | Phase 1 | In Progress | Menubar protocol optional; WM polish required | Good baseline app |
-| Simple GUI editor candidate A | Editor | Lightweight or toolkit-backed | Phase 1 | Not Started | Dialog transients, menu dispatch | Pick one stable target |
-| Simple utility candidate A | Utility | Lightweight/toolkit-backed | Phase 1 | Not Started | Menu state updates | Use for command-state validation |
+| st | Terminal | Xlib/lightweight | Phase 1 | In Progress | WM polish required | Baseline terminal target |
+| xedit | Editor | Xaw/Xlib | Phase 1 | Not Started | Dialog transients, menu dispatch, state sync | Spartan editor target with simple menu model |
+| xeyes | Utility | Xlib/lightweight | Phase 1 | Not Started | Utility role policy, unmanaged/popup policy validation | Doodad utility target for event/lifecycle coverage |
+| xfw | Utility | FOX toolkit | Deferred | Not Started | Toolkit subsystem maturity (FOX adapter work) | Deferred to avoid rushing toolkit integration layer |
 
 Action required:
 
-1. Replace placeholder candidates with exact app names as soon as selected.
-2. Add required feature rows for each selected app.
+1. Add required feature rows specific to `st`, `xedit`, and `xeyes`.
+2. Re-evaluate `xfw` after first adapter path is stable.
 
 ---
 
@@ -142,3 +143,5 @@ Deferred until post-Phase-1 stability:
 
 1. Initial matrix created from UI Porting and Desktop Coherence Strategy.
 2. Established Phase 1 target profiles and baseline feature ownership buckets.
+3. Selected concrete Phase 1 app targets: `st`, `xedit`, and `xeyes`.
+4. Marked `xfw` deferred until toolkit integration layer matures.

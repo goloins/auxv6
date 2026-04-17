@@ -60,13 +60,13 @@ All toplevel windows must classify into one of the following roles.
 
 ## 4. Default Geometry and Metrics (v1 Baseline)
 
-These values are the initial baseline and can be tuned later. Changes require updating tests and screenshots.
+These values are locked v1 defaults targeting a classic Mac OS 9-style look/feel. Changes require updating tests and screenshots.
 
 ### 4.1 Frame Metrics (Document Window)
 
-1. Border thickness: 2 px
-2. Title bar height: 18 px
-3. Content inset top (below title): 18 px
+1. Border thickness: 1 px inner + 1 px outer bevel (2 px total visual edge)
+2. Title bar height: 19 px
+3. Content inset top (below title): 19 px
 4. Content inset left/right/bottom: 2 px
 5. Corner radius: 0 px (rectangular baseline for now)
 
@@ -76,17 +76,23 @@ Controls are left-aligned in title bar, vertically centered.
 
 1. Close box size: 11x11 px
 2. Zoom box size: 11x11 px
-3. Collapse box size: 11x11 px (optional in v1, may be disabled)
+3. Collapse box: disabled in v1 baseline
 4. Control horizontal gap: 4 px
 5. Left margin from frame edge to first control: 5 px
 
 ### 4.3 Title Text
 
-1. Font: system UI bitmap/serif choice from platform font contract
+1. Font: Chicago-like bitmap UI face (fallback to closest available bitmap sans)
 2. Size: 12 px equivalent baseline
-3. Weight: medium/bold for active window, normal for inactive
+3. Weight: bold for active window, normal for inactive
 4. Horizontal alignment: centered in remaining title bar region
 5. Truncation: ellipsis at end when overflow occurs
+
+### 4.4 Palette and Bevel Baseline
+
+1. Window chrome uses a platinum-style gray palette.
+2. Title bar and border rendering must use dual-edge bevels (light top/left, dark bottom/right).
+3. Active title text and controls must have stronger contrast than inactive state.
 
 ---
 
@@ -231,7 +237,5 @@ Any contract change must include:
 
 ## 13. Open Items
 
-1. Exact font family/bitmap selection for the title bar.
-2. Final decision on collapse box in v1.
-3. Utility window compact title metrics.
-4. Modal scope default (owner-window vs app-wide).
+1. Utility window compact title metrics.
+2. Modal scope default (owner-window vs app-wide).

@@ -54,6 +54,7 @@ Required atoms:
 4. _AUX_MENU_STATE (UTF8_STRING)
 5. _AUX_MENU_CAPS (UTF8_STRING, optional)
 6. _AUX_MENU_COMMAND (ClientMessage dispatch channel)
+7. _AUX_MENU_COMMAND_TEXT (UTF8_STRING transient command payload)
 
 ### 3.2 Encoding
 
@@ -158,15 +159,22 @@ ClientMessage payload v1 fields:
 
 1. protocol_version
 2. serial_seen
-3. command_id hash/token
+3. command_id_string_property_ref
 4. reserved
 5. reserved
 
-For v1 simplicity, command_id token mapping is maintained by adapter locally.
+v1 decision:
 
-Alternative allowed in v1.1:
+1. Command identifiers are string-based (human-readable IDs such as `cmd.open` or `cmd.quit`).
+2. Menubar service writes the selected command ID into `_AUX_MENU_COMMAND_TEXT` on the active window.
+3. Menubar service emits `_AUX_MENU_COMMAND` ClientMessage as the dispatch trigger.
+4. Adapter reads `_AUX_MENU_COMMAND_TEXT` and dispatches by exact string match.
 
-- command_id string via transient property + ClientMessage notification.
+Rationale:
+
+1. Easier tracing/debugging during early iteration.
+2. Lower maintenance cost than hash/token maps during frequent schema changes.
+3. Avoids token synchronization bugs across menu service and adapters.
 
 ---
 
@@ -194,6 +202,7 @@ Optional line-delimited flags:
 2. CAPS|radio-items
 3. CAPS|dynamic-labels
 4. CAPS|command-ids-64bit
+5. CAPS|command-ids-string
 
 Menubar may use these to enable richer behavior progressively.
 
@@ -244,7 +253,7 @@ Required tests:
 
 ## 12. Open Items
 
-1. Finalize command token representation (hash vs indirect string).
+1. Define max command string length and overflow behavior.
 2. Define max payload sizes and chunking rules.
 3. Decide whether per-window or per-app shared menu root is preferred in v1.
 4. Add optional accelerator/shortcut metadata fields.
