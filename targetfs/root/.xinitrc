@@ -1,6 +1,6 @@
 #!/bin/sh
 
-wallpaper '#4169E1'
+/bin/wallpaper '#4169E1'
 #if [ -x /bin/xwmselftest ]; then
 #	/bin/xwmselftest || echo "xwmselftest: rc=$?"
 #elif [ -x /usr/bin/xwmselftest ]; then
