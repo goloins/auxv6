@@ -21,11 +21,9 @@
 #define PLT_WHITE           0xFFFFFFUL  /* outer bevel highlight       */
 #define PLT_LIGHT_GRAY      0xDDDDDDUL  /* inner bevel light edge      */
 #define PLT_FRAME_BG        0xC8C8C8UL  /* standard platinum chrome    */
-#define PLT_TITLE_ACTIVE    0xAAAAA0UL  /* active title bar fill       */
-/*
- * TODO(draw): replace PLT_TITLE_ACTIVE solid fill with alternating
- * stripe pattern (classic platinum look) — see §4.4.
- */
+#define PLT_TITLE_ACTIVE    0xAAAAA0UL  /* active title base fill       */
+#define PLT_TITLE_STRIPE_A  0xB5B5AAUL  /* active stripe light band     */
+#define PLT_TITLE_STRIPE_B  0x9F9F95UL  /* active stripe dark band      */
 #define PLT_TITLE_INACTIVE  0xC8C8C8UL  /* inactive title (= frame bg) */
 #define PLT_DARK_GRAY       0x888888UL  /* inner bevel shadow edge     */
 #define PLT_BLACK           0x000000UL  /* outer bevel shadow edge     */
@@ -40,7 +38,7 @@
 
 /*
  * Font loaded at draw_init().  The runtime tries a small fallback chain,
- * starting with auxv6's bitmap Montecarlo face, then fixed.
+ * starting with auxv6's bitmap Montecarlo face, then fixed and server default.
  *
  * TODO(draw): replace with a Chicago-style bitmap face once available
  * in the auxv6 font directory (§4.3).

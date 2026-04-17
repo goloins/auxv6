@@ -41,13 +41,30 @@ draw_init(void)
     }
 
     if (!g_wm.font) {
-        dprintf(2, "6wm: draw_init: no preferred font available, "
+        dprintf(2, "6wm: draw_init: montecarlo/fixed unavailable, "
                    "using server default\n");
         g_wm.font = XQueryFont(g_wm.dpy, 0);
+        if (g_wm.font)
+            dprintf(2, "6wm: draw_init: using server default font fid=%lu\n",
+                    (unsigned long)g_wm.font->fid);
     }
 
     if (g_wm.font)
         XSetFont(g_wm.dpy, g_wm.gc, g_wm.font->fid);
+}
+
+static void
+draw_title_stripes(Window win, int x, int y, int w, int h)
+{
+    int row;
+
+    if (w <= 0 || h <= 0)
+        return;
+
+    for (row = 0; row < h; row++) {
+        unsigned long c = ((row / 2) & 1) ? PLT_TITLE_STRIPE_A : PLT_TITLE_STRIPE_B;
+        draw_rect(win, c, x, y + row, w, 1);
+    }
 }
 
 void
@@ -173,6 +190,8 @@ draw_title_bar(Window win, WmRole role, WmState state,
 
     /* Fill title bar background */
     draw_rect(win, bg, tx, ty, tw, th);
+    if (state == STATE_ACTIVE)
+        draw_title_stripes(win, tx, ty, tw, th);
 
     /*
      * Title text: document windows only (§4.3).

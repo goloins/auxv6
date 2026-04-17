@@ -270,8 +270,8 @@ Any contract change must include:
 
 ## 13. Open Items
 
-1. Implement active title-bar stripe treatment for document windows to better match platinum-era appearance (currently solid fill in scaffold).
-2. Integrate Chicago-like bitmap UI font for title rendering; current fallback face is functional but not contract-accurate.
+1. Integrate Chicago-like bitmap UI font for title rendering; current Montecarlo/fixed fallback chain is functional but not contract-accurate.
+2. Finalize stripe tuning values (band spacing and contrast) against visual snapshots for both active and inactive states.
 3. Refine zoom policy details (for example multi-monitor/work-area policy and role-specific constraints) beyond basic maximize/restore behavior.
 4. Formalize menubar service registration protocol/atom handshake so WM reserves menubar band and binds service deterministically.
 5. Add WM-side ownership validation for menu command dispatch hardening before broader untrusted-client scenarios are considered.
@@ -369,4 +369,6 @@ Utility-window hit regions:
 10. Late property/hint updates on managed windows now refresh role/layer/app identity/modal-scope policy without requiring remap.
 11. Client-driven configure notifications are now synchronized back through WM frame geometry policy.
 12. WM keyboard action path is implemented with document-first Alt+Tab cycling, explicit all-window cycling (Alt+Ctrl+Tab and Alt+Escape), and Alt+Q close.
-13. Modal policy remains partial because remaining edge cases still require refinement against Section 6.4.
+13. Active document title bars now render with alternating platinum-style stripes instead of a flat fill.
+14. Font loading now explicitly prefers Montecarlo, then fixed, then server default with runtime logging of selection.
+15. Modal policy remains partial because remaining edge cases still require refinement against Section 6.4.

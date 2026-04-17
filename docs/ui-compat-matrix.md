@@ -207,10 +207,9 @@ Deferred until post-Phase-1 stability:
 
 ### 7.2 TODO Backlog From 6wm Scaffold
 
-1. `TODO(draw)`: replace active title solid fill with alternating platinum stripe treatment (`6wm/draw.h`).
-2. `TODO(draw)`: replace fallback font with Chicago-like bitmap UI font once available (`6wm/draw.h`).
-3. `TODO(menu)`: define formal menubar registration atom/protocol between menubar service and WM (`6wm/6wm.c`).
-4. `TODO(menu)`: add WM-side ownership validation for `_AUX_MENU_COMMAND` dispatch hardening (`6wm/menu.c`).
+1. `TODO(draw)`: replace Montecarlo/fixed fallback chain with Chicago-like bitmap UI font once available (`6wm/draw.h`).
+2. `TODO(menu)`: define formal menubar registration atom/protocol between menubar service and WM (`6wm/6wm.c`).
+3. `TODO(menu)`: add WM-side ownership validation for `_AUX_MENU_COMMAND` dispatch hardening (`6wm/menu.c`).
 
 ---
 
@@ -244,3 +243,4 @@ Deferred until post-Phase-1 stability:
 15. Added WM keyboard action path baseline with Alt+Tab focus cycling and Alt+Q close for managed windows.
 16. Hardened WM key grabs for lock/numlock modifier combinations and made focus-cycle ordering deterministic by layer.
 17. Refined cycling policy for usability: document-first Alt+Tab, explicit all-window cycle paths via Alt+Ctrl+Tab and Alt+Escape.
+18. Implemented active title stripe rendering and updated draw/font policy notes (Montecarlo -> fixed -> server default) for current Phase 1A visuals.
