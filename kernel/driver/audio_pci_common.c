@@ -4,6 +4,146 @@
 #include "audio.h"
 #include "audio_pci_common.h"
 
+/*
+ * Default hwif used by probe-only stub backends.
+ *
+ * This keeps all discovered audio families on the new audio_hw_ops path
+ * without pretending to provide real DMA/format programming yet.
+ */
+static int
+audio_pci_stub_hwif_query_format(void *hdl, struct audio_format *fmt)
+{
+  (void)hdl;
+  (void)fmt;
+  return 0;
+}
+
+static int
+audio_pci_stub_hwif_set_format(void *hdl, struct audio_format *fmt)
+{
+  (void)hdl;
+  (void)fmt;
+  return 0;
+}
+
+static int
+audio_pci_stub_hwif_round_blocksize(void *hdl, int bs, int mode)
+{
+  (void)hdl;
+  (void)mode;
+  return bs;
+}
+
+static int
+audio_pci_stub_hwif_init_output(void *hdl)
+{
+  (void)hdl;
+  return 0;
+}
+
+static int
+audio_pci_stub_hwif_init_input(void *hdl)
+{
+  (void)hdl;
+  return 0;
+}
+
+static int
+audio_pci_stub_hwif_trigger_output(void *hdl)
+{
+  (void)hdl;
+  return 0;
+}
+
+static int
+audio_pci_stub_hwif_trigger_input(void *hdl)
+{
+  (void)hdl;
+  return 0;
+}
+
+static int
+audio_pci_stub_hwif_halt_output(void *hdl)
+{
+  (void)hdl;
+  return 0;
+}
+
+static int
+audio_pci_stub_hwif_halt_input(void *hdl)
+{
+  (void)hdl;
+  return 0;
+}
+
+static uint32_t
+audio_pci_stub_hwif_pointer(void *hdl, int mode)
+{
+  (void)hdl;
+  (void)mode;
+  return 0;
+}
+
+static int
+audio_pci_stub_hwif_get_props(void *hdl, struct audio_props *props)
+{
+  (void)hdl;
+  (void)props;
+  return -1;
+}
+
+static void *
+audio_pci_stub_hwif_allocm(void *hdl, int direction, uint32_t size, int type)
+{
+  (void)hdl;
+  (void)direction;
+  (void)size;
+  (void)type;
+  return 0;
+}
+
+static void
+audio_pci_stub_hwif_freem(void *hdl, void *addr, int type)
+{
+  (void)hdl;
+  (void)addr;
+  (void)type;
+}
+
+static int
+audio_pci_stub_hwif_mixer_set_port(void *hdl, void *mc)
+{
+  (void)hdl;
+  (void)mc;
+  return -1;
+}
+
+static int
+audio_pci_stub_hwif_mixer_get_port(void *hdl, void *mc)
+{
+  (void)hdl;
+  (void)mc;
+  return -1;
+}
+
+static struct audio_hw_ops audio_pci_stub_hwif_ops = {
+  .query_format = audio_pci_stub_hwif_query_format,
+  .set_format = audio_pci_stub_hwif_set_format,
+  .round_blocksize = audio_pci_stub_hwif_round_blocksize,
+  .init_output = audio_pci_stub_hwif_init_output,
+  .init_input = audio_pci_stub_hwif_init_input,
+  .trigger_output = audio_pci_stub_hwif_trigger_output,
+  .trigger_input = audio_pci_stub_hwif_trigger_input,
+  .halt_output = audio_pci_stub_hwif_halt_output,
+  .halt_input = audio_pci_stub_hwif_halt_input,
+  .pointer = audio_pci_stub_hwif_pointer,
+  .get_props = audio_pci_stub_hwif_get_props,
+  .allocm = audio_pci_stub_hwif_allocm,
+  .freem = audio_pci_stub_hwif_freem,
+  .mixer_set_port = audio_pci_stub_hwif_mixer_set_port,
+  .mixer_get_port = audio_pci_stub_hwif_mixer_get_port,
+};
+
 int
 audio_pci_stub_match_dev(const struct audio_pci_stub_match *m,
                          const struct pci_dev *dev)
@@ -78,12 +218,14 @@ audio_pci_stub_attach(struct audio_pci_stub_softc *sc,
             dev->vendor_id, dev->device_id, dev->irq_line);
   }
 
-  if(audio_register_hw_device(dev->vendor_id, dev->device_id,
-                              AUDIO_CARD_AUTO, 0,
-                              AUDIO_DIR_PLAYBACK,
-                              m->flags,
-                              m->profile,
-                              m->name) < 0)
+  if(audio_attach_hwif(dev->vendor_id, dev->device_id,
+                       AUDIO_CARD_AUTO, 0,
+                       AUDIO_DIR_PLAYBACK,
+                       m->flags,
+                       m->profile,
+                       &audio_pci_stub_hwif_ops,
+                       sc,
+                       m->name) < 0)
     return -1;
   return 0;
 }

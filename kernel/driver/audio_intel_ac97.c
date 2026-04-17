@@ -326,6 +326,199 @@ ac97_intr(int irq, void *arg)
 }
 
 /* -----------------------------------------------------------------------
+ * Hardware abstraction interface (audio_hw_ops)
+ * -----------------------------------------------------------------------
+ * Callback implementations for the formal hardware interface.
+ * These allow the audio core to use AC97 via a generic interface.
+ * ----------------------------------------------------------------------- */
+
+static int
+ac97_query_format(void *hdl, struct audio_format *fmt)
+{
+  (void)hdl;
+  (void)fmt;
+  /* For now, accept any format requested; validation happens elsewhere */
+  return 0;
+}
+
+static int
+ac97_set_format(void *hdl, struct audio_format *fmt)
+{
+  struct ac97_softc *sc = (struct ac97_softc *)hdl;
+  /* TODO: Set hardware format register based on fmt->sample_format */
+  (void)fmt;
+  (void)sc;
+  return 0;
+}
+
+static int
+ac97_round_blocksize(void *hdl, int bs, int mode)
+{
+  (void)hdl;
+  (void)mode;
+  /* AC97 uses fixed 2KB blocks; round to nearest power of 2 */
+  if(bs > 2048) return 4096;
+  if(bs > 1024) return 2048;
+  if(bs > 512)  return 1024;
+  return 512;
+}
+
+static int
+ac97_init_output(void *hdl)
+{
+  struct ac97_softc *sc = (struct ac97_softc *)hdl;
+  /* Playback setup is done in ac97_pcmout_setup(); this is called on stream PREPARE */
+  (void)sc;
+  return 0;
+}
+
+static int
+ac97_init_input(void *hdl)
+{
+  (void)hdl;
+  /* TODO: Capture channel setup */
+  return -1;  /* Not yet implemented */
+}
+
+static int
+ac97_trigger_output(void *hdl)
+{
+  struct ac97_softc *sc = (struct ac97_softc *)hdl;
+  uint8_t chan = NABM_PCM_OUT_BASE;
+  
+  /* Enable PCM-Out playback (Run Pause Burst Mode) */
+  nabm_outb(sc, chan + NABM_OFF_CR,
+            NABM_CR_RPBM | NABM_CR_LVBIE | NABM_CR_IOCE | NABM_CR_FEIE);
+  return 0;
+}
+
+static int
+ac97_trigger_input(void *hdl)
+{
+  (void)hdl;
+  /* TODO: Capture trigger */
+  return -1;
+}
+
+static int
+ac97_halt_output(void *hdl)
+{
+  struct ac97_softc *sc = (struct ac97_softc *)hdl;
+  uint8_t chan = NABM_PCM_OUT_BASE;
+  
+  /* Disable playback */
+  nabm_outb(sc, chan + NABM_OFF_CR, 0);
+  return 0;
+}
+
+static int
+ac97_halt_input(void *hdl)
+{
+  (void)hdl;
+  return -1;
+}
+
+static uint32_t
+ac97_pointer(void *hdl, int mode)
+{
+  struct ac97_softc *sc = (struct ac97_softc *)hdl;
+  uint8_t chan = NABM_PCM_OUT_BASE;
+  uint8_t civ;
+  
+  if(mode != AUMODE_PLAY)
+    return 0;  /* Capture not supported yet */
+  
+  /* Read Current Index Value (CIV) to get current DMA position */
+  civ = nabm_inb(sc, chan + NABM_OFF_CIV);
+  
+  /* CIV is buffer index (0-31); each buffer is AC97_PERIOD_BYTES
+   * Convert to frames (samples): PERIOD_BYTES / (channels * bytes_per_sample) */
+  /* For now, simplified: PERIOD_BYTES = 2048, assume 2 channels, S16_LE */
+  /* 2048 bytes / 4 bytes per sample = 512 samples */
+  return (uint32_t)civ * (AC97_PERIOD_BYTES / 4);
+}
+
+static int
+ac97_get_props(void *hdl, struct audio_props *props)
+{
+  (void)hdl;
+  
+  props->min_rate = 8000;
+  props->max_rate = 48000;
+  props->min_channels = 1;
+  props->max_channels = 2;
+  
+  props->formats[0] = AUDIO_FMT_S16_LE;
+  props->formats[1] = AUDIO_FMT_U8;
+  props->formats[2] = 0;  /* End of list */
+  
+  props->rates[0] = 48000;
+  props->rates[1] = 44100;
+  props->rates[2] = 32000;
+  props->rates[3] = 0;  /* End of list */
+  
+  props->flags = 0;
+  return 0;
+}
+
+static void *
+ac97_allocm(void *hdl, int direction, uint32_t size, int type)
+{
+  (void)hdl;
+  (void)direction;
+  (void)type;
+  /* For now, return NULL; DMA buffers are pre-allocated in ac97_softc */
+  (void)size;
+  return 0;
+}
+
+static void
+ac97_freem(void *hdl, void *addr, int type)
+{
+  (void)hdl;
+  (void)addr;
+  (void)type;
+  /* No-op for now */
+}
+
+static int
+ac97_mixer_set_port(void *hdl, void *mc)
+{
+  (void)hdl;
+  (void)mc;
+  /* TODO: Mixer control write */
+  return -1;
+}
+
+static int
+ac97_mixer_get_port(void *hdl, void *mc)
+{
+  (void)hdl;
+  (void)mc;
+  /* TODO: Mixer control read */
+  return -1;
+}
+
+/* Static hardware ops structure registration */
+static struct audio_hw_ops ac97_hwif_ops = {
+  .query_format    = ac97_query_format,
+  .set_format      = ac97_set_format,
+  .round_blocksize = ac97_round_blocksize,
+  .init_output     = ac97_init_output,
+  .init_input      = ac97_init_input,
+  .trigger_output  = ac97_trigger_output,
+  .trigger_input   = ac97_trigger_input,
+  .halt_output     = ac97_halt_output,
+  .halt_input      = ac97_halt_input,
+  .pointer         = ac97_pointer,
+  .get_props       = ac97_get_props,
+  .allocm          = ac97_allocm,
+  .freem           = ac97_freem,
+  .mixer_set_port  = ac97_mixer_set_port,
+  .mixer_get_port  = ac97_mixer_get_port,
+};
+
+/* -----------------------------------------------------------------------
  * Probe / attach
  * ----------------------------------------------------------------------- */
 static const struct audio_pci_stub_match match_tbl[] = {
@@ -372,19 +565,21 @@ audio_intel_ac97_init(void)
             dev->bus, dev->slot, dev->func,
             sc->nambar, sc->nabm, sc->irq);
 
-    if(audio_register_hw_device(dev->vendor_id, dev->device_id,
-                                AUDIO_CARD_AUTO, 0,
-                                AUDIO_DIR_PLAYBACK,
-                                match_tbl[0].flags,
-                                AUDIO_HW_PROFILE_AC97,
-                                "intel-ac97") < 0){
-      BOOTDBG("audio/intel-ac97: register failed\n");
-      continue;
-    }
-
     ac97_codec_reset(sc);
     ac97_codec_init(sc);
     ac97_pcmout_setup(sc);
+
+    if(audio_attach_hwif(dev->vendor_id, dev->device_id,
+                         AUDIO_CARD_AUTO, 0,
+                         AUDIO_DIR_PLAYBACK,
+                         match_tbl[0].flags,
+                         AUDIO_HW_PROFILE_AC97,
+                         &ac97_hwif_ops,
+                         sc,
+                         "intel-ac97") < 0){
+      BOOTDBG("audio/intel-ac97: hwif attach failed\n");
+      continue;
+    }
 
     if(sc->irq > 0 && sc->irq < 24){
       irq_register(sc->irq, ac97_intr, sc, "intel-ac97");

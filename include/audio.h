@@ -8,6 +8,7 @@
 #define AUXV6_AUDIO_H
 
 #include "stdint.h"
+#include "audio_hwif.h"
 
 #define AUDIO_ABI_MAJOR 1
 #define AUDIO_ABI_MINOR 0

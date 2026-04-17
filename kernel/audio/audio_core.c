@@ -63,18 +63,14 @@ struct audio_stream {
   uint32_t ring_head;
   uint32_t ring_tail;
   uint32_t last_tick;
+
+  /* Hardware device binding (set during stream allocation) */
+  uint16_t hw_card;
+  uint16_t hw_device;
+  uint16_t hw_direction;
 };
 
-struct audio_hw_device {
-  uint16_t vendor_id;
-  uint16_t device_id;
-  uint16_t card;
-  uint16_t device;
-  uint16_t direction;
-  uint16_t reserved0;
-  uint32_t flags;
-  uint32_t hw_profile;
-};
+/* struct audio_hw_device is now defined in audio_hwif.h */
 
 static struct audio_core_state audio_core;
 static struct audio_hw_device audio_hw_devs[AUDIO_MAX_DEVICES];
@@ -186,6 +182,7 @@ audio_stream_alloc_locked(struct file *f, int minor, int nonblock, char *ring)
   int i;
   struct audio_stream *s;
   struct proc *p;
+  struct audio_hw_device *hw;
 
   for(i = 0; i < AUDIO_STREAM_MAX; i++){
     if(audio_streams[i].in_use)
@@ -220,6 +217,20 @@ audio_stream_alloc_locked(struct file *f, int minor, int nonblock, char *ring)
     acquire(&tickslock);
     s->last_tick = ticks;
     release(&tickslock);
+
+    /* Bind stream to hardware device based on default route.
+     * This determines which hardware device will serve this stream's I/O. */
+    hw = audio_pick_default_hw_device();
+    if(hw){
+      s->hw_card = hw->card;
+      s->hw_device = hw->device;
+      s->hw_direction = hw->direction;
+    } else {
+      s->hw_card = 0;
+      s->hw_device = 0;
+      s->hw_direction = AUDIO_DIR_PLAYBACK;  /* Default */
+    }
+
     return s;
   }
   return 0;
@@ -522,6 +533,87 @@ audio_pick_default_hw_device(void)
   if(audio_hw_count == 0)
     return 0;
   return &audio_hw_devs[0];
+}
+
+/*
+ * audio_query_hw_pointer - Query real hardware DMA position.
+ *
+ * Calls the hardware pointer() callback if available.
+ * Returns byte offset in ring buffer, or 0 if no device or unsupported.
+ * Can be called from interrupt context (callback is expected to be fast).
+ */
+static uint64_t
+audio_query_hw_pointer(struct audio_hw_device *hw, int aumode)
+{
+  uint32_t frames;
+  uint32_t frame_bytes;
+
+  if(hw == 0 || hw->ops == 0 || hw->ops->pointer == 0)
+    return 0;
+
+  frames = hw->ops->pointer(hw->hdl, aumode);
+  
+  /* Convert frames to bytes using current format */
+  frame_bytes = audio_bytes_per_sample(hw->current_format.sample_format);
+  if(frame_bytes == 0 || hw->current_format.channels == 0)
+    return 0;
+  frame_bytes *= hw->current_format.channels;
+  
+  return (uint64_t)frames * frame_bytes;
+}
+
+/*
+ * audio_fill_caps_from_hwif - Fill caps from hardware ops, with fallback.
+ *
+ * Attempts to query hardware capabilities via the get_props() callback.
+ * Falls back to profile-based defaults if hardware doesn't support queries.
+ * Returns 0 on success, -1 on error.
+ */
+static int
+audio_fill_caps_from_hwif(struct audio_hw_caps *caps, struct audio_hw_device *hw)
+{
+  struct audio_props props;
+  int rc;
+  int i;
+
+  if(hw == 0 || hw->ops == 0)
+    return -1;
+
+  /* Try to query real hardware properties */
+  if(hw->ops->get_props){
+    memset(&props, 0, sizeof(props));
+    rc = hw->ops->get_props(hw->hdl, &props);
+    if(rc == 0){
+      /* Populate caps from real hardware properties */
+      caps->min_channels = (props.min_channels > 1) ? props.min_channels : 1;
+      caps->max_channels = (props.max_channels > 0) ? props.max_channels : 2;
+      
+      /* Copy supported formats and rates from hardware props */
+      caps->format_count = 0;
+      for(i = 0; i < 8 && props.formats[i] != 0 && caps->format_count < 8; i++){
+        caps->formats[i] = props.formats[i];
+        caps->format_count++;
+      }
+      
+      caps->rate_count = 0;
+      for(i = 0; i < 16 && props.rates[i] != 0 && caps->rate_count < 16; i++){
+        caps->rates[i] = props.rates[i];
+        caps->rate_count++;
+      }
+      
+      /* Use hardware min/max rates */
+      caps->min_period_frames = AUDIO_DEFAULT_PERIOD_FRAMES;
+      caps->max_period_frames = AUDIO_DEFAULT_PERIOD_FRAMES;
+      caps->min_periods = AUDIO_DEFAULT_PERIODS;
+      caps->max_periods = AUDIO_DEFAULT_PERIODS;
+      
+      return 0;
+    }
+  }
+
+  /* Fallback: Use profile-based defaults */
+  audio_fill_caps_for_profile(caps, hw->hw_profile);
+  return 0;
 }
 
 static void
@@ -987,7 +1079,12 @@ audio_ioctl_file(struct file *f, int request, uint arg)
     caps->direction = hw->direction;
     memset(caps->formats, 0, sizeof(caps->formats));
     memset(caps->rates, 0, sizeof(caps->rates));
-    audio_fill_caps_for_profile(caps, hw->hw_profile);
+    
+    /* Try to fill capabilities from hardware ops; fall back to profile  */
+    if(audio_fill_caps_from_hwif(caps, hw) < 0){
+      audio_fill_caps_for_profile(caps, hw->hw_profile);
+    }
+    
     caps->flags = hw->flags;
     memset(caps->reserved1, 0, sizeof(caps->reserved1));
     release(&audio_core.lock);
@@ -1680,6 +1777,70 @@ audio_register_hw_device(uint16_t vendor_id, uint16_t device_id,
 }
 
 /*
+ * audio_attach_hwif - Register hardware with its operations interface.
+ *
+ * Called by backend drivers to attach their audio_hw_ops implementation.
+ * The ops table and opaque hardware handle are stored alongside device metadata.
+ *
+ * Returns 0 on success, -1 on error.
+ *
+ * This is the modern registration path; audio_register_hw_device() is now
+ * called implicitly during the attach process (or as a legacy path for
+ * profile-based device discovery by stub probes).
+ */
+int
+audio_attach_hwif(uint16_t vendor_id, uint16_t device_id,
+                  uint16_t card, uint16_t device,
+                  uint16_t direction, uint32_t flags,
+                  uint32_t hw_profile,
+                  struct audio_hw_ops *ops,
+                  void *hdl,
+                  const char *driver_name)
+{
+  struct audio_hw_device *slot;
+  uint32_t slot_index;
+  int rc;
+
+  if(direction != AUDIO_DIR_PLAYBACK && direction != AUDIO_DIR_CAPTURE)
+    return -1;
+
+  if(ops == 0 || hdl == 0)
+    return -1;
+
+  /* First, register the device metadata and track which slot it was assigned */
+  acquire(&audio_core.lock);
+  slot_index = audio_hw_count;
+  release(&audio_core.lock);
+
+  rc = audio_register_hw_device(vendor_id, device_id,
+                                card, device,
+                                direction, flags,
+                                hw_profile,
+                                driver_name);
+  if(rc < 0)
+    return -1;
+
+  /* Now update the registered device with ops and hdl.
+   * Since audio_register_hw_device incremented audio_hw_count,
+   * the new device is at the slot_index we tracked above. */
+  acquire(&audio_core.lock);
+  if(slot_index < audio_hw_count){
+    slot = &audio_hw_devs[slot_index];
+    slot->ops = ops;
+    slot->hdl = hdl;
+    release(&audio_core.lock);
+    BOOTDBG("audio: attached hwif for %s card=%d dev=%d dir=%d\n",
+            driver_name ? driver_name : "audio-hw",
+            slot->card, device, direction);
+    return 0;
+  }
+  release(&audio_core.lock);
+  BOOTDBG("audio: failed to attach hwif for %s (device not found)\n",
+          driver_name ? driver_name : "audio-hw");
+  return -1;
+}
+
+/*
  * audio_hw_period_advance - called from a hardware DMA interrupt handler.
  *
  * Copies up to `n` bytes from the first active running stream's ring buffer
@@ -1695,6 +1856,7 @@ int
 audio_hw_period_advance(char *dst, int n)
 {
   struct audio_stream *s;
+  struct audio_hw_device *hw;
   uint32_t used;
   uint32_t consume;
   int i;
@@ -1752,6 +1914,19 @@ audio_hw_period_advance(char *dst, int n)
 
   s->ring_head = (s->ring_head + consume) % s->ring_size;
   s->hw_ptr_bytes += consume;
+
+  /* Optionally: Update hw_ptr_bytes from real hardware pointer if available.
+   * This provides true latency measurement and xrun detection based on
+   * actual hardware DMA position rather than accumulated consumption.
+   * For now, we trust the accumulated bytes; future: enable real pointer. */
+  hw = audio_find_hw_device(s->hw_card, s->hw_device, s->hw_direction);
+  if(hw && hw->ops && hw->ops->pointer){
+    /* TODO(optional): Query hw->ops->pointer() to update hw_ptr_bytes
+     * and detect true xrun conditions. This provides more accurate
+     * latency and state tracking. Currently disabled to maintain
+     * backward compatibility with tick-based semantics. */
+  }
+
   audio_stream_update_queue_frames(s);
 
   audio_core.hw_ptr_frames = s->hw_ptr_bytes / (audio_stream_frame_bytes(s) > 0 ? audio_stream_frame_bytes(s) : 1);
@@ -1761,3 +1936,4 @@ audio_hw_period_advance(char *dst, int n)
   release(&audio_core.lock);
   return n;
 }
+

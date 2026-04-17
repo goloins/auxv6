@@ -237,6 +237,7 @@ int             audio_ioctl_arg_size(int request);
 int             audio_ioctl_file(struct file *f, int request, uint arg);
 int             audio_hw_period_advance(char *dst, int n);
 int             audio_register_hw_device(uint16_t vendor_id, uint16_t device_id, uint16_t card, uint16_t device, uint16_t direction, uint32_t flags, uint32_t hw_profile, const char *driver_name);
+int             audio_attach_hwif(uint16_t vendor_id, uint16_t device_id, uint16_t card, uint16_t device, uint16_t direction, uint32_t flags, uint32_t hw_profile, struct audio_hw_ops *ops, void *hdl, const char *driver_name);
 int             audio_intel_ac97_debug_snapshot(uint32_t *irq_count,
 												uint32_t *poll_count,
 												uint32_t *bcis_count,
