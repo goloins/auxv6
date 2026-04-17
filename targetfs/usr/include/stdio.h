@@ -15,7 +15,7 @@
 
 #ifndef BUFSIZ
 #define BUFSIZ 512
-#endif /* AUXV6_STDIO_H */
+#endif
 
 #define _IOFBF 0
 #define _IOLBF 1
@@ -106,4 +106,4 @@ struct __auxv6_FILE {
   int buf_owned;
 };
 
-#endif
+#endif /* AUXV6_STDIO_H */

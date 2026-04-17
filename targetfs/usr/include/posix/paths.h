@@ -14,6 +14,7 @@
 #define _PATH_VARDB     "/var/db/"
 #define _PATH_VARRUN    "/var/run/"
 #define _PATH_VARTMP    "/var/tmp/"
+#define _PATH_MAILDIR   "/var/mail"
 #define _PATH_TTY       "/dev/tty"
 #define _PATH_CONSOLE   "/dev/console"
 

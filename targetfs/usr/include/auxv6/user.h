@@ -174,6 +174,9 @@ int sigaction(int signo, const struct sigaction *act, struct sigaction *oldact);
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
 int sigreturn(void);
 unsigned int alarm(unsigned int seconds);
+int __auxv6_sys_getitimer(int which, struct itimerval *curr_value);
+int __auxv6_sys_setitimer(int which, const struct itimerval *new_value,
+						  struct itimerval *old_value);
 int __auxv6_sys_clock_gettime(int clock_id, struct timespec *tp);
 int __auxv6_sys_clock_settime(int clock_id, const struct timespec *tp);
 int __auxv6_sys_getrlimit(int resource, struct rlimit *rlp);
@@ -251,6 +254,7 @@ void* malloc(size_t);
 void free(void*);
 int atoi(const char*);
 char* readpass(char*, int);
+int write_lastlog(uid_t uid, const char *line, const char *host, time_t when);
 int isatty(int fd);
 char* ttyname(int fd);
 int ttyname_r(int fd, char *buf, size_t buflen);

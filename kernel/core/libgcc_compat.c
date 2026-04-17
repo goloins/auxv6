@@ -51,6 +51,12 @@ __udivdi3(unsigned long long a, unsigned long long b)
 }
 
 unsigned long long
+__udivmoddi4(unsigned long long a, unsigned long long b, unsigned long long *rem)
+{
+  return udivmod64(a, b, rem);
+}
+
+unsigned long long
 __umoddi3(unsigned long long a, unsigned long long b)
 {
   unsigned long long rem;
