@@ -56,6 +56,10 @@ atoms_init(void)
         XInternAtom(dpy, "_AUX_MENU_COMMAND",           False);
     g_wm.a_aux_menu_command_text =
         XInternAtom(dpy, "_AUX_MENU_COMMAND_TEXT",      False);
+    g_wm.a_aux_menubar_window =
+        XInternAtom(dpy, "_AUX_MENUBAR_WINDOW",         False);
+    g_wm.a_aux_menubar_height =
+        XInternAtom(dpy, "_AUX_MENUBAR_HEIGHT",         False);
     g_wm.a_aux_modal_scope_owner =
         XInternAtom(dpy, "_AUX_MODAL_SCOPE_OWNER",      False);
 

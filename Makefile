@@ -383,6 +383,8 @@ LIBC_A = libc/libc.a
 AUXRT_A = libc/libauxrt.a
 X11_OBJS = user/x11.o
 X11_A = user/libX11.a
+AUXMENU_OBJS = user/aux_menu.o
+AUXMENU_A = user/libauxmenu.a
 
 .PHONY: libc-rebuild libc-phase libc-phase-core
 # Force a clean libc runtime rebuild (crt0 + libc + auxrt) and restage libc.a.
@@ -409,6 +411,10 @@ $(AUXRT_A): $(LIBAUXRT_OBJS)
 
 $(X11_A): $(X11_OBJS)
 	$(AR) rcs $@ $(X11_OBJS)
+	$(RANLIB) $@
+
+$(AUXMENU_A): $(AUXMENU_OBJS)
+	$(AR) rcs $@ $(AUXMENU_OBJS)
 	$(RANLIB) $@
 
 USER_STAGE_DIR = user/.stage

@@ -104,6 +104,10 @@ struct x6_event {
   int button;
   uint state;
   uint data0;
+  uint data1;
+  uint data2;
+  uint data3;
+  uint data4;
   uint requestor;
   uint time;
   int mode;
@@ -223,6 +227,8 @@ static int x6_dbg_count;
 static int x6_draw_rx_count;
 static int x6_draw_reply_tx_count;
 static uint x6_trace_mask;
+static int x6_root_draw_rect_seen;
+static int x6_root_draw_text_seen;
 
 /* Deferred framebuffer dirty-rect: updated only in shadow RAM during a burst
  * of small draw ops, then flushed to /dev/fb0 in one sequential write pass. */
@@ -3589,6 +3595,10 @@ handle_one_command(int cfd, char *cmd)
       oy = win->y;
       x6dbg("x6:draw_rect win=%u mapped=%d local=%d,%d wh=%dx%d abs=%d,%d color=%u",
         id, win->mapped, x, y, w, h, ox + x, oy + y, color);
+    } else if(x6_root_draw_rect_seen < 8) {
+      x6_root_draw_rect_seen++;
+      x6consolecrit("x6:root draw_rect #%d local=%d,%d wh=%dx%d color=%u",
+                    x6_root_draw_rect_seen, x, y, w, h, color);
     }
     x6_canvas_fill_pixels(ox + x, oy + y, w, h, color);
     if(win) {
@@ -3716,6 +3726,10 @@ handle_one_command(int cfd, char *cmd)
           return;
         ox = win->x;
         oy = win->y;
+      } else if(tlen > 0 && x6_root_draw_text_seen < 8) {
+        x6_root_draw_text_seen++;
+        x6consolecrit("x6:root draw_text #%d local=%d,%d len=%d color=%u",
+                      x6_root_draw_text_seen, x, y, tlen, color);
       }
 
       if(tlen > 0 || (x % 64) == 0) {
@@ -4299,19 +4313,33 @@ handle_one_command(int cfd, char *cmd)
     return;
   }
 
-  if(sscanf(cmd, "QUEUE_CLIENT_MESSAGE %u %u %u", &id, &color, &uw) == 3) {
+  if(sscanf(cmd, "QUEUE_CLIENT_MESSAGE %u %u %u", &id, &color, &uw) >= 3) {
     struct x6_client *owner;
     struct x6_event evt;
+    uint d1 = 0, d2 = 0, d3 = 0, d4 = 0;
+    sscanf(cmd, "QUEUE_CLIENT_MESSAGE %*u %*u %*u %u %u %u %u", &d1, &d2, &d3, &d4);
 
-    win = find_window(id);
-    if(win == 0) {
-      x6_send_line(cfd, "ERR not-found\n");
-      return;
-    }
-    owner = x6_find_client_by_fd(win->owner_fd);
-    if(owner == 0 || !owner->in_use || !owner->hello_done) {
-      x6_send_line(cfd, "ERR no-owner\n");
-      return;
+    if(id == (uint)wm_redirect_root) {
+      if(wm_event_queue == 0 || wm_client_fd < 0) {
+        x6_send_line(cfd, "ERR no-owner\n");
+        return;
+      }
+      owner = x6_find_client_by_fd(wm_client_fd);
+      if(owner == 0 || !owner->in_use || !owner->hello_done) {
+        x6_send_line(cfd, "ERR no-owner\n");
+        return;
+      }
+    } else {
+      win = find_window(id);
+      if(win == 0) {
+        x6_send_line(cfd, "ERR not-found\n");
+        return;
+      }
+      owner = x6_find_client_by_fd(win->owner_fd);
+      if(owner == 0 || !owner->in_use || !owner->hello_done) {
+        x6_send_line(cfd, "ERR no-owner\n");
+        return;
+      }
     }
 
     evt.type = X6_EVENT_CLIENT_MESSAGE;
@@ -4321,6 +4349,10 @@ handle_one_command(int cfd, char *cmd)
     evt.button = 0;
     evt.state = 0;
     evt.data0 = uw;
+    evt.data1 = d1;
+    evt.data2 = d2;
+    evt.data3 = d3;
+    evt.data4 = d4;
     if(x6_event_queue_enqueue(&owner->queue, &evt) < 0) {
       x6_send_line(cfd, "ERR queue-full\n");
       return;
@@ -5426,8 +5458,9 @@ x6_flush_client_events(struct x6_client *client)
                evt.wid, evt.x, evt.y, evt.w, evt.h);
     } else if(evt.type == X6_EVENT_CLIENT_MESSAGE) {
       snprintf(eventbuf, sizeof(eventbuf),
-               "EVENT ClientMessage wid=%u type=%u data0=%u\n",
-               evt.wid, (uint)evt.keycode, evt.data0);
+               "EVENT ClientMessage wid=%u type=%u data0=%u data1=%u data2=%u data3=%u data4=%u\n",
+               evt.wid, (uint)evt.keycode, evt.data0,
+               evt.data1, evt.data2, evt.data3, evt.data4);
     } else if(evt.type == X6_EVENT_CONFIGURE_REQUEST) {
       snprintf(eventbuf, sizeof(eventbuf),
                "EVENT ConfigureRequest wid=%u geom=%d,%d %dx%d\n",

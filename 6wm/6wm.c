@@ -39,6 +39,7 @@ static int g_another_wm;
 #define WM_KEY_CYCLE_FWD XK_Tab
 #define WM_KEY_CYCLE_ALL XK_Escape
 #define WM_KEY_CLOSE     XK_q
+#define MENUBAR_H_DEFAULT (TITLE_H + 2)
 
 typedef enum {
     CYCLE_SCOPE_DOCUMENTS = 0,
@@ -207,29 +208,37 @@ error_handler_default(Display *dpy, XErrorEvent *e)
     return 0;
 }
 
-/*
- * spawn_startup — fork/exec a startup client so the WM has a window to
- * manage immediately.  Called once after scan_existing_windows().
- * This avoids relying on shell & backgrounding in .xinitrc.
- */
 static void
-spawn_startup(void)
+wm_draw_root_chrome(void)
 {
-    char *argv[] = { "/usr/bin/st", NULL };
-    pid_t pid;
+    int h = g_wm.menubar_h;
 
-    pid = fork();
-    if (pid < 0) {
-        dprintf(2, "6wm: spawn_startup: fork failed\n");
+    if (h <= 0)
         return;
+    if (h > g_wm.sh)
+        h = g_wm.sh;
+
+    draw_rect(g_wm.root, PLT_FRAME_BG, 0, 0, g_wm.sw, h);
+    draw_bevel(g_wm.root, 0, 0, g_wm.sw, h);
+
+    if (h >= 1)
+        draw_rect(g_wm.root, PLT_BLACK, 0, h - 1, g_wm.sw, 1);
+
+    if (g_wm.font) {
+        static const char *label = "auxv6";
+        int tw = XTextWidth(g_wm.font, label, 5);
+        int th = g_wm.font->ascent + g_wm.font->descent;
+        int tx = 8;
+        int ty = h / 2 + g_wm.font->ascent - th / 2;
+
+        if (tx + tw >= g_wm.sw)
+            tx = 2;
+
+        XSetForeground(g_wm.dpy, g_wm.gc, PLT_TEXT_ACTIVE);
+        XDrawString(g_wm.dpy, g_wm.root, g_wm.gc, tx, ty, label, 5);
     }
-    if (pid == 0) {
-        setsid();
-        execv("/usr/bin/st", argv);
-        dprintf(2, "6wm: spawn_startup: execv failed\n");
-        exit(1);
-    }
-    dprintf(1, "6wm: spawn_startup: pid=%d\n", (int)pid);
+
+    XFlush(g_wm.dpy);
 }
 
 static void
@@ -599,6 +608,11 @@ on_expose(XExposeEvent *e)
     /* Only redraw on the last Expose in a sequence */
     if (e->count > 0) return;
 
+    if (e->window == g_wm.root) {
+        wm_draw_root_chrome();
+        return;
+    }
+
     c = client_find(e->window);
     if (c && c->frame == e->window)
         frame_draw(c);
@@ -619,6 +633,15 @@ on_property_notify(XPropertyEvent *e)
     int needs_redraw;
     int needs_focus_recheck;
     int title_h_old, title_h_new;
+
+    if (e->window == g_wm.root) {
+        if (e->atom == g_wm.a_aux_menubar_window ||
+            e->atom == g_wm.a_aux_menubar_height) {
+            menu_sync_registration_from_root();
+            wm_draw_root_chrome();
+        }
+        return;
+    }
 
     c = client_find(e->window);
     if (!c) return;
@@ -707,6 +730,15 @@ static void
 on_configure_notify(XConfigureEvent *e)
 {
     Client *c;
+
+    if (e->window == g_wm.root) {
+        if (e->width > 0)
+            g_wm.sw = e->width;
+        if (e->height > 0)
+            g_wm.sh = e->height;
+        wm_draw_root_chrome();
+        return;
+    }
 
     c = client_find(e->window);
     if (!c)
@@ -930,6 +962,8 @@ main(int argc, char **argv)
     XSelectInput(g_wm.dpy, g_wm.root,
                  SubstructureRedirectMask
                  | SubstructureNotifyMask
+                 | StructureNotifyMask
+                 | ExposureMask
                  | ButtonPressMask
                  | KeyPressMask
                  | PropertyChangeMask);
@@ -948,10 +982,17 @@ main(int argc, char **argv)
     WM6DBG("calling atoms_init");
     atoms_init();
     WM6DBG("atoms_init done");
+    menu_sync_registration_from_root();
 
     WM6DBG("calling draw_init");
     draw_init();
     WM6DBG("draw_init done");
+
+    if (g_wm.menubar_h <= 0)
+        g_wm.menubar_h = MENUBAR_H_DEFAULT;
+    menu_publish_registration_to_root();
+    WM6DBG("default menubar_h=%d", g_wm.menubar_h);
+    wm_draw_root_chrome();
 
     WM6DBG("calling wm_grab_keys");
     wm_grab_keys();
@@ -962,10 +1003,6 @@ main(int argc, char **argv)
     WM6DBG("calling scan_existing_windows");
     scan_existing_windows();
     WM6DBG("scan_existing_windows done");
-
-    WM6DBG("calling spawn_startup");
-    spawn_startup();
-    WM6DBG("spawn_startup done");
 
     WM6DBG("entering run()");
     run();

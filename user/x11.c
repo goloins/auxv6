@@ -2237,13 +2237,17 @@ x11_parse_event_line(Display *display, const char *line, XEvent *event)
   }
   if (strncmp(line + 6, "ClientMessage", 13) == 0) {
     unsigned int mtype = 0;
-    unsigned int d0 = 0;
+    unsigned int d0 = 0, d1 = 0, d2 = 0, d3 = 0, d4 = 0;
     event->type = ClientMessage;
-    sscanf(line, "EVENT ClientMessage wid=%u type=%u data0=%u",
-           &event->xclient.window, &mtype, &d0);
+    sscanf(line, "EVENT ClientMessage wid=%u type=%u data0=%u data1=%u data2=%u data3=%u data4=%u",
+           &event->xclient.window, &mtype, &d0, &d1, &d2, &d3, &d4);
     event->xclient.message_type = (Atom)mtype;
     event->xclient.format = 32;
     event->xclient.data.l[0] = (long)d0;
+    event->xclient.data.l[1] = (long)d1;
+    event->xclient.data.l[2] = (long)d2;
+    event->xclient.data.l[3] = (long)d3;
+    event->xclient.data.l[4] = (long)d4;
     return 0;
   }
   if (strncmp(line + 6, "PropertyNotify", 14) == 0) {
@@ -3817,10 +3821,14 @@ Status XSendEvent(Display *display, Window w, Bool propagate, long event_mask, X
   }
 
   if (event_send->type == ClientMessage) {
-    snprintf(cmd, sizeof(cmd), "QUEUE_CLIENT_MESSAGE %u %u %u\n",
+    snprintf(cmd, sizeof(cmd), "QUEUE_CLIENT_MESSAGE %u %u %u %u %u %u %u\n",
              (uint)event_send->xclient.window,
              (uint)event_send->xclient.message_type,
-             (uint)event_send->xclient.data.l[0]);
+             (uint)event_send->xclient.data.l[0],
+             (uint)event_send->xclient.data.l[1],
+             (uint)event_send->xclient.data.l[2],
+             (uint)event_send->xclient.data.l[3],
+             (uint)event_send->xclient.data.l[4]);
     if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
       return 0;
     return 1;

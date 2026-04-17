@@ -10,8 +10,95 @@
 
 #include "6wm.h"
 #include "menu.h"
+#include "client.h"
+#include "frame.h"
 #include "stdio.h"
 #include "string.h"
+
+#define MENU_DEFAULT_BAR_H (TITLE_H + 2)
+
+static int
+menu_has_command_text(Window w)
+{
+    Atom actual_type;
+    int actual_format;
+    unsigned long nitems;
+    unsigned long bytes_after;
+    unsigned char *data;
+    int ok = 0;
+
+    data = NULL;
+    if (XGetWindowProperty(g_wm.dpy, w,
+                           g_wm.a_aux_menu_command_text,
+                           0, 1, False,
+                           AnyPropertyType,
+                           &actual_type, &actual_format,
+                           &nitems, &bytes_after,
+                           &data) == Success) {
+        if (actual_type != None && nitems > 0)
+            ok = 1;
+    }
+    if (data)
+        XFree(data);
+
+    return ok;
+}
+
+static void
+menu_reflow_clients_for_bar(int bar_h)
+{
+    Client *c;
+
+    for (c = g_wm.clients; c; c = c->next) {
+        int nx, ny;
+
+        if (!c->frame)
+            continue;
+
+        nx = c->x;
+        ny = c->y;
+
+        if (ny < bar_h)
+            ny = bar_h;
+
+        if (ny + c->h > g_wm.sh)
+            ny = g_wm.sh - c->h;
+        if (ny < bar_h)
+            ny = bar_h;
+
+        if (nx < 0)
+            nx = 0;
+        if (nx + c->w > g_wm.sw)
+            nx = g_wm.sw - c->w;
+        if (nx < 0)
+            nx = 0;
+
+        if (nx != c->x || ny != c->y)
+            frame_configure(c, nx, ny, c->cw, c->ch);
+    }
+}
+
+void
+menu_publish_registration_to_root(void)
+{
+    unsigned long h;
+
+    h = (unsigned long)((g_wm.menubar_h > 0) ? g_wm.menubar_h : MENU_DEFAULT_BAR_H);
+    XChangeProperty(g_wm.dpy, g_wm.root,
+                    g_wm.a_aux_menubar_height,
+                    XA_CARDINAL, 32, PropModeReplace,
+                    (unsigned char *)&h, 1);
+
+    if (g_wm.menubar_win != None) {
+        Window w = g_wm.menubar_win;
+        XChangeProperty(g_wm.dpy, g_wm.root,
+                        g_wm.a_aux_menubar_window,
+                        XA_WINDOW, 32, PropModeReplace,
+                        (unsigned char *)&w, 1);
+    } else {
+        XDeleteProperty(g_wm.dpy, g_wm.root, g_wm.a_aux_menubar_window);
+    }
+}
 
 /* ------------------------------------------------------------------ *
  * menu_register_bar                                                   *
@@ -20,10 +107,89 @@
 void
 menu_register_bar(Window bar_win, int bar_h)
 {
+    int old_h = g_wm.menubar_h;
+
+    if (bar_h < 1)
+        bar_h = 1;
+    if (bar_h > g_wm.sh)
+        bar_h = g_wm.sh;
+
     g_wm.menubar_win = bar_win;
     g_wm.menubar_h   = bar_h;
     dprintf(2, "6wm: menubar registered win=%lu h=%d\n",
             (unsigned long)bar_win, bar_h);
+
+    if (old_h != g_wm.menubar_h)
+        menu_reflow_clients_for_bar(g_wm.menubar_h);
+
+    menu_publish_registration_to_root();
+}
+
+int
+menu_sync_registration_from_root(void)
+{
+    Atom actual_type;
+    int actual_format;
+    unsigned long nitems;
+    unsigned long bytes_after;
+    unsigned char *data;
+    Window bar_win = None;
+    int bar_h = 0;
+    int changed = 0;
+    XWindowAttributes attrs;
+
+    data = NULL;
+    if (XGetWindowProperty(g_wm.dpy, g_wm.root,
+                           g_wm.a_aux_menubar_window,
+                           0, 1, False,
+                           XA_WINDOW,
+                           &actual_type, &actual_format,
+                           &nitems, &bytes_after,
+                           &data) == Success) {
+        if (actual_type == XA_WINDOW && actual_format == 32 && nitems >= 1 && data)
+            bar_win = *((Window *)data);
+    }
+    if (data)
+        XFree(data);
+
+    data = NULL;
+    if (XGetWindowProperty(g_wm.dpy, g_wm.root,
+                           g_wm.a_aux_menubar_height,
+                           0, 1, False,
+                           XA_CARDINAL,
+                           &actual_type, &actual_format,
+                           &nitems, &bytes_after,
+                           &data) == Success) {
+        if (actual_type == XA_CARDINAL && actual_format == 32 && nitems >= 1 && data)
+            bar_h = (int)(*((unsigned long *)data));
+    }
+    if (data)
+        XFree(data);
+
+    if (bar_win != None && bar_h > 0) {
+        if (bar_win == g_wm.root ||
+            !XGetWindowAttributes(g_wm.dpy, bar_win, &attrs) ||
+            attrs.map_state != IsViewable) {
+            bar_win = None;
+        }
+    }
+
+    if (bar_win != None && bar_h > 0) {
+        if (g_wm.menubar_win != bar_win || g_wm.menubar_h != bar_h) {
+            menu_register_bar(bar_win, bar_h);
+            changed = 1;
+        }
+    } else if (g_wm.menubar_win != None) {
+        dprintf(2, "6wm: menubar unregistered\n");
+        g_wm.menubar_win = None;
+        if (g_wm.menubar_h <= 0)
+            g_wm.menubar_h = MENU_DEFAULT_BAR_H;
+        menu_reflow_clients_for_bar(g_wm.menubar_h);
+        menu_publish_registration_to_root();
+        changed = 1;
+    }
+
+    return changed;
 }
 
 /* ------------------------------------------------------------------ *
@@ -116,13 +282,34 @@ menu_on_property(Client *c, XPropertyEvent *ev)
 void
 menu_dispatch_command(XClientMessageEvent *ev)
 {
-    /*
-     * v1: the menubar sends _AUX_MENU_COMMAND directly to the client
-     * window (not through the WM), so this path is only reached if the
-     * WM itself is the target — which is not expected in normal operation.
-     *
-     * TODO(menu): add ownership validation per ui-menu-protocol.md §9
-     * when security hardening pass is done.
-     */
-    (void)ev;
+    XEvent fwd;
+    Window target;
+
+    if (!ev)
+        return;
+
+    if (g_wm.menubar_win == None)
+        return;
+    if (ev->window != g_wm.root)
+        return;
+
+    if (!g_wm.focused)
+        return;
+    target = g_wm.focused->win;
+
+    if (!g_wm.focused || g_wm.focused->win != target)
+        return;
+    if (!client_find(target))
+        return;
+    if (!menu_has_command_text(target))
+        return;
+
+    memset(&fwd, 0, sizeof(fwd));
+    fwd.type = ClientMessage;
+    fwd.xclient.window = target;
+    fwd.xclient.message_type = g_wm.a_aux_menu_command;
+    fwd.xclient.format = 32;
+    fwd.xclient.data.l[0] = 1;
+    fwd.xclient.data.l[1] = 0;
+    XSendEvent(g_wm.dpy, target, False, NoEventMask, &fwd);
 }

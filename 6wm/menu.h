@@ -38,6 +38,20 @@ void menu_on_focus(Client *c);
 void menu_on_property(Client *c, XPropertyEvent *ev);
 
 /*
+ * Re-read menubar registration metadata from root properties:
+ *   _AUX_MENUBAR_WINDOW (XA_WINDOW)
+ *   _AUX_MENUBAR_HEIGHT (CARDINAL)
+ * Returns 1 if registration state changed, else 0.
+ */
+int menu_sync_registration_from_root(void);
+
+/*
+ * Publish current WM menubar state to root properties so shell/services
+ * share one source of truth for reserved top-bar geometry.
+ */
+void menu_publish_registration_to_root(void);
+
+/*
  * Route a _AUX_MENU_COMMAND ClientMessage from the menubar service
  * to the currently focused app window (§5.4, §6).
  */

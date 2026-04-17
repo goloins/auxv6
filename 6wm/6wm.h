@@ -173,6 +173,8 @@ typedef struct {
     Atom            a_aux_menu_caps;
     Atom            a_aux_menu_command;
     Atom            a_aux_menu_command_text;
+    Atom            a_aux_menubar_window;
+    Atom            a_aux_menubar_height;
     Atom            a_aux_modal_scope_owner;
 
     /* Menubar service registration (menu.c) */

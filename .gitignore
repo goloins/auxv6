@@ -252,3 +252,4 @@ targetfs/usr/libexec/ssh-pkcs11-helper
 targetfs/usr/libexec/ssh-sk-helper
 targetfs/usr/libexec/sshd-auth
 targetfs/usr/libexec/sshd-session
+user/libauxmenu.a
