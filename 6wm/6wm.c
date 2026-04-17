@@ -36,21 +36,28 @@ WmGlobal g_wm;
 static int g_another_wm;
 
 #define WM_KEY_CYCLE_FWD XK_Tab
+#define WM_KEY_CYCLE_ALL XK_Escape
 #define WM_KEY_CLOSE     XK_q
 
-static Client *
-cycle_target(Client *from, int dir)
+typedef enum {
+    CYCLE_SCOPE_DOCUMENTS = 0,
+    CYCLE_SCOPE_ALL = 1,
+} CycleScope;
+
+static int
+collect_cycle_order(CycleScope scope, Client **order, int cap)
 {
-    Client *order[256];
     int n = 0;
     int layer;
-    int i;
-    int idx = -1;
     Client *scan;
 
-    /* Deterministic cycle order: documents, then utilities, then modals. */
+    if (!order || cap <= 0)
+        return 0;
+
     for (layer = (int)LAYER_DOCUMENT; layer <= (int)LAYER_MODAL; layer++) {
-        for (scan = g_wm.clients; scan && n < 256; scan = scan->next) {
+        if (scope == CYCLE_SCOPE_DOCUMENTS && layer != (int)LAYER_DOCUMENT)
+            continue;
+        for (scan = g_wm.clients; scan && n < cap; scan = scan->next) {
             if (!scan->frame)
                 continue;
             if ((int)scan->layer != layer)
@@ -58,6 +65,21 @@ cycle_target(Client *from, int dir)
             order[n++] = scan;
         }
     }
+
+    return n;
+}
+
+static Client *
+cycle_target(Client *from, int dir, CycleScope scope)
+{
+    Client *order[256];
+    int n = 0;
+    int i;
+    int idx = -1;
+
+    n = collect_cycle_order(scope, order, 256);
+    if (n == 0 && scope == CYCLE_SCOPE_DOCUMENTS)
+        n = collect_cycle_order(CYCLE_SCOPE_ALL, order, 256);
 
     if (n == 0)
         return NULL;
@@ -134,6 +156,7 @@ static void
 wm_grab_keys(void)
 {
     int tab;
+    int esc;
     int q;
     unsigned int numlock_mask;
 
@@ -142,11 +165,22 @@ wm_grab_keys(void)
     numlock_mask = wm_detect_numlock_mask();
 
     tab = (int)XKeysymToKeycode(g_wm.dpy, WM_KEY_CYCLE_FWD);
+    esc = (int)XKeysymToKeycode(g_wm.dpy, WM_KEY_CYCLE_ALL);
     q = (int)XKeysymToKeycode(g_wm.dpy, WM_KEY_CLOSE);
 
     if (tab > 0) {
+        /* Alt+Tab / Alt+Shift+Tab => document cycling */
         grab_key_variant_set(tab, Mod1Mask, numlock_mask);
         grab_key_variant_set(tab, Mod1Mask | ShiftMask, numlock_mask);
+
+        /* Alt+Ctrl+Tab / Alt+Ctrl+Shift+Tab => all-window cycling */
+        grab_key_variant_set(tab, Mod1Mask | ControlMask, numlock_mask);
+        grab_key_variant_set(tab, Mod1Mask | ControlMask | ShiftMask, numlock_mask);
+    }
+    if (esc > 0) {
+        /* Alt+Escape / Alt+Shift+Escape => all-window cycling */
+        grab_key_variant_set(esc, Mod1Mask, numlock_mask);
+        grab_key_variant_set(esc, Mod1Mask | ShiftMask, numlock_mask);
     }
     if (q > 0)
         grab_key_variant_set(q, Mod1Mask, numlock_mask);
@@ -417,8 +451,12 @@ on_button_release(XButtonEvent *e)
 
 /*
  * KeyPress — WM keyboard action path (§10 baseline).
- * Alt+Tab           : cycle focus forward
- * Alt+Shift+Tab     : cycle focus backward
+ * Alt+Tab           : cycle document windows forward
+ * Alt+Shift+Tab     : cycle document windows backward
+ * Alt+Ctrl+Tab      : cycle all windows forward
+ * Alt+Ctrl+Shift+Tab: cycle all windows backward
+ * Alt+Escape        : cycle all windows forward
+ * Alt+Shift+Escape  : cycle all windows backward
  * Alt+Q             : close focused window
  */
 static void
@@ -431,10 +469,15 @@ on_key_press(XKeyEvent *e)
 
     ks = XKeycodeToKeysym(g_wm.dpy, e->keycode, 0);
 
-    if (ks == WM_KEY_CYCLE_FWD) {
+    if (ks == WM_KEY_CYCLE_FWD || ks == WM_KEY_CYCLE_ALL) {
         Client *target;
         int dir = (e->state & ShiftMask) ? -1 : 1;
-        target = cycle_target(g_wm.focused, dir);
+        CycleScope scope = CYCLE_SCOPE_DOCUMENTS;
+
+        if (ks == WM_KEY_CYCLE_ALL || (e->state & ControlMask))
+            scope = CYCLE_SCOPE_ALL;
+
+        target = cycle_target(g_wm.focused, dir, scope);
         if (target)
             focus_set(target);
         return;

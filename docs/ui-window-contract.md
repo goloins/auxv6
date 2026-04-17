@@ -368,5 +368,5 @@ Utility-window hit regions:
 9. Utility/modal family-aware raise behavior is implemented so same-app palettes/modals follow active app focus more coherently.
 10. Late property/hint updates on managed windows now refresh role/layer/app identity/modal-scope policy without requiring remap.
 11. Client-driven configure notifications are now synchronized back through WM frame geometry policy.
-12. WM keyboard action path is implemented with Alt+Tab focus cycling and Alt+Q close to satisfy baseline keyboard control requirements.
+12. WM keyboard action path is implemented with document-first Alt+Tab cycling, explicit all-window cycling (Alt+Ctrl+Tab and Alt+Escape), and Alt+Q close.
 13. Modal policy remains partial because remaining edge cases still require refinement against Section 6.4.

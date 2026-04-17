@@ -65,7 +65,7 @@ Phase 1 non-targets:
 | Toolkit Adapter | Menu model export | Must | No | Adapter | First adapter defines baseline |
 | Toolkit Adapter | Platform theme metrics ingestion | Should | No | Adapter | Prevent spacing drift |
 | Rendering | Basic text and rect drawing path | Must | Partial | Graphics/X stack | Keep within simple-app needs |
-| Input | Keyboard focus correctness | Must | Partial | WM + Input | Focus handoff plus WM key actions (Alt+Tab, Alt+Q) implemented; validation still pending |
+| Input | Keyboard focus correctness | Must | Partial | WM + Input | Focus handoff plus WM key actions (Alt+Tab docs, Alt+Ctrl+Tab/Alt+Esc all windows, Alt+Q close) implemented; validation still pending |
 | Input | Pointer button/motion routing | Must | Partial | WM + Input | Drag/resize reliability gate |
 
 ---
@@ -243,3 +243,4 @@ Deferred until post-Phase-1 stability:
 14. Added dynamic policy refresh on late property/hint updates and configure-notify synchronization for managed windows to improve lifecycle stability.
 15. Added WM keyboard action path baseline with Alt+Tab focus cycling and Alt+Q close for managed windows.
 16. Hardened WM key grabs for lock/numlock modifier combinations and made focus-cycle ordering deterministic by layer.
+17. Refined cycling policy for usability: document-first Alt+Tab, explicit all-window cycle paths via Alt+Ctrl+Tab and Alt+Escape.
