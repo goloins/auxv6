@@ -219,6 +219,7 @@ RANLIB = $(TOOLPREFIX)ranlib
 STRIP = $(TOOLPREFIX)strip
 OBJCOPY = $(TOOLPREFIX)objcopy
 OBJDUMP = $(TOOLPREFIX)objdump
+MAKEFLAGS += --no-print-directory --silent
 CFLAGS = -fno-pic -static -fno-builtin -fno-strict-aliasing -O2 -Wall -MD -ggdb -m32 -Werror -fno-omit-frame-pointer -Iinclude
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
 ASFLAGS = -m32 -gdwarf-2 -Wa,-divide -Iinclude
@@ -282,6 +283,17 @@ $(EXTRA_CFLAGS_STAMP): FORCE Makefile
 	printf '%s\n' "$(EXTRA_CFLAGS)" > "$$tmp"; \
 	if ! cmp -s "$$tmp" "$@" 2>/dev/null; then mv "$$tmp" "$@"; else rm -f "$$tmp"; fi
 
+define run_quiet
+@log=.make.$$$$.log; \
+	rm -f "$$log"; \
+	if ! { $(1); } >"$$log" 2>&1; then \
+		cat "$$log" >&2; \
+		rm -f "$$log"; \
+		exit 1; \
+	fi; \
+	rm -f "$$log"
+endef
+
 $(OBJS) kernel/core/entry.o: $(ROOTFS_CONFIG) $(EXTRA_CFLAGS_STAMP)
 
 user/%.o: $(ROOTFS_CONFIG) $(EXTRA_CFLAGS_STAMP)
@@ -289,15 +301,16 @@ user/%.o: $(ROOTFS_CONFIG) $(EXTRA_CFLAGS_STAMP)
 libc/%.o: $(ROOTFS_CONFIG) $(EXTRA_CFLAGS_STAMP)
 
 aux.bootkern: bootblock aux.kern
-	dd if=/dev/zero of=aux.bootkern count=10000
-	dd if=bootblock of=aux.bootkern conv=notrunc
-	dd if=aux.kern of=aux.bootkern seek=1 conv=notrunc
+	@printf '==> Kernel\n'
+	$(call run_quiet,dd if=/dev/zero of=aux.bootkern count=10000)
+	$(call run_quiet,dd if=bootblock of=aux.bootkern conv=notrunc)
+	$(call run_quiet,dd if=aux.kern of=aux.bootkern seek=1 conv=notrunc)
 
 ifeq ($(LEGACY_XV6FS),1)
 xv6memfs.img: bootblock kernelmemfs
-	dd if=/dev/zero of=xv6memfs.img count=10000
-	dd if=bootblock of=xv6memfs.img conv=notrunc
-	dd if=kernelmemfs of=xv6memfs.img seek=1 conv=notrunc
+	$(call run_quiet,dd if=/dev/zero of=xv6memfs.img count=10000)
+	$(call run_quiet,dd if=bootblock of=xv6memfs.img conv=notrunc)
+	$(call run_quiet,dd if=kernelmemfs of=xv6memfs.img seek=1 conv=notrunc)
 else
 xv6memfs.img:
 	@echo "xv6memfs is deprecated and disabled by default; set LEGACY_XV6FS=1 to enable." >&2
@@ -329,7 +342,6 @@ aux.kern: toolchain-check $(OBJS) kernel/core/entry.o entryother config/kernel.l
 	hard_total=$$((8*1024*1024)); \
 	soft_total=$$((6*1024*1024)); \
 	bss_hard=$$((4*1024*1024)); \
-	printf "kernel-size: text=%s data=%s bss=%s total=%s bytes\n" "$$text" "$$data" "$$bss" "$$dec"; \
 	if [ "$$dec" -gt "$$hard_total" ]; then \
 		echo "ERROR: kernel total size exceeds hard budget (8MB)." >&2; \
 		exit 1; \
@@ -372,11 +384,17 @@ AUXRT_A = libc/libauxrt.a
 X11_OBJS = user/x11.o
 X11_A = user/libX11.a
 
-.PHONY: libc-rebuild
+.PHONY: libc-rebuild libc-phase libc-phase-core
 # Force a clean libc runtime rebuild (crt0 + libc + auxrt) and restage libc.a.
 libc-rebuild:
 	rm -f $(LIBC_OBJS) $(LIBAUXRT_OBJS) $(CRT0_OBJ) $(LIBC_A) $(AUXRT_A) $(TARGETFS_LIBC_A)
 	$(MAKE) $(CRT0_OBJ) $(LIBC_A) $(AUXRT_A) $(TARGETFS_LIBC_A)
+
+libc-phase:
+	@printf '==> libc\n'
+	+$(MAKE) libc-phase-core
+
+libc-phase-core: $(CRT0_OBJ) $(LIBC_A) $(AUXRT_A) $(TARGETFS_LIBC_A)
 
 # Convenience static archive of the full auxv6 userland runtime library.
 # Used by native programs and by ports that need to link against our libc
@@ -972,13 +990,23 @@ _ftwtest: user/ftwtest
 _ftstest: user/ftstest
 	cp user/ftstest _ftstest
 
-.PHONY: userprogs userprogs-oldinit
+.PHONY: userprogs userprogs-core userprogs-oldinit userprogs-oldinit-core
 userprogs:
+	+$(MAKE) libc-phase
 	+$(MAKE) ports-progs PORTS=$(PORTS)
+	@printf '==> userland\n'
+	+$(MAKE) userprogs-core
+
+userprogs-core:
 	+$(MAKE) -j$(USER_PROG_JOBS) $(UPROGS)
 
 userprogs-oldinit:
+	+$(MAKE) libc-phase
 	+$(MAKE) ports-progs PORTS=$(PORTS)
+	@printf '==> userland\n'
+	+$(MAKE) userprogs-oldinit-core
+
+userprogs-oldinit-core:
 	+$(MAKE) -j$(USER_PROG_JOBS) $(UPROGS_OLDINIT)
 
 .PHONY: strip-uprogs strip-uprogs-oldinit
@@ -1004,17 +1032,17 @@ ports-sync:
 
 ports-progs:
 	@if [ "$(PORTS)" != "1" ]; then \
-		echo "ports: skipped (PORTS=$(PORTS))"; \
 		exit 0; \
 	fi
+	@printf '==> ports\n'
 	@mkdir -p ports
 	@: > $(PORTS_BUILD_LOG)
 	@if [ ! -f "$(PORTS_MANIFEST)" ]; then \
-		echo "ports: manifest $(PORTS_MANIFEST) not found; skipping" | tee -a $(PORTS_BUILD_LOG); \
+		echo "ports: manifest $(PORTS_MANIFEST) not found; skipping" | tee -a $(PORTS_BUILD_LOG) >&2; \
 		exit 0; \
 	fi
 	@if [ ! -f "$(PORTS_ENABLED_LIST)" ]; then \
-		echo "ports: enabled-list $(PORTS_ENABLED_LIST) not found; skipping" | tee -a $(PORTS_BUILD_LOG); \
+		echo "ports: enabled-list $(PORTS_ENABLED_LIST) not found; skipping" | tee -a $(PORTS_BUILD_LOG) >&2; \
 		exit 0; \
 	fi
 	@hooks_seen="ports/.ports-install-hooks.seen"; \
@@ -1041,11 +1069,11 @@ ports-progs:
 		if [ -z "$$binname" ]; then binname="$$name"; fi; \
 		portdir="ports/$$srcdir"; \
 		if [ ! -d "$$portdir" ]; then \
-			echo "ports: source directory missing for $$name (expected $$portdir); run make ports-sync" | tee -a $(PORTS_BUILD_LOG); \
+			echo "ports: source directory missing for $$name (expected $$portdir); run make ports-sync" | tee -a $(PORTS_BUILD_LOG) >&2; \
 			continue; \
 		fi; \
 		if [ ! -f "$$portdir/Makefile.auxv6" ]; then \
-			echo "ports: missing Makefile.auxv6 for $$name (expected $$portdir/Makefile.auxv6)" | tee -a $(PORTS_BUILD_LOG); \
+			echo "ports: missing Makefile.auxv6 for $$name (expected $$portdir/Makefile.auxv6)" | tee -a $(PORTS_BUILD_LOG) >&2; \
 			continue; \
 		fi; \
 		canon_mk="ports/makefiles/$$name.Makefile"; \
@@ -1053,7 +1081,7 @@ ports-progs:
 			if cp "$$canon_mk" "$$portdir/Makefile.auxv6"; then \
 				echo "ports: synced canonical makefile for $$name" >> $(PORTS_BUILD_LOG); \
 			else \
-				echo "ports: failed to sync canonical makefile for $$name from $$canon_mk" | tee -a $(PORTS_BUILD_LOG); \
+				echo "ports: failed to sync canonical makefile for $$name from $$canon_mk" | tee -a $(PORTS_BUILD_LOG) >&2; \
 				continue; \
 			fi; \
 		fi; \
@@ -1062,7 +1090,7 @@ ports-progs:
 			if cp "$$canon_postinstall" "$$portdir/pkg-postinstall.local"; then \
 				echo "ports: synced canonical postinstall hook for $$name" >> $(PORTS_BUILD_LOG); \
 			else \
-				echo "ports: failed to sync canonical postinstall hook for $$name from $$canon_postinstall" | tee -a $(PORTS_BUILD_LOG); \
+				echo "ports: failed to sync canonical postinstall hook for $$name from $$canon_postinstall" | tee -a $(PORTS_BUILD_LOG) >&2; \
 				continue; \
 			fi; \
 		fi; \
@@ -1085,15 +1113,23 @@ ports-progs:
 			rebuild=0; \
 		fi; \
 		if [ "$$rebuild" = "1" ]; then \
-			echo "ports: building $$name from $$portdir" | tee -a $(PORTS_BUILD_LOG); \
-			if ! $(MAKE) -C "$$portdir" -f Makefile.auxv6 all; then \
-				echo "ports: build failed for $$name" | tee -a $(PORTS_BUILD_LOG); \
+			printf 'ports: %s\n' "$$name"; \
+			echo "ports: building $$name from $$portdir" >> $(PORTS_BUILD_LOG); \
+			portlog="$(CURDIR)/$(PORTS_BUILD_LOG).$$name.log"; \
+			rm -f "$$portlog"; \
+			if ! $(MAKE) -C "$$portdir" -f Makefile.auxv6 all >"$$portlog" 2>&1; then \
+				cat "$$portlog" >&2; \
+				cat "$$portlog" >> $(PORTS_BUILD_LOG); \
+				rm -f "$$portlog"; \
+				echo "ports: build failed for $$name" | tee -a $(PORTS_BUILD_LOG) >&2; \
 				continue; \
 			fi; \
+			cat "$$portlog" >> $(PORTS_BUILD_LOG); \
+			rm -f "$$portlog"; \
 			echo "$$expected_sig" > "$$stamp"; \
 			touch "$$legacy_stamp"; \
 		else \
-			echo "ports: up-to-date $$name (skipping build)" | tee -a $(PORTS_BUILD_LOG); \
+			echo "ports: up-to-date $$name (skipping build)" >> $(PORTS_BUILD_LOG); \
 		fi; \
 		portbin=""; \
 		for cand in "$$portdir/_$$name" "$$portdir/$$binname"; do \
@@ -1103,29 +1139,36 @@ ports-progs:
 			fi; \
 		done; \
 		if [ -z "$$portbin" ]; then \
-			echo "ports: built binary not found for $$name (looked for _$$name and $$binname)" | tee -a $(PORTS_BUILD_LOG); \
+			echo "ports: built binary not found for $$name (looked for _$$name and $$binname)" | tee -a $(PORTS_BUILD_LOG) >&2; \
 			continue; \
 		fi; \
 		if ! $(OBJDUMP) -f "$$portbin" 2>/dev/null | grep -q 'file format elf32-i386'; then \
-			echo "ports: refusing non-ELF artifact for $$name: $$portbin" | tee -a $(PORTS_BUILD_LOG); \
+			echo "ports: refusing non-ELF artifact for $$name: $$portbin" | tee -a $(PORTS_BUILD_LOG) >&2; \
 			continue; \
 		fi; \
 		case "$$pclass" in \
 			system|helper) destdir="$(TARGETFS_DIR)/bin" ;; \
 			user) destdir="$(TARGETFS_DIR)/usr/bin" ;; \
 			sbin) destdir="$(TARGETFS_DIR)/usr/sbin" ;; \
-			*) echo "ports: invalid class '$$pclass' for $$name (use system/helper/user/sbin)" | tee -a $(PORTS_BUILD_LOG); continue ;; \
+			*) echo "ports: invalid class '$$pclass' for $$name (use system/helper/user/sbin)" | tee -a $(PORTS_BUILD_LOG) >&2; continue ;; \
 		esac; \
 		install -d "$$destdir"; \
 		install -m 0755 "$$portbin" "$$destdir/$$binname"; \
-		echo "ports: installed $$name -> $$destdir/$$binname" | tee -a $(PORTS_BUILD_LOG); \
+		echo "ports: installed $$name -> $$destdir/$$binname" >> $(PORTS_BUILD_LOG); \
 		hook_key="$$name|$$srcdir"; \
 		if ! grep -Fxq "$$hook_key" "$$hooks_seen"; then \
 			if grep -Eq '^[[:space:]]*install-targetfs:' "$$portdir/Makefile.auxv6"; then \
-				if ! $(MAKE) -C "$$portdir" -f Makefile.auxv6 install-targetfs; then \
-					echo "ports: install-targetfs hook failed for $$name" | tee -a $(PORTS_BUILD_LOG); \
+				hooklog="$(CURDIR)/$(PORTS_BUILD_LOG).$$name.install.log"; \
+				rm -f "$$hooklog"; \
+				if ! $(MAKE) -C "$$portdir" -f Makefile.auxv6 install-targetfs >"$$hooklog" 2>&1; then \
+					cat "$$hooklog" >&2; \
+					cat "$$hooklog" >> $(PORTS_BUILD_LOG); \
+					rm -f "$$hooklog"; \
+					echo "ports: install-targetfs hook failed for $$name" | tee -a $(PORTS_BUILD_LOG) >&2; \
 					continue; \
 				fi; \
+				cat "$$hooklog" >> $(PORTS_BUILD_LOG); \
+				rm -f "$$hooklog"; \
 			fi; \
 			postinstall_local="$(CURDIR)/$$portdir/pkg-postinstall.local"; \
 			if [ -s "$$postinstall_local" ]; then \
@@ -1133,13 +1176,13 @@ ports-progs:
 				rm -rf "$$postinstall_tmp"; \
 				mkdir -p "$$postinstall_tmp"; \
 				if ! (cd "$$postinstall_tmp" && /bin/sh "$$postinstall_local"); then \
-					echo "ports: failed to generate postinstall for $$name from $$postinstall_local" | tee -a $(PORTS_BUILD_LOG); \
+					echo "ports: failed to generate postinstall for $$name from $$postinstall_local" | tee -a $(PORTS_BUILD_LOG) >&2; \
 					continue; \
 				fi; \
 				if [ -f "$$postinstall_tmp/postinstall" ]; then \
-					echo "ports: running postinstall hook for $$name" | tee -a $(PORTS_BUILD_LOG); \
+					echo "ports: running postinstall hook for $$name" >> $(PORTS_BUILD_LOG); \
 					if ! (cd "$$postinstall_tmp" && PKG_INSTALL_ROOT="$(CURDIR)/$(TARGETFS_DIR)" /bin/sh ./postinstall >> "$(CURDIR)/$(PORTS_BUILD_LOG)" 2>&1); then \
-						echo "ports: postinstall hook failed for $$name" | tee -a $(PORTS_BUILD_LOG); \
+						echo "ports: postinstall hook failed for $$name" | tee -a $(PORTS_BUILD_LOG) >&2; \
 						continue; \
 					fi; \
 				else \
@@ -1549,13 +1592,13 @@ $(TARGETFS_INCLUDE)/%: include/%
 
 #nice
 test_ext2.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) strip-uprogs
-	sh tools/stage-ext2-root.sh .ext2root $(EXT2IMG) $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) $(UPROGS)
+	$(call run_quiet,sh tools/stage-ext2-root.sh .ext2root $(EXT2IMG) $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) $(UPROGS))
 
 test_ext2_server7.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES_SERVER7) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) strip-uprogs
-	sh tools/stage-ext2-root.sh .ext2root-server7 test_ext2_server7.img $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES_SERVER7) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) $(UPROGS)
+	$(call run_quiet,sh tools/stage-ext2-root.sh .ext2root-server7 test_ext2_server7.img $(ROOTFS_COMMON_FILES) $(ROOTFS_RC_FILES_SERVER7) $(ROOTFS_MAN_FILES) $(ROOTFS_TARGETFS_FILES) $(UPROGS))
 
 test_ext2_oldinit.img: tools/stage-ext2-root.sh $(ROOTFS_COMMON_FILES) strip-uprogs-oldinit
-	sh tools/stage-ext2-root.sh .ext2root-oldinit test_ext2_oldinit.img $(ROOTFS_COMMON_FILES) $(UPROGS_OLDINIT)
+	$(call run_quiet,sh tools/stage-ext2-root.sh .ext2root-oldinit test_ext2_oldinit.img $(ROOTFS_COMMON_FILES) $(UPROGS_OLDINIT))
 
 test_fat.img: tools/stage-fat-root.sh
 	sh tools/stage-fat-root.sh $(FATROOT_STAGE) $(FATIMG)
