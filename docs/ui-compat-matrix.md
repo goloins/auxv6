@@ -96,6 +96,51 @@ Action required:
 1. Add required feature rows specific to `st`, `xedit`, and `xeyes`.
 2. Re-evaluate `xfw` after first adapter path is stable.
 
+### 5.1 Per-App Required Feature Checklist
+
+| App | Requirement | Priority | Status | Validation Notes |
+|---|---|---:|---|---|
+| st | Managed reparented frame with Mac-style chrome | P0 | Partial | Must show active/inactive transitions correctly |
+| st | Keyboard focus and input reliability | P0 | Partial | No dropped focus after window raise/lower |
+| st | Resize behavior with live content redraw | P0 | Partial | Verify no geometry desync after repeated resize |
+| st | Close path (graceful then fallback) | P1 | Partial | WM close action should terminate cleanly |
+| xedit | Managed frame + title truncation behavior | P0 | Partial | Long filenames should ellipsize in title bar |
+| xedit | Menu publish/dispatch integration | P0 | No | File/Edit basics routed through global menubar |
+| xedit | Dialog transient + modal behavior | P0 | No | Open/Save/Confirm prompts block app scope correctly |
+| xedit | Enabled/disabled menu state sync | P1 | No | State updates reflect selection/editability |
+| xeyes | Utility-window role classification | P0 | No | Classified as utility/doodad role, not document |
+| xeyes | Utility stacking policy correctness | P0 | No | Utility layer ordering remains stable |
+| xeyes | Unmanaged/popup policy sanity | P1 | No | No accidental reparent/decorate of transient doodad surfaces |
+| xeyes | Motion/event lifecycle stability | P1 | Partial | Continuous event updates do not starve WM event loop |
+
+### 5.2 Phase 1 Smoke Test Scripts
+
+The following smoke scripts are intended for manual run/verification in a graphical session.
+
+#### st Smoke Script
+
+1. Launch `st`.
+2. Verify frame uses Mac-style chrome and control placement.
+3. Move, resize, and refocus repeatedly.
+4. Type continuously while switching focus between windows.
+5. Trigger close via WM control and verify clean exit.
+
+#### xedit Smoke Script
+
+1. Launch `xedit`.
+2. Verify title rendering and truncation behavior for long titles.
+3. Open File/Edit menus from global menubar.
+4. Trigger a dialog (open/save/confirm) and confirm modal blocking behavior.
+5. Verify command dispatch reaches app actions from menubar.
+
+#### xeyes Smoke Script
+
+1. Launch `xeyes`.
+2. Verify utility-role frame policy (or intentional unmanaged handling) is applied consistently.
+3. Move and restack relative to document windows.
+4. Confirm motion updates remain smooth and do not destabilize WM input/focus paths.
+5. Close and relaunch repeatedly to check lifecycle cleanup.
+
 ---
 
 ## 6. Gating Criteria
@@ -145,3 +190,4 @@ Deferred until post-Phase-1 stability:
 2. Established Phase 1 target profiles and baseline feature ownership buckets.
 3. Selected concrete Phase 1 app targets: `st`, `xedit`, and `xeyes`.
 4. Marked `xfw` deferred until toolkit integration layer matures.
+5. Added per-app requirement checklist and manual smoke-test scripts for Phase 1 targets.

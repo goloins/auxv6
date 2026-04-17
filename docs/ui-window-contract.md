@@ -32,8 +32,14 @@ All toplevel windows must classify into one of the following roles.
 
 2. Utility/Palette Window
 - Tool palettes and floating utility surfaces.
-- May use compact title treatment.
+- Uses compact title treatment with no title text.
 - Stacks above document windows of same app unless modal constraints apply.
+
+Utility compact treatment definition (v1 locked):
+
+1. A reduced-height title bar and tighter border insets used for small helper windows.
+2. Same control semantics as document windows unless explicitly disabled by role policy.
+3. Intended for tools like doodads, inspectors, and tiny utility surfaces where full document chrome is visually heavy.
 
 3. Dialog Window
 - App-scoped transient prompts.
@@ -88,11 +94,24 @@ Controls are left-aligned in title bar, vertically centered.
 4. Horizontal alignment: centered in remaining title bar region
 5. Truncation: ellipsis at end when overflow occurs
 
+Utility-window title text rule:
+
+1. Utility windows do not render title text in v1.
+2. Utility title strip is purely structural/interactive chrome.
+
 ### 4.4 Palette and Bevel Baseline
 
 1. Window chrome uses a platinum-style gray palette.
 2. Title bar and border rendering must use dual-edge bevels (light top/left, dark bottom/right).
 3. Active title text and controls must have stronger contrast than inactive state.
+
+### 4.5 Utility Window Compact Metrics (v1 Locked)
+
+1. Utility title bar height: 15 px
+2. Utility border thickness: 1 px inner + 1 px outer bevel (same bevel model)
+3. Utility control size: 9x9 px
+4. Utility left margin to first control: 4 px
+5. Utility title text: none
 
 ---
 
@@ -135,6 +154,12 @@ Optional future states:
 2. Resize initiates from resize affordance/hot edges according to role.
 3. Dialog windows may restrict resize based on hints/policy.
 
+### 6.4 Modal Scope Policy (v1 Locked)
+
+1. Default modal scope is app-wide.
+2. If owner-window relationship is explicit and policy requires narrower blocking, owner-window scope is allowed as an override.
+3. For Phase 1 target apps, app-wide default is authoritative unless a clear breakage requires owner-window fallback.
+
 ---
 
 ## 7. Lifecycle Contract
@@ -172,8 +197,8 @@ Optional future states:
 2. Zoom box
 - Toggles between normal geometry and policy-defined zoomed geometry.
 
-3. Collapse box (if enabled)
-- Collapses content region while retaining title bar presence.
+3. Collapse box
+- Disabled in v1 baseline (reserved for future expansion).
 
 Control behavior must be role-aware (for example, dialogs may hide or disable unsupported controls).
 
@@ -237,5 +262,81 @@ Any contract change must include:
 
 ## 13. Open Items
 
-1. Utility window compact title metrics.
-2. Modal scope default (owner-window vs app-wide).
+None for v1 baseline.
+
+---
+
+## 14. Visual Appendix (v1 Reference Layouts)
+
+This appendix provides implementation-facing ASCII sketches for chrome geometry and hit regions.
+
+Legend:
+
+1. `[X]` close box
+2. `[+]` zoom box
+3. `====` title strip area
+4. `....` content area
+5. `##` frame border/bevel edge
+
+### 14.1 Document Window (v1)
+
+Reference metrics:
+
+1. Title bar height: 19 px
+2. Border/bevel visual edge: 2 px
+3. Control size: 11x11 px
+4. Left margin to first control: 5 px
+5. Control gap: 4 px
+
+```
+##==============================================================##
+##  [X]  [+]                  Document Title...                 ##  <- 19 px title bar
+##==============================================================##
+##..............................................................##
+##..............................................................##
+##......................... client content .....................##
+##..............................................................##
+##..............................................................##
+##################################################################
+```
+
+Document-window hit regions:
+
+1. Drag region: title strip area excluding control hit boxes.
+2. Control region: `[X]` and `[+]` bounding rectangles.
+3. Resize region: frame edges/corners per WM policy.
+4. Content region: area below title bar inset, routed to client.
+
+### 14.2 Utility/Palette Window (v1)
+
+Reference metrics:
+
+1. Title bar height: 15 px
+2. Border/bevel visual edge: 2 px
+3. Control size: 9x9 px
+4. Left margin to first control: 4 px
+5. Title text: none
+
+```
+##==================================##
+## [X]  [+]                         ##  <- 15 px compact title strip (no title text)
+##==================================##
+##..................................##
+##........ utility content .........##
+##..................................##
+######################################
+```
+
+Utility-window hit regions:
+
+1. Drag region: compact title strip excluding controls.
+2. Control region: `[X]` and `[+]` compact control boxes.
+3. Resize region: optional by role policy; disabled for fixed palettes.
+4. Content region: utility client area.
+
+### 14.3 Notes for Test Review
+
+1. Utility windows must remain visually lighter than document windows.
+2. Utility windows must never render title text in v1.
+3. Active/inactive state transitions must preserve control placement and box sizes.
+4. Any geometry delta must update both Section 4 metrics and this appendix.
