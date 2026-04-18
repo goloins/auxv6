@@ -437,3 +437,185 @@ MLFQ is considered successfully landed when all are true:
 - Throughput regression remains within target.
 - Procfs and tooling compatibility preserved.
 - Fallback switch retained until at least one release cycle of validation completes.
+
+## 18. Patch-Ready Execution Checklist
+
+Use this section as the source of truth during implementation. Do not start the next commit until all checks in the current commit are complete.
+
+Legend:
+- [ ] not started
+- [x] done
+
+### 18.1 Pre-flight (before Commit 1)
+
+- [ ] Confirm tree is clean enough to isolate scheduler changes.
+- [ ] Capture baseline `/proc/schedstat`, `/proc/loadavg`, `/proc/ps` snapshots.
+- [ ] Run baseline quick tests: `schedperf`, `usertests` subset, `top` smoke.
+- [ ] Record baseline latency/throughput numbers for later comparison.
+- [ ] Create branch dedicated to scheduler work.
+
+Artifacts to save:
+- [ ] baseline command log
+- [ ] baseline metric summary
+
+### 18.2 Commit 1 checklist: mlfq fields + config gate (no behavior change)
+
+Scope:
+- [ ] Add MLFQ metadata fields to `struct proc` in `include/proc.h`.
+- [ ] Add optional per-CPU MLFQ counters to `struct cpu` in `include/proc.h`.
+- [ ] Initialize/reset new fields in alloc/fork/reap/userinit paths.
+- [ ] Add compile-time gate (`CONFIG_SCHED_MLFQ` or equivalent) default-disabled.
+
+Safety checks:
+- [ ] No scheduler behavior changes when gate is off.
+- [ ] No procfs schema changes in this commit.
+
+Validation:
+- [ ] Build kernel and userspace successfully.
+- [ ] Boot and run smoke tests with gate off.
+- [ ] Verify old `/proc/schedstat` keys unchanged.
+
+Evidence:
+- [ ] short commit note with touched files and invariants checked
+
+### 18.3 Commit 2 checklist: queue primitives + invariants (no behavior change)
+
+Scope:
+- [ ] Add queue data structures (heads/tails, linkage fields, flags).
+- [ ] Implement `schedq_enqueue_locked`, `schedq_dequeue_locked`, `schedq_pick_next_locked` helpers.
+- [ ] Add debug assertions for queue/process-state consistency.
+
+Safety checks:
+- [ ] Queue code compiled but not used for dispatch yet.
+- [ ] No direct replacement of existing runnable pick path yet.
+
+Validation:
+- [ ] Build passes with debug assertions enabled.
+- [ ] Boot passes idle and light workload smoke.
+- [ ] No assertion triggers under basic fork/sleep/wakeup use.
+
+Evidence:
+- [ ] invariant check log (or explicit statement no violations seen)
+
+### 18.4 Commit 3 checklist: route RUNNABLE transitions through helpers
+
+Scope:
+- [ ] Update `yield()` path to enqueue helper.
+- [ ] Update `wakeup1()` paths (`ticks`, `proc`, general channels) to enqueue helper.
+- [ ] Update fork child admission path to enqueue helper.
+- [ ] Update signal/alarm resume paths to enqueue helper.
+
+Safety checks:
+- [ ] No remaining direct `state = RUNNABLE` writes without scheduler helper.
+- [ ] Preserve existing lock ownership (`ptable.lock`) at all transition sites.
+
+Validation:
+- [ ] grep audit completed for raw RUNNABLE transitions.
+- [ ] `schedperf` pass.
+- [ ] signal stop/continue sanity tests pass.
+- [ ] wait/wakeup correctness unchanged.
+
+Evidence:
+- [ ] include grep results in commit message or note
+
+### 18.5 Commit 4 checklist: switch dispatcher to MLFQ pick
+
+Scope:
+- [ ] Replace table scan in `scheduler()` with queue pick helper.
+- [ ] Keep idle `hlt` path intact when queues empty.
+- [ ] Preserve `switchuvm` -> `swtch` -> `switchkvm` ordering.
+
+Safety checks:
+- [ ] `sched()` invariants unchanged.
+- [ ] No queue mutation outside `ptable.lock`.
+
+Validation:
+- [ ] Boot idle and active workloads stable.
+- [ ] No deadlock, panic, or lost-runnable behavior in stress loops.
+- [ ] Legacy scheduler counters still sensible.
+
+Evidence:
+- [ ] short stress summary attached
+
+### 18.6 Commit 5 checklist: quantum accounting + demotion
+
+Scope:
+- [ ] Implement per-queue quantum table.
+- [ ] Charge running process budget on timer ticks.
+- [ ] Demote on budget exhaustion (clamped at lowest queue).
+- [ ] Preserve preemption trigger compatibility with current trap/yield flow.
+
+Safety checks:
+- [ ] Budget updates race-safe under current locking model.
+- [ ] No underflow/overflow in budget accounting.
+
+Validation:
+- [ ] CPU-bound hog tests converge to lower queues.
+- [ ] Interactive tasks still make forward progress.
+- [ ] No regressions in syscall/trap return paths.
+
+Evidence:
+- [ ] queue-dispatch sample output captured
+
+### 18.7 Commit 6 checklist: wake heuristics + global boost
+
+Scope:
+- [ ] Add promotion-on-meaningful-block heuristic.
+- [ ] Add anti-gaming threshold for micro-sleeps.
+- [ ] Implement global periodic boost (target `Q1` default).
+
+Safety checks:
+- [ ] Starvation cannot occur with boost enabled.
+- [ ] Promotion/demotion counters monotonic and bounded.
+
+Validation:
+- [ ] mixed interactive + batch workload latency check.
+- [ ] long-running batch throughput check.
+- [ ] no oscillation pathologies observed in queue levels.
+
+Evidence:
+- [ ] before/after p95 wake-to-run latency note
+
+### 18.8 Commit 7 checklist: procfs telemetry extension
+
+Scope:
+- [ ] Add MLFQ counters in `proc_stats` aggregation.
+- [ ] Extend `/proc/schedstat` output with new `mlfq_*` keys.
+- [ ] Keep existing keys unchanged and present.
+
+Safety checks:
+- [ ] Existing tools parsing old keys continue to work.
+- [ ] Output formatting remains stable and newline-terminated.
+
+Validation:
+- [ ] `top`, `schedperf`, ad hoc parsers still operate.
+- [ ] New counters change as expected under controlled scenarios.
+
+Evidence:
+- [ ] sample `/proc/schedstat` output before/after
+
+### 18.9 Commit 8 checklist: docs/tests follow-through
+
+Scope:
+- [ ] Update scheduler docs to match final semantics.
+- [ ] Extend `schedperf` with queue-behavior checks.
+- [ ] Add troubleshooting notes for common regressions.
+
+Validation:
+- [ ] test additions pass in normal build profile.
+- [ ] no new flaky behavior in repeated test runs.
+
+Evidence:
+- [ ] final validation summary committed
+
+### 18.10 Release-gate checklist (must be complete before merge)
+
+- [ ] All 8 commits build and boot independently.
+- [ ] No lockdep or scheduler invariant failures in stress runs.
+- [ ] Functional regressions: none open.
+- [ ] Performance targets met or exceptions documented and accepted.
+- [ ] Rollback path tested (gate off -> legacy behavior).
+- [ ] Final sign-off note includes:
+- [ ] changed files list
+- [ ] key invariants verified
+- [ ] known limitations and follow-up items
