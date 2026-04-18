@@ -85,6 +85,8 @@
 #define MLFQ_QUANTUM_Q3       8    // timer ticks per quantum at level 3
 #define MLFQ_QUANTUM_Q4      16    // timer ticks per quantum at level 4
 #define MLFQ_BOOST_INTERVAL 200    // ticks between global anti-starvation boosts
+#define MLFQ_BOOST_INTERVAL_MIN 10 // minimum runtime boost interval in ticks
+#define MLFQ_BOOST_INTERVAL_MAX 5000 // maximum runtime boost interval in ticks
 #define MLFQ_PROMOTE_MIN_SLEEP 2   // min sleep ticks to earn a promotion on wake
 #define MLFQ_FORK_START_Q     1    // initial queue level for new/forked processes
 
