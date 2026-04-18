@@ -7,6 +7,10 @@
 //   - proc_handle_signals_on_return lockless fast path
 //   - mycpu() O(1) APIC reverse map (implicitly, via lock hot paths)
 //   - ptable / spinlock pause improvement (via concurrent fork/yield)
+// MLFQ scheduler (2026-04-18):
+//   - CPU-bound processes demote through Q0→Q4
+//   - I/O-bound processes promote on wakeup
+//   - Global anti-starvation boost fires every 200 ticks
 //
 // Usage: schedperf
 // Prints [PASS]/[FAIL] for each sub-test and a final summary.
@@ -26,7 +30,7 @@ static int failed = 0;
 static int perf_score = 0;
 static int perf_score_max = 0;
 
-#define SCHEDPERF_PROFILE "2026-04-03-r2"
+#define SCHEDPERF_PROFILE "2026-04-18-mlfq-r1"
 
 static int
 ops_per_sec(int ops, uint start_ticks, uint end_ticks)
@@ -438,6 +442,221 @@ test_proc_table_limit(void)
 }
 
 // ---------------------------------------------------------------------------
+// MLFQ helpers -- minimal /proc/schedstat reader used by MLFQ tests below.
+// ---------------------------------------------------------------------------
+
+static int
+sp_read_text(const char *path, char *buf, int max)
+{
+  int fd, n, off;
+  fd = open(path, O_RDONLY);
+  if(fd < 0) return -1;
+  off = 0;
+  while(off < max - 1){
+    n = read(fd, buf + off, max - 1 - off);
+    if(n <= 0) break;
+    off += n;
+  }
+  buf[off] = 0;
+  close(fd);
+  return off;
+}
+
+// Find a "key value\n" pair in buf, return the integer value, or -1.
+static int
+sp_find_kv(const char *buf, const char *key)
+{
+  int i, j;
+  for(i = 0; buf[i]; i++){
+    for(j = 0; key[j] && buf[i+j] == key[j]; j++) ;
+    if(key[j] != 0) continue;
+    i += j;
+    while(buf[i] == ' ' || buf[i] == '\t') i++;
+    if(buf[i] < '0' || buf[i] > '9') return -1;
+    return atoi(&buf[i]);
+  }
+  return -1;
+}
+
+static int
+sp_read_schedstat(char *buf, int sz)
+{
+  return sp_read_text("/proc/schedstat", buf, sz);
+}
+
+// ---------------------------------------------------------------------------
+// T-M1: mlfq-demotion -- verify that a CPU-spinner drives mlfq_demotions
+//        upward and accumulates dispatches in lower queues.
+// ---------------------------------------------------------------------------
+static void
+test_mlfq_demotion(void)
+{
+  char buf[1024];
+  int dem_before, dem_after;
+  int dq2_before, dq2_after;
+  int pid;
+  int status;
+
+  if(sp_read_schedstat(buf, sizeof(buf)) < 0){
+    FAIL("mlfq-demotion", "cannot read /proc/schedstat");
+    return;
+  }
+  dem_before = sp_find_kv(buf, "mlfq_demotions ");
+  dq2_before = sp_find_kv(buf, "mlfq_dispatch_q2 ");
+  if(dem_before < 0 || dq2_before < 0){
+    FAIL("mlfq-demotion", "mlfq keys missing from /proc/schedstat");
+    return;
+  }
+
+  // Spin child for ~4 seconds (400 ticks at 100Hz) — long enough to exhaust
+  // its Q1 quantum (2 ticks) many times and reach Q4.
+  pid = fork();
+  if(pid == 0){
+    uint t0 = uptime();
+    while(uptime() - t0 < 400)
+      ;  // busy spin — no sleeps, no yields
+    exit(0);
+  }
+  if(pid < 0){
+    FAIL("mlfq-demotion", "fork failed");
+    return;
+  }
+  wait(&status);
+
+  if(sp_read_schedstat(buf, sizeof(buf)) < 0){
+    FAIL("mlfq-demotion", "cannot read /proc/schedstat after spin");
+    return;
+  }
+  dem_after  = sp_find_kv(buf, "mlfq_demotions ");
+  dq2_after  = sp_find_kv(buf, "mlfq_dispatch_q2 ");
+
+  dprintf(1, "[DIAG] mlfq-demotion: demotions %d->%d  dispatch_q2 %d->%d\n",
+          dem_before, dem_after, dq2_before, dq2_after);
+
+  if(dem_after > dem_before && dq2_after > dq2_before)
+    PASS("mlfq-demotion");
+  else
+    FAIL("mlfq-demotion", "demotions or lower-queue dispatch did not increase");
+
+  perf_record("mlfq-demotion", "demotions",
+              dem_after - dem_before, 3, 15);
+}
+
+// ---------------------------------------------------------------------------
+// T-M2: mlfq-promotion -- I/O-bound sleeper earns queue promotions.
+// ---------------------------------------------------------------------------
+static void
+test_mlfq_promotion(void)
+{
+  char buf[1024];
+  int prom_before, prom_after;
+  int pfd[2];
+  int i, pid, status;
+
+  if(sp_read_schedstat(buf, sizeof(buf)) < 0){
+    FAIL("mlfq-promotion", "cannot read /proc/schedstat");
+    return;
+  }
+  prom_before = sp_find_kv(buf, "mlfq_promotions ");
+  if(prom_before < 0){
+    FAIL("mlfq-promotion", "mlfq_promotions key missing");
+    return;
+  }
+
+  if(pipe(pfd) < 0){
+    FAIL("mlfq-promotion", "pipe failed");
+    return;
+  }
+
+  // Reader: sleeps waiting for data — each wakeup after >= 2 ticks earns +1
+  // promotion.  We do 20 slow wakeup cycles.
+#define PROMO_CYCLES 20
+  pid = fork();
+  if(pid == 0){
+    char c;
+    close(pfd[1]);
+    for(i = 0; i < PROMO_CYCLES; i++)
+      read(pfd[0], &c, 1);
+    exit(0);
+  }
+  if(pid < 0){
+    close(pfd[0]);
+    close(pfd[1]);
+    FAIL("mlfq-promotion", "fork failed");
+    return;
+  }
+
+  // Writer: sends a byte every ~3 ticks so reader sleeps long enough each time.
+  close(pfd[0]);
+  for(i = 0; i < PROMO_CYCLES; i++){
+    uint t0 = uptime();
+    while(uptime() - t0 < 3) ;  // wait 3 ticks
+    write(pfd[1], "x", 1);
+  }
+  close(pfd[1]);
+  wait(&status);
+
+  if(sp_read_schedstat(buf, sizeof(buf)) < 0){
+    FAIL("mlfq-promotion", "cannot read /proc/schedstat after test");
+    return;
+  }
+  prom_after = sp_find_kv(buf, "mlfq_promotions ");
+
+  dprintf(1, "[DIAG] mlfq-promotion: promotions %d->%d\n",
+          prom_before, prom_after);
+
+  if(prom_after > prom_before)
+    PASS("mlfq-promotion");
+  else
+    FAIL("mlfq-promotion", "mlfq_promotions did not increase");
+
+  perf_record("mlfq-promotion", "promotions",
+              prom_after - prom_before, PROMO_CYCLES / 2, 15);
+}
+
+// ---------------------------------------------------------------------------
+// T-M3: mlfq-boost -- run long enough to trigger at least one global boost.
+//        MLFQ_BOOST_INTERVAL = 200 ticks → wait 250 ticks to be safe.
+// ---------------------------------------------------------------------------
+static void
+test_mlfq_boost(void)
+{
+  char buf[1024];
+  int boost_before, boost_after;
+  uint t0;
+
+  if(sp_read_schedstat(buf, sizeof(buf)) < 0){
+    FAIL("mlfq-boost", "cannot read /proc/schedstat");
+    return;
+  }
+  boost_before = sp_find_kv(buf, "mlfq_boosts ");
+  if(boost_before < 0){
+    FAIL("mlfq-boost", "mlfq_boosts key missing");
+    return;
+  }
+
+  // Wait 250 ticks (2.5 s) — long enough for at least one 200-tick boost cycle.
+  t0 = uptime();
+  while(uptime() - t0 < 250)
+    sleep(10);  // polite sleep instead of spin so other tests can run
+
+  if(sp_read_schedstat(buf, sizeof(buf)) < 0){
+    FAIL("mlfq-boost", "cannot read /proc/schedstat after wait");
+    return;
+  }
+  boost_after = sp_find_kv(buf, "mlfq_boosts ");
+
+  dprintf(1, "[DIAG] mlfq-boost: boosts %d->%d\n", boost_before, boost_after);
+
+  if(boost_after > boost_before)
+    PASS("mlfq-boost");
+  else
+    FAIL("mlfq-boost", "mlfq_boosts did not increase after 250 ticks");
+
+  perf_record("mlfq-boost", "boosts", boost_after - boost_before, 1, 10);
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 #define MAX_RUNS 32
@@ -481,6 +700,9 @@ main(int argc, char *argv[])
     test_idle_responsiveness();
     test_sched_spread();
     test_proc_table_limit();
+    test_mlfq_demotion();
+    test_mlfq_promotion();
+    test_mlfq_boost();
 
     run_scores[r] = perf_score_max ? (perf_score * 100) / perf_score_max : 0;
     total_passed += passed;
