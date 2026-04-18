@@ -104,6 +104,8 @@ schedq_enqueue_locked(struct proc *p, int reason)
   uint now;
   uint slept;
   int  q;
+  int  orig_q;
+  int  budget_was_expired;
 
   if(p == 0)
     return;
@@ -114,9 +116,12 @@ schedq_enqueue_locked(struct proc *p, int reason)
 
   now = ticks;   // approx — stale by at most 1 tick, fine for heuristics
 
+  orig_q           = p->sched_q;
+  budget_was_expired = (p->sched_flags & SCHED_F_BUDGET_EXPIRED) ? 1 : 0;
+
   // --- Demotion ---
   // Timer preemption exhausted this quantum: move down one level.
-  if((p->sched_flags & SCHED_F_BUDGET_EXPIRED) && reason == SCHED_ENQ_YIELD) {
+  if(budget_was_expired && reason == SCHED_ENQ_YIELD) {
     if(p->sched_q < MLFQ_NQUEUES - 1)
       p->sched_q++;
     mlfq_stat_demotions++;
@@ -141,9 +146,17 @@ schedq_enqueue_locked(struct proc *p, int reason)
   if(q >= MLFQ_NQUEUES) q = MLFQ_NQUEUES - 1;
   p->sched_q = (uchar)q;
 
-  // Fresh quantum at this level on every enqueue.
-  p->sched_budget_left = mlfq_quanta[q];
-  p->sched_enq_tick    = now;
+  // Reset the quantum budget when:
+  //   - the queue level changed (promotion or demotion)
+  //   - the budget was fully exhausted this run (expired yield at same level)
+  //   - this is a fresh start (fork, wake, signal, alarm, boost)
+  // Preserve the remaining budget on a plain timer-preemption yield at the
+  // same level so that the process accumulates charges across consecutive
+  // 1-tick dispatches rather than getting a fresh quantum on every tick.
+  if(q != orig_q || budget_was_expired || reason != SCHED_ENQ_YIELD)
+    p->sched_budget_left = mlfq_quanta[q];
+
+  p->sched_enq_tick = now;
 
   mlfq_list_append(&mlfq_qs[q], p);
 }
