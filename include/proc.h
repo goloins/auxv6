@@ -23,6 +23,8 @@ struct cpu {
   uint sched_passes;           // Number of scheduler outer-loop passes
   uint sched_idle_halts;       // Number of idle hlt transitions
   uint sched_picks;            // Number of RUNNABLE selections dispatched
+  uint sched_q_dispatch[5];    // MLFQ: dispatches per queue level
+  uint sched_q_empty_passes;   // MLFQ: scheduler passes with all queues empty
   struct run *kfree_cache[KALLOC_CPU_CACHE]; // Per-CPU free-page stash
   int kfree_cache_count;       // Number of pages in kfree_cache
 #if KDEBUG_LOCKDEP
@@ -102,6 +104,18 @@ struct procfdlimitinfo_k {
 
 #define PROC_NGROUPS_MAX 16
 
+// MLFQ scheduler flag bits (struct proc sched_flags)
+#define SCHED_F_BUDGET_EXPIRED  0x01  // quantum exhausted; demote on next enqueue
+#define SCHED_F_BOOST_APPLIED   0x02  // promoted in current boost epoch
+
+// Enqueue reason codes passed to schedq_enqueue_locked()
+#define SCHED_ENQ_FORK    1  // newly forked/userinit process
+#define SCHED_ENQ_WAKE    2  // wakeup from sleep (I/O or event)
+#define SCHED_ENQ_YIELD   3  // timer preemption or voluntary yield
+#define SCHED_ENQ_SIGNAL  4  // resumed by SIGCONT or signal delivery
+#define SCHED_ENQ_ALARM   5  // woken by alarm expiry
+#define SCHED_ENQ_BOOST   6  // global anti-starvation boost
+
 // Per-process state
 struct proc {
   uint sz;                     // Size of process memory (bytes)
@@ -144,6 +158,19 @@ struct proc {
   uint alarm_ticks;            // Tick count when SIGALRM should fire (0=none)
   uint alarm_interval_ticks;   // Reload interval for ITIMER_REAL (0=one-shot)
   uint cticks;                 // Cumulative CPU ticks charged to this process
+  // MLFQ scheduler metadata.  All fields protected by ptable.lock, except
+  // sched_budget_left and sched_flags which are written lock-free by the
+  // owning CPU while the process is RUNNING (safe: single owner at a time).
+  uchar  sched_q;              // current queue level [0..MLFQ_NQUEUES-1]
+  uchar  sched_flags;          // SCHED_F_* flag bits
+  ushort sched_budget_left;    // ticks remaining in current quantum
+  uint   sched_enq_tick;       // ticks when last enqueued RUNNABLE
+  uint   sched_last_start_tick;// ticks when last dispatched onto a CPU
+  uint   sched_last_block_tick;// ticks when last entered SLEEPING state
+  uint   sched_last_wake_tick; // ticks when last woken to RUNNABLE
+  uint   sched_cpu_burst_ticks;// CPU ticks charged this dispatch slot
+  struct proc *sched_next;     // intrusive doubly-linked queue forward link
+  struct proc *sched_prev;     // intrusive doubly-linked queue backward link
   uint stack_top;              // VA of top of user stack region (const after exec)
   uint stack_bot;              // VA of bottom of current accessible user stack
   struct fdtable *fdtable;     // Dynamic file descriptor table (Phase 1A)

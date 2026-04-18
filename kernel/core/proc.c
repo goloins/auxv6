@@ -59,6 +59,9 @@ chan_wait_hash_idx(void *chan)
 
 extern struct proc *initproc;
 
+// ticks is declared in trap.c; needed to record block timestamps.
+extern uint ticks;
+
 int valid_signo(int signo);
 int signal_pick_stop(uint pending);
 int signal_pick_fatal(uint pending);
@@ -165,8 +168,10 @@ proc_check_alarms(uint current_ticks)
         proc_set_alarm_state(p, 0, 0);
       p->sig_pending |= SIGBIT(SIGALRM);
       // Wake process if sleeping so it can receive the signal
-      if(p->state == SLEEPING)
+      if(p->state == SLEEPING) {
         p->state = RUNNABLE;
+        schedq_enqueue_locked(p, SCHED_ENQ_ALARM);
+      }
     }
   }
   release(&ptable.lock);
@@ -235,6 +240,7 @@ proc_apply_pending_signals(struct proc *p)
     p->sig_pending &= ~cont;
     if(p->state == STOPPED) {
       p->state = RUNNABLE;
+      schedq_enqueue_locked(p, SCHED_ENQ_SIGNAL);
       p->wait_event = WAIT_EVENT_CONTINUED;
       p->wait_status = WSTATUS_CONT;
     }
@@ -257,8 +263,10 @@ proc_apply_pending_signals(struct proc *p)
     p->killed = 1;
     if(valid_signo(termsig))
       p->xstatus = WSTATUS_SIG(termsig);
-    if(p->state == STOPPED)
+    if(p->state == STOPPED) {
       p->state = RUNNABLE;
+      schedq_enqueue_locked(p, SCHED_ENQ_SIGNAL);
+    }
     p->sig_pending &= ~fatal;
   }
   release(&ptable.lock);
@@ -844,6 +852,7 @@ sleep(void *chan, struct spinlock *lk)
     tick_sleepq_add_locked(p);
   p->chan = chan;
   p->state = SLEEPING;
+  p->sched_last_block_tick = ticks;  // MLFQ: record when we block for promotion heuristic
 
   sched();
 
@@ -885,8 +894,9 @@ wakeup1(void *chan)
     while(p){
       next = p->tick_next;
       scanned++;
-      if(p->state == SLEEPING && p->chan == chan){
+      if(p->state == SLEEPING && p->chan == chan) {
         p->state = RUNNABLE;
+        schedq_enqueue_locked(p, SCHED_ENQ_WAKE);
         wakeup_hits++;
       }
       // Whether matched or stale, remove from tick queue.
@@ -913,8 +923,9 @@ wakeup1(void *chan)
     wakeup_proc_calls++;
     p = (struct proc*)chan;
     wakeup_scans++;
-    if(p->state == SLEEPING && p->chan == chan){
+    if(p->state == SLEEPING && p->chan == chan) {
       p->state = RUNNABLE;
+      schedq_enqueue_locked(p, SCHED_ENQ_WAKE);
       wakeup_hits++;
     }
     return;
@@ -924,8 +935,9 @@ wakeup1(void *chan)
     wakeup_other_calls++;
   wakeup_scans += NPROC;
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
-    if(p->state == SLEEPING && p->chan == chan){
+    if(p->state == SLEEPING && p->chan == chan) {
       p->state = RUNNABLE;
+      schedq_enqueue_locked(p, SCHED_ENQ_WAKE);
       wakeup_hits++;
     }
 }

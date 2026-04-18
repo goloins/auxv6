@@ -140,6 +140,24 @@ proc_get_wakeup_class_stats(uint *ticks_calls, uint *proc_calls, uint *other_cal
   *other_calls = wakeup_other_calls;
 }
 
+// Return MLFQ counters and per-queue lengths plus per-queue dispatch totals
+// aggregated across all CPUs.  Values are sampled locklessly; minor imprecision
+// is acceptable for observability purposes.
+void
+proc_get_mlfq_stats(uint *promotions, uint *demotions, uint *boosts,
+                    uint *budget_expired, uint *q_lens, uint *q_dispatch)
+{
+  int i, c;
+
+  mlfq_get_stats(promotions, demotions, boosts, budget_expired, q_lens);
+
+  for(i = 0; i < MLFQ_NQUEUES; i++) {
+    q_dispatch[i] = 0;
+    for(c = 0; c < ncpu; c++)
+      q_dispatch[i] += cpus[c].sched_q_dispatch[i];
+  }
+}
+
 int
 proc_has_tick_sleepers(void)
 {

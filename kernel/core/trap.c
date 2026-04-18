@@ -70,6 +70,8 @@ trap(struct trapframe *tf)
       ktime_tick(current_ticks);
       // Check all processes for expired alarms
       proc_check_alarms(current_ticks);
+      // MLFQ: anti-starvation global boost check (every MLFQ_BOOST_INTERVAL ticks)
+      mlfq_apply_global_boost(current_ticks);
       // Update load averages every 500 ticks (5 seconds at 100Hz)
       if((current_ticks % 500) == 0)
         proc_tick_loadavg();
@@ -80,8 +82,10 @@ trap(struct trapframe *tf)
         tcp_slowtimo();
     }
     // Charge one CPU tick to the process running on this CPU (all CPUs).
-    if(myproc())
+    if(myproc()) {
       myproc()->cticks++;
+      mlfq_timer_charge(myproc());  // MLFQ: decrement quantum budget
+    }
     lapiceoi();
     break;
   case T_IRQ0 + IRQ_IDE:

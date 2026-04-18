@@ -78,8 +78,10 @@ proc_note_signal_locked(struct proc *p, int signo)
   if(signo == SIGCONT) {
     // Continue clears pending stop intents and resumes stopped tasks.
     p->sig_pending &= ~(SIGBIT(SIGSTOP) | SIGBIT(SIGTSTP));
-    if(p->state == STOPPED)
+    if(p->state == STOPPED) {
       p->state = RUNNABLE;
+      schedq_enqueue_locked(p, SCHED_ENQ_SIGNAL);
+    }
   }
 
   // Preserve existing semantics: SIGKILL marks process as killed.
@@ -87,6 +89,8 @@ proc_note_signal_locked(struct proc *p, int signo)
     p->killed = 1;
 
   // Signals should wake a sleeping process so delivery can progress.
-  if(p->state == SLEEPING)
+  if(p->state == SLEEPING) {
     p->state = RUNNABLE;
+    schedq_enqueue_locked(p, SCHED_ENQ_SIGNAL);
+  }
 }

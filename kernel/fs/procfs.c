@@ -77,7 +77,7 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_NET_TCP_INO, "net_tcp", 4096 },
   { PROCFS_NET_UDP_INO, "net_udp", 4096 },
   { PROCFS_NET_DEV_INO, "net_dev", 1024 },
-  { PROCFS_SCHEDSTAT_INO, "schedstat", 256 },
+  { PROCFS_SCHEDSTAT_INO, "schedstat", 512 },
   { PROCFS_VMSTAT_INO, "vmstat", 4096 },
   { PROCFS_FDLIMITS_INO, "fdlimits", 2048 },
   { PROCFS_AUDIO_INO, "audio", 512 },
@@ -1751,12 +1751,20 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     uint wake_ticks_calls;
     uint wake_proc_calls;
     uint wake_other_calls;
+    uint mlfq_promotions;
+    uint mlfq_demotions;
+    uint mlfq_boosts;
+    uint mlfq_budget_expired;
+    uint mlfq_q_lens[5];
+    uint mlfq_q_dispatch[5];
 
     proc_get_sched_stats(&passes, &idle_halts, &picks);
     proc_get_sched_latency_stats(&wake_calls, &wake_scanned, &wake_matched,
                                  &wait_loops, &wait_scanned);
     proc_get_wakeup_class_stats(&wake_ticks_calls, &wake_proc_calls,
                   &wake_other_calls);
+    proc_get_mlfq_stats(&mlfq_promotions, &mlfq_demotions, &mlfq_boosts,
+                        &mlfq_budget_expired, mlfq_q_lens, mlfq_q_dispatch);
 
     len = 0;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "passes ", passes) < 0)
@@ -1780,6 +1788,34 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "wake_proc_calls ", wake_proc_calls) < 0)
       return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "wake_other_calls ", wake_other_calls) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "mlfq_q0_len ", mlfq_q_lens[0]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "mlfq_q1_len ", mlfq_q_lens[1]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "mlfq_q2_len ", mlfq_q_lens[2]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "mlfq_q3_len ", mlfq_q_lens[3]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "mlfq_q4_len ", mlfq_q_lens[4]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "mlfq_dispatch_q0 ", mlfq_q_dispatch[0]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "mlfq_dispatch_q1 ", mlfq_q_dispatch[1]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "mlfq_dispatch_q2 ", mlfq_q_dispatch[2]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "mlfq_dispatch_q3 ", mlfq_q_dispatch[3]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "mlfq_dispatch_q4 ", mlfq_q_dispatch[4]) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "mlfq_promotions ", mlfq_promotions) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "mlfq_demotions ", mlfq_demotions) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "mlfq_boosts ", mlfq_boosts) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "mlfq_budget_expired ", mlfq_budget_expired) < 0)
       return -1;
     return procfs_copy_data(dst, off, n, buf, len);
   }

@@ -76,3 +76,15 @@
 
 #define NSOCKET 64              /* max open sockets system-wide */
 
+// MLFQ scheduler policy (kernel/core/proc_sched.c)
+// Q0 = highest priority (most interactive), Q4 = lowest (most CPU-bound).
+#define MLFQ_NQUEUES          5    // number of priority levels
+#define MLFQ_QUANTUM_Q0       1    // timer ticks per quantum at level 0
+#define MLFQ_QUANTUM_Q1       2    // timer ticks per quantum at level 1
+#define MLFQ_QUANTUM_Q2       4    // timer ticks per quantum at level 2
+#define MLFQ_QUANTUM_Q3       8    // timer ticks per quantum at level 3
+#define MLFQ_QUANTUM_Q4      16    // timer ticks per quantum at level 4
+#define MLFQ_BOOST_INTERVAL 200    // ticks between global anti-starvation boosts
+#define MLFQ_PROMOTE_MIN_SLEEP 2   // min sleep ticks to earn a promotion on wake
+#define MLFQ_FORK_START_Q     1    // initial queue level for new/forked processes
+

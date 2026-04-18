@@ -165,6 +165,17 @@ found:
   }
   p->alarm_ticks = 0;
   p->alarm_interval_ticks = 0;
+  // MLFQ scheduler fields — zeroed at EMBRYO allocation.
+  p->sched_q = MLFQ_FORK_START_Q;
+  p->sched_flags = 0;
+  p->sched_budget_left = MLFQ_QUANTUM_Q1;
+  p->sched_enq_tick = 0;
+  p->sched_last_start_tick = 0;
+  p->sched_last_block_tick = 0;
+  p->sched_last_wake_tick = 0;
+  p->sched_cpu_burst_ticks = 0;
+  p->sched_next = 0;
+  p->sched_prev = 0;
 
   release(&ptable.lock);
 
@@ -248,7 +259,9 @@ userinit(void)
   p->sig_caught = 0;
 
   acquire(&ptable.lock);
+  p->sched_q = MLFQ_FORK_START_Q;
   p->state = RUNNABLE;
+  schedq_enqueue_locked(p, SCHED_ENQ_FORK);
   release(&ptable.lock);
 }
 
@@ -328,7 +341,9 @@ fork(void)
   pid = np->pid;
 
   acquire(&ptable.lock);
+  np->sched_q = MLFQ_FORK_START_Q;
   np->state = RUNNABLE;
+  schedq_enqueue_locked(np, SCHED_ENQ_FORK);
   release(&ptable.lock);
 
   return pid;
@@ -474,6 +489,17 @@ proc_waitpid(int pid, int *status, int options)
         memset(p->sig_handler, 0, sizeof(p->sig_handler));
         memset(p->sig_actmask, 0, sizeof(p->sig_actmask));
         memset(p->sig_actflags, 0, sizeof(p->sig_actflags));
+        // Zero MLFQ fields so reused slot starts clean.
+        p->sched_q = 0;
+        p->sched_flags = 0;
+        p->sched_budget_left = 0;
+        p->sched_enq_tick = 0;
+        p->sched_last_start_tick = 0;
+        p->sched_last_block_tick = 0;
+        p->sched_last_wake_tick = 0;
+        p->sched_cpu_burst_ticks = 0;
+        p->sched_next = 0;
+        p->sched_prev = 0;
         p->state = UNUSED;
         if(status)
           *status = st;
