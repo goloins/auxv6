@@ -36,6 +36,7 @@ struct mlfq_queue {
 
 static struct mlfq_queue mlfq_qs[MLFQ_NQUEUES];
 static uint   mlfq_last_boost_tick;
+static volatile uint mlfq_boost_interval_ticks = MLFQ_BOOST_INTERVAL;
 
 // MLFQ movement counters — written under ptable.lock (or single-CPU ISR);
 // declared volatile so lockless procfs reads see up-to-date values.
@@ -218,10 +219,12 @@ mlfq_timer_charge(struct proc *p)
 void
 mlfq_apply_global_boost(uint now_ticks)
 {
+  uint interval;
   int i, q;
   struct proc *p;
 
-  if(now_ticks - mlfq_last_boost_tick < MLFQ_BOOST_INTERVAL)
+  interval = mlfq_boost_interval_ticks;
+  if(now_ticks - mlfq_last_boost_tick < interval)
     return;
   mlfq_last_boost_tick = now_ticks;
 
@@ -250,6 +253,26 @@ mlfq_apply_global_boost(uint now_ticks)
   }
   mlfq_stat_boosts++;
   release(&ptable.lock);
+}
+
+uint
+mlfq_get_boost_interval(void)
+{
+  return mlfq_boost_interval_ticks;
+}
+
+int
+mlfq_set_boost_interval(uint interval_ticks)
+{
+  if(interval_ticks < MLFQ_BOOST_INTERVAL_MIN ||
+     interval_ticks > MLFQ_BOOST_INTERVAL_MAX)
+    return -1;
+
+  acquire(&ptable.lock);
+  mlfq_boost_interval_ticks = interval_ticks;
+  mlfq_last_boost_tick = ticks;
+  release(&ptable.lock);
+  return 0;
 }
 
 // Return current MLFQ movement counters and per-queue lengths for procfs.

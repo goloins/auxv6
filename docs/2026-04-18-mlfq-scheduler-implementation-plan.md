@@ -1,7 +1,7 @@
 # auxv6 MLFQ Scheduler Implementation Plan (High-Precision Rollout)
 
 Date: 2026-04-18
-Status: Design/implementation plan only (no code changes in this document)
+Status: Implemented design reference with runtime tuning notes
 Audience: kernel maintainers, scheduler contributors, validation owners
 
 ## 1. Executive Intent
@@ -120,6 +120,9 @@ Rationale:
 - If process blocks before budget exhaustion and has meaningful sleep interval, promote by one queue (clamped at `Q0`).
 - `yield()` does not automatically promote.
 - Global anti-starvation boost every 200 ticks: move runnable/sleeping tasks to `Q1` and reset budget.
+
+Runtime note:
+- The boost interval defaults to 200 ticks but can now be changed at runtime through `/proc/mlfq_tune`.
 
 ### 4.4 Anti-gaming rule
 
@@ -358,6 +361,44 @@ Validation:
 
 - tick sleep path (`sys_sleep`) regressions.
 - pipe read/write wakeup behavior.
+
+## 12. Runtime Tuning Interface
+
+The MLFQ implementation exposes one runtime-tunable procfs knob:
+
+- `/proc/mlfq_tune` — read/write control file for the global anti-starvation boost interval.
+
+Current write contract:
+
+- Write a single unsigned integer containing the desired boost interval in ticks.
+- Valid range is `10..5000` ticks.
+- The scheduler tick rate is 100 Hz, so `1 tick = 10 ms`.
+- Successful writes reset the current boost epoch to "now", so the new interval starts counting immediately from the time of the write.
+
+Examples:
+
+```sh
+cat /proc/mlfq_tune
+echo 50 > /proc/mlfq_tune
+cat /proc/mlfq_tune
+cat /proc/schedstat | grep mlfq_boost_interval_ticks
+```
+
+Interpretation:
+
+- `50` ticks is about `500 ms`.
+- `100` ticks is about `1.0 s`.
+- `200` ticks is about `2.0 s` and is the default profile.
+
+Operational guidance:
+
+- Lower values reduce the worst-case starvation window but weaken queue separation because CPU-bound tasks are refreshed back to `Q1` more often.
+- Higher values strengthen the distinction between interactive and CPU-bound work but let low-priority tasks sit longer before the next global refresh.
+- Keep `/proc/schedstat` open during tuning and watch `mlfq_boosts`, `mlfq_boost_interval_ticks`, and the queue length/dispatch counters together.
+
+Observability:
+
+- `/proc/schedstat` now reports `mlfq_boost_interval_ticks` so benchmark runs can be interpreted against the active runtime setting.
 - wait/waitpid parent-child channel wakeups.
 
 ### 11.3 Signals/job-control correctness

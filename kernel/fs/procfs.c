@@ -50,6 +50,7 @@
 #define PROCFS_WIFI_INO       32   /* /proc/wifi — discovered 802.11 controllers */
 #define PROCFS_WPAN_INO       33   /* /proc/wpan — discovered 802.15.4 coordinators */
 #define PROCFS_R815X_INO      34   /* /proc/r815x — discovered RTL8152/RTL8153 USB NICs */
+#define PROCFS_MLFQ_TUNE_INO  35   /* /proc/mlfq_tune — runtime MLFQ tuning knobs */
 #define PROCFS_VERSION_STR  "a/ux86 aux86 i686\n"
 
 struct procfs_inode {
@@ -77,7 +78,7 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_NET_TCP_INO, "net_tcp", 4096 },
   { PROCFS_NET_UDP_INO, "net_udp", 4096 },
   { PROCFS_NET_DEV_INO, "net_dev", 1024 },
-  { PROCFS_SCHEDSTAT_INO, "schedstat", 512 },
+  { PROCFS_SCHEDSTAT_INO, "schedstat", 640 },
   { PROCFS_VMSTAT_INO, "vmstat", 4096 },
   { PROCFS_FDLIMITS_INO, "fdlimits", 2048 },
   { PROCFS_AUDIO_INO, "audio", 512 },
@@ -92,6 +93,7 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_WIFI_INO, "wifi", 2048 },
   { PROCFS_WPAN_INO, "wpan", 1024 },
   { PROCFS_R815X_INO, "r815x", 2048 },
+  { PROCFS_MLFQ_TUNE_INO, "mlfq_tune", 192 },
   { 0, 0, 0 }
 };
 
@@ -1755,6 +1757,7 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     uint mlfq_demotions;
     uint mlfq_boosts;
     uint mlfq_budget_expired;
+    uint mlfq_boost_interval;
     uint mlfq_q_lens[5];
     uint mlfq_q_dispatch[5];
 
@@ -1765,6 +1768,7 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
                   &wake_other_calls);
     proc_get_mlfq_stats(&mlfq_promotions, &mlfq_demotions, &mlfq_boosts,
                         &mlfq_budget_expired, mlfq_q_lens, mlfq_q_dispatch);
+    mlfq_boost_interval = mlfq_get_boost_interval();
 
     len = 0;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "passes ", passes) < 0)
@@ -1815,7 +1819,32 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
       return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "mlfq_boosts ", mlfq_boosts) < 0)
       return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "mlfq_boost_interval_ticks ",
+                          mlfq_boost_interval) < 0)
+      return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "mlfq_budget_expired ", mlfq_budget_expired) < 0)
+      return -1;
+    return procfs_copy_data(dst, off, n, buf, len);
+  }
+  if(ip->inum == PROCFS_MLFQ_TUNE_INO){
+    uint interval_ticks;
+
+    interval_ticks = mlfq_get_boost_interval();
+    len = 0;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "boost_interval_ticks ",
+                          interval_ticks) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "boost_interval_ms ",
+                          interval_ticks * 10) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "boost_interval_min_ticks ",
+                          MLFQ_BOOST_INTERVAL_MIN) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "boost_interval_max_ticks ",
+                          MLFQ_BOOST_INTERVAL_MAX) < 0)
+      return -1;
+    if(procfs_buf_puts(buf, sizeof(buf), &len,
+                       "write_usage echo <ticks> > /proc/mlfq_tune\n") < 0)
       return -1;
     return procfs_copy_data(dst, off, n, buf, len);
   }
@@ -1844,7 +1873,8 @@ procfs_writei(struct inode *ip, char *src, uint off, uint n)
       ip->inum != PROCFS_AHCI_TUNE_INO &&
       ip->inum != PROCFS_NVME_TUNE_INO &&
       ip->inum != PROCFS_LOGO_INO &&
-      ip->inum != PROCFS_SERVER7_INO)
+      ip->inum != PROCFS_SERVER7_INO &&
+      ip->inum != PROCFS_MLFQ_TUNE_INO)
     return -1;
   if(off != 0)
     return -1;
@@ -1935,6 +1965,12 @@ procfs_writei(struct inode *ip, char *src, uint off, uint n)
     if(val > 1)
       return -1;
     if(console_logo_set_enabled((int)val) < 0)
+      return -1;
+    return n;
+  }
+
+  if(ip->inum == PROCFS_MLFQ_TUNE_INO){
+    if(mlfq_set_boost_interval(val) < 0)
       return -1;
     return n;
   }
