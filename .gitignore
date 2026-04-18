@@ -183,6 +183,7 @@ user/xinit
 user/startx
 user/x6test
 user/xwmselftest
+user/6write
 user/wallpaper
 user/date
 user/ddate
@@ -253,3 +254,4 @@ targetfs/usr/libexec/ssh-sk-helper
 targetfs/usr/libexec/sshd-auth
 targetfs/usr/libexec/sshd-session
 user/libauxmenu.a
+.tmp

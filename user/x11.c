@@ -103,6 +103,7 @@ static int g_x11_dbg_count;
 static int g_x11_draw_tx_count;
 static int g_x11_draw_call_count;
 static int g_x11_draw_reply_seen;
+static int g_x11_event_trace_count;
 static Drawable g_copy_area_last_src;
 static Drawable g_copy_area_last_dest;
 static int g_copy_area_last_src_x;
@@ -1869,6 +1870,13 @@ x11_handle_unsolicited_line(Display *display, const char *line)
     XEvent ev;
     memset(&ev, 0, sizeof(ev));
     if (x11_parse_event_line(display, line, &ev) == 0) {
+      if (g_x11_event_trace_count < 32 &&
+          (ev.type == KeyPress || ev.type == KeyRelease ||
+           ev.type == ButtonPress || ev.type == ButtonRelease)) {
+        dprintf(1, "x11: recv event type=%d window=%u raw='%s'\n",
+                ev.type, (uint)x11_event_window(&ev), line);
+        g_x11_event_trace_count++;
+      }
       x11_event_push_back(display, &ev);
       x11dbg("x11:event queued type=%d qlen=%d", ev.type, display->event_count);
     } else {

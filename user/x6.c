@@ -229,6 +229,8 @@ static int x6_draw_reply_tx_count;
 static uint x6_trace_mask;
 static int x6_root_draw_rect_seen;
 static int x6_root_draw_text_seen;
+static int x6_flush_trace_count;
+static int x6_wm_flush_probe_count;
 
 /* Deferred framebuffer dirty-rect: updated only in shadow RAM during a burst
  * of small draw ops, then flushed to /dev/fb0 in one sequential write pass. */
@@ -343,6 +345,9 @@ static uint pointer_hover_wid;
 static int pointer_grab_active;
 static uint pointer_grab_window;
 static uint root_cursor;
+static int x6_input_trace_kbd_count;
+static int x6_input_trace_ptr_count;
+static int x6_input_trace_route_count;
 
 struct x6_fb_state {
   int fd;
@@ -1085,8 +1090,14 @@ x6_queue_for_window(uint wid)
   struct x6_client *client;
   struct x6_window *win;
 
-  if(wid == (uint)wm_redirect_root)
+  if(wid == (uint)wm_redirect_root) {
+    if(wm_client_fd >= 0) {
+      client = x6_find_client_by_fd(wm_client_fd);
+      if(client && client->in_use)
+        return &client->queue;
+    }
     return wm_event_queue;
+  }
 
   win = find_window(wid);
   if(win == 0)
@@ -1865,6 +1876,7 @@ static void __attribute__((unused))
 x6_enqueue_keyevent(int type, uint keycode, uint state)
 {
   struct x6_event evt;
+  struct x6_client *wmc;
   struct x6_event_queue *target_q;
   struct x6_window *hit;
   uint target;
@@ -1892,6 +1904,14 @@ x6_enqueue_keyevent(int type, uint keycode, uint state)
   if(target_q == 0)
     return;
 
+  if(x6_input_trace_route_count < 64) {
+    dprintf(1,
+            "x6: key type=%d keycode=%u state=0x%x target=%u focus=%u kbgrab=%d ptr=%d,%d\n",
+            type, keycode, state, target, focus_wid, wm_has_kb_grab,
+            pointer_x, pointer_y);
+    x6_input_trace_route_count++;
+  }
+
   evt.type = type;
   evt.wid = target;
   evt.keycode = (int)keycode;
@@ -1902,13 +1922,23 @@ x6_enqueue_keyevent(int type, uint keycode, uint state)
   evt.button = 0;
   evt.data0 = 0;
   evt.atom[0] = '\0';
-  x6_event_queue_enqueue(target_q, &evt);
+  {
+    int rc = x6_event_queue_enqueue(target_q, &evt);
+    wmc = x6_find_client_by_fd(wm_client_fd);
+    if(target == (uint)wm_redirect_root && x6_input_trace_route_count < 96) {
+      dprintf(1, "x6: key enqueue root rc=%d qlen=%d wmfd=%d q=%p live_q=%p\n",
+              rc, x6_event_queue_len(target_q), wm_client_fd, target_q,
+              wmc ? &wmc->queue : 0);
+      x6_input_trace_route_count++;
+    }
+  }
 }
 
 static void
 x6_enqueue_pointer_event(int type, int button)
 {
   struct x6_event evt;
+  struct x6_client *wmc;
   struct x6_event_queue *target_q;
   struct x6_window *hit;
   uint grab_wid;
@@ -1929,6 +1959,14 @@ x6_enqueue_pointer_event(int type, int button)
   if(target_q == 0)
     return;
 
+  if(x6_input_trace_ptr_count < 64 && type != X6_EVENT_MOTION_NOTIFY) {
+    dprintf(1,
+            "x6: ptr type=%d button=%d mods=0x%x target=%u hit=%u ptr=%d,%d\n",
+            type, button, mods, evt.wid, hit ? hit->id : 0U,
+            pointer_x, pointer_y);
+    x6_input_trace_ptr_count++;
+  }
+
   evt.x = pointer_x;
   evt.y = pointer_y;
   evt.w = evt.h = 0;
@@ -1937,7 +1975,16 @@ x6_enqueue_pointer_event(int type, int button)
   evt.button = button;
   evt.data0 = 0;
   evt.atom[0] = '\0';
-  x6_event_queue_enqueue(target_q, &evt);
+  {
+    int rc = x6_event_queue_enqueue(target_q, &evt);
+    wmc = x6_find_client_by_fd(wm_client_fd);
+    if(evt.wid == (uint)wm_redirect_root && x6_input_trace_ptr_count < 96 && type != X6_EVENT_MOTION_NOTIFY) {
+      dprintf(1, "x6: ptr enqueue root rc=%d qlen=%d wmfd=%d q=%p live_q=%p\n",
+              rc, x6_event_queue_len(target_q), wm_client_fd, target_q,
+              wmc ? &wmc->queue : 0);
+      x6_input_trace_ptr_count++;
+    }
+  }
 }
 
 static void
@@ -2231,6 +2278,9 @@ x6_mouse_setup(void)
     flags = fcntl(x6_mouse_fd, F_GETFL, 0);
     if(flags >= 0)
       fcntl(x6_mouse_fd, F_SETFL, flags | O_NONBLOCK);
+    dprintf(1, "x6: mouse fd=%d ready\n", x6_mouse_fd);
+  } else {
+    dprintf(1, "x6: mouse unavailable errno=%d\n", errno);
   }
 }
 
@@ -2250,6 +2300,9 @@ x6_keyboard_setup(void)
     flags = fcntl(x6_kbd_fd, F_GETFL, 0);
     if(flags >= 0)
       fcntl(x6_kbd_fd, F_SETFL, flags | O_NONBLOCK);
+    dprintf(1, "x6: kbd fd=%d ready\n", x6_kbd_fd);
+  } else {
+    dprintf(1, "x6: kbd unavailable errno=%d\n", errno);
   }
 }
 
@@ -2257,6 +2310,7 @@ static int
 x6_pump_keyboard(void)
 {
   struct aux_kbd_event evbuf[16];
+  struct pollfd pfd;
   int n;
   int i;
   int total;
@@ -2267,6 +2321,14 @@ x6_pump_keyboard(void)
   total = 0;
 
   for(;;) {
+    pfd.fd = x6_kbd_fd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    if(poll(&pfd, 1, 0) <= 0)
+      break;
+    if((pfd.revents & POLLIN) == 0)
+      break;
+
     n = read(x6_kbd_fd, evbuf, sizeof(evbuf));
     if(n < 0) {
       if(errno == EAGAIN || errno == EWOULDBLOCK)
@@ -2281,6 +2343,13 @@ x6_pump_keyboard(void)
     n /= (int)sizeof(struct aux_kbd_event);
     total += n;
     for(i = 0; i < n; i++) {
+      if(x6_input_trace_kbd_count < 64) {
+        dprintf(1, "x6: kbd keycode=%u state=0x%x value=%u\n",
+                (uint)evbuf[i].keycode,
+                (uint)evbuf[i].state,
+                (uint)evbuf[i].value);
+        x6_input_trace_kbd_count++;
+      }
       keyboard_mod_state = (uint)evbuf[i].state;
       if(evbuf[i].value == AUX_KBD_VALUE_PRESS ||
          evbuf[i].value == AUX_KBD_VALUE_REPEAT) {
@@ -2301,6 +2370,7 @@ static int
 x6_pump_mouse(void)
 {
   struct aux_mouse_event evt;
+  struct pollfd pfd;
   int n;
   int bit;
   int total;
@@ -2310,6 +2380,14 @@ x6_pump_mouse(void)
 
   total = 0;
   for(;;) {
+    pfd.fd = x6_mouse_fd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    if(poll(&pfd, 1, 0) <= 0)
+      break;
+    if((pfd.revents & POLLIN) == 0)
+      break;
+
     n = read(x6_mouse_fd, &evt, sizeof(evt));
     if(n < 0) {
       if(errno == EAGAIN || errno == EWOULDBLOCK)
@@ -2592,7 +2670,7 @@ x6_init_backend(void)
   return 0;
 }
 
-static void
+static int
 x6_send_line(int cfd, const char *s)
 {
   int len;
@@ -2602,10 +2680,10 @@ x6_send_line(int cfd, const char *s)
   int wait_retries;
 
   if(cfd < 0 || s == 0)
-    return;
+    return -1;
 
   is_event = (strncmp(s, "EVENT ", 6) == 0);
-  max_wait_retries = is_event ? 0 : 5;
+  max_wait_retries = is_event ? 5 : 5;
   wait_retries = 0;
 
   if(strncmp(s, "OK draw", 7) == 0 || strncmp(s, "OK text", 7) == 0) {
@@ -2633,18 +2711,15 @@ x6_send_line(int cfd, const char *s)
       struct pollfd pfd;
       int pr;
 
-      if(is_event)
-        break;
-
       /* Keep control-plane responses reliable without introducing long stalls. */
       wait_retries++;
       if(wait_retries > max_wait_retries) {
         struct x6_client *cl;
-        dprintf(2, "x6: send retry timeout fd=%d off=%d len=%d errno=%d\n", cfd, off, len, errno);
+        dprintf(2, "x6: send retry timeout fd=%d off=%d len=%d errno=%d event=%d\n", cfd, off, len, errno, is_event);
         cl = x6_find_client_by_fd(cfd);
         if(cl)
           cl->disconnect_pending = 1;
-        break;
+        return is_event ? -2 : -1;
       }
 
       pfd.fd = cfd;
@@ -2663,8 +2738,10 @@ x6_send_line(int cfd, const char *s)
         cl->disconnect_pending = 1;
     }
     dprintf(2, "x6: send failed fd=%d off=%d len=%d n=%d errno=%d\n", cfd, off, len, n, errno);
-    break;
+    return -1;
   }
+
+  return 0;
 }
 
 static int
@@ -3091,6 +3168,7 @@ x6_event_queue_upsert_randr(struct x6_event_queue *q, struct x6_event *evt)
 }
 
 static int
+__attribute__((unused))
 x6_event_queue_dequeue(struct x6_event_queue *q, struct x6_event *evt)
 {
   if(q->head == q->tail)
@@ -4171,6 +4249,11 @@ handle_one_command(int cfd, char *cmd)
     wm_has_redirect = 1;
     wm_event_queue = current_event_queue;
     wm_client_fd = cfd;
+    x6_input_trace_kbd_count = 0;
+    x6_input_trace_ptr_count = 0;
+    x6_input_trace_route_count = 0;
+    x6_flush_trace_count = 0;
+    dprintf(1, "x6: redirect owner fd=%d queue=%p\n", cfd, wm_event_queue);
     x6_send_line(cfd, "OK redirect_granted\n");
     return;
   }
@@ -5436,16 +5519,52 @@ x6_flush_client_events(struct x6_client *client)
   char eventbuf[256];
   struct x6_event evt;
   int sent;
+  int allow_without_hello;
 
-  if(client == 0 || !client->in_use || !client->hello_done)
+  allow_without_hello = 0;
+  if(client && wm_has_redirect && wm_client_fd >= 0 && client->fd == wm_client_fd)
+    allow_without_hello = 1;
+
+  if(client == 0 || !client->in_use)
     return 0;
+  if(!client->hello_done && !allow_without_hello)
+    return 0;
+
+  if(client->fd == wm_client_fd && x6_wm_flush_probe_count < 64) {
+    int qlen_live;
+    int qlen_cached;
+    int head_type;
+
+    qlen_live = x6_event_queue_len(&client->queue);
+    qlen_cached = x6_event_queue_len(wm_event_queue);
+    head_type = qlen_live > 0 ? client->queue.events[client->queue.head].type : -1;
+    dprintf(1,
+            "x6: wm flush probe fd=%d live_q=%p cached_q=%p qlive=%d qcached=%d head_type=%d hello=%d inuse=%d\n",
+            client->fd, &client->queue, wm_event_queue, qlen_live, qlen_cached,
+            head_type, client->hello_done, client->in_use);
+    x6_wm_flush_probe_count++;
+  }
+
+  if(client->fd == wm_client_fd && !x6_event_queue_empty(&client->queue)) {
+    int head;
+    int tail;
+    int head_type;
+
+    head = client->queue.head;
+    tail = client->queue.tail;
+    head_type = client->queue.events[head].type;
+    dprintf(1,
+            "x6: wm flush active fd=%d qlen=%d head=%d tail=%d head_type=%d\n",
+            client->fd, x6_event_queue_len(&client->queue), head, tail, head_type);
+  }
 
   sent = 0;
   while(!x6_event_queue_empty(&client->queue)) {
+    int rc;
+
     if(sent >= 64)
       break;
-    if(x6_event_queue_dequeue(&client->queue, &evt) < 0)
-      break;
+    evt = client->queue.events[client->queue.head];
     if(evt.type == X6_EVENT_MAP_REQUEST) {
       snprintf(eventbuf, sizeof(eventbuf), "EVENT MapRequest wid=%u\n", evt.wid);
     } else if(evt.type == X6_EVENT_CONFIGURE_NOTIFY) {
@@ -5530,10 +5649,35 @@ x6_flush_client_events(struct x6_client *client)
                "EVENT RandRNotify wid=%u width=%d height=%d\n",
                evt.wid, evt.w, evt.h);
     } else {
+      client->queue.head = (client->queue.head + 1) % X6_MAX_EVENTS_PER_CLIENT;
       continue;
     }
+    if(x6_flush_trace_count < 32 &&
+       (evt.type == X6_EVENT_KEY_PRESS || evt.type == X6_EVENT_KEY_RELEASE ||
+        evt.type == X6_EVENT_BUTTON_PRESS || evt.type == X6_EVENT_BUTTON_RELEASE)) {
+      dprintf(1, "x6: flush fd=%d %s", client->fd, eventbuf);
+      x6_flush_trace_count++;
+    }
     x6dbg("x6:event->fd=%d '%s'", client->fd, eventbuf);
-    x6_send_line(client->fd, eventbuf);
+    if(client->fd == wm_client_fd) {
+      dprintf(1, "x6: wm flush send fd=%d evt=%d line=%s", client->fd, evt.type, eventbuf);
+    }
+    rc = x6_send_line(client->fd, eventbuf);
+    if(rc == -2) {
+      if(client->fd == wm_client_fd)
+        dprintf(1, "x6: flush blocked fd=%d evt=%d qlen=%d\n",
+                client->fd, evt.type, x6_event_queue_len(&client->queue));
+      break;
+    }
+    if(rc < 0) {
+      if(client->fd == wm_client_fd)
+        dprintf(1, "x6: wm flush error fd=%d evt=%d rc=%d\n", client->fd, evt.type, rc);
+      break;
+    }
+    client->queue.head = (client->queue.head + 1) % X6_MAX_EVENTS_PER_CLIENT;
+    if(client->fd == wm_client_fd)
+      dprintf(1, "x6: wm flush sent fd=%d evt=%d qlen_now=%d\n",
+              client->fd, evt.type, x6_event_queue_len(&client->queue));
     sent++;
   }
   return sent;
@@ -5768,7 +5912,13 @@ main(int argc, char **argv)
       poll_timeout_ms = 0;
     else {
       for(i = 0; i < X6_MAX_CLIENTS; i++) {
+        int can_flush;
+
         if(!clients[i].in_use || !clients[i].hello_done)
+          can_flush = (clients[i].in_use && wm_has_redirect && wm_client_fd >= 0 && clients[i].fd == wm_client_fd);
+        else
+          can_flush = 1;
+        if(!can_flush)
           continue;
         if(!x6_event_queue_empty(&clients[i].queue)) {
           poll_timeout_ms = 0;
@@ -5796,11 +5946,29 @@ main(int argc, char **argv)
       cmds_tick_budget = X6_MAX_CMDS_PER_TICK_BOOST;
 
     if(kbd_poll_index >= 0 && (pfds[kbd_poll_index].revents & POLLIN)) {
-      if(x6_pump_keyboard() > 0)
+      uint tpk0;
+      uint tpk1;
+      int pk;
+
+      tpk0 = uptime();
+      pk = x6_pump_keyboard();
+      tpk1 = uptime();
+      if((uint)(tpk1 - tpk0) >= 20U)
+        dprintf(1, "x6: pump_keyboard slow dt=%u events=%d\n", (uint)(tpk1 - tpk0), pk);
+      if(pk > 0)
         did_work = 1;
     }
     if(mouse_poll_index >= 0 && (pfds[mouse_poll_index].revents & POLLIN)) {
-      if(x6_pump_mouse() > 0)
+      uint tpm0;
+      uint tpm1;
+      int pm;
+
+      tpm0 = uptime();
+      pm = x6_pump_mouse();
+      tpm1 = uptime();
+      if((uint)(tpm1 - tpm0) >= 20U)
+        dprintf(1, "x6: pump_mouse slow dt=%u events=%d\n", (uint)(tpm1 - tpm0), pm);
+      if(pm > 0)
         did_work = 1;
     }
 
@@ -5918,8 +6086,25 @@ main(int argc, char **argv)
      * request/response traffic is not delayed by event backlog. */
     for(i = 0; i < X6_MAX_CLIENTS; i++) {
       int flushed;
+      int pre_qlen;
+
+      pre_qlen = x6_event_queue_len(&clients[i].queue);
+      if(clients[i].in_use && clients[i].fd == wm_client_fd && pre_qlen > 0) {
+        dprintf(1,
+                "x6: wm preflush fd=%d qlen=%d head=%d tail=%d hello=%d\n",
+                clients[i].fd, pre_qlen,
+                clients[i].queue.head, clients[i].queue.tail,
+                clients[i].hello_done);
+      }
 
       flushed = x6_flush_client_events(&clients[i]);
+      if(clients[i].in_use && clients[i].fd == wm_client_fd && pre_qlen > 0) {
+        dprintf(1,
+                "x6: wm postflush fd=%d flushed=%d qlen=%d head=%d tail=%d\n",
+                clients[i].fd, flushed,
+                x6_event_queue_len(&clients[i].queue),
+                clients[i].queue.head, clients[i].queue.tail);
+      }
       if(flushed > 0) {
         x6_event_flush_count += (uint)flushed;
         did_work = 1;
@@ -5944,6 +6129,9 @@ main(int argc, char **argv)
         uint clients_live;
         uint clients_disc_pending;
         uint defer_rows;
+        uint wm_q_len;
+        uint wm_live;
+        uint wm_hello;
 
         d_cmd = x6_cmd_total_count - x6_hb_last_cmd_total;
         d_copy_cmd = x6_copy_cmd_count - x6_hb_last_copy_cmd;
@@ -5971,13 +6159,26 @@ main(int argc, char **argv)
         else
           defer_rows = x6_fb_defer_dirty ? (uint)(x6_fb_defer_y1 - x6_fb_defer_y0 + 1) : 0U;
 
+        wm_q_len = 0;
+        wm_live = 0;
+        wm_hello = 0;
+        if(wm_client_fd >= 0) {
+          struct x6_client *wmc = x6_find_client_by_fd(wm_client_fd);
+          if(wmc && wmc->in_use) {
+            wm_live = 1;
+            wm_hello = wmc->hello_done ? 1U : 0U;
+            wm_q_len = (uint)x6_event_queue_len(&wmc->queue);
+          }
+        }
+
         x6consolecrit(
-            "x6:hb dt=%u cmd=%u copy_cmd=%u copy_exec=%u copy_drop=%u ev_flush=%u poll=%u live=%u disc=%u rx=%u evq=%u defer=%u",
+            "x6:hb dt=%u cmd=%u copy_cmd=%u copy_exec=%u copy_drop=%u ev_flush=%u poll=%u live=%u disc=%u rx=%u evq=%u defer=%u wmfd=%d wmlive=%u wmhello=%u wmq=%u",
             (uint)(now - x6_hb_last_tick),
             d_cmd, d_copy_cmd, d_copy_exec, d_copy_drop,
             d_event_flush, d_poll,
             clients_live, clients_disc_pending,
-            rx_backlog_bytes, ev_pending, defer_rows);
+            rx_backlog_bytes, ev_pending, defer_rows,
+            wm_client_fd, wm_live, wm_hello, wm_q_len);
 
         x6_hb_last_tick = now;
         x6_hb_last_cmd_total = x6_cmd_total_count;

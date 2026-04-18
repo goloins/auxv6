@@ -39,6 +39,8 @@ static int g_another_wm;
 #define WM_KEY_CYCLE_FWD XK_Tab
 #define WM_KEY_CYCLE_ALL XK_Escape
 #define WM_KEY_CLOSE     XK_q
+#define WM_KEY_TERMINAL  't'
+#define WM_KEY_EDITOR    'e'
 #define MENUBAR_H_DEFAULT (TITLE_H + 2)
 
 typedef enum {
@@ -160,6 +162,8 @@ wm_grab_keys(void)
     int tab;
     int esc;
     int q;
+    int t;
+    int e;
     unsigned int numlock_mask;
 
     XUngrabKey(g_wm.dpy, AnyKey, AnyModifier, g_wm.root);
@@ -169,6 +173,10 @@ wm_grab_keys(void)
     tab = (int)XKeysymToKeycode(g_wm.dpy, WM_KEY_CYCLE_FWD);
     esc = (int)XKeysymToKeycode(g_wm.dpy, WM_KEY_CYCLE_ALL);
     q = (int)XKeysymToKeycode(g_wm.dpy, WM_KEY_CLOSE);
+    t = (int)XKeysymToKeycode(g_wm.dpy, WM_KEY_TERMINAL);
+    e = (int)XKeysymToKeycode(g_wm.dpy, WM_KEY_EDITOR);
+
+    WM6DBG("grab keys tab=%d esc=%d q=%d t=%d e=%d", tab, esc, q, t, e);
 
     if (tab > 0) {
         /* Alt+Tab / Alt+Shift+Tab => document cycling */
@@ -186,6 +194,10 @@ wm_grab_keys(void)
     }
     if (q > 0)
         grab_key_variant_set(q, Mod1Mask, numlock_mask);
+    if (t > 0)
+        grab_key_variant_set(t, Mod1Mask, numlock_mask);
+    if (e > 0)
+        grab_key_variant_set(e, Mod1Mask, numlock_mask);
 }
 
 static int
@@ -403,8 +415,8 @@ on_button_press(XButtonEvent *e)
     int     hit;
 
     /* Bar click: open/close dropdown popup */
-    if (e->window == g_wm.root && e->y < g_wm.menubar_h) {
-        menu_handle_bar_press(e->x, e->y);
+    if (e->button == Button1 && e->y_root < g_wm.menubar_h) {
+        menu_handle_bar_press(e->x_root, e->y_root);
         return;
     }
 
@@ -503,10 +515,25 @@ on_key_press(XKeyEvent *e)
 {
     KeySym ks;
 
+    ks = XKeycodeToKeysym(g_wm.dpy, e->keycode, 0);
+
+    /* No active window: shortcuts drive the fallback "@" system menu.
+     * We hold XGrabKeyboard so all keys come here. The aux kbd driver
+     * may transform keycodes when Alt is held, so we try both the
+     * keysym and the raw keycode as a keysym (which matches ASCII). */
+    if (!g_wm.focused) {
+        WM6DBG("no-focus keypress keycode=%u keysym=0x%lx state=0x%x",
+               (unsigned)e->keycode, (unsigned long)ks, (unsigned)e->state);
+        if (menu_handle_global_shortcut(ks))
+            return;
+        /* Alt may mutate the driver keycode; try treating keycode as keysym */
+        if ((e->state & Mod1Mask) && menu_handle_global_shortcut((KeySym)e->keycode))
+            return;
+        return; /* no match: swallow in no-focus mode */
+    }
+
     if (!(e->state & Mod1Mask))
         return;
-
-    ks = XKeycodeToKeysym(g_wm.dpy, e->keycode, 0);
 
     if (ks == WM_KEY_CYCLE_FWD || ks == WM_KEY_CYCLE_ALL) {
         Client *target;
@@ -872,8 +899,18 @@ run(void)
             on_key_press(&ev.xkey);
             break;
         case ButtonRelease:
-            if (g_wm.menu_popup != None &&
-                ev.xbutton.window == g_wm.menu_popup) {
+            if (g_wm.menu_popup != None && ev.xbutton.button == Button1) {
+                /* The passive XGrabButton on root steals ButtonRelease even
+                 * from clicks inside the popup.  Translate root coords to
+                 * popup-window coords and dispatch regardless of .window. */
+                Window dummy_child;
+                int ppx, ppy;
+                XTranslateCoordinates(g_wm.dpy, g_wm.root, g_wm.menu_popup,
+                                      ev.xbutton.x_root, ev.xbutton.y_root,
+                                      &ppx, &ppy, &dummy_child);
+                ev.xbutton.window = g_wm.menu_popup;
+                ev.xbutton.x = ppx;
+                ev.xbutton.y = ppy;
                 menu_handle_popup_event(&ev);
                 break;
             }
@@ -1013,6 +1050,11 @@ main(int argc, char **argv)
     WM6DBG("calling scan_existing_windows");
     scan_existing_windows();
     WM6DBG("scan_existing_windows done");
+
+    if (!g_wm.focused) {
+        WM6DBG("no managed focus after scan; entering fallback no-focus mode");
+        focus_set(NULL);
+    }
 
     WM6DBG("entering run()");
     run();

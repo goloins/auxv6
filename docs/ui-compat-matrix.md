@@ -80,7 +80,7 @@ Phase 1 non-targets:
 | WM close protocol path | P0 | Yes | Yes | Partial | Graceful close preferred |
 | WM zoom toggle path | P1 | Should | Yes | Partial | Basic toggle path implemented; multi-head/policy refinement pending |
 | Menu publish/dispatch protocol | P0 | Yes | Yes | Partial | Atoms + focus/property bridge scaffolded in 6wm; adapter dispatch path pending |
-| Dialog/transient ownership | P1 | Yes | Yes | Partial | App identity, transient ownership inference, and owner-scope modal override hook implemented; edge-policy refinement still needed before xedit gate |
+| Dialog/transient ownership | P1 | Yes | Yes | Partial | App identity, transient ownership inference, and owner-scope modal override hook implemented; edge-policy refinement still needed before broader editor/dialog ports |
 | Clipboard basic text | P1 | Should | Yes | No | Add once core stable |
 | Drag-and-drop | P2 | No | Optional | No | Deferred |
 | Rich accessibility semantics | P2 | No | Optional | No | Deferred |
@@ -95,13 +95,13 @@ This table tracks first concrete port targets.
 | App Candidate | Profile | Toolkit Class | Phase Target | Port Status | Blocking Gaps | Notes |
 |---|---|---|---|---|---|---|
 | st | Terminal | Xlib/lightweight | Phase 1A | In Progress | Remaining WM interaction hardening | Baseline terminal target and immediate bring-up gate |
-| xedit | Editor | Xaw/Xlib | Phase 1 | Not Started | Dialog transients, menu dispatch, state sync | Spartan editor target with simple menu model |
+| 6write | Editor | Pure Xlib (in-tree) | Phase 1 | In Progress | Validate missing Xlib calls and WM interaction edge cases | First-party editor with app-owned menus to stress raw X11 behavior |
 | xeyes | Utility | Xlib/lightweight | Phase 1 | Not Started | Utility role policy, unmanaged/popup policy validation | Doodad utility target for event/lifecycle coverage |
 | xfw | Utility | FOX toolkit | Deferred | Not Started | Toolkit subsystem maturity (FOX adapter work) | Deferred to avoid rushing toolkit integration layer |
 
 Action required:
 
-1. Add required feature rows specific to `st`, `xedit`, and `xeyes`.
+1. Add required feature rows specific to `st`, `6write`, and `xeyes`.
 2. Re-evaluate `xfw` after first adapter path is stable.
 
 ### 5.1 Per-App Required Feature Checklist
@@ -113,10 +113,10 @@ Action required:
 | st | Resize behavior with live content redraw | P0 | Partial | Verify no geometry desync after repeated resize |
 | st | Close path (graceful then fallback) | P1 | Partial | WM close action should terminate cleanly |
 | st | Zoom behavior | P2 | Partial | Basic zoom toggle path exists; advanced policy refinement deferred |
-| xedit | Managed frame + title truncation behavior | P0 | Partial | Long filenames should ellipsize in title bar |
-| xedit | Menu publish/dispatch integration | P0 | No | File/Edit basics routed through global menubar |
-| xedit | Dialog transient + modal behavior | P0 | No | Open/Save/Confirm prompts block app scope correctly |
-| xedit | Enabled/disabled menu state sync | P1 | No | State updates reflect selection/editability |
+| 6write | Managed frame + title updates on dirty/file state | P0 | Partial | Verify title updates remain stable through save/new cycles |
+| 6write | In-window menu interaction (app-owned File/Edit) | P0 | Partial | Validate dropdown open/close, hover, click dispatch under WM |
+| 6write | Keyboard input/edit lifecycle correctness | P0 | Partial | Verify arrows/home/end/page keys, save/new/quit accelerators |
+| 6write | Resize and redraw stability under continuous edits | P1 | Partial | Confirm no redraw corruption during repeated configure events |
 | xeyes | Utility-window role classification | P0 | No | Classified as utility/doodad role, not document |
 | xeyes | Utility stacking policy correctness | P0 | No | Utility layer ordering remains stable |
 | xeyes | Unmanaged/popup policy sanity | P1 | No | No accidental reparent/decorate of transient doodad surfaces |
@@ -139,13 +139,13 @@ Phase 1A pass condition for this script:
 1. `st` is visible in a managed frame with basic WM decorations.
 2. Move/resize/focus interactions are stable enough for normal terminal use.
 
-#### xedit Smoke Script
+#### 6write Smoke Script
 
-1. Launch `xedit`.
-2. Verify title rendering and truncation behavior for long titles.
-3. Open File/Edit menus from global menubar.
-4. Trigger a dialog (open/save/confirm) and confirm modal blocking behavior.
-5. Verify command dispatch reaches app actions from menubar.
+1. Launch `6write` (optionally with a file path argument).
+2. Verify typing/editing, cursor movement, and save/quit accelerators.
+3. Open File/Edit in-window menus and verify dropdown hover/click dispatch.
+4. Resize repeatedly while editing and ensure redraw remains coherent.
+5. Close via WM close protocol; verify dirty-buffer double-confirm behavior.
 
 #### xeyes Smoke Script
 
@@ -235,7 +235,7 @@ Deferred until post-Phase-1 stability:
 
 1. Initial matrix created from UI Porting and Desktop Coherence Strategy.
 2. Established Phase 1 target profiles and baseline feature ownership buckets.
-3. Selected concrete Phase 1 app targets: `st`, `xedit`, and `xeyes`.
+3. Selected concrete Phase 1 app targets: `st`, `6write`, and `xeyes`.
 4. Marked `xfw` deferred until toolkit integration layer matures.
 5. Added per-app requirement checklist and manual smoke-test scripts for Phase 1 targets.
 6. Updated matrix statuses for the initial `6wm` scaffold and added an implementation TODO backlog sourced from in-tree code markers.
@@ -252,3 +252,4 @@ Deferred until post-Phase-1 stability:
 17. Refined cycling policy for usability: document-first Alt+Tab, explicit all-window cycle paths via Alt+Ctrl+Tab and Alt+Escape.
 18. Implemented active title stripe rendering and updated draw/font policy notes (Montecarlo -> fixed -> server default) for current Phase 1A visuals.
 19. Refined modal input policy by preventing blocked-owner frame actions after modal focus redirection; documented Phase 1A near-exit validation checklist.
+20. Replaced `xedit` Phase 1 editor target with first-party `6write` to validate pure Xlib behavior without toolkit/AUX coupling.

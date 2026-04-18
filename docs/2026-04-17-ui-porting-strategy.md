@@ -328,7 +328,7 @@ No new compatibility feature lands without:
 2. Validate Phase 1A bring-up with `st` as the first real target.
 3. Record any visual deltas as deferred polish, not blockers.
 4. Begin menubar completion work only when WM core stability reaches daily-usable baseline.
-5. After `st` baseline passes, proceed to `xedit` and `xeyes` smoke validation.
+5. After `st` baseline passes, proceed to `6write` and `xeyes` smoke validation.
 
 ## Execution Updates
 

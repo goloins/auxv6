@@ -12,6 +12,7 @@
 #include "draw.h"
 #include "client.h"
 #include "frame.h"
+#include "auxv6/user.h"
 #include "stdio.h"
 #include "string.h"
 #include "stdlib.h"
@@ -336,6 +337,29 @@ menu_dispatch_command(XClientMessageEvent *ev)
 #define PLT_SEL_BG   0x000080UL
 #define PLT_SEL_TEXT 0xFFFFFFUL
 
+#define POPUP_SYSTEM_IDX (-2)
+
+typedef struct {
+    const char *label;
+    int action;
+} WmSysMenuItem;
+
+enum {
+    SYS_ACT_NONE = 0,
+    SYS_ACT_LAUNCH_ST,
+    SYS_ACT_LAUNCH_6WRITE,
+    SYS_ACT_QUIT_X,
+};
+
+static const WmSysMenuItem s_sys_items[] = {
+    { "Terminal",    SYS_ACT_LAUNCH_ST },
+    { "Text Editor", SYS_ACT_LAUNCH_6WRITE },
+    { "Quit",        SYS_ACT_QUIT_X },
+};
+
+static int s_sys_bar_x;
+static int s_sys_bar_w;
+
 typedef struct {
     char id[MNU_FIELD_MAX];
     char label[MNU_FIELD_MAX];
@@ -359,6 +383,79 @@ static WmMenu  s_menus[MNU_MAX];
 static int     s_n_menus;
 static long    s_serial    = -1;
 static Window  s_model_win = None;
+
+static int mnu_text_width(const char *s);
+
+static void
+menu_refresh_system_title_bounds(void)
+{
+    static const char *lbl = "@";
+    int tw = mnu_text_width(lbl);
+    int bw = tw + POPUP_PAD_X * 2;
+
+    s_sys_bar_x = 6;
+    if (bw < 18)
+        bw = 18;
+    s_sys_bar_w = bw;
+}
+
+static int
+menu_spawn_with_paths(const char *arg0, const char *const paths[])
+{
+    int i;
+    pid_t pid;
+
+    if (!arg0 || !paths)
+        return -1;
+
+    pid = fork();
+    if (pid < 0) {
+        dprintf(2, "6wm: fork failed launching '%s'\n", arg0);
+        return -1;
+    }
+
+    if (pid == 0) {
+        char *argv[2];
+        argv[0] = (char *)arg0;
+        argv[1] = NULL;
+        for (i = 0; paths[i]; i++)
+            exec((char *)paths[i], argv);
+        dprintf(2, "6wm: exec failed for '%s'\n", arg0);
+        exit(127);
+    }
+
+    return 0;
+}
+
+static void
+menu_run_system_action(int action)
+{
+    static const char *const st_paths[] = {
+        "/bin/st",
+        "/usr/bin/st",
+        "st",
+        NULL
+    };
+    static const char *const write_paths[] = {
+        "/bin/6write",
+        "/usr/bin/6write",
+        "6write",
+        NULL
+    };
+
+    if (action == SYS_ACT_LAUNCH_ST) {
+        menu_spawn_with_paths("st", st_paths);
+        return;
+    }
+    if (action == SYS_ACT_LAUNCH_6WRITE) {
+        menu_spawn_with_paths("6write", write_paths);
+        return;
+    }
+    if (action == SYS_ACT_QUIT_X) {
+        g_wm.running = 0;
+        return;
+    }
+}
 
 /* ---- internal helpers ------------------------------------------ */
 
@@ -562,9 +659,20 @@ menu_draw_titles(void)
 
     if (s_n_menus == 0) {
         /* Fallback: system label */
-        static const char *lbl = "auxv6";
-        XSetForeground(g_wm.dpy, g_wm.gc, PLT_TEXT_ACTIVE);
-        XDrawString(g_wm.dpy, g_wm.root, g_wm.gc, 8, ty, lbl, 5);
+        static const char *lbl = "@";
+
+        menu_refresh_system_title_bounds();
+
+        if (g_wm.menu_popup_idx == POPUP_SYSTEM_IDX) {
+            draw_rect(g_wm.root, PLT_SEL_BG,
+                      s_sys_bar_x, 0, s_sys_bar_w, h - 1);
+            XSetForeground(g_wm.dpy, g_wm.gc, PLT_SEL_TEXT);
+        } else {
+            XSetForeground(g_wm.dpy, g_wm.gc, PLT_TEXT_ACTIVE);
+        }
+        XDrawString(g_wm.dpy, g_wm.root, g_wm.gc,
+                    s_sys_bar_x + POPUP_PAD_X / 2, ty,
+                    lbl, (int)strlen(lbl));
         return;
     }
 
@@ -620,14 +728,66 @@ popup_item_width(WmMenu *m)
     return w;
 }
 
+static int
+popup_system_item_width(void)
+{
+    int i;
+    int w = POPUP_MIN_W;
+
+    for (i = 0; i < (int)(sizeof(s_sys_items) / sizeof(s_sys_items[0])); i++) {
+        int tw = mnu_text_width(s_sys_items[i].label) + POPUP_PAD_X * 3;
+        if (tw > w)
+            w = tw;
+    }
+
+    return w;
+}
+
 static void
 popup_render(void)
 {
     WmMenu *m;
     int i, pw, ph, item_y, ty;
 
-    if (g_wm.menu_popup == None || g_wm.menu_popup_idx < 0 ||
-        g_wm.menu_popup_idx >= s_n_menus)
+    if (g_wm.menu_popup == None)
+        return;
+
+    if (g_wm.menu_popup_idx == POPUP_SYSTEM_IDX) {
+        int pw;
+        int ph;
+        int i;
+
+        pw = popup_system_item_width();
+        ph = (int)(sizeof(s_sys_items) / sizeof(s_sys_items[0])) * POPUP_ITEM_H + POPUP_PAD_TOP * 2;
+
+        draw_rect(g_wm.menu_popup, PLT_FRAME_BG, 0, 0, pw, ph);
+        draw_bevel(g_wm.menu_popup, 0, 0, pw, ph);
+
+        for (i = 0; i < (int)(sizeof(s_sys_items) / sizeof(s_sys_items[0])); i++) {
+            int item_y = POPUP_PAD_TOP + i * POPUP_ITEM_H;
+            int ty = item_y + (POPUP_ITEM_H + (g_wm.font ? g_wm.font->ascent : 12)) / 2;
+
+            if (g_wm.menu_popup_hover == i) {
+                draw_rect(g_wm.menu_popup, PLT_SEL_BG,
+                          1, item_y, pw - 2, POPUP_ITEM_H);
+                XSetForeground(g_wm.dpy, g_wm.gc, PLT_SEL_TEXT);
+            } else {
+                draw_rect(g_wm.menu_popup, PLT_FRAME_BG,
+                          1, item_y, pw - 2, POPUP_ITEM_H);
+                XSetForeground(g_wm.dpy, g_wm.gc, PLT_TEXT_ACTIVE);
+            }
+
+            XDrawString(g_wm.dpy, g_wm.menu_popup, g_wm.gc,
+                        POPUP_PAD_X, ty,
+                        s_sys_items[i].label,
+                        (int)strlen(s_sys_items[i].label));
+        }
+
+        XFlush(g_wm.dpy);
+        return;
+    }
+
+    if (g_wm.menu_popup_idx < 0 || g_wm.menu_popup_idx >= s_n_menus)
         return;
 
     m  = &s_menus[g_wm.menu_popup_idx];
@@ -697,15 +857,22 @@ popup_open(int menu_idx)
     XSetWindowAttributes swa;
     unsigned long vmask;
 
-    if (menu_idx < 0 || menu_idx >= s_n_menus)
-        return;
-    m = &s_menus[menu_idx];
-    if (m->n_items == 0)
-        return;
+    if (menu_idx == POPUP_SYSTEM_IDX) {
+        menu_refresh_system_title_bounds();
+        pw = popup_system_item_width();
+        ph = (int)(sizeof(s_sys_items) / sizeof(s_sys_items[0])) * POPUP_ITEM_H + POPUP_PAD_TOP * 2;
+        px = s_sys_bar_x;
+    } else {
+        if (menu_idx < 0 || menu_idx >= s_n_menus)
+            return;
+        m = &s_menus[menu_idx];
+        if (m->n_items == 0)
+            return;
+        pw = popup_item_width(m);
+        ph = m->n_items * POPUP_ITEM_H + POPUP_PAD_TOP * 2;
+        px = m->bar_x;
+    }
 
-    pw = popup_item_width(m);
-    ph = m->n_items * POPUP_ITEM_H + POPUP_PAD_TOP * 2;
-    px = m->bar_x;
     py = g_wm.menubar_h;
     if (px + pw > g_wm.sw) px = g_wm.sw - pw;
     if (px < 0) px = 0;
@@ -738,6 +905,15 @@ popup_hit_item(int py)
     WmMenu *m;
     int i, item_y;
 
+    if (g_wm.menu_popup_idx == POPUP_SYSTEM_IDX) {
+        for (i = 0; i < (int)(sizeof(s_sys_items) / sizeof(s_sys_items[0])); i++) {
+            item_y = POPUP_PAD_TOP + i * POPUP_ITEM_H;
+            if (py >= item_y && py < item_y + POPUP_ITEM_H)
+                return i;
+        }
+        return -1;
+    }
+
     if (g_wm.menu_popup_idx < 0 || g_wm.menu_popup_idx >= s_n_menus)
         return -1;
     m = &s_menus[g_wm.menu_popup_idx];
@@ -755,6 +931,13 @@ popup_dispatch(int item_idx)
     WmMenu *m;
     WmMenuItem *it;
     XEvent ev;
+
+    if (g_wm.menu_popup_idx == POPUP_SYSTEM_IDX) {
+        if (item_idx < 0 || item_idx >= (int)(sizeof(s_sys_items) / sizeof(s_sys_items[0])))
+            return;
+        menu_run_system_action(s_sys_items[item_idx].action);
+        return;
+    }
 
     if (!g_wm.focused || g_wm.menu_popup_idx < 0 ||
         g_wm.menu_popup_idx >= s_n_menus)
@@ -799,6 +982,27 @@ menu_handle_bar_press(int x, int y)
     int i;
     (void)y;
 
+    WM6DBG("bar press x=%d menus=%d sys=[%d,%d) popup_idx=%d",
+           x, s_n_menus, s_sys_bar_x, s_sys_bar_x + s_sys_bar_w,
+           g_wm.menu_popup_idx);
+
+    if (s_n_menus == 0) {
+        menu_refresh_system_title_bounds();
+        if (x >= s_sys_bar_x && x < s_sys_bar_x + s_sys_bar_w) {
+            if (g_wm.menu_popup_idx == POPUP_SYSTEM_IDX)
+                menu_popup_close();
+            else {
+                menu_popup_close();
+                popup_open(POPUP_SYSTEM_IDX);
+            }
+            return;
+        }
+
+        if (g_wm.menu_popup != None)
+            menu_popup_close();
+        return;
+    }
+
     for (i = 0; i < s_n_menus; i++) {
         if (x >= s_menus[i].bar_x &&
             x <  s_menus[i].bar_x + s_menus[i].bar_w) {
@@ -816,6 +1020,28 @@ menu_handle_bar_press(int x, int y)
     /* Click outside all menu titles: close any open popup */
     if (g_wm.menu_popup != None)
         menu_popup_close();
+}
+
+int
+menu_handle_global_shortcut(KeySym ks)
+{
+    if (s_n_menus != 0)
+        return 0;
+
+    if (ks == 't' || ks == 'T') {
+        menu_run_system_action(SYS_ACT_LAUNCH_ST);
+        return 1;
+    }
+    if (ks == 'e' || ks == 'E') {
+        menu_run_system_action(SYS_ACT_LAUNCH_6WRITE);
+        return 1;
+    }
+    if (ks == 'q' || ks == 'Q') {
+        menu_run_system_action(SYS_ACT_QUIT_X);
+        return 1;
+    }
+
+    return 0;
 }
 
 /* ---- public: popup event routing ------------------------------ */

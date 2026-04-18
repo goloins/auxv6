@@ -11,6 +11,37 @@
 #include "stack.h"
 #include "menu.h"
 
+static int s_fallback_input_grabbed;
+
+static void
+focus_update_fallback_input_grab(int active)
+{
+    if (active) {
+        int kb_rc;
+        if (s_fallback_input_grabbed)
+            return;
+        kb_rc = XGrabKeyboard(g_wm.dpy, g_wm.root, True,
+                              GrabModeAsync, GrabModeAsync, CurrentTime);
+        WM6DBG("fallback grab activate: XGrabKeyboard rc=%d", kb_rc);
+        XGrabButton(g_wm.dpy, Button1, AnyModifier,
+                    g_wm.root, True, ButtonPressMask,
+                    GrabModeAsync, GrabModeAsync,
+                    None, None);
+        WM6DBG("fallback grab activate: XGrabButton button=%u mods=0x%x root=0x%lx",
+               Button1, AnyModifier, (unsigned long)g_wm.root);
+        s_fallback_input_grabbed = 1;
+        return;
+    }
+
+    if (!s_fallback_input_grabbed)
+        return;
+
+    XUngrabKeyboard(g_wm.dpy, CurrentTime);
+    XUngrabButton(g_wm.dpy, Button1, AnyModifier, g_wm.root);
+    WM6DBG("fallback grab release");
+    s_fallback_input_grabbed = 0;
+}
+
 /* ------------------------------------------------------------------ *
  * Internal helpers                                                    *
  * ------------------------------------------------------------------ */
@@ -108,12 +139,15 @@ focus_set(Client *c)
     deactivate_current();
 
     if (!target) {
+        focus_update_fallback_input_grab(1);
         g_wm.focused = NULL;
         XSetInputFocus(g_wm.dpy, g_wm.root,
                        RevertToPointerRoot, CurrentTime);
         menu_on_focus(NULL);
         return;
     }
+
+    focus_update_fallback_input_grab(0);
 
     g_wm.focused  = target;
     target->state = STATE_ACTIVE;

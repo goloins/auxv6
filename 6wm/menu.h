@@ -36,5 +36,8 @@ void menu_popup_close(void);
 void menu_handle_bar_press(int x, int y);
 void menu_handle_popup_event(XEvent *ev);
 
+/* --- fallback system menu shortcuts (no active window mode) ----- */
+int  menu_handle_global_shortcut(KeySym ks);
+
 #endif /* WM6_MENU_H */
 

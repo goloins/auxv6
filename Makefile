@@ -933,6 +933,14 @@ user/xwmselftest: user/xwmselftest.o $(X11_A) $(CRT0_OBJ) $(LIBC_A) $(AUXRT_A) |
 	$(OBJDUMP) -S $@ > $(basename $@).asm
 	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(basename $@).sym
 
+user/6write: user/6write.o $(X11_A) $(CRT0_OBJ) $(LIBC_A) $(AUXRT_A) | toolchain-check
+	$(LD) $(LDFLAGS) -N -e _start -Ttext 0 -o $@ $(CRT0_OBJ) user/6write.o $(X11_A) $(AUXRT_A) $(LIBC_A) $(LIBGCC)
+	$(OBJDUMP) -S $@ > $(basename $@).asm
+	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(basename $@).sym
+
+_6write: user/6write
+	cp user/6write _6write
+
 _xwmselftest: user/xwmselftest
 	cp user/xwmselftest _xwmselftest
 
@@ -1377,6 +1385,7 @@ UPROGS=\
 	_xinit\
 	_xwmtrace\
 	_xwmselftest\
+	_6write\
 	_startx\
 	_x6test\
 	_wallpaper\
