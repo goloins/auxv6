@@ -111,8 +111,11 @@ schedq_enqueue_locked(struct proc *p, int reason)
   if(p == 0)
     return;
 
-  // Guard against double-enqueue bugs: silently dequeue if already linked.
-  if(mlfq_is_queued(p))
+  // Hot path: SCHED_ENQ_YIELD comes from a RUNNING task that cannot already
+  // be queued. Skip the queue-membership check there to keep per-tick
+  // preemption overhead minimal.
+  // For all other enqueue reasons, keep the defensive double-enqueue guard.
+  if(reason != SCHED_ENQ_YIELD && mlfq_is_queued(p))
     mlfq_list_remove(&mlfq_qs[p->sched_q], p);
 
   now = ticks;   // approx — stale by at most 1 tick, fine for heuristics

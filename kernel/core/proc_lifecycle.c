@@ -418,8 +418,121 @@ proc_waitpid(int pid, int *status, int options)
   for(;;){
     havekids = 0;
     waitpid_loops++;
-    waitpid_scans += NPROC;
+
+    // Fast path for waitpid(child_pid, ...): there is at most one process
+    // with this pid, so stop scanning once it is found.
+    if(pid > 0){
+      for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+        waitpid_scans++;
+        if(p->pid != pid)
+          continue;
+        if(p->parent != curproc){
+          release(&ptable.lock);
+          return -1;
+        }
+        havekids = 1;
+
+        if((options & WUNTRACED) && p->wait_event == WAIT_EVENT_STOPPED){
+          st = p->wait_status;
+          p->wait_event = WAIT_EVENT_NONE;
+          p->wait_status = 0;
+          foundpid = p->pid;
+          if(status)
+            *status = st;
+          release(&ptable.lock);
+          return foundpid;
+        }
+
+        if((options & WCONTINUED) && p->wait_event == WAIT_EVENT_CONTINUED){
+          st = p->wait_status;
+          p->wait_event = WAIT_EVENT_NONE;
+          p->wait_status = 0;
+          foundpid = p->pid;
+          if(status)
+            *status = st;
+          release(&ptable.lock);
+          return foundpid;
+        }
+
+        if(p->state == ZOMBIE){
+          foundpid = p->pid;
+          st = p->xstatus;
+          if(p->addrsp){
+            address_space_destroy(p->addrsp);
+          } else if(proc_pgdir(p)){
+            freevm(proc_pgdir(p));
+          }
+          proc_clear_addrspace(p);
+          p->pid = 0;
+          p->ppid = 0;
+          p->pgid = 0;
+          p->sid = 0;
+          p->tty = -1;
+          p->uid = 0;
+          p->gid = 0;
+          p->ruid = 0;
+          p->rgid = 0;
+          p->suid = 0;
+          p->sgid = 0;
+          p->ngroups = 0;
+          for(i = 0; i < PROC_NGROUPS_MAX; i++)
+            p->groups[i] = 0;
+          p->umask = 022;
+          p->rlimit_nofile_cur = 0;
+          p->rlimit_nofile_max = 0;
+          p->xstatus = 0;
+          p->wait_event = WAIT_EVENT_NONE;
+          p->wait_status = 0;
+          p->parent = 0;
+          p->name[0] = 0;
+          p->tick_next = 0;
+          p->on_tickq = 0;
+          p->killed = 0;
+          p->sig_pending = 0;
+          p->sig_caught = 0;
+          p->sig_mask = 0;
+          p->sig_ignored = 0;
+          memset(p->sig_handler, 0, sizeof(p->sig_handler));
+          memset(p->sig_actmask, 0, sizeof(p->sig_actmask));
+          memset(p->sig_actflags, 0, sizeof(p->sig_actflags));
+          // Zero MLFQ fields so reused slot starts clean.
+          p->sched_q = 0;
+          p->sched_flags = 0;
+          p->sched_budget_left = 0;
+          p->sched_enq_tick = 0;
+          p->sched_last_start_tick = 0;
+          p->sched_last_block_tick = 0;
+          p->sched_last_wake_tick = 0;
+          p->sched_cpu_burst_ticks = 0;
+          p->sched_next = 0;
+          p->sched_prev = 0;
+          p->state = UNUSED;
+          if(status)
+            *status = st;
+          release(&ptable.lock);
+          return foundpid;
+        }
+
+        // Found the specific child but it is not reportable yet.
+        break;
+      }
+
+      if(!havekids || curproc->killed){
+        release(&ptable.lock);
+        return -1;
+      }
+
+      if(options & WNOHANG){
+        release(&ptable.lock);
+        return 0;
+      }
+
+      sleep(curproc, &ptable.lock);
+      continue;
+    }
+
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+      waitpid_scans++;
       if(p->parent != curproc)
         continue;
       if(!proc_wait_target_match(curproc, p, pid))
