@@ -674,6 +674,8 @@ void            schedq_dequeue_locked(struct proc*);
 struct proc*    schedq_pick_next_locked(void);
 void            mlfq_timer_charge(struct proc*);
 void            mlfq_apply_global_boost(uint now_ticks);
+uint            mlfq_get_boost_interval(void);
+int             mlfq_set_boost_interval(uint interval_ticks);
 void            mlfq_get_stats(uint *promotions, uint *demotions, uint *boosts,
                                uint *budget_expired, uint *q_lens);
 void            proc_get_mlfq_stats(uint *promotions, uint *demotions, uint *boosts,
