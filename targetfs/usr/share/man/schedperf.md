@@ -43,6 +43,9 @@ None.
 - Use comparative runs on the same QEMU profile for trend tracking.
 - Keep `[PASS]`/`[FAIL]` as the correctness gate; score is the performance ruler.
 - When tuning targets, update both this manpage and `user/schedperf.c` in the same change.
+- In the `2026-04-18-mlfq-r3` profile, `fork-storm` uses a lower full-score
+	target than earlier profiles because MLFQ intentionally deprioritizes a
+	CPU-bound parent during a fork burst while fresh children start at Q1.
 
 ## Examples
 ```
@@ -51,4 +54,4 @@ schedperf
 
 ## Source Audit
 - Source file: user/schedperf.c
-- Last updated: 2026-04-03
+- Last updated: 2026-04-18
