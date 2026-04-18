@@ -176,6 +176,7 @@ user/audiopollstress
 user/bcachestress
 user/audiod
 user/audiodctl
+user/mlfqtune
 user/lockprobe
 user/server7
 user/x6
