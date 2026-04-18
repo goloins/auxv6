@@ -30,7 +30,7 @@ static int failed = 0;
 static int perf_score = 0;
 static int perf_score_max = 0;
 
-#define SCHEDPERF_PROFILE "2026-04-18-mlfq-r4"
+#define SCHEDPERF_PROFILE "2026-04-18-mlfq-r5"
 
 static int
 ops_per_sec(int ops, uint start_ticks, uint end_ticks)
@@ -519,11 +519,12 @@ test_mlfq_demotion(void)
   pid = fork();
   if(pid == 0){
     // Pure computation: NO syscalls so IF=1 the whole time and timer IRQs
-    // fire freely.  Use a long enough run to usually cross at least three
-    // demotion boundaries (Q1->Q2->Q3->Q4 requires 2+4+8 = 14 ticks).
+    // fire freely.  Keep this comfortably above 14 ticks (Q1->Q2->Q3->Q4
+    // requires 2+4+8 ticks) even on faster hosts or under timer contention,
+    // so mlfq_demotions consistently reaches >= 3.
     volatile unsigned int x = 0;
     unsigned int i;
-    for(i = 0; i < 50000000U; i++)
+    for(i = 0; i < 120000000U; i++)
       x += i;
     exit(0);
   }
