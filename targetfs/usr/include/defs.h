@@ -667,6 +667,18 @@ void            userinit(void);
 int             wait(void);
 void            wakeup(void*);
 void            yield(void);
+// MLFQ helpers (kernel/core/proc_sched.c) — callers must hold ptable.lock
+// except mlfq_timer_charge() and mlfq_apply_global_boost().
+void            schedq_enqueue_locked(struct proc*, int reason);
+void            schedq_dequeue_locked(struct proc*);
+struct proc*    schedq_pick_next_locked(void);
+void            mlfq_timer_charge(struct proc*);
+void            mlfq_apply_global_boost(uint now_ticks);
+void            mlfq_get_stats(uint *promotions, uint *demotions, uint *boosts,
+                               uint *budget_expired, uint *q_lens);
+void            proc_get_mlfq_stats(uint *promotions, uint *demotions, uint *boosts,
+                                    uint *budget_expired, uint *q_lens,
+                                    uint *q_dispatch);
 
 // swtch.S
 void            swtch(struct context**, struct context*);
