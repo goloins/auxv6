@@ -43,6 +43,12 @@ static int usb_select_bulk_pair(struct usb_device *ud, int iface_index,
 #define USB_RUNTIME_CHANGE_BOOST 8U
 #define USB_RUNTIME_EVENT_BOOST 2U
 #define USB_RUNTIME_RESUME_BOOST 4U
+#define USB_RUNTIME_DEFERRED_MAX 8U
+#define USB_RUNTIME_DEFERRED_REASON_RESCAN       (1U << 0)
+#define USB_RUNTIME_DEFERRED_REASON_REENUMERATE  (1U << 1)
+#define USB_RUNTIME_DEFERRED_REASON_ERROR_RECOVERY (1U << 2)
+#define USB_RUNTIME_DEFERRED_ERR_STREAK_LIMIT 3U
+#define USB_RUNTIME_DEFERRED_ERR_COOLDOWN_PULSES 50U
 
 #define USB_ATTACH_NONE       0
 #define USB_ATTACH_R815X      1
@@ -184,11 +190,31 @@ static uint usb_runtime_irq_event_transfer;
 static uint usb_runtime_irq_event_error;
 static uint usb_runtime_irq_event_resume;
 static uint usb_runtime_irq_event_other;
+static uint usb_runtime_deferred_pending[USB_HC_MAX];
+static uint usb_runtime_deferred_rescan_pending[USB_HC_MAX];
+static uint usb_runtime_deferred_reenum_pending[USB_HC_MAX];
+static uint usb_runtime_deferred_error_pending[USB_HC_MAX];
+static uint usb_runtime_deferred_error_streak[USB_HC_MAX];
+static uint usb_runtime_deferred_error_cooldown[USB_HC_MAX];
+static uint usb_runtime_deferred_cursor;
+static uint usb_runtime_deferred_enqueued;
+static uint usb_runtime_deferred_dropped;
+static uint usb_runtime_deferred_runs;
+static uint usb_runtime_deferred_materialize;
+static uint usb_runtime_deferred_reason_rescan;
+static uint usb_runtime_deferred_reason_reenumerate;
+static uint usb_runtime_deferred_reason_error_recovery;
+static uint usb_runtime_deferred_error_cooldown_skips;
 static uchar usb_runtime_irq_registered[USB_HC_MAX];
 static char usb_irq_name[USB_HC_MAX][12];
 
 static void usb_irq_handler(int irq, void *arg);
 static void usb_make_irq_name(uint hc_index, char *dst, uint dstlen);
+static void usb_runtime_tick_deferred_cooldowns(void);
+static uint usb_runtime_reason_from_events(uint event_flags, uint change_bits);
+static int usb_runtime_enqueue_deferred_one(uint hc_index, uint reason);
+static void usb_runtime_enqueue_deferred(uint hc_index, uint reason);
+static int usb_runtime_next_deferred_hc(uint *out_hc_index, uint *out_reason);
 
 struct usb_bus_state {
   uint addr_bits[4];
@@ -1539,6 +1565,7 @@ usb_runtime_refresh_hc(uint hc_index)
   struct pci_dev *pdev;
   uint consumed_change_bits;
   uint consumed_event_flags;
+  uint deferred_reason;
   uint change_bits;
   int refreshed;
 
@@ -1560,6 +1587,7 @@ usb_runtime_refresh_hc(uint hc_index)
   refreshed = 0;
   consumed_change_bits = 0;
   consumed_event_flags = 0;
+  deferred_reason = 0;
 
   if(usb_runtime_irq_registered[hc_index] && ops->consume_events){
     if(ops->consume_events(sc, pdev, &consumed_change_bits,
@@ -1587,6 +1615,11 @@ usb_runtime_refresh_hc(uint hc_index)
       else if((consumed_event_flags & (USB_HC_EVENT_TRANSFER | USB_HC_EVENT_OTHER)) &&
               usb_runtime_boost_budget[hc_index] < USB_RUNTIME_EVENT_BOOST)
         usb_runtime_boost_budget[hc_index] = USB_RUNTIME_EVENT_BOOST;
+
+      deferred_reason = usb_runtime_reason_from_events(consumed_event_flags,
+                                                       consumed_change_bits);
+      if(deferred_reason)
+        usb_runtime_enqueue_deferred(hc_index, deferred_reason);
     }
   }
 
@@ -1642,6 +1675,118 @@ usb_runtime_next_boosted_hc(uint *out_hc_index)
     hc_index = (start + n) % usb_hc_count;
     if(usb_runtime_boost_budget[hc_index] == 0)
       continue;
+    *out_hc_index = hc_index;
+    return 1;
+  }
+
+  return 0;
+}
+
+static void
+usb_runtime_tick_deferred_cooldowns(void)
+{
+  uint i;
+
+  for(i = 0; i < usb_hc_count; i++){
+    if(usb_runtime_deferred_error_cooldown[i] > 0)
+      usb_runtime_deferred_error_cooldown[i]--;
+  }
+}
+
+static uint
+usb_runtime_reason_from_events(uint event_flags, uint change_bits)
+{
+  uint reason;
+
+  reason = 0;
+  if(event_flags & USB_HC_EVENT_ERROR)
+    reason |= USB_RUNTIME_DEFERRED_REASON_ERROR_RECOVERY;
+  if(change_bits || (event_flags & (USB_HC_EVENT_PORT_CHANGE | USB_HC_EVENT_RESUME)))
+    reason |= USB_RUNTIME_DEFERRED_REASON_REENUMERATE;
+  if(event_flags & (USB_HC_EVENT_TRANSFER | USB_HC_EVENT_OTHER))
+    reason |= USB_RUNTIME_DEFERRED_REASON_RESCAN;
+
+  return reason;
+}
+
+static void
+usb_runtime_enqueue_deferred(uint hc_index, uint reason)
+{
+  if(hc_index >= usb_hc_count || reason == 0)
+    return;
+
+  if(reason & USB_RUNTIME_DEFERRED_REASON_ERROR_RECOVERY)
+    (void)usb_runtime_enqueue_deferred_one(hc_index,
+                                           USB_RUNTIME_DEFERRED_REASON_ERROR_RECOVERY);
+  if(reason & USB_RUNTIME_DEFERRED_REASON_REENUMERATE)
+    (void)usb_runtime_enqueue_deferred_one(hc_index,
+                                           USB_RUNTIME_DEFERRED_REASON_REENUMERATE);
+  if(reason & USB_RUNTIME_DEFERRED_REASON_RESCAN)
+    (void)usb_runtime_enqueue_deferred_one(hc_index,
+                                           USB_RUNTIME_DEFERRED_REASON_RESCAN);
+}
+
+static int
+usb_runtime_enqueue_deferred_one(uint hc_index, uint reason)
+{
+  if(hc_index >= usb_hc_count)
+    return 0;
+  if(reason == USB_RUNTIME_DEFERRED_REASON_ERROR_RECOVERY &&
+     usb_runtime_deferred_error_cooldown[hc_index] > 0){
+    usb_runtime_deferred_error_cooldown_skips++;
+    return 0;
+  }
+
+  if(usb_runtime_deferred_pending[hc_index] >= USB_RUNTIME_DEFERRED_MAX){
+    usb_runtime_deferred_dropped++;
+    return 0;
+  }
+
+  usb_runtime_deferred_pending[hc_index]++;
+  if(reason == USB_RUNTIME_DEFERRED_REASON_ERROR_RECOVERY)
+    usb_runtime_deferred_error_pending[hc_index]++;
+  else if(reason == USB_RUNTIME_DEFERRED_REASON_REENUMERATE)
+    usb_runtime_deferred_reenum_pending[hc_index]++;
+  else
+    usb_runtime_deferred_rescan_pending[hc_index]++;
+  usb_runtime_deferred_enqueued++;
+  return 1;
+}
+
+static int
+usb_runtime_next_deferred_hc(uint *out_hc_index, uint *out_reason)
+{
+  uint start;
+  uint n;
+  uint hc_index;
+  if(!out_hc_index || !out_reason || usb_hc_count == 0)
+    return 0;
+
+  start = usb_runtime_deferred_cursor;
+  if(start >= usb_hc_count)
+    start = 0;
+
+  for(n = 0; n < usb_hc_count; n++){
+    hc_index = (start + n) % usb_hc_count;
+    if(usb_runtime_deferred_pending[hc_index] == 0)
+      continue;
+
+    if(usb_runtime_deferred_error_pending[hc_index] > 0){
+      *out_reason = USB_RUNTIME_DEFERRED_REASON_ERROR_RECOVERY;
+      usb_runtime_deferred_error_pending[hc_index]--;
+    } else if(usb_runtime_deferred_reenum_pending[hc_index] > 0){
+      *out_reason = USB_RUNTIME_DEFERRED_REASON_REENUMERATE;
+      usb_runtime_deferred_reenum_pending[hc_index]--;
+    } else if(usb_runtime_deferred_rescan_pending[hc_index] > 0){
+      *out_reason = USB_RUNTIME_DEFERRED_REASON_RESCAN;
+      usb_runtime_deferred_rescan_pending[hc_index]--;
+    } else {
+      if(usb_runtime_deferred_pending[hc_index] > 0)
+        usb_runtime_deferred_pending[hc_index]--;
+      continue;
+    }
+
+    usb_runtime_deferred_cursor = (hc_index + 1) % usb_hc_count;
     *out_hc_index = hc_index;
     return 1;
   }
@@ -1736,6 +1881,21 @@ usb_init(void)
   usb_runtime_irq_event_error = 0;
   usb_runtime_irq_event_resume = 0;
   usb_runtime_irq_event_other = 0;
+  memset(usb_runtime_deferred_pending, 0, sizeof(usb_runtime_deferred_pending));
+  memset(usb_runtime_deferred_rescan_pending, 0, sizeof(usb_runtime_deferred_rescan_pending));
+  memset(usb_runtime_deferred_reenum_pending, 0, sizeof(usb_runtime_deferred_reenum_pending));
+  memset(usb_runtime_deferred_error_pending, 0, sizeof(usb_runtime_deferred_error_pending));
+  memset(usb_runtime_deferred_error_streak, 0, sizeof(usb_runtime_deferred_error_streak));
+  memset(usb_runtime_deferred_error_cooldown, 0, sizeof(usb_runtime_deferred_error_cooldown));
+  usb_runtime_deferred_cursor = 0;
+  usb_runtime_deferred_enqueued = 0;
+  usb_runtime_deferred_dropped = 0;
+  usb_runtime_deferred_runs = 0;
+  usb_runtime_deferred_materialize = 0;
+  usb_runtime_deferred_reason_rescan = 0;
+  usb_runtime_deferred_reason_reenumerate = 0;
+  usb_runtime_deferred_reason_error_recovery = 0;
+  usb_runtime_deferred_error_cooldown_skips = 0;
   memset(usb_runtime_boost_budget, 0, sizeof(usb_runtime_boost_budget));
   memset(usb_runtime_irq_registered, 0, sizeof(usb_runtime_irq_registered));
   memset(usb_irq_name, 0, sizeof(usb_irq_name));
@@ -1870,6 +2030,7 @@ void
 usb_runtime_service(void)
 {
   uint hc_index;
+  uint deferred_reason;
   uint i;
   int refreshed;
 
@@ -1877,6 +2038,7 @@ usb_runtime_service(void)
 
   acquire(&usb_lock);
   usb_runtime_pulses++;
+  usb_runtime_tick_deferred_cooldowns();
 
   if(usb_hc_count > 0 && (usb_runtime_pulses % USB_RUNTIME_SWEEP_PULSE) == 0){
     usb_dev_count = 0;
@@ -1892,6 +2054,32 @@ usb_runtime_service(void)
       refreshed = 1;
     if(usb_runtime_boost_budget[hc_index] > 0)
       usb_runtime_boost_budget[hc_index]--;
+  } else if(usb_runtime_next_deferred_hc(&hc_index, &deferred_reason)){
+    usb_dev_count = 0;
+    usb_runtime_deferred_runs++;
+    if(deferred_reason == USB_RUNTIME_DEFERRED_REASON_ERROR_RECOVERY)
+      usb_runtime_deferred_reason_error_recovery++;
+    else if(deferred_reason == USB_RUNTIME_DEFERRED_REASON_REENUMERATE)
+      usb_runtime_deferred_reason_reenumerate++;
+    else
+      usb_runtime_deferred_reason_rescan++;
+
+    if(usb_runtime_refresh_hc(hc_index)){
+      refreshed = 1;
+      usb_runtime_deferred_materialize++;
+      if(deferred_reason == USB_RUNTIME_DEFERRED_REASON_ERROR_RECOVERY)
+        usb_runtime_deferred_error_streak[hc_index] = 0;
+    } else if(deferred_reason == USB_RUNTIME_DEFERRED_REASON_ERROR_RECOVERY){
+      usb_runtime_deferred_error_streak[hc_index]++;
+      if(usb_runtime_deferred_error_streak[hc_index] >= USB_RUNTIME_DEFERRED_ERR_STREAK_LIMIT){
+        usb_runtime_deferred_error_streak[hc_index] = 0;
+        usb_runtime_deferred_error_cooldown[hc_index] =
+            USB_RUNTIME_DEFERRED_ERR_COOLDOWN_PULSES;
+      }
+    }
+
+    if(usb_runtime_deferred_pending[hc_index] > 0)
+      usb_runtime_deferred_pending[hc_index]--;
   } else if(usb_hc_count > 0 && (usb_runtime_pulses % USB_RUNTIME_HC_PULSE) == 0){
     hc_index = usb_runtime_hc_cursor;
     if(hc_index >= usb_hc_count)
@@ -2142,6 +2330,38 @@ usb_procfs_dump(char *buf, uint max)
   if(usb_buf_putu(buf, max, &len, usb_runtime_irq_event_other) < 0) goto out;
   if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
 
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_deferred_enqueued ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_deferred_enqueued) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_deferred_dropped ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_deferred_dropped) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_deferred_runs ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_deferred_runs) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_deferred_materialize ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_deferred_materialize) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_deferred_reason_rescan ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_deferred_reason_rescan) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_deferred_reason_reenum ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_deferred_reason_reenumerate) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_deferred_reason_error_recovery ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_deferred_reason_error_recovery) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_deferred_error_cooldown_skips ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_deferred_error_cooldown_skips) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
   for(i = 0; i < usb_hc_count; i++){
     struct usb_hc_probe *sc = &usb_hc[i];
     struct usb_bus_state *bus = &usb_bus[i];
@@ -2251,6 +2471,16 @@ usb_procfs_dump(char *buf, uint max)
     if(usb_buf_putu(buf, max, &len, bus->addr_conflicts) < 0) goto out;
     if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
     if(usb_buf_putu(buf, max, &len, bus->addr_exhausted) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " defer=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, usb_runtime_deferred_pending[i]) < 0) goto out;
+    if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, usb_runtime_deferred_rescan_pending[i]) < 0) goto out;
+    if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, usb_runtime_deferred_reenum_pending[i]) < 0) goto out;
+    if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, usb_runtime_deferred_error_pending[i]) < 0) goto out;
+    if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, usb_runtime_deferred_error_cooldown[i]) < 0) goto out;
 
     if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
   }

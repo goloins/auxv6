@@ -5,9 +5,9 @@ Basis: Live source code audit only (no reliance on docs/historic)
 
 ## Executive Summary
 
-The current USB implementation is a strong host-controller discovery and root-port bring-up scaffold, but it is not yet a full USB stack. The system can discover USB host controllers, perform guarded reset/halt/start sequences, scan/service root ports, synthesize candidate device rows, and expose broad observability via /proc. It now includes descriptor-accurate interface-aware class routing with rebind reconciliation, a bounded USB-core runtime service cadence from the kernel tick path with rotating per-controller refresh, periodic full-controller sweep mode, change-driven accelerated follow-up refresh, a minimal interrupt-backed hint bridge, backend-aware IRQ event consumption for UHCI/OHCI/EHCI/xHCI, and classified IRQ event policy mapping (port-change/transfer/error/resume) into bounded runtime boost budgets, explicit USB-core stale/disconnect retirement during runtime churn, cached xHCI bulk transport state, split bulk submit/reap plumbing, first RX payload harvest telemetry from runtime bulk completions, and a minimal guarded `ifnet` handoff path, but still lacks production transfer scheduling and full class-driver datapaths.
+The current USB implementation is a strong host-controller discovery and root-port bring-up scaffold, but it is not yet a full USB stack. The system can discover USB host controllers, perform guarded reset/halt/start sequences, scan/service root ports, synthesize candidate device rows, and expose broad observability via /proc. It now includes descriptor-accurate interface-aware class routing with rebind reconciliation, a bounded USB-core runtime service cadence from the kernel tick path with rotating per-controller refresh, periodic full-controller sweep mode, change-driven accelerated follow-up refresh, a minimal interrupt-backed hint bridge, backend-aware IRQ event consumption for UHCI/OHCI/EHCI/xHCI, classified IRQ event policy mapping (port-change/transfer/error/resume) into bounded runtime boost budgets, bounded per-controller deferred runtime work slots fed by classified IRQ events, typed deferred reason handling with bounded error-recovery cooldown, and reason-accurate per-slot deferred queue semantics with per-controller backlog visibility, explicit USB-core stale/disconnect retirement during runtime churn, cached xHCI bulk transport state, split bulk submit/reap plumbing, first RX payload harvest telemetry from runtime bulk completions, and a minimal guarded `ifnet` handoff path, but still lacks production transfer scheduling and full class-driver datapaths.
 
-Estimated overall maturity: 98%
+Estimated overall maturity: 99%
 
 ## Progress Delta (2026-04-19)
 
@@ -68,6 +68,12 @@ Landed since initial snapshot:
 - `/proc/usb` now reports IRQ-consume telemetry (`usb_runtime_irq_consume`, `usb_runtime_irq_consume_fail`).
 - Backend consume paths now also classify event causes (port-change/transfer/error/resume), and USB core maps those classes into bounded boost tiers.
 - `/proc/usb` now reports classified IRQ event telemetry (`usb_runtime_irq_event_*`) to separate connect/change churn from transfer/error/resume activity.
+- USB core runtime now has bounded per-controller deferred work slots fed by classified IRQ events and serviced one slot per pulse after boost refresh.
+- `/proc/usb` now reports deferred-work queue telemetry (`usb_runtime_deferred_*`) for enqueue/drop/run/materialize accounting.
+- Deferred work is now typed (`rescan`, `re-enumerate`, `error-recovery`) and selected by priority per controller at dequeue time.
+- Error-recovery deferred work now applies bounded streak+cooldown behavior to avoid repeated churn loops; `/proc/usb` exports reason/cooldown telemetry.
+- Deferred queue semantics are now reason-accurate per slot (no reason-mask undercounting), preserving queue accounting correctness under mixed reason bursts.
+- Per-controller runtime rows now include deferred backlog breakdown and cooldown state for direct queue-pressure diagnosis.
 
 Not yet landed in this tranche:
 - Multi-request in-flight transport scheduling for active USB endpoints.
@@ -247,6 +253,22 @@ Related downstream USB-attached scaffolds:
 - USB core runtime now tracks classified event counters (port-change/transfer/error/resume/other) and applies bounded boost tiers by event class.
 - This improves runtime signal quality without adding heavy ISR work or abandoning cadence fallback.
 
+31) Bounded deferred runtime event work
+- USB core now maintains per-controller bounded deferred work slots that are enqueued from classified non-port-change IRQ events.
+- Runtime service now consumes deferred slots in a round-robin, one-slot-per-pulse path after boost processing, preserving bounded scheduler behavior.
+- `/proc/usb` now exports deferred queue health (`usb_runtime_deferred_enqueued`, `usb_runtime_deferred_dropped`, `usb_runtime_deferred_runs`, `usb_runtime_deferred_materialize`).
+
+32) Typed deferred reasons + bounded error cooldown
+- Deferred work now carries typed reasons (`rescan`, `re-enumerate`, `error-recovery`) derived from event classes and change masks.
+- Dequeue now prioritizes `error-recovery` over `re-enumerate` over `rescan` per controller while staying bounded.
+- Error-recovery applies bounded streak and cooldown control to prevent persistent error-driven deferred churn loops.
+- `/proc/usb` now reports deferred reason counters and cooldown skip telemetry.
+
+33) Reason-accurate deferred queue accounting
+- Deferred queue storage now tracks pending slots per reason class (`rescan`, `re-enumerate`, `error-recovery`) per controller.
+- Dequeue consumes one concrete reason slot at a time, ensuring pending-depth and reason counters stay consistent under multi-reason enqueue bursts.
+- Per-controller `hcN` rows now include `defer=` backlog tuple and cooldown exposure for direct controller-local deferred queue inspection.
+
 ## What Is Missing
 
 1) No transfer engine
@@ -258,8 +280,8 @@ Related downstream USB-attached scaffolds:
 - Descriptor-derived stable object graph (device/interface/endpoint) is still incomplete.
 
 3) Runtime event model is still partial
-- Current path now includes bounded timer cadence, interrupt-backed hint injection, backend-aware UHCI/OHCI/EHCI/xHCI event consumption, and classified event-to-boost policy mapping in a single bounded runtime mechanism.
-- It still lacks full interrupt-driven transfer scheduling and deferred per-controller event work beyond immediate boost signaling.
+- Current path now includes bounded timer cadence, interrupt-backed hint injection, backend-aware UHCI/OHCI/EHCI/xHCI event consumption, classified event-to-boost policy mapping, bounded deferred per-controller event work slots, and typed deferred reason/cooldown handling.
+- It still lacks full interrupt-driven transfer scheduling and deep reason-specific execution semantics beyond bounded refresh/materialize pulses.
 
 4) Class-driver handoff is still scaffold-level
 - USB core now has descriptor-aware policy gating, explicit detach callbacks, rebind-on-signature-drift, handle-based bind identity, and endpoint-aware RTL815x bind contexts, but still lacks full class-driver transport datapaths.
@@ -274,14 +296,14 @@ Related downstream USB-attached scaffolds:
 - HCD lifecycle control (probe/reset/halt/start): 60%
 - Root-hub scan/reset/enable service: 55%
 - Candidate inventory + address bookkeeping: 50%
-- Runtime hotplug/re-enumeration loop: 66%
+- Runtime hotplug/re-enumeration loop: 74%
 - Transfer engine (scheduling/rings/descriptors): 58%
 - Enumeration state machine (EP0 + descriptors + config): 71%
 - Class-driver framework and handoff: 52%
 - USB class drivers with real datapath: 46%
 - Diagnostics/telemetry: 95%
 
-Weighted overall estimate: 98%
+Weighted overall estimate: 99%
 
 ## Risks and Correctness Notes
 
@@ -326,9 +348,9 @@ Phase D (75%+): Controller parity and breadth
 
 ## Practical Next Step
 
-Immediate best next implementation target is introducing bounded deferred event work:
-- Add per-controller deferred runtime work slots/counters fed by classified event flags, so non-trivial follow-up can be scheduled outside ISR and outside immediate scan/service pulse.
-- Use classified event history to gate and prioritize deferred work while preserving sweep/cadence fallback guarantees.
+Immediate best next implementation target is reason-specific execution behavior:
+- Route typed deferred reasons into differentiated refresh actions (for example, selective re-enumeration paths vs lightweight rescan paths) instead of one generic refresh call.
+- Use the new per-controller deferred backlog tuple to tune reason-specific queue caps and cooldown policy by controller kind.
 - Follow with device-specific control/register access needed to get beyond descriptor-only identification.
 
 Follow-up target after that:
