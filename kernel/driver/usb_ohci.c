@@ -6,6 +6,7 @@
 /* OHCI register offsets (relative to BAR0 MMIO base). */
 #define OHCI_REG_CONTROL       0x04
 #define OHCI_REG_CMDSTATUS     0x08
+#define OHCI_REG_INTRSTATUS    0x0C
 
 /* HcControl HCFS field (bits 7:6). */
 #define OHCI_CTL_HCFS_MASK     (3U << 6)
@@ -16,6 +17,12 @@
 
 /* HcCommandStatus bits. */
 #define OHCI_CMD_HCR           (1U << 0)
+
+/* HcInterruptStatus bits. */
+#define OHCI_INTR_WDH          (1U << 1)
+#define OHCI_INTR_RD           (1U << 3)
+#define OHCI_INTR_UE           (1U << 4)
+#define OHCI_INTR_RHSC         (1U << 6)
 
 #define OHCI_POLL_TRIES        1000
 #define OHCI_POLL_DELAY_US     10
@@ -235,5 +242,61 @@ usb_ohci_service_ports(struct usb_hc_probe *sc, struct pci_dev *dev)
       sc->rh_enabled_bits |= (1U << n);
   }
 
+  return 0;
+}
+
+int
+usb_ohci_consume_events(struct usb_hc_probe *sc, struct pci_dev *dev,
+                        uint *change_bits, uint *event_flags)
+{
+  volatile uint *regs;
+  uint n;
+  uint changes;
+  uint st;
+
+  if(change_bits)
+    *change_bits = 0;
+  if(event_flags)
+    *event_flags = 0;
+  if(!sc || !sc->reg_probe_ok || sc->rh_ports == 0)
+    return 0;
+
+  regs = ohci_regs(dev);
+  if(!regs)
+    return -1;
+
+  st = ohci_read(regs, OHCI_REG_INTRSTATUS);
+  st &= (OHCI_INTR_WDH | OHCI_INTR_RD | OHCI_INTR_UE | OHCI_INTR_RHSC);
+  if(st)
+    ohci_write(regs, OHCI_REG_INTRSTATUS, st);
+
+  if(event_flags){
+    if(st & OHCI_INTR_WDH)
+      *event_flags |= USB_HC_EVENT_TRANSFER;
+    if(st & OHCI_INTR_UE)
+      *event_flags |= USB_HC_EVENT_ERROR;
+    if(st & OHCI_INTR_RD)
+      *event_flags |= USB_HC_EVENT_RESUME;
+    if(st & OHCI_INTR_RHSC)
+      *event_flags |= USB_HC_EVENT_PORT_CHANGE;
+  }
+
+  changes = 0;
+  for(n = 0; n < sc->rh_ports && n < 32; n++){
+    uint off;
+    uint ps;
+
+    off = OHCI_RH_PORT_STATUS + n * 4;
+    ps = ohci_read(regs, off);
+    if(!(ps & OHCI_RH_CSC))
+      continue;
+    changes |= (1U << n);
+    ohci_write(regs, off, OHCI_RH_CSC);
+  }
+
+  if(change_bits)
+    *change_bits = changes;
+  if(event_flags && changes)
+    *event_flags |= USB_HC_EVENT_PORT_CHANGE;
   return 0;
 }

@@ -41,6 +41,8 @@ static int usb_select_bulk_pair(struct usb_device *ud, int iface_index,
 #define USB_RUNTIME_HC_PULSE  25U
 #define USB_RUNTIME_SWEEP_PULSE 250U
 #define USB_RUNTIME_CHANGE_BOOST 8U
+#define USB_RUNTIME_EVENT_BOOST 2U
+#define USB_RUNTIME_RESUME_BOOST 4U
 
 #define USB_ATTACH_NONE       0
 #define USB_ATTACH_R815X      1
@@ -177,6 +179,11 @@ static uint usb_runtime_irq_events;
 static uint usb_runtime_irq_boosts;
 static uint usb_runtime_irq_consumes;
 static uint usb_runtime_irq_consume_failures;
+static uint usb_runtime_irq_event_port_change;
+static uint usb_runtime_irq_event_transfer;
+static uint usb_runtime_irq_event_error;
+static uint usb_runtime_irq_event_resume;
+static uint usb_runtime_irq_event_other;
 static uchar usb_runtime_irq_registered[USB_HC_MAX];
 static char usb_irq_name[USB_HC_MAX][12];
 
@@ -218,7 +225,7 @@ static const struct usb_hc_ops usb_hc_ops_uhci = {
   .reset = usb_uhci_reset,
   .halt = usb_uhci_halt,
   .start = usb_uhci_start,
-  .consume_events = 0,
+  .consume_events = usb_uhci_consume_events,
   .scan_ports = usb_uhci_scan_ports,
   .service_ports = usb_uhci_service_ports,
   .get_device_desc8 = 0,
@@ -236,7 +243,7 @@ static const struct usb_hc_ops usb_hc_ops_ohci = {
   .reset = usb_ohci_reset,
   .halt = usb_ohci_halt,
   .start = usb_ohci_start,
-  .consume_events = 0,
+  .consume_events = usb_ohci_consume_events,
   .scan_ports = usb_ohci_scan_ports,
   .service_ports = usb_ohci_service_ports,
   .get_device_desc8 = 0,
@@ -1531,6 +1538,7 @@ usb_runtime_refresh_hc(uint hc_index)
   const struct usb_hc_ops *ops;
   struct pci_dev *pdev;
   uint consumed_change_bits;
+  uint consumed_event_flags;
   uint change_bits;
   int refreshed;
 
@@ -1551,12 +1559,35 @@ usb_runtime_refresh_hc(uint hc_index)
 
   refreshed = 0;
   consumed_change_bits = 0;
+  consumed_event_flags = 0;
 
   if(usb_runtime_irq_registered[hc_index] && ops->consume_events){
-    if(ops->consume_events(sc, pdev, &consumed_change_bits) < 0)
+    if(ops->consume_events(sc, pdev, &consumed_change_bits,
+                           &consumed_event_flags) < 0)
       usb_runtime_irq_consume_failures++;
-    else
+    else {
       usb_runtime_irq_consumes++;
+      if(consumed_event_flags & USB_HC_EVENT_PORT_CHANGE)
+        usb_runtime_irq_event_port_change++;
+      if(consumed_event_flags & USB_HC_EVENT_TRANSFER)
+        usb_runtime_irq_event_transfer++;
+      if(consumed_event_flags & USB_HC_EVENT_ERROR)
+        usb_runtime_irq_event_error++;
+      if(consumed_event_flags & USB_HC_EVENT_RESUME)
+        usb_runtime_irq_event_resume++;
+      if(consumed_event_flags & USB_HC_EVENT_OTHER)
+        usb_runtime_irq_event_other++;
+
+      if((consumed_event_flags & USB_HC_EVENT_ERROR) &&
+         usb_runtime_boost_budget[hc_index] < USB_RUNTIME_CHANGE_BOOST)
+        usb_runtime_boost_budget[hc_index] = USB_RUNTIME_CHANGE_BOOST;
+      else if((consumed_event_flags & USB_HC_EVENT_RESUME) &&
+              usb_runtime_boost_budget[hc_index] < USB_RUNTIME_RESUME_BOOST)
+        usb_runtime_boost_budget[hc_index] = USB_RUNTIME_RESUME_BOOST;
+      else if((consumed_event_flags & (USB_HC_EVENT_TRANSFER | USB_HC_EVENT_OTHER)) &&
+              usb_runtime_boost_budget[hc_index] < USB_RUNTIME_EVENT_BOOST)
+        usb_runtime_boost_budget[hc_index] = USB_RUNTIME_EVENT_BOOST;
+    }
   }
 
   if(ops->scan_ports){
@@ -1700,6 +1731,11 @@ usb_init(void)
   usb_runtime_irq_boosts = 0;
   usb_runtime_irq_consumes = 0;
   usb_runtime_irq_consume_failures = 0;
+  usb_runtime_irq_event_port_change = 0;
+  usb_runtime_irq_event_transfer = 0;
+  usb_runtime_irq_event_error = 0;
+  usb_runtime_irq_event_resume = 0;
+  usb_runtime_irq_event_other = 0;
   memset(usb_runtime_boost_budget, 0, sizeof(usb_runtime_boost_budget));
   memset(usb_runtime_irq_registered, 0, sizeof(usb_runtime_irq_registered));
   memset(usb_irq_name, 0, sizeof(usb_irq_name));
@@ -2084,6 +2120,26 @@ usb_procfs_dump(char *buf, uint max)
 
   if(usb_buf_puts(buf, max, &len, "usb_runtime_irq_consume_fail ") < 0) goto out;
   if(usb_buf_putu(buf, max, &len, usb_runtime_irq_consume_failures) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_irq_event_port_change ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_irq_event_port_change) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_irq_event_transfer ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_irq_event_transfer) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_irq_event_error ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_irq_event_error) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_irq_event_resume ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_irq_event_resume) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_irq_event_other ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_irq_event_other) < 0) goto out;
   if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
 
   for(i = 0; i < usb_hc_count; i++){

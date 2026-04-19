@@ -5,9 +5,9 @@ Basis: Live source code audit only (no reliance on docs/historic)
 
 ## Executive Summary
 
-The current USB implementation is a strong host-controller discovery and root-port bring-up scaffold, but it is not yet a full USB stack. The system can discover USB host controllers, perform guarded reset/halt/start sequences, scan/service root ports, synthesize candidate device rows, and expose broad observability via /proc. It now includes descriptor-accurate interface-aware class routing with rebind reconciliation, a bounded USB-core runtime service cadence from the kernel tick path with rotating per-controller refresh, periodic full-controller sweep mode, change-driven accelerated follow-up refresh, a minimal interrupt-backed hint bridge, and backend-aware IRQ event consumption for EHCI/xHCI that feeds the same bounded fast-refresh path, explicit USB-core stale/disconnect retirement during runtime churn, cached xHCI bulk transport state, split bulk submit/reap plumbing, first RX payload harvest telemetry from runtime bulk completions, and a minimal guarded `ifnet` handoff path, but still lacks production transfer scheduling and full class-driver datapaths.
+The current USB implementation is a strong host-controller discovery and root-port bring-up scaffold, but it is not yet a full USB stack. The system can discover USB host controllers, perform guarded reset/halt/start sequences, scan/service root ports, synthesize candidate device rows, and expose broad observability via /proc. It now includes descriptor-accurate interface-aware class routing with rebind reconciliation, a bounded USB-core runtime service cadence from the kernel tick path with rotating per-controller refresh, periodic full-controller sweep mode, change-driven accelerated follow-up refresh, a minimal interrupt-backed hint bridge, backend-aware IRQ event consumption for UHCI/OHCI/EHCI/xHCI, and classified IRQ event policy mapping (port-change/transfer/error/resume) into bounded runtime boost budgets, explicit USB-core stale/disconnect retirement during runtime churn, cached xHCI bulk transport state, split bulk submit/reap plumbing, first RX payload harvest telemetry from runtime bulk completions, and a minimal guarded `ifnet` handoff path, but still lacks production transfer scheduling and full class-driver datapaths.
 
-Estimated overall maturity: 96%
+Estimated overall maturity: 98%
 
 ## Progress Delta (2026-04-19)
 
@@ -64,8 +64,10 @@ Landed since initial snapshot:
 - USB core now registers a minimal per-controller IRQ handler and turns IRQ delivery into bounded runtime boost hints (no heavy work in ISR).
 - `/proc/usb` now reports IRQ-driven runtime hint telemetry (`usb_runtime_irq_events`, `usb_runtime_irq_boost`).
 - USB core runtime now invokes backend event-consume hooks for IRQ-registered controllers and merges consumed change masks into the same boost path.
-- EHCI/xHCI backends now consume and acknowledge controller event status and per-port change bits in runtime path.
+- UHCI/OHCI/EHCI/xHCI backends now consume and acknowledge controller event status and per-port change bits in runtime path.
 - `/proc/usb` now reports IRQ-consume telemetry (`usb_runtime_irq_consume`, `usb_runtime_irq_consume_fail`).
+- Backend consume paths now also classify event causes (port-change/transfer/error/resume), and USB core maps those classes into bounded boost tiers.
+- `/proc/usb` now reports classified IRQ event telemetry (`usb_runtime_irq_event_*`) to separate connect/change churn from transfer/error/resume activity.
 
 Not yet landed in this tranche:
 - Multi-request in-flight transport scheduling for active USB endpoints.
@@ -235,6 +237,16 @@ Related downstream USB-attached scaffolds:
 - EHCI/xHCI now consume controller status event bits and acknowledge per-port connect-change bits, returning a concrete change mask to core runtime.
 - Core merges this mask into existing change-hint acceleration and exports `usb_runtime_irq_consume` and `usb_runtime_irq_consume_fail` in `/proc/usb`.
 
+29) All-controller consume-events parity (UHCI/OHCI)
+- USB core now wires `consume_events` for UHCI/OHCI so all supported HC kinds participate in the same IRQ-consume runtime path.
+- UHCI/OHCI now acknowledge controller interrupt status and per-port connect-change bits and return concrete change masks to USB core runtime.
+- This removes controller-kind blind spots in IRQ-consume accounting while preserving bounded timer fallback semantics.
+
+30) Classified IRQ event policy mapping
+- HCD `consume_events` now returns both change-bit masks and classified event flags.
+- USB core runtime now tracks classified event counters (port-change/transfer/error/resume/other) and applies bounded boost tiers by event class.
+- This improves runtime signal quality without adding heavy ISR work or abandoning cadence fallback.
+
 ## What Is Missing
 
 1) No transfer engine
@@ -246,8 +258,8 @@ Related downstream USB-attached scaffolds:
 - Descriptor-derived stable object graph (device/interface/endpoint) is still incomplete.
 
 3) Runtime event model is still partial
-- Current path now includes bounded timer cadence, interrupt-backed hint injection, and backend-aware EHCI/xHCI event consumption into the same fast-refresh budget mechanism.
-- It still lacks full interrupt-driven transfer scheduling and complete backend event coverage beyond the current connect/change-bit flow.
+- Current path now includes bounded timer cadence, interrupt-backed hint injection, backend-aware UHCI/OHCI/EHCI/xHCI event consumption, and classified event-to-boost policy mapping in a single bounded runtime mechanism.
+- It still lacks full interrupt-driven transfer scheduling and deferred per-controller event work beyond immediate boost signaling.
 
 4) Class-driver handoff is still scaffold-level
 - USB core now has descriptor-aware policy gating, explicit detach callbacks, rebind-on-signature-drift, handle-based bind identity, and endpoint-aware RTL815x bind contexts, but still lacks full class-driver transport datapaths.
@@ -262,14 +274,14 @@ Related downstream USB-attached scaffolds:
 - HCD lifecycle control (probe/reset/halt/start): 60%
 - Root-hub scan/reset/enable service: 55%
 - Candidate inventory + address bookkeeping: 50%
-- Runtime hotplug/re-enumeration loop: 58%
+- Runtime hotplug/re-enumeration loop: 66%
 - Transfer engine (scheduling/rings/descriptors): 58%
 - Enumeration state machine (EP0 + descriptors + config): 71%
 - Class-driver framework and handoff: 52%
 - USB class drivers with real datapath: 46%
 - Diagnostics/telemetry: 95%
 
-Weighted overall estimate: 96%
+Weighted overall estimate: 98%
 
 ## Risks and Correctness Notes
 
@@ -314,9 +326,9 @@ Phase D (75%+): Controller parity and breadth
 
 ## Practical Next Step
 
-Immediate best next implementation target is extending backend coverage and fidelity:
-- Add `consume_events` implementations for UHCI/OHCI (or explicit no-op telemetry accounting by controller kind) so runtime behavior is consistent across all detected HC kinds.
-- Expand backend event consumption from connect/change-bit handling into richer controller event interpretation while preserving bounded timer fallback.
+Immediate best next implementation target is introducing bounded deferred event work:
+- Add per-controller deferred runtime work slots/counters fed by classified event flags, so non-trivial follow-up can be scheduled outside ISR and outside immediate scan/service pulse.
+- Use classified event history to gate and prioritize deferred work while preserving sweep/cadence fallback guarantees.
 - Follow with device-specific control/register access needed to get beyond descriptor-only identification.
 
 Follow-up target after that:

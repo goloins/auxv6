@@ -13,6 +13,9 @@
 #define UHCI_CMD_HCRESET   (1U << 1)    /* Host Controller Reset */
 
 /* USBSTS bits. */
+#define UHCI_STS_USBINT    (1U << 0)    /* USB Interrupt */
+#define UHCI_STS_ERROR     (1U << 1)    /* USB Error Interrupt */
+#define UHCI_STS_RD        (1U << 2)    /* Resume Detect */
 #define UHCI_STS_HCH       (1U << 5)    /* HCHalted */
 
 #define UHCI_POLL_TRIES    2000
@@ -225,5 +228,58 @@ usb_uhci_service_ports(struct usb_hc_probe *sc, struct pci_dev *dev)
       sc->rh_enabled_bits |= (1U << n);
   }
 
+  return 0;
+}
+
+int
+usb_uhci_consume_events(struct usb_hc_probe *sc, struct pci_dev *dev,
+                        uint *change_bits, uint *event_flags)
+{
+  ushort iobase;
+  ushort st;
+  uint n;
+  uint changes;
+
+  (void)dev;
+
+  if(change_bits)
+    *change_bits = 0;
+  if(event_flags)
+    *event_flags = 0;
+  if(!sc || !sc->reg_probe_ok || sc->rh_ports == 0)
+    return 0;
+
+  iobase = uhci_iobase(sc);
+  st = inw(iobase + UHCI_REG_USBSTS);
+  st &= (UHCI_STS_USBINT | UHCI_STS_ERROR | UHCI_STS_RD);
+  if(st)
+    outw(iobase + UHCI_REG_USBSTS, st);
+
+  if(event_flags){
+    if(st & UHCI_STS_USBINT)
+      *event_flags |= USB_HC_EVENT_TRANSFER;
+    if(st & UHCI_STS_ERROR)
+      *event_flags |= USB_HC_EVENT_ERROR;
+    if(st & UHCI_STS_RD)
+      *event_flags |= USB_HC_EVENT_RESUME;
+  }
+
+  changes = 0;
+  for(n = 0; n < sc->rh_ports && n < 2; n++){
+    ushort off;
+    ushort ps;
+
+    off = (ushort)(UHCI_REG_PORTSC1 + n * 2);
+    ps = inw(iobase + off);
+    if(!(ps & UHCI_PORTSC_CSC))
+      continue;
+    changes |= (1U << n);
+    outw(iobase + off, (ushort)(ps | UHCI_PORTSC_CSC));
+  }
+
+  if(change_bits)
+    *change_bits = changes;
+  if(event_flags && changes)
+    *event_flags |= USB_HC_EVENT_PORT_CHANGE;
   return 0;
 }

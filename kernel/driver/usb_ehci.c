@@ -280,7 +280,7 @@ usb_ehci_service_ports(struct usb_hc_probe *sc, struct pci_dev *dev)
 
 int
 usb_ehci_consume_events(struct usb_hc_probe *sc, struct pci_dev *dev,
-                        uint *change_bits)
+                        uint *change_bits, uint *event_flags)
 {
   volatile uint *regs;
   uint opbase;
@@ -290,6 +290,8 @@ usb_ehci_consume_events(struct usb_hc_probe *sc, struct pci_dev *dev,
 
   if(change_bits)
     *change_bits = 0;
+  if(event_flags)
+    *event_flags = 0;
   if(!sc || !sc->reg_probe_ok || sc->rh_ports == 0)
     return 0;
 
@@ -306,6 +308,15 @@ usb_ehci_consume_events(struct usb_hc_probe *sc, struct pci_dev *dev,
   if(st)
     ehci_write(regs, opbase + EHCI_OP_USBSTS, st);
 
+  if(event_flags){
+    if(st & EHCI_USBSTS_USBINT)
+      *event_flags |= USB_HC_EVENT_TRANSFER;
+    if(st & EHCI_USBSTS_ERRINT)
+      *event_flags |= USB_HC_EVENT_ERROR;
+    if(st & EHCI_USBSTS_PCD)
+      *event_flags |= USB_HC_EVENT_PORT_CHANGE;
+  }
+
   changes = 0;
   for(n = 0; n < sc->rh_ports && n < 32; n++){
     uint off;
@@ -321,5 +332,7 @@ usb_ehci_consume_events(struct usb_hc_probe *sc, struct pci_dev *dev,
 
   if(change_bits)
     *change_bits = changes;
+  if(event_flags && changes)
+    *event_flags |= USB_HC_EVENT_PORT_CHANGE;
   return 0;
 }
