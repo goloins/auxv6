@@ -127,7 +127,6 @@ static struct ifnet_ops virtio_net_ops = {
 
 static const struct pci_device_id virtio_net_pci_ids[] = {
     { PCI_VENDOR_VIRTIO, PCI_DEVICE_VIRTIO_NET, 0, 0, PCI_MATCH_VENDOR | PCI_MATCH_DEVICE },
-    { PCI_VENDOR_VIRTIO, 0x1000, 0, 0, PCI_MATCH_VENDOR | PCI_MATCH_DEVICE },
 };
 
 static struct pci_driver virtio_net_pci_driver = {

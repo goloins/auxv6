@@ -80,6 +80,7 @@ Progress log
 - 2026-04-18: Added `bdev_unregister()` core API and wired `virtio_blk_remove` to unregister block devices and reclaim device-unit allocation state.
 - 2026-04-19: Enhanced PCI audit and procfs observability to include bound driver names and first vector (irq0) in `pci_irq_audit_report()` and `pci_format_devices()` for runtime visibility of driver-device binding and active IRQ routing.
 - 2026-04-19: Fixed `virtio_probe_pci()` to handle transitional devices (0x1000-0x103F) that use modern memory-mapped BARs instead of legacy I/O ports, allowing virtio_net/blk/gpu to probe correctly regardless of QEMU BAR configuration.
+- 2026-04-19: Fixed virtio legacy-device regression in MSI-X helper path: `virtq_set_vector()` and `virtio_set_config_vector()` now no-op for non-MSI-X devices before requiring modern common config, restoring virtio_net attach on transitional INTx/MSI devices. Also removed duplicate virtio PCI ID table entries that caused immediate misleading re-probe after probe failure.
 
 Next tranche (ready to start)
 - All 10 production PCI drivers converted to vector API (100% coverage for interrupt-using drivers).
@@ -252,3 +253,4 @@ Latest verification events
 - 2026-04-18: Converted `virtio_gpu` init/probe flow to PCI driver registration callbacks and verified with `sudo make aux.kern` (`✓ virtio-gpu-pci-driver aux.kern clean`).
 - 2026-04-18: Converted `virtio_net` and `virtio_blk` init/probe flow to PCI driver registration callbacks and verified with `sudo make aux.kern` (`✓ net-blk-pci-driver aux.kern clean`).
 - 2026-04-18: Added `bdev_unregister()` and integrated virtio_blk remove-path device unregistration, verified with `sudo make aux.kern` (`✓ bdev-unregister aux.kern clean`).
+- 2026-04-19: Fixed virtio legacy-device MSI-X helper regression (`virtq_set_vector()` / `virtio_set_config_vector()` mode gating) and removed duplicate virtio net/block PCI ID entries; verified with `sudo make aux.kern` (`✓ virtio-legacy-msix-helper-fix aux.kern clean`).

@@ -606,7 +606,6 @@ static const struct bdevsw virtio_blk_bdevsw = {
 
 static const struct pci_device_id virtio_blk_pci_ids[] = {
     { PCI_VENDOR_VIRTIO, PCI_DEVICE_VIRTIO_BLK, 0, 0, PCI_MATCH_VENDOR | PCI_MATCH_DEVICE },
-    { PCI_VENDOR_VIRTIO, 0x1001, 0, 0, PCI_MATCH_VENDOR | PCI_MATCH_DEVICE },
 };
 
 static struct pci_driver virtio_blk_pci_driver = {

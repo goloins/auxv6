@@ -563,11 +563,14 @@ virtio_set_config_vector(struct virtio_dev *vdev, int vector_index)
 {
     uint16_t vec;
 
-    if (!vdev || !vdev->common_cfg || !vdev->pci)
+    if (!vdev || !vdev->pci)
         return -1;
 
     if (pci_irq_mode(vdev->pci) != PCI_IRQ_MODE_MSIX)
         return 0;
+
+    if (!vdev->common_cfg)
+        return -1;
 
     if (vector_index < 0)
         vec = 0xFFFF;
@@ -722,11 +725,14 @@ virtq_set_vector(struct virtio_dev *vdev, int index, int vector_index)
 {
     uint16_t vec;
 
-    if (!vdev || !vdev->common_cfg || !vdev->pci || index < 0)
+    if (!vdev || !vdev->pci || index < 0)
         return -1;
 
     if (pci_irq_mode(vdev->pci) != PCI_IRQ_MODE_MSIX)
         return 0;
+
+    if (!vdev->common_cfg)
+        return -1;
 
     if (vector_index < 0)
         vec = 0xFFFF;

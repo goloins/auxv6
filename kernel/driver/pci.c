@@ -882,6 +882,7 @@ pci_register_driver(struct pci_driver *drv)
         struct pci_dev *dev = &pci_devices[i];
         int bound;
 
+
         if (dev->bound_driver)
             continue;
 
