@@ -256,3 +256,4 @@ targetfs/usr/libexec/sshd-auth
 targetfs/usr/libexec/sshd-session
 user/libauxmenu.a
 .tmp
+targetfs/usr/include/*

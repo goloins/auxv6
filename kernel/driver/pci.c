@@ -880,6 +880,12 @@ pci_register_driver(struct pci_driver *drv)
     /* Probe existing devices */
     for (int i = 0; i < pci_ndevices; i++) {
         struct pci_dev *dev = &pci_devices[i];
+        int bound;
+
+        if (dev->bound_driver)
+            continue;
+
+        bound = 0;
         for (int j = 0; j < drv->id_table_len; j++) {
             const struct pci_device_id *id = &drv->id_table[j];
             int match = 1;
@@ -898,10 +904,16 @@ pci_register_driver(struct pci_driver *drv)
                 match = 0;
             
             if (match && drv->probe) {
-                drv->probe(dev);
-                break;
+                if (drv->probe(dev) == 0) {
+                    dev->bound_driver = drv;
+                    bound = 1;
+                    break;
+                }
             }
         }
+
+        if (bound)
+            continue;
     }
     
     release(&pci_lock);
@@ -911,11 +923,23 @@ pci_register_driver(struct pci_driver *drv)
 void
 pci_unregister_driver(struct pci_driver *drv)
 {
+    struct pci_dev *remove_list[PCI_MAX_DEVICES];
+    int remove_count;
+
+    remove_count = 0;
+
     acquire(&pci_lock);
     for (int i = 0; i < pci_ndrivers; i++) {
         if (pci_drivers[i] == drv) {
-            /* Call remove for all attached devices */
-            /* TODO: Track which devices are attached to which driver */
+            /* Collect bound devices and clear ownership under lock. */
+            for (int d = 0; d < pci_ndevices; d++) {
+                struct pci_dev *dev = &pci_devices[d];
+                if (dev->bound_driver == drv) {
+                    dev->bound_driver = 0;
+                    remove_list[remove_count++] = dev;
+                }
+            }
+
             for (int j = i; j < pci_ndrivers - 1; j++)
                 pci_drivers[j] = pci_drivers[j + 1];
             pci_ndrivers--;
@@ -923,6 +947,13 @@ pci_unregister_driver(struct pci_driver *drv)
         }
     }
     release(&pci_lock);
+
+    if (drv->remove) {
+        for (int i = 0; i < remove_count; i++) {
+            drv->remove(remove_list[i]);
+            remove_list[i]->driver_data = 0;
+        }
+    }
 }
 
 /*

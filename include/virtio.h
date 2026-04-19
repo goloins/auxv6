@@ -209,6 +209,7 @@ void virtio_reset(struct virtio_dev *vdev);
 int  virtio_negotiate_features(struct virtio_dev *vdev, uint64_t requested);
 void virtio_set_status(struct virtio_dev *vdev, uint8_t status);
 int  virtio_finalize_features(struct virtio_dev *vdev);
+int  virtio_set_config_vector(struct virtio_dev *vdev, int vector_index);
 
 /* Virtqueue management */
 struct virtqueue *virtq_create(struct virtio_dev *vdev, int index, int size);

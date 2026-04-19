@@ -370,8 +370,6 @@ virtq_size_bytes(int qsize)
 int
 virtio_probe_pci(struct pci_dev *pci, struct virtio_dev *vdev)
 {
-    int is_legacy;
-
     if (!pci || !vdev)
         return -1;
     
@@ -381,15 +379,12 @@ virtio_probe_pci(struct pci_dev *pci, struct virtio_dev *vdev)
     /* Check for virtio vendor ID */
     if (pci->vendor_id != PCI_VENDOR_VIRTIO)
         return -1;
-
-    is_legacy = 0;
     
     /* Map PCI device ID to virtio device type. */
     /* Transitional devices use 0x1000 + virtio device ID - 1. */
     if (pci->device_id >= VIRTIO_PCI_TRANSITIONAL_MIN &&
         pci->device_id <= VIRTIO_PCI_TRANSITIONAL_MAX) {
         vdev->device_id = pci->device_id - 0x0FFF;
-        is_legacy = 1;
     } else if (pci->device_id >= VIRTIO_PCI_MODERN_MIN &&
                pci->device_id <= VIRTIO_PCI_MODERN_MAX) {
         vdev->device_id = pci->device_id - VIRTIO_PCI_MODERN_MIN;
@@ -398,7 +393,9 @@ virtio_probe_pci(struct pci_dev *pci, struct virtio_dev *vdev)
         vdev->device_id = pci_config_read16(pci->bus, pci->slot, pci->func, 0x2E);
     }
 
-    if(!is_legacy && (pci_bar_type(pci, 0) & PCI_BAR_IO) == 0)
+    /* Check if device is using modern (memory-mapped) interface.
+     * This can happen even on transitional devices if firmware/QEMU configures them that way. */
+    if((pci_bar_type(pci, 0) & PCI_BAR_IO) == 0)
         return virtio_probe_modern_pci(pci, vdev);
     
     /* Get I/O base from BAR0 (legacy interface) */
@@ -461,6 +458,18 @@ virtio_reset(struct virtio_dev *vdev)
     } else {
         while (virtio_ioread8(vdev, VIRTIO_PCI_STATUS) != 0)
             ;
+    }
+
+    if (virtio_is_modern(vdev) && vdev->pci && pci_irq_mode(vdev->pci) == PCI_IRQ_MODE_MSIX) {
+        /* Reset should leave no active MSI-X config/queue assignments. */
+        virtio_mmio_write16(vdev->common_cfg, VIRTIO_PCI_COMMON_MSIX_CFG, 0xFFFF);
+        for (int q = 0; q < 16; q++) {
+            if (!vdev->vqs[q])
+                continue;
+            virtio_mmio_write16(vdev->common_cfg, VIRTIO_PCI_COMMON_Q_SELECT, (uint16_t)q);
+            virtio_mmio_write16(vdev->common_cfg, VIRTIO_PCI_COMMON_Q_MSIX, 0xFFFF);
+            virtio_mmio_write16(vdev->common_cfg, VIRTIO_PCI_COMMON_Q_ENABLE, 0);
+        }
     }
     
     vdev->status = 0;
@@ -546,6 +555,35 @@ virtio_finalize_features(struct virtio_dev *vdev)
         return -1;
     }
     
+    return 0;
+}
+
+int
+virtio_set_config_vector(struct virtio_dev *vdev, int vector_index)
+{
+    uint16_t vec;
+
+    if (!vdev || !vdev->common_cfg || !vdev->pci)
+        return -1;
+
+    if (pci_irq_mode(vdev->pci) != PCI_IRQ_MODE_MSIX)
+        return 0;
+
+    if (vector_index < 0)
+        vec = 0xFFFF;
+    else if (vector_index > 0x7FFF)
+        return -1;
+    else
+        vec = (uint16_t)vector_index;
+
+    virtio_mmio_write16(vdev->common_cfg, VIRTIO_PCI_COMMON_MSIX_CFG, vec);
+    if (virtio_mmio_read16(vdev->common_cfg, VIRTIO_PCI_COMMON_MSIX_CFG) != vec)
+        return -1;
+
+    BOOTDBG("virtio: config->vec=%d dev=%d\n",
+            (vector_index < 0) ? -1 : vector_index,
+            (int)vdev->device_id);
+
     return 0;
 }
 
@@ -705,6 +743,11 @@ virtq_set_vector(struct virtio_dev *vdev, int index, int vector_index)
     if (virtio_mmio_read16(vdev->common_cfg, VIRTIO_PCI_COMMON_Q_MSIX) != vec)
         return -1;
 
+    BOOTDBG("virtio: q%d->vec=%d dev=%d\n",
+            index,
+            (vector_index < 0) ? -1 : vector_index,
+            (int)vdev->device_id);
+
     return 0;
 }
 
@@ -718,8 +761,17 @@ virtq_destroy(struct virtqueue *vq)
         return;
     
     if(virtio_is_modern(vq->vdev)) {
+        /* Explicitly disable modern queue state before freeing ring memory. */
+        virtio_mmio_write16(vq->vdev->common_cfg, VIRTIO_PCI_COMMON_Q_SELECT,
+                            (uint16_t)vq->index);
+        if (pci_irq_mode(vq->vdev->pci) == PCI_IRQ_MODE_MSIX)
+            virtio_mmio_write16(vq->vdev->common_cfg, VIRTIO_PCI_COMMON_Q_MSIX, 0xFFFF);
+        virtio_mmio_write16(vq->vdev->common_cfg, VIRTIO_PCI_COMMON_Q_ENABLE, 0);
+
         if(vq->index < 16 && vq->vdev->vqs[vq->index] == vq)
             vq->vdev->vqs[vq->index] = 0;
+        while (vq->vdev->nvqs > 0 && vq->vdev->vqs[vq->vdev->nvqs - 1] == 0)
+            vq->vdev->nvqs--;
     } else {
         /* Tell device queue is gone */
         virtio_iowrite16(vq->vdev, VIRTIO_PCI_QUEUE_SEL, vq->index);

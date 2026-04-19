@@ -84,6 +84,7 @@ void            vm_get_addrspace_guard_stats(uint *checks, uint *allows,
                                              uint *bypass_vm_size);
 void            bdevinit(void);
 int             bdev_register(uint dev, const struct bdevsw *ops);
+int             bdev_unregister(uint dev);
 int             bdev_register_part(uint dev, uint parent, uint start, uint nblocks);
 int             bdev_set_nblocks(uint dev, uint nblocks);
 int             bdevrw(struct buf *b);

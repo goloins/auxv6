@@ -117,10 +117,25 @@ struct virtio_net_udp_hdr {
 
 static int virtio_net_output(struct ifnet *ifp, struct mbuf *m);
 static void virtio_net_poll(struct ifnet *ifp);
+static int virtio_net_pci_probe(struct pci_dev *dev);
+static void virtio_net_pci_remove(struct pci_dev *dev);
 
 static struct ifnet_ops virtio_net_ops = {
     .if_output = virtio_net_output,
     .if_poll = virtio_net_poll,
+};
+
+static const struct pci_device_id virtio_net_pci_ids[] = {
+    { PCI_VENDOR_VIRTIO, PCI_DEVICE_VIRTIO_NET, 0, 0, PCI_MATCH_VENDOR | PCI_MATCH_DEVICE },
+    { PCI_VENDOR_VIRTIO, 0x1000, 0, 0, PCI_MATCH_VENDOR | PCI_MATCH_DEVICE },
+};
+
+static struct pci_driver virtio_net_pci_driver = {
+    .name = "virtio_net",
+    .id_table = virtio_net_pci_ids,
+    .id_table_len = sizeof(virtio_net_pci_ids) / sizeof(virtio_net_pci_ids[0]),
+    .probe = virtio_net_pci_probe,
+    .remove = virtio_net_pci_remove,
 };
 
 /* Driver-specific data */
@@ -154,6 +169,32 @@ struct virtio_net_softc {
     int irq_tx;                /* TX queue IRQ */
     int num_vecs;              /* Number of vectors allocated (1 or 2) */
 };
+
+static void
+virtio_net_remove(struct virtio_net_softc *sc)
+{
+    if (!sc)
+        return;
+
+    if (sc->ifp.if_xname[0])
+        if_unregister(&sc->ifp);
+
+    if (sc->irq_tx > 0 && sc->irq_tx != sc->irq_rx)
+        irq_unregister(sc->irq_tx, "virtio_net_tx");
+    if (sc->irq_rx > 0)
+        irq_unregister(sc->irq_rx, "virtio_net_rx");
+
+    if (sc->vdev.vqs[VIRTIO_NET_Q_TX])
+        virtq_destroy(sc->vdev.vqs[VIRTIO_NET_Q_TX]);
+    if (sc->vdev.vqs[VIRTIO_NET_Q_RX])
+        virtq_destroy(sc->vdev.vqs[VIRTIO_NET_Q_RX]);
+
+    virtio_reset(&sc->vdev);
+    if (sc->vdev.pci)
+        pci_irq_free_vectors(sc->vdev.pci);
+
+    memset(sc, 0, sizeof(*sc));
+}
 
 /* Global array of virtio-net devices */
 #define MAX_VIRTIO_NET 4
@@ -695,6 +736,14 @@ virtio_net_probe(struct pci_dev *pci)
         virtio_reset(&sc->vdev);
         return -1;
     }
+    if (virtio_set_config_vector(&sc->vdev, 0) < 0) {
+        VNETDBG("virtio_net: failed to map config vector\n");
+        pci_irq_free_vectors(pci);
+        virtq_destroy(rxq);
+        virtq_destroy(txq);
+        virtio_reset(&sc->vdev);
+        return -1;
+    }
 
     /* Register RX handler */
     if (irq_register(sc->irq_rx, virtio_net_irq_handler, sc, "virtio_net_rx") < 0) {
@@ -719,12 +768,15 @@ virtio_net_probe(struct pci_dev *pci)
         }
     }
 
-    if (pci_irq_mode(pci) == PCI_IRQ_MODE_INTX) {
+    int setup_irq_mode = pci_irq_mode(pci);
+    if (setup_irq_mode == PCI_IRQ_MODE_INTX) {
         VNETDBG("virtio_net: irq=%d mode=intx enabling ioapic cpu=%d (nvecs=%d)\n",
                 sc->vdev.irq, ncpu - 1, sc->num_vecs);
         pci_enable_irq(pci, ncpu - 1);
     } else {
-        VNETDBG("virtio_net: irq=%d mode=msi ioapic-bypass (nvecs=%d)\n", sc->vdev.irq, sc->num_vecs);
+        const char *setup_mode_name = (setup_irq_mode == PCI_IRQ_MODE_MSIX) ? "msix" : "msi";
+        VNETDBG("virtio_net: irq=%d mode=%s ioapic-bypass (nvecs=%d)\n",
+                sc->vdev.irq, setup_mode_name, sc->num_vecs);
     }
 
     virtio_net_fill_rx(sc);
@@ -777,10 +829,32 @@ virtio_net_probe(struct pci_dev *pci)
         irq_mode_name = "msix";
     
     virtio_net_count++;
+    pci->driver_data = sc;
     cprintf("virtio_net: attached %s irq=%d/%d mode=%s (nvecs=%d)\n",
             sc->ifp.if_xname, sc->irq_rx, sc->irq_tx, irq_mode_name, sc->num_vecs);
     
     return 0;
+}
+
+static int
+virtio_net_pci_probe(struct pci_dev *dev)
+{
+    return virtio_net_probe(dev);
+}
+
+static void
+virtio_net_pci_remove(struct pci_dev *dev)
+{
+    struct virtio_net_softc *sc;
+
+    if (!dev)
+        return;
+    sc = (struct virtio_net_softc *)dev->driver_data;
+    if (!sc)
+        return;
+
+    virtio_net_remove(sc);
+    dev->driver_data = 0;
 }
 
 /*
@@ -789,34 +863,20 @@ virtio_net_probe(struct pci_dev *pci)
 void
 virtio_net_init(void)
 {
-    int found;
+    int rc;
 
 #if DBG_VIRTIO_NET
     cprintf("virtio_net: DBG_VIRTIO_NET=1 verbose tracing enabled\n");
 #endif
 
     BOOTDBG("virtio_net: initializing driver\n");
-    found = 0;
 
-    /* Look for virtio-net PCI devices */
-    for (int i = 0; i < pci_device_count(); i++) {
-        struct pci_dev *dev = pci_get_device(i);
-        if (!dev)
-            continue;
-        
-        if (dev->vendor_id == PCI_VENDOR_VIRTIO &&
-            (dev->device_id == PCI_DEVICE_VIRTIO_NET ||
-             (dev->device_id >= 0x1000 && dev->device_id <= 0x103F &&
-              dev->device_id - 0x0FFF == VIRTIO_DEV_NET))) {
-            found = 1;
-            if (virtio_net_probe(dev) < 0) {
-                cprintf("virtio_net: probe failed at %d:%d.%d id=%x:%x\n",
-                        dev->bus, dev->slot, dev->func,
-                        dev->vendor_id, dev->device_id);
-            }
-        }
+    rc = pci_register_driver(&virtio_net_pci_driver);
+    if (rc < 0) {
+        cprintf("virtio_net: failed to register pci driver\n");
+        return;
     }
 
-    if (!found)
+    if (virtio_net_count == 0)
         cprintf("virtio_net: no compatible PCI device\n");
 }

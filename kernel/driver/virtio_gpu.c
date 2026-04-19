@@ -59,6 +59,8 @@ virtio_gpu_uartlog(const char *msg)
 static int virtio_gpu_display_probe(struct display_device *dev);
 static void virtio_gpu_irq_handler(int irq, void *arg);
 static void virtio_gpu_intr(struct virtio_dev *vdev);
+static int virtio_gpu_pci_probe(struct pci_dev *dev);
+static void virtio_gpu_pci_remove(struct pci_dev *dev);
 static int virtio_gpu_display_set_scanout(struct display_device *dev,
                                           struct display_crtc *crtc,
                                           struct framebuffer *fb);
@@ -82,6 +84,19 @@ static const struct display_device_ops virtio_gpu_display_ops = {
     .set_scanout = virtio_gpu_display_set_scanout,
     .flush_region = virtio_gpu_display_flush_region,
     .flush = virtio_gpu_display_flush,
+};
+
+static const struct pci_device_id virtio_gpu_pci_ids[] = {
+    { PCI_VENDOR_VIRTIO, 0x1050, 0, 0, PCI_MATCH_VENDOR | PCI_MATCH_DEVICE },
+    { PCI_VENDOR_VIRTIO, 0x100F, 0, 0, PCI_MATCH_VENDOR | PCI_MATCH_DEVICE },
+};
+
+static struct pci_driver virtio_gpu_pci_driver = {
+    .name = "virtio_gpu",
+    .id_table = virtio_gpu_pci_ids,
+    .id_table_len = sizeof(virtio_gpu_pci_ids) / sizeof(virtio_gpu_pci_ids[0]),
+    .probe = virtio_gpu_pci_probe,
+    .remove = virtio_gpu_pci_remove,
 };
 
 static int
@@ -342,6 +357,15 @@ virtio_gpu_probe(struct pci_dev *pci)
         release(&virtio_gpu_lock);
         return -1;
     }
+    if (virtio_set_config_vector(vdev, 0) < 0) {
+        cprintf("virtio_gpu: failed to map config vector\n");
+        pci_irq_free_vectors(pci);
+        sc->irq_allocated = 0;
+        virtq_destroy(ctrl_q);
+        virtq_destroy(cursor_q);
+        release(&virtio_gpu_lock);
+        return -1;
+    }
 
     /* Mark driver ready */
     virtio_set_status(vdev, VIRTIO_STATUS_DRIVER_OK);
@@ -419,11 +443,34 @@ virtio_gpu_probe(struct pci_dev *pci)
 
     virtio_gpu_count++;
 
+    pci->driver_data = sc;
+
     release(&virtio_gpu_lock);
 
     cprintf("virtio_gpu: device initialized successfully irq=%d mode=%s (nvecs=%d)\n",
             vdev->irq, irq_mode_name, sc->num_vecs);
     return 0;
+}
+
+static int
+virtio_gpu_pci_probe(struct pci_dev *dev)
+{
+    return virtio_gpu_probe(dev);
+}
+
+static void
+virtio_gpu_pci_remove(struct pci_dev *dev)
+{
+    struct virtio_gpu_softc *sc;
+
+    if(!dev)
+        return;
+    sc = (struct virtio_gpu_softc *)dev->driver_data;
+    if(!sc)
+        return;
+
+    virtio_gpu_remove(sc);
+    dev->driver_data = 0;
 }
 
 /*
@@ -440,10 +487,18 @@ virtio_gpu_remove(struct virtio_gpu_softc *sc)
             irq_unregister(sc->irq_ctrl, "virtio-gpu-ctrl");
         if(sc->vdev.irq > 0)
             irq_unregister(sc->vdev.irq, "virtio-gpu");
-        if(sc->vdev.pci)
-            pci_irq_free_vectors(sc->vdev.pci);
         sc->irq_allocated = 0;
     }
+
+    if(sc->vdev.vqs[VIRTIO_GPU_Q_CURSOR])
+        virtq_destroy(sc->vdev.vqs[VIRTIO_GPU_Q_CURSOR]);
+    if(sc->vdev.vqs[VIRTIO_GPU_Q_CONTROL])
+        virtq_destroy(sc->vdev.vqs[VIRTIO_GPU_Q_CONTROL]);
+
+    virtio_reset(&sc->vdev);
+
+    if(sc->vdev.pci)
+        pci_irq_free_vectors(sc->vdev.pci);
 
     if(sc->display_dev) {
         display_device_unregister(sc->display_dev);
@@ -1137,33 +1192,19 @@ virtio_gpu_display_flush(struct display_device *dev, struct framebuffer *fb)
 void
 virtio_gpu_init(void)
 {
-    int found;
+    int rc;
 
     initlock(&virtio_gpu_lock, "virtio_gpu");
     virtio_gpu_count = 0;
-    found = 0;
 
     BOOTDBG("virtio_gpu: subsystem initialized\n");
 
-    /* Look for virtio-gpu PCI devices (same model as virtio_blk/net). */
-    for (int i = 0; i < pci_device_count(); i++) {
-        struct pci_dev *dev = pci_get_device(i);
-        if (!dev)
-            continue;
-
-        if (dev->vendor_id == PCI_VENDOR_VIRTIO &&
-            (dev->device_id == 0x1050 ||
-             (dev->device_id >= 0x1000 && dev->device_id <= 0x103F &&
-              dev->device_id - 0x0FFF == VIRTIO_DEV_GPU))) {
-            found = 1;
-            if (virtio_gpu_probe(dev) < 0) {
-                cprintf("virtio_gpu: probe failed at %d:%d.%d id=%x:%x\n",
-                        dev->bus, dev->slot, dev->func,
-                        dev->vendor_id, dev->device_id);
-            }
-        }
+    rc = pci_register_driver(&virtio_gpu_pci_driver);
+    if (rc < 0) {
+        cprintf("virtio_gpu: failed to register pci driver\n");
+        return;
     }
 
-    if (!found)
+    if (virtio_gpu_count == 0)
         cprintf("virtio_gpu: no compatible PCI device\n");
 }

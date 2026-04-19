@@ -127,6 +127,7 @@ struct virtio_blk_softc {
     
     /* Block device ID (for blockdev registration) */
     uint dev_id;
+    int dev_registered;
 
     /* Hardware-negotiated virtqueue depth (set once at probe, read-only thereafter) */
     uint32_t vq_size;
@@ -216,6 +217,8 @@ static int virtio_blk_admin_write_zeroes_all(uint64_t sector, uint32_t count,
 static int virtio_blk_admin_flush_by_dev(uint dev);
 static int virtio_blk_admin_flush_all(void);
 static int virtio_blk_admin_flush_first(void);
+static int virtio_blk_pci_probe(struct pci_dev *dev);
+static void virtio_blk_pci_remove(struct pci_dev *dev);
 
 int
 virtio_blk_get_flush_every_writes(void)
@@ -601,6 +604,19 @@ static const struct bdevsw virtio_blk_bdevsw = {
     .name = "virtio-blk"
 };
 
+static const struct pci_device_id virtio_blk_pci_ids[] = {
+    { PCI_VENDOR_VIRTIO, PCI_DEVICE_VIRTIO_BLK, 0, 0, PCI_MATCH_VENDOR | PCI_MATCH_DEVICE },
+    { PCI_VENDOR_VIRTIO, 0x1001, 0, 0, PCI_MATCH_VENDOR | PCI_MATCH_DEVICE },
+};
+
+static struct pci_driver virtio_blk_pci_driver = {
+    .name = "virtio_blk",
+    .id_table = virtio_blk_pci_ids,
+    .id_table_len = sizeof(virtio_blk_pci_ids) / sizeof(virtio_blk_pci_ids[0]),
+    .probe = virtio_blk_pci_probe,
+    .remove = virtio_blk_pci_remove,
+};
+
 /*
  * IRQ handler wrapper (called from trap.c)
  */
@@ -646,6 +662,34 @@ virtio_blk_find_by_dev(uint dev)
     }
 
     return 0;
+}
+
+static void
+virtio_blk_remove(struct virtio_blk_softc *sc)
+{
+    int unit;
+
+    if (!sc)
+        return;
+
+    if (sc->dev_registered)
+        bdev_unregister(sc->dev_id);
+
+    unit = (int)sc->dev_id - VD_DISK_BASE;
+    if (unit >= 0 && unit < VD_DISK_UNITS && unit < virtio_blk_next_unit)
+        virtio_blk_next_unit = unit;
+
+    if (sc->vdev.irq > 0)
+        irq_unregister(sc->vdev.irq, "virtio_blk");
+
+    if (sc->vdev.vqs[0])
+        virtq_destroy(sc->vdev.vqs[0]);
+
+    virtio_reset(&sc->vdev);
+    if (sc->vdev.pci)
+        pci_irq_free_vectors(sc->vdev.pci);
+
+    memset(sc, 0, sizeof(*sc));
 }
 
 /*
@@ -1319,6 +1363,13 @@ virtio_blk_probe(struct pci_dev *pci)
         virtio_reset(&sc->vdev);
         return -1;
     }
+    if (virtio_set_config_vector(&sc->vdev, 0) < 0) {
+        cprintf("virtio_blk: failed to map config vector\n");
+        pci_irq_free_vectors(pci);
+        virtq_destroy(vq);
+        virtio_reset(&sc->vdev);
+        return -1;
+    }
     
     /* Register IRQ handler on vector 0 */
     if (irq_register(sc->vdev.irq, virtio_blk_irq_handler, sc, "virtio_blk") < 0) {
@@ -1346,6 +1397,7 @@ virtio_blk_probe(struct pci_dev *pci)
         return -1;
     }
     sc->dev_id = dev_id;
+    sc->dev_registered = 1;
     bdev_set_nblocks(sc->dev_id, sc->capacity / (BSIZE / 512));
 
     irq_mode = pci_irq_mode(pci);
@@ -1356,10 +1408,32 @@ virtio_blk_probe(struct pci_dev *pci)
         irq_mode_name = "msix";
     
     virtio_blk_count++;
+    pci->driver_data = sc;
     cprintf("virtio_blk: attached device %d as dev=%d irq=%d mode=%s (nvecs=%d)\n",
             virtio_blk_count - 1, sc->dev_id, sc->vdev.irq, irq_mode_name, sc->num_vecs);
     
     return 0;
+}
+
+static int
+virtio_blk_pci_probe(struct pci_dev *dev)
+{
+    return virtio_blk_probe(dev);
+}
+
+static void
+virtio_blk_pci_remove(struct pci_dev *dev)
+{
+    struct virtio_blk_softc *sc;
+
+    if (!dev)
+        return;
+    sc = (struct virtio_blk_softc *)dev->driver_data;
+    if (!sc)
+        return;
+
+    virtio_blk_remove(sc);
+    dev->driver_data = 0;
 }
 
 /*
@@ -1368,19 +1442,16 @@ virtio_blk_probe(struct pci_dev *pci)
 void
 virtio_blk_init(void)
 {
+    int rc;
+
     BOOTDBG("virtio_blk: initializing driver\n");
-    
-    /* Look for virtio-blk PCI devices */
-    for (int i = 0; i < pci_device_count(); i++) {
-        struct pci_dev *dev = pci_get_device(i);
-        if (!dev)
-            continue;
-        
-        if (dev->vendor_id == PCI_VENDOR_VIRTIO &&
-            (dev->device_id == PCI_DEVICE_VIRTIO_BLK ||
-             (dev->device_id >= 0x1000 && dev->device_id <= 0x103F &&
-              dev->device_id - 0x0FFF == VIRTIO_DEV_BLK))) {
-            virtio_blk_probe(dev);
-        }
+
+    rc = pci_register_driver(&virtio_blk_pci_driver);
+    if (rc < 0) {
+        cprintf("virtio_blk: failed to register pci driver\n");
+        return;
     }
+
+    if (virtio_blk_count == 0)
+        cprintf("virtio_blk: no compatible PCI device\n");
 }

@@ -189,6 +189,8 @@
 /* Maximum PCI devices to enumerate */
 #define PCI_MAX_DEVICES     64
 
+struct pci_driver;
+
 /* PCI device structure */
 struct pci_dev {
     uint8_t   bus;
@@ -212,6 +214,7 @@ struct pci_dev {
     uint8_t   irq_nvec;       /* Number of allocated vectors */
     uint8_t   irq_vectors[PCI_IRQ_MAX_VECTORS]; /* trap.c IRQ indexes */
     void     *driver_data;    /* Driver-private data */
+    struct pci_driver *bound_driver; /* Driver currently bound to this device */
 };
 
 /* PCI driver match structure (for driver registration) */

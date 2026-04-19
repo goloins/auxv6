@@ -172,6 +172,43 @@ bdev_register(uint dev, const struct bdevsw *ops)
 }
 
 int
+bdev_unregister(uint dev)
+{
+  int i;
+
+  if(dev >= NDEV)
+    return -1;
+
+  acquire(&bdevtable.lock);
+  if(bdevtable.dev[dev].ops == 0){
+    release(&bdevtable.lock);
+    return -1;
+  }
+
+  /* Refuse to remove a parent while partitions still reference it. */
+  for(i = 0; i < NDEV; i++){
+    if(i == (int)dev)
+      continue;
+    if(bdevtable.dev[i].ops == 0)
+      continue;
+    if(!bdevtable.dev[i].is_part)
+      continue;
+    if(bdevtable.dev[i].parent == dev){
+      release(&bdevtable.lock);
+      return -1;
+    }
+  }
+
+  bdevtable.dev[dev].ops = 0;
+  bdevtable.dev[dev].parent = 0;
+  bdevtable.dev[dev].start = 0;
+  bdevtable.dev[dev].nblocks = 0;
+  bdevtable.dev[dev].is_part = 0;
+  release(&bdevtable.lock);
+  return 0;
+}
+
+int
 bdev_register_part(uint dev, uint parent, uint start, uint nblocks)
 {
   const struct bdevsw *ops;

@@ -20,3 +20,7 @@ Loosely formatted list of goals of various scope and effort levels
 - Improve our window decorations, bring them into more of a os9/rhapsody look
 - Port C-only gcc.
 - ext2 -> 3 -> 4
+
+- Non-PCI follow-up: adopt bdev_unregister in other block providers/detach paths (loop, nvme, ahci where applicable)
+- Non-PCI follow-up: add blockdev lifecycle tests for bdev_unregister (including parent-with-partitions refusal path)
+- Non-PCI follow-up: add operator-facing blockdev registration/unregistration observability in proc/debug output

@@ -1,5 +1,5 @@
 PCI MSI/MSI-X Status
-Date: 2026-04-18
+Date: 2026-04-19
 Source of truth: live code in kernel/ and include/ only (no historic docs used)
 
 Baseline Summary
@@ -13,11 +13,11 @@ Baseline Summary
 Current Snapshot
 - Core PCI MSI/MSI-X infrastructure: 88%
 - Driver adoption (real users of pci_irq_alloc_vectors): 100% (all 10 drivers)
-- Multi-vector MSI-X support (per-queue routing): 80%
-- Interrupt-path integration quality: 88%
-- Observability/debug surface: 75%
-- Validation coverage: 70%
-- Weighted overall readiness to ship MSI/MSI-X broadly: 88%
+- Multi-vector MSI-X support (per-queue/config routing): 85%
+- Interrupt-path integration quality: 92%
+- Observability/debug surface: 85%
+- Validation coverage: 74%
+- Weighted overall readiness to ship MSI/MSI-X broadly: 93%
 
 How percentages are being measured
 - Core PCI MSI/MSI-X infrastructure:
@@ -70,6 +70,16 @@ Progress log
 - 2026-04-18: Added pci_irq_audit_format() kernel function to provide runtime observability of allocated vector usage per driver; enables quick validation of IRQ mode and vector count distribution.
 - 2026-04-18: Added pci_irq_audit_report() boot-time diagnostic function to report vector allocation results and per-device mode at kernel initialization.
 - 2026-04-18: Added virtio core queue-to-vector API (`virtq_set_vector`) and wired virtio_net/virtio_blk/virtio_gpu queue MSI-X mapping (`VIRTIO_PCI_COMMON_Q_MSIX`) with single-vector fallback semantics.
+- 2026-04-18: Added virtio config-vector programming API (`virtio_set_config_vector`) and wired virtio_net/virtio_blk/virtio_gpu to map config interrupts in MSI-X mode.
+- 2026-04-18: Hardened modern virtqueue teardown path to explicitly disable queues and unmap queue MSI-X vectors during `virtq_destroy`.
+- 2026-04-18: Hardened `virtio_reset` for modern MSI-X devices to clear config/queue vector mappings and disable active queue state during reset.
+- 2026-04-18: Hardened `virtio_gpu_remove` lifecycle ordering to destroy control/cursor virtqueues, reset device state, and then free PCI vectors.
+- 2026-04-18: Implemented PCI driver bind tracking (`pci_dev.bound_driver`) and wired `pci_unregister_driver()` to invoke remove callbacks for bound devices.
+- 2026-04-18: Converted `virtio_gpu` to PCI core registration (`pci_register_driver`) with explicit probe/remove callbacks and `pci_dev.driver_data` ownership.
+- 2026-04-18: Converted `virtio_net` and `virtio_blk` to PCI core registration (`pci_register_driver`) with explicit probe/remove callbacks and `pci_dev.driver_data` ownership.
+- 2026-04-18: Added `bdev_unregister()` core API and wired `virtio_blk_remove` to unregister block devices and reclaim device-unit allocation state.
+- 2026-04-19: Enhanced PCI audit and procfs observability to include bound driver names and first vector (irq0) in `pci_irq_audit_report()` and `pci_format_devices()` for runtime visibility of driver-device binding and active IRQ routing.
+- 2026-04-19: Fixed `virtio_probe_pci()` to handle transitional devices (0x1000-0x103F) that use modern memory-mapped BARs instead of legacy I/O ports, allowing virtio_net/blk/gpu to probe correctly regardless of QEMU BAR configuration.
 
 Next tranche (ready to start)
 - All 10 production PCI drivers converted to vector API (100% coverage for interrupt-using drivers).
@@ -88,6 +98,14 @@ Completed capabilities
 - [x] IRQ audit and observability (boot diagnostics + procfs formatting)
 - [x] Error injection framework for fallback path testing
 - [x] Multi-vector MSI-X with queue-per-vector routing in virtio core/drivers (active when MSI-X mode is granted)
+- [x] Config MSI-X vector programming in virtio core/drivers (active when MSI-X mode is granted)
+- [x] Modern virtqueue teardown hardening (queue disable + MSI-X queue unmap on destroy)
+- [x] Modern reset-path MSI-X hardening (clear config/queue mappings on reset)
+- [x] Virtio GPU remove-path lifecycle hardening (queue teardown + reset + vector free ordering)
+- [x] PCI driver lifecycle bookkeeping (bound-driver tracking + remove callback dispatch on unregister)
+- [x] Virtio GPU wired into PCI core driver registration/removal path
+- [x] Virtio net and block wired into PCI core driver registration/removal path
+- [x] Block-device lifecycle symmetry (`bdev_unregister`) with virtio_blk remove-path integration
 
 Runtime validation guide
 To populate the runtime-verified rows, follow these steps:
@@ -223,3 +241,14 @@ Latest verification events
 - 2026-04-18: `sudo make aux.kern` passed in development terminal after queue-vector routing updates.
 - 2026-04-18: QEMU runtime regression check passed (`/proc/pci` boot sample remained stable at `I:1` across present devices).
 - 2026-04-18: Captured QEMU `/proc/pci` baseline snapshot (all observed devices `I:1`), confirming no runtime regression after queue-vector routing changes.
+- 2026-04-18: `sudo make aux.kern` passed again after status/doc cleanups and minor virtio-net observability refinement (`✓ post-doc aux.kern clean`).
+- 2026-04-19: Fixed virtio_probe_pci() to support modern BAR configuration on transitional devices, verified with `sudo make aux.kern` (`✓ virtio-transitional-modern-probe aux.kern clean`).
+- 2026-04-18: Added config MSI-X vector routing (`virtio_set_config_vector`) and verified with `make -j4` (`✓ config-vector make clean`).
+- 2026-04-18: Added MSI-X mapping boot traces in virtio core (`qN->vec`, `config->vec`) and verified with `sudo make aux.kern` (`✓ msix-debug aux.kern clean`).
+- 2026-04-18: Hardened `virtq_destroy` for modern devices (queue disable + queue-vector unmap) and verified with `sudo make aux.kern` (`✓ teardown-hardening aux.kern clean`).
+- 2026-04-18: Hardened `virtio_reset` to clear MSI-X config/queue mappings and disable queue state, verified with `sudo make aux.kern` (`✓ reset-hardening aux.kern clean`).
+- 2026-04-18: Hardened `virtio_gpu_remove` queue lifecycle teardown and verified with `sudo make aux.kern` (`✓ gpu-remove-hardening aux.kern clean`).
+- 2026-04-18: Added PCI bound-driver/remove-callback tracking infrastructure and verified with `sudo make aux.kern` (`✓ pci-bind-tracking aux.kern clean`).
+- 2026-04-18: Converted `virtio_gpu` init/probe flow to PCI driver registration callbacks and verified with `sudo make aux.kern` (`✓ virtio-gpu-pci-driver aux.kern clean`).
+- 2026-04-18: Converted `virtio_net` and `virtio_blk` init/probe flow to PCI driver registration callbacks and verified with `sudo make aux.kern` (`✓ net-blk-pci-driver aux.kern clean`).
+- 2026-04-18: Added `bdev_unregister()` and integrated virtio_blk remove-path device unregistration, verified with `sudo make aux.kern` (`✓ bdev-unregister aux.kern clean`).
