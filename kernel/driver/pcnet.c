@@ -516,6 +516,10 @@ int
 pcnet_probe(struct pci_dev *pci)
 {
     struct pcnet_softc *sc;
+    int irq;
+    int nvec;
+    int irq_mode;
+    const char *irq_mode_name;
     
     if (pcnet_count >= MAX_PCNET)
         return -1;
@@ -563,15 +567,29 @@ pcnet_probe(struct pci_dev *pci)
     /* Start controller */
     if (pcnet_start(sc) < 0)
         return -1;
-    
-    /* Register IRQ handler */
-    if (irq_register(pci->irq_line, pcnet_irq_handler, sc, "pcnet") < 0) {
-        cprintf("pcnet: failed to register IRQ %d\n", pci->irq_line);
+
+    nvec = pci_irq_alloc_vectors(pci, 1, 1, PCI_IRQ_F_ALL);
+    if (nvec < 1) {
+        cprintf("pcnet: failed to allocate IRQ vectors\n");
+        return -1;
+    }
+    irq = pci_irq_vector(pci, 0);
+    if (irq < 0) {
+        pci_irq_free_vectors(pci);
+        cprintf("pcnet: invalid IRQ vector\n");
         return -1;
     }
     
-    /* Enable interrupt */
-    pci_enable_irq(pci, ncpu - 1);
+    /* Register IRQ handler */
+    if (irq_register(irq, pcnet_irq_handler, sc, "pcnet") < 0) {
+        cprintf("pcnet: failed to register IRQ %d\n", irq);
+        pci_irq_free_vectors(pci);
+        return -1;
+    }
+    
+    /* INTx requires IOAPIC routing; MSI/MSI-X does not. */
+    if (pci_irq_mode(pci) == PCI_IRQ_MODE_INTX)
+        pci_enable_irq(pci, ncpu - 1);
     
     /* Set up ifnet structure */
     memset(&sc->ifn, 0, sizeof(sc->ifn));
@@ -588,12 +606,20 @@ pcnet_probe(struct pci_dev *pci)
     /* Register with network stack */
     if (if_register(&sc->ifn) < 0) {
         cprintf("pcnet: failed to register ifnet\n");
-        irq_unregister(pci->irq_line, "pcnet");
+        irq_unregister(irq, "pcnet");
+        pci_irq_free_vectors(pci);
         return -1;
     }
+
+    irq_mode = pci_irq_mode(pci);
+    irq_mode_name = "intx";
+    if (irq_mode == PCI_IRQ_MODE_MSI)
+        irq_mode_name = "msi";
+    else if (irq_mode == PCI_IRQ_MODE_MSIX)
+        irq_mode_name = "msix";
     
     pcnet_count++;
-    cprintf("pcnet: attached %s irq=%d\n", sc->ifn.if_xname, pci->irq_line);
+    cprintf("pcnet: attached %s irq=%d mode=%s\n", sc->ifn.if_xname, irq, irq_mode_name);
     
     return 0;
 }

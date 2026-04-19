@@ -219,6 +219,8 @@ virtio_gpu_probe(struct pci_dev *pci)
     struct virtio_gpu_softc *sc;
     struct virtio_dev *vdev;
     struct display_device *display_dev;
+    int irq_mode;
+    const char *irq_mode_name;
 
     if(!pci) {
         cprintf("virtio_gpu: pci_dev is null\n");
@@ -284,6 +286,29 @@ virtio_gpu_probe(struct pci_dev *pci)
 
     if(!ctrl_q || !cursor_q) {
         cprintf("virtio_gpu: failed to create virtqueues\n");
+        if(ctrl_q)
+            virtq_destroy(ctrl_q);
+        if(cursor_q)
+            virtq_destroy(cursor_q);
+        release(&virtio_gpu_lock);
+        return -1;
+    }
+
+    if(pci_irq_alloc_vectors(pci, 1, 1, PCI_IRQ_F_MSI | PCI_IRQ_F_INTX) < 1) {
+        cprintf("virtio_gpu: failed to allocate IRQ vectors\n");
+        virtq_destroy(ctrl_q);
+        virtq_destroy(cursor_q);
+        release(&virtio_gpu_lock);
+        return -1;
+    }
+    sc->irq_allocated = 1;
+    vdev->irq = pci_irq_vector(pci, 0);
+    if(vdev->irq < 0) {
+        cprintf("virtio_gpu: failed to get IRQ vector\n");
+        pci_irq_free_vectors(pci);
+        sc->irq_allocated = 0;
+        virtq_destroy(ctrl_q);
+        virtq_destroy(cursor_q);
         release(&virtio_gpu_lock);
         return -1;
     }
@@ -296,9 +321,25 @@ virtio_gpu_probe(struct pci_dev *pci)
 
     /* Register IRQ handler */
     if(vdev->irq > 0) {
-        ioapicenable(vdev->irq, 0);
-        irq_register(vdev->irq, virtio_gpu_irq_handler, sc, "virtio-gpu");
+        if(irq_register(vdev->irq, virtio_gpu_irq_handler, sc, "virtio-gpu") < 0) {
+            cprintf("virtio_gpu: failed to register IRQ %d\n", vdev->irq);
+            pci_irq_free_vectors(pci);
+            sc->irq_allocated = 0;
+            virtq_destroy(ctrl_q);
+            virtq_destroy(cursor_q);
+            release(&virtio_gpu_lock);
+            return -1;
+        }
+        if(pci_irq_mode(pci) == PCI_IRQ_MODE_INTX)
+            pci_enable_irq(pci, 0);
     }
+
+    irq_mode = pci_irq_mode(pci);
+    irq_mode_name = "intx";
+    if (irq_mode == PCI_IRQ_MODE_MSI)
+        irq_mode_name = "msi";
+    else if (irq_mode == PCI_IRQ_MODE_MSIX)
+        irq_mode_name = "msix";
 
     /* Create display device abstraction */
     display_dev = display_device_alloc();
@@ -338,7 +379,8 @@ virtio_gpu_probe(struct pci_dev *pci)
 
     release(&virtio_gpu_lock);
 
-    cprintf("virtio_gpu: device initialized successfully\n");
+    cprintf("virtio_gpu: device initialized successfully irq=%d mode=%s\n",
+            vdev->irq, irq_mode_name);
     return 0;
 }
 
@@ -350,6 +392,14 @@ virtio_gpu_remove(struct virtio_gpu_softc *sc)
 {
     if(!sc)
         return;
+
+    if(sc->irq_allocated) {
+        if(sc->vdev.irq > 0)
+            irq_unregister(sc->vdev.irq, "virtio-gpu");
+        if(sc->vdev.pci)
+            pci_irq_free_vectors(sc->vdev.pci);
+        sc->irq_allocated = 0;
+    }
 
     if(sc->display_dev) {
         display_device_unregister(sc->display_dev);

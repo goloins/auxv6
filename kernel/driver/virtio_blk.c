@@ -1216,6 +1216,9 @@ virtio_blk_alloc_devid(void)
 int
 virtio_blk_probe(struct pci_dev *pci)
 {
+    int irq_mode;
+    const char *irq_mode_name;
+
     if (virtio_blk_count >= MAX_VIRTIO_BLK)
         return -1;
     
@@ -1280,10 +1283,26 @@ virtio_blk_probe(struct pci_dev *pci)
     /* Set driver data for interrupt handler */
     sc->vdev.driver_data = sc;
     sc->vdev.isr_handler = virtio_blk_intr;
+
+    if (pci_irq_alloc_vectors(pci, 1, 1, PCI_IRQ_F_MSI | PCI_IRQ_F_INTX) < 1) {
+        cprintf("virtio_blk: failed to allocate IRQ vectors\n");
+        virtq_destroy(vq);
+        virtio_reset(&sc->vdev);
+        return -1;
+    }
+    sc->vdev.irq = pci_irq_vector(pci, 0);
+    if (sc->vdev.irq < 0) {
+        cprintf("virtio_blk: failed to get IRQ vector\n");
+        pci_irq_free_vectors(pci);
+        virtq_destroy(vq);
+        virtio_reset(&sc->vdev);
+        return -1;
+    }
     
     /* Register IRQ handler */
     if (irq_register(sc->vdev.irq, virtio_blk_irq_handler, sc, "virtio_blk") < 0) {
         cprintf("virtio_blk: failed to register IRQ %d\n", sc->vdev.irq);
+        pci_irq_free_vectors(pci);
         virtq_destroy(vq);
         virtio_reset(&sc->vdev);
         return -1;
@@ -1299,6 +1318,7 @@ virtio_blk_probe(struct pci_dev *pci)
     int dev_id = virtio_blk_alloc_devid();
     if (dev_id < 0) {
         irq_unregister(sc->vdev.irq, "virtio_blk");
+        pci_irq_free_vectors(pci);
         virtq_destroy(vq);
         virtio_reset(&sc->vdev);
         cprintf("virtio_blk: no free block device slots\n");
@@ -1306,10 +1326,17 @@ virtio_blk_probe(struct pci_dev *pci)
     }
     sc->dev_id = dev_id;
     bdev_set_nblocks(sc->dev_id, sc->capacity / (BSIZE / 512));
+
+    irq_mode = pci_irq_mode(pci);
+    irq_mode_name = "intx";
+    if (irq_mode == PCI_IRQ_MODE_MSI)
+        irq_mode_name = "msi";
+    else if (irq_mode == PCI_IRQ_MODE_MSIX)
+        irq_mode_name = "msix";
     
     virtio_blk_count++;
-    cprintf("virtio_blk: attached device %d as dev=%d\n",
-            virtio_blk_count - 1, sc->dev_id);
+    cprintf("virtio_blk: attached device %d as dev=%d irq=%d mode=%s\n",
+            virtio_blk_count - 1, sc->dev_id, sc->vdev.irq, irq_mode_name);
     
     return 0;
 }

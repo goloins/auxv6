@@ -430,6 +430,42 @@ pci_init(void)
 }
 
 /*
+ * Boot-time IRQ vector audit report
+ * Call this after all driver probes to show allocation results
+ */
+void
+pci_irq_audit_report(void)
+{
+    int used_count = 0;
+    int total_available = (PCI_MSI_IRQ_LIMIT - PCI_MSI_IRQ_BASE);
+    
+    /* Count used vectors */
+    acquire(&pci_irqvec_lock);
+    for (int irq = PCI_MSI_IRQ_BASE; irq < PCI_MSI_IRQ_LIMIT; irq++) {
+        if (pci_irqvec_bitmap[irq >> 5] & (1U << (irq & 31)))
+            used_count++;
+    }
+    release(&pci_irqvec_lock);
+    
+    cprintf("pci: irq vector allocation: %d/%d allocated, %d available\n",
+            used_count, total_available, total_available - used_count);
+    
+    /* Report per-device allocation */
+    for (int i = 0; i < pci_ndevices; i++) {
+        struct pci_dev *dev = &pci_devices[i];
+        if (dev->irq_nvec == 0)
+            continue;
+        const char *mode_str = "intx";
+        if (dev->irq_mode == PCI_IRQ_MODE_MSI)
+            mode_str = "msi";
+        else if (dev->irq_mode == PCI_IRQ_MODE_MSIX)
+            mode_str = "msix";
+        cprintf("pci:   %d:%d.%d: %d vectors, mode=%s\n",
+                dev->bus, dev->slot, dev->func, dev->irq_nvec, mode_str);
+    }
+}
+
+/*
  * BAR operations
  */
 uint32_t pci_bar_base(struct pci_dev *dev, int bar)
@@ -899,6 +935,10 @@ pci_get_irq(struct pci_dev *dev)
 void
 pci_enable_irq(struct pci_dev *dev, int cpu)
 {
+    if (!dev)
+        return;
+    if (dev->irq_mode != PCI_IRQ_MODE_INTX)
+        return;
     if (dev->irq_line > 0 && dev->irq_line < 255) {
         ioapicenable(dev->irq_line, cpu);
     }
@@ -968,10 +1008,109 @@ pci_format_devices(char *buf, int maxlen)
         buf[len++] = hexchar(dev->subclass & 0xF);
         buf[len++] = ' ';
         
-        /* IRQ (decimal) */
-        if (dev->irq_line >= 100) buf[len++] = '0' + (dev->irq_line / 100);
-        if (dev->irq_line >= 10) buf[len++] = '0' + ((dev->irq_line / 10) % 10);
-        buf[len++] = '0' + (dev->irq_line % 10);
+        /* IRQ (decimal), current active vector if allocated. */
+        int irq = pci_get_irq(dev);
+        if (irq >= 100) buf[len++] = '0' + (irq / 100);
+        if (irq >= 10) buf[len++] = '0' + ((irq / 10) % 10);
+        buf[len++] = '0' + (irq % 10);
+
+        buf[len++] = ' ';
+        if (dev->irq_mode == PCI_IRQ_MODE_MSIX)
+            buf[len++] = 'X';
+        else if (dev->irq_mode == PCI_IRQ_MODE_MSI)
+            buf[len++] = 'M';
+        else
+            buf[len++] = 'I';
+
+        buf[len++] = ':';
+        if (dev->irq_nvec >= 10) buf[len++] = '0' + ((dev->irq_nvec / 10) % 10);
+        buf[len++] = '0' + (dev->irq_nvec % 10);
+        buf[len++] = '\n';
+    }
+    
+    return len;
+}
+
+int
+pci_irq_audit_format(char *buf, int maxlen)
+{
+    int len = 0;
+    int used_count = 0;
+    int total_available = (PCI_MSI_IRQ_LIMIT - PCI_MSI_IRQ_BASE);
+    
+    /* Header */
+    const char *header = "PCI IRQ Vector Allocation Audit\n";
+    int hlen = 0;
+    for (const char *p = header; *p; p++) hlen++;
+    if (len + hlen >= maxlen) return len;
+    for (int i = 0; i < hlen; i++) buf[len++] = header[i];
+    
+    /* Count used vectors */
+    acquire(&pci_irqvec_lock);
+    for (int irq = PCI_MSI_IRQ_BASE; irq < PCI_MSI_IRQ_LIMIT; irq++) {
+        if (pci_irqvec_bitmap[irq >> 5] & (1U << (irq & 31)))
+            used_count++;
+    }
+    release(&pci_irqvec_lock);
+    
+    /* Summary line */
+    const char *fmt = "Used: ";
+    int flen = 0;
+    for (const char *p = fmt; *p; p++) flen++;
+    if (len + flen + 8 >= maxlen) return len;
+    for (int i = 0; i < flen; i++) buf[len++] = fmt[i];
+    
+    /* Write used count */
+    if (used_count >= 100) buf[len++] = '0' + (used_count / 100);
+    if (used_count >= 10) buf[len++] = '0' + ((used_count / 10) % 10);
+    buf[len++] = '0' + (used_count % 10);
+    buf[len++] = '/';
+    
+    /* Write total available */
+    int ta = total_available;
+    if (ta >= 100) buf[len++] = '0' + (ta / 100);
+    if (ta >= 10) buf[len++] = '0' + ((ta / 10) % 10);
+    buf[len++] = '0' + (ta % 10);
+    buf[len++] = '\n';
+    
+    /* Device list with allocated vectors */
+    for (int i = 0; i < pci_ndevices && len < maxlen - 32; i++) {
+        struct pci_dev *dev = &pci_devices[i];
+        if (dev->irq_nvec == 0)
+            continue;
+        
+        /* Format: "BB:SS.F vectors=N mode=X irq=I\n" */
+        buf[len++] = hexchar(dev->bus >> 4);
+        buf[len++] = hexchar(dev->bus & 0xF);
+        buf[len++] = ':';
+        buf[len++] = hexchar(dev->slot >> 4);
+        buf[len++] = hexchar(dev->slot & 0xF);
+        buf[len++] = '.';
+        buf[len++] = '0' + dev->func;
+        
+        const char *vfmt = " vectors=";
+        int vflen = 0;
+        for (const char *p = vfmt; *p; p++) vflen++;
+        for (int j = 0; j < vflen && len < maxlen - 16; j++)
+            buf[len++] = vfmt[j];
+        
+        int nvec = dev->irq_nvec;
+        if (nvec >= 10) buf[len++] = '0' + ((nvec / 10) % 10);
+        buf[len++] = '0' + (nvec % 10);
+        
+        buf[len++] = ' ';
+        buf[len++] = 'm';
+        buf[len++] = 'o';
+        buf[len++] = 'd';
+        buf[len++] = 'e';
+        buf[len++] = '=';
+        if (dev->irq_mode == PCI_IRQ_MODE_MSIX)
+            buf[len++] = 'X';
+        else if (dev->irq_mode == PCI_IRQ_MODE_MSI)
+            buf[len++] = 'M';
+        else
+            buf[len++] = 'I';
+        
         buf[len++] = '\n';
     }
     

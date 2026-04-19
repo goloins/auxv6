@@ -552,7 +552,7 @@ audio_intel_ac97_init(void)
 
     sc->nambar = (uint16_t)(pci_bar_base(dev, 0) & ~1U);
     sc->nabm   = (uint16_t)(pci_bar_base(dev, 1) & ~1U);
-    sc->irq    = dev->irq_line;
+    sc->irq    = -1;
     sc->active = 1;
 
     if(!(pci_bar_type(dev, 0) & PCI_BAR_IO) ||
@@ -581,9 +581,20 @@ audio_intel_ac97_init(void)
       continue;
     }
 
-    if(sc->irq > 0 && sc->irq < 24){
-      irq_register(sc->irq, ac97_intr, sc, "intel-ac97");
-      ioapicenable(sc->irq, 0);
+    sc->irq = -1;
+    if (pci_irq_alloc_vectors(dev, 1, 1, PCI_IRQ_F_ALL) >= 1) {
+      int irq = pci_irq_vector(dev, 0);
+      if (irq >= 0 && irq_register(irq, ac97_intr, sc, "intel-ac97") == 0) {
+        sc->irq = irq;
+        if (pci_irq_mode(dev) == PCI_IRQ_MODE_INTX)
+          ioapicenable(irq, 0);
+        BOOTDBG("audio/intel-ac97: irq=%d mode=%s\n", irq,
+                pci_irq_mode(dev) == PCI_IRQ_MODE_MSI ? "msi" :
+                pci_irq_mode(dev) == PCI_IRQ_MODE_MSIX ? "msix" : "intx");
+      } else {
+        pci_irq_free_vectors(dev);
+        BOOTDBG("audio/intel-ac97: irq registration failed\n");
+      }
     }
 
     count++;

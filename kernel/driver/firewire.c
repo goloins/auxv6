@@ -592,17 +592,30 @@ firewire_attach_probe(struct pci_dev *dev)
   firewire_write(entry, OHCI_REG_INT_MASK_SET, OHCI_INT_CORE_MASK);
   firewire_write(entry, OHCI_REG_HC_CONTROL_SET, OHCI_HCCTRL_LINK_ENABLE);
 
-  if(dev->irq_line > 0 && irq_register(dev->irq_line, firewire_irq_handler,
-                                       entry, "firewire") == 0){
-    uint now = firewire_current_ticks();
-    pci_enable_irq(dev, ncpu - 1);
-    acquire(&firewire_lock);
-    entry->irq_registered = 1;
-    if(entry->phase != FIREWIRE_PHASE_DEGRADED)
-      firewire_set_phase_locked(entry, FIREWIRE_PHASE_READY, now);
-    if(entry->phase != FIREWIRE_PHASE_DEGRADED)
-      firewire_async_submit_locked(entry, now);
-    release(&firewire_lock);
+  entry->irq_registered = 0;
+  int irq = -1;
+  if (pci_irq_alloc_vectors(dev, 1, 1, PCI_IRQ_F_ALL) >= 1) {
+    irq = pci_irq_vector(dev, 0);
+    if (irq >= 0 && irq_register(irq, firewire_irq_handler, entry, "firewire") == 0) {
+      uint now = firewire_current_ticks();
+      if (pci_irq_mode(dev) == PCI_IRQ_MODE_INTX)
+        pci_enable_irq(dev, ncpu - 1);
+      acquire(&firewire_lock);
+      entry->irq_registered = 1;
+      if(entry->phase != FIREWIRE_PHASE_DEGRADED)
+        firewire_set_phase_locked(entry, FIREWIRE_PHASE_READY, now);
+      if(entry->phase != FIREWIRE_PHASE_DEGRADED)
+        firewire_async_submit_locked(entry, now);
+      release(&firewire_lock);
+    } else {
+      if (irq >= 0)
+        pci_irq_free_vectors(dev);
+      uint now = firewire_current_ticks();
+      acquire(&firewire_lock);
+      entry->init_failures++;
+      firewire_set_phase_locked(entry, FIREWIRE_PHASE_DEGRADED, now);
+      release(&firewire_lock);
+    }
   } else {
     uint now = firewire_current_ticks();
     acquire(&firewire_lock);

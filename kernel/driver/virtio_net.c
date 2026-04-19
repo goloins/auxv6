@@ -571,6 +571,8 @@ virtio_net_probe(struct pci_dev *pci)
     struct virtqueue *rxq;
     struct virtqueue *txq;
     ushort link_status;
+    int irq_mode;
+    const char *irq_mode_name;
 
     if (virtio_net_count >= MAX_VIRTIO_NET)
         return -1;
@@ -638,18 +640,40 @@ virtio_net_probe(struct pci_dev *pci)
     sc->vdev.driver_data = sc;
     sc->vdev.isr_handler = virtio_net_intr;
 
-    if (irq_register(sc->vdev.irq, virtio_net_irq_handler, sc, "virtio_net") < 0) {
-        VNETDBG("virtio_net: irq register failed irq=%d\n", sc->vdev.irq);
+    if (pci_irq_alloc_vectors(pci, 1, 1, PCI_IRQ_F_MSI | PCI_IRQ_F_INTX) < 1) {
+        VNETDBG("virtio_net: failed to allocate IRQ vectors\n");
+        virtq_destroy(rxq);
+        virtq_destroy(txq);
+        virtio_reset(&sc->vdev);
+        return -1;
+    }
+    sc->vdev.irq = pci_irq_vector(pci, 0);
+    if (sc->vdev.irq < 0) {
+        VNETDBG("virtio_net: failed to get IRQ vector\n");
+        pci_irq_free_vectors(pci);
         virtq_destroy(rxq);
         virtq_destroy(txq);
         virtio_reset(&sc->vdev);
         return -1;
     }
 
-    VNETDBG("virtio_net: irq registered irq=%d enabling ioapic cpu=%d\n",
-            sc->vdev.irq, ncpu - 1);
-    
-    pci_enable_irq(pci, ncpu - 1);
+    if (irq_register(sc->vdev.irq, virtio_net_irq_handler, sc, "virtio_net") < 0) {
+        VNETDBG("virtio_net: irq register failed irq=%d\n", sc->vdev.irq);
+        pci_irq_free_vectors(pci);
+        virtq_destroy(rxq);
+        virtq_destroy(txq);
+        virtio_reset(&sc->vdev);
+        return -1;
+    }
+
+    if (pci_irq_mode(pci) == PCI_IRQ_MODE_INTX) {
+        VNETDBG("virtio_net: irq=%d mode=intx enabling ioapic cpu=%d\n",
+                sc->vdev.irq, ncpu - 1);
+        pci_enable_irq(pci, ncpu - 1);
+    } else {
+        VNETDBG("virtio_net: irq=%d mode=msi ioapic-bypass\n", sc->vdev.irq);
+    }
+
     virtio_net_fill_rx(sc);
 
     memset(&sc->ifp, 0, sizeof(sc->ifp));
@@ -680,6 +704,7 @@ virtio_net_probe(struct pci_dev *pci)
         VNETDBG("virtio_net: if_register failed name=%s irq=%d\n",
                 sc->ifp.if_xname, sc->vdev.irq);
         irq_unregister(sc->vdev.irq, "virtio_net");
+        pci_irq_free_vectors(pci);
         virtq_destroy(rxq);
         virtq_destroy(txq);
         virtio_reset(&sc->vdev);
@@ -688,9 +713,17 @@ virtio_net_probe(struct pci_dev *pci)
 
     virtio_set_status(&sc->vdev, VIRTIO_STATUS_DRIVER_OK);
     virtio_net_dbg_queue_state(sc, "attach");
+
+    irq_mode = pci_irq_mode(pci);
+    irq_mode_name = "intx";
+    if (irq_mode == PCI_IRQ_MODE_MSI)
+        irq_mode_name = "msi";
+    else if (irq_mode == PCI_IRQ_MODE_MSIX)
+        irq_mode_name = "msix";
     
     virtio_net_count++;
-    cprintf("virtio_net: attached %s irq=%d\n", sc->ifp.if_xname, sc->vdev.irq);
+    cprintf("virtio_net: attached %s irq=%d mode=%s\n",
+            sc->ifp.if_xname, sc->vdev.irq, irq_mode_name);
     
     return 0;
 }

@@ -186,6 +186,7 @@ struct virtio_gpu_resource_attach_backing {
 struct virtio_gpu_softc {
     struct virtio_dev vdev;
     struct spinlock lock;
+    uint8_t irq_allocated;
     
     /* Display info */
     struct display_device *display_dev;

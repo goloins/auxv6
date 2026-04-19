@@ -2006,13 +2006,22 @@ ahci_probe(struct pci_dev *pci, const struct ahci_ctrl_profile *profile)
     cprintf("ahci: ports implemented: 0x%x\n", pi);
 
     sc->use_interrupts = 0;
-    if (irq_register(pci->irq_line, ahci_irq_handler, sc, "ahci") < 0) {
-        cprintf("ahci: failed to register IRQ %d, falling back to polling\n",
-                pci->irq_line);
+    if (pci_irq_alloc_vectors(pci, 1, 1, PCI_IRQ_F_ALL) < 1) {
+        cprintf("ahci: failed to allocate IRQ vectors, falling back to polling\n");
     } else {
-        sc->use_interrupts = 1;
-        ahci_write(sc, AHCI_GHC, ahci_read(sc, AHCI_GHC) | AHCI_GHC_IE);
-        pci_enable_irq(pci, ncpu - 1);
+        int irq = pci_irq_vector(pci, 0);
+        if (irq < 0) {
+            cprintf("ahci: invalid IRQ vector, falling back to polling\n");
+            pci_irq_free_vectors(pci);
+        } else if (irq_register(irq, ahci_irq_handler, sc, "ahci") < 0) {
+            cprintf("ahci: failed to register IRQ %d, falling back to polling\n", irq);
+            pci_irq_free_vectors(pci);
+        } else {
+            sc->use_interrupts = 1;
+            ahci_write(sc, AHCI_GHC, ahci_read(sc, AHCI_GHC) | AHCI_GHC_IE);
+            if (pci_irq_mode(pci) == PCI_IRQ_MODE_INTX)
+                pci_enable_irq(pci, ncpu - 1);
+        }
     }
     
     /* Initialize each port */

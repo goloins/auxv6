@@ -297,5 +297,7 @@ int      pci_irq_mode(struct pci_dev *dev);
 
 /* Debug */
 void     pci_dump_devices(void);
+int      pci_irq_audit_format(char *buf, int maxlen);
+void     pci_irq_audit_report(void);
 
 #endif /* _PCI_H_ */

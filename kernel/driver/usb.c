@@ -19,6 +19,7 @@ static struct spinlock usb_lock;
 static struct usb_hc_probe usb_hc[USB_HC_MAX];
 static uint usb_hc_count;
 static const struct usb_hc_ops* usb_get_ops(uchar kind);
+struct usb_device;
 static int usb_select_bulk_pair(struct usb_device *ud, int iface_index,
                                 uchar *ep_in, uchar *ep_out);
 

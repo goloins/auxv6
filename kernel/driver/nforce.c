@@ -521,6 +521,9 @@ nforce_probe(struct pci_dev *dev)
     struct nforce_softc *sc;
     uint link_state;
     extern int ncpu;
+    int irq;
+    int irq_mode;
+    const char *irq_mode_name;
 
     if (nforce_count >= MAX_NFORCE)
         return -1;
@@ -556,16 +559,25 @@ nforce_probe(struct pci_dev *dev)
 
     nforce_hw_init(sc);
 
-    if (dev->irq_line > 0 &&
-        irq_register(dev->irq_line, nforce_irq_handler, sc, "nforce") == 0) {
-        sc->irq_registered = 1;
-        sc->poll_fallback = 0;
-        pci_enable_irq(dev, ncpu - 1);
-        nfe_w32(sc, NFE_IRQ_MASK, NFE_IRQ_WANTED);
+    sc->irq_registered = 0;
+    sc->poll_fallback = 1;
+    if (pci_irq_alloc_vectors(dev, 1, 1, PCI_IRQ_F_ALL) < 1) {
+        cprintf("nforce: IRQ allocation failed; using polling fallback\n");
     } else {
-        sc->irq_registered = 0;
-        sc->poll_fallback = 1;
-        cprintf("nforce: IRQ registration failed; using polling fallback\n");
+        irq = pci_irq_vector(dev, 0);
+        if (irq < 0) {
+            cprintf("nforce: invalid IRQ vector; using polling fallback\n");
+            pci_irq_free_vectors(dev);
+        } else if (irq_register(irq, nforce_irq_handler, sc, "nforce") < 0) {
+            cprintf("nforce: IRQ registration failed; using polling fallback\n");
+            pci_irq_free_vectors(dev);
+        } else {
+            sc->irq_registered = 1;
+            sc->poll_fallback = 0;
+            if (pci_irq_mode(dev) == PCI_IRQ_MODE_INTX)
+                pci_enable_irq(dev, ncpu - 1);
+            nfe_w32(sc, NFE_IRQ_MASK, NFE_IRQ_WANTED);
+        }
     }
 
     memset(&sc->ifn, 0, sizeof(sc->ifn));
@@ -584,16 +596,29 @@ nforce_probe(struct pci_dev *dev)
 
     if (if_register(&sc->ifn) < 0) {
         cprintf("nforce: failed to register ifnet\n");
-        if (sc->irq_registered)
-            irq_unregister(dev->irq_line, "nforce");
+        if (sc->irq_registered) {
+            irq_unregister(pci_irq_vector(dev, 0), "nforce");
+            pci_irq_free_vectors(dev);
+        }
         nforce_free_rings(sc);
         return -1;
     }
 
+    irq_mode = sc->irq_registered ? pci_irq_mode(dev) : PCI_IRQ_MODE_INTX;
+    irq_mode_name = "poll";
+    if (sc->irq_registered) {
+        if (irq_mode == PCI_IRQ_MODE_MSI)
+            irq_mode_name = "msi";
+        else if (irq_mode == PCI_IRQ_MODE_MSIX)
+            irq_mode_name = "msix";
+        else
+            irq_mode_name = "intx";
+    }
+
     cprintf("nforce: attached %s MCP79 irq=%d mode=%s link=%s MAC %x:%x:%x:%x:%x:%x\n",
             sc->ifn.if_xname,
-            dev->irq_line,
-            sc->irq_registered ? "intx" : "poll",
+            sc->irq_registered ? pci_irq_vector(dev, 0) : dev->irq_line,
+            irq_mode_name,
             (sc->ifn.if_link_state == LINK_STATE_UP) ? "up" :
             (sc->ifn.if_link_state == LINK_STATE_DOWN) ? "down" : "unknown",
             sc->mac[0], sc->mac[1], sc->mac[2],

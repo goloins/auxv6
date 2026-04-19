@@ -472,6 +472,10 @@ rtl8111_probe(struct pci_dev *dev)
 {
     struct rtl8111_softc *sc;
     void *regs;
+    int irq;
+    int nvec;
+    int irq_mode;
+    const char *irq_mode_name;
     
     if (rtl8111_count >= MAX_RTL8111)
         return -1;
@@ -517,10 +521,23 @@ rtl8111_probe(struct pci_dev *dev)
     
     /* Set TX config */
     rtl_write32(sc, RTL_TCR, TCR_IFG_STD | TCR_MXDMA_UNLIM);
+
+    nvec = pci_irq_alloc_vectors(dev, 1, 1, PCI_IRQ_F_ALL);
+    if (nvec < 1) {
+        cprintf("rtl8111: failed to allocate IRQ vectors\n");
+        return -1;
+    }
+    irq = pci_irq_vector(dev, 0);
+    if (irq < 0) {
+        pci_irq_free_vectors(dev);
+        cprintf("rtl8111: invalid IRQ vector\n");
+        return -1;
+    }
     
     /* Register IRQ handler */
-    if (irq_register(dev->irq_line, rtl8111_irq_handler, sc, "rtl8111") < 0) {
-        cprintf("rtl8111: failed to register IRQ %d\n", dev->irq_line);
+    if (irq_register(irq, rtl8111_irq_handler, sc, "rtl8111") < 0) {
+        cprintf("rtl8111: failed to register IRQ %d\n", irq);
+        pci_irq_free_vectors(dev);
         return -1;
     }
     
@@ -530,8 +547,9 @@ rtl8111_probe(struct pci_dev *dev)
     /* Enable TX and RX */
     rtl_write8(sc, RTL_CR, CR_TE | CR_RE);
     
-    /* Enable PCI interrupt */
-    pci_enable_irq(dev, ncpu - 1);
+    /* INTx requires IOAPIC routing; MSI/MSI-X does not. */
+    if (pci_irq_mode(dev) == PCI_IRQ_MODE_INTX)
+        pci_enable_irq(dev, ncpu - 1);
     
     /* Set up ifnet structure */
     memset(&sc->ifn, 0, sizeof(sc->ifn));
@@ -550,12 +568,20 @@ rtl8111_probe(struct pci_dev *dev)
     /* Register with network stack */
     if (if_register(&sc->ifn) < 0) {
         cprintf("rtl8111: failed to register ifnet\n");
-        irq_unregister(dev->irq_line, "rtl8111");
+        irq_unregister(irq, "rtl8111");
+        pci_irq_free_vectors(dev);
         return -1;
     }
+
+    irq_mode = pci_irq_mode(dev);
+    irq_mode_name = "intx";
+    if (irq_mode == PCI_IRQ_MODE_MSI)
+        irq_mode_name = "msi";
+    else if (irq_mode == PCI_IRQ_MODE_MSIX)
+        irq_mode_name = "msix";
     
     rtl8111_count++;
-    cprintf("rtl8111: attached %s irq=%d\n", sc->ifn.if_xname, dev->irq_line);
+    cprintf("rtl8111: attached %s irq=%d mode=%s\n", sc->ifn.if_xname, irq, irq_mode_name);
     
     return 0;
 }

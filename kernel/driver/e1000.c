@@ -479,6 +479,10 @@ e1000_probe(struct pci_dev *pci)
 {
     struct e1000_softc *sc;
     uint32_t status;
+    int irq;
+    int nvec;
+    int irq_mode;
+    const char *irq_mode_name;
     
     if (e1000_count >= MAX_E1000)
         return -1;
@@ -518,10 +522,23 @@ e1000_probe(struct pci_dev *pci)
     /* Set link up */
     e1000_write(sc, E1000_CTRL,
         e1000_read(sc, E1000_CTRL) | E1000_CTRL_SLU | E1000_CTRL_ASDE);
+
+    nvec = pci_irq_alloc_vectors(pci, 1, 1, PCI_IRQ_F_ALL);
+    if (nvec < 1) {
+        cprintf("e1000: failed to allocate IRQ vectors\n");
+        return -1;
+    }
+    irq = pci_irq_vector(pci, 0);
+    if (irq < 0) {
+        pci_irq_free_vectors(pci);
+        cprintf("e1000: invalid IRQ vector\n");
+        return -1;
+    }
     
     /* Register IRQ handler */
-    if (irq_register(pci->irq_line, e1000_irq_handler, sc, "e1000") < 0) {
-        cprintf("e1000: failed to register IRQ %d\n", pci->irq_line);
+    if (irq_register(irq, e1000_irq_handler, sc, "e1000") < 0) {
+        cprintf("e1000: failed to register IRQ %d\n", irq);
+        pci_irq_free_vectors(pci);
         return -1;
     }
     
@@ -529,8 +546,9 @@ e1000_probe(struct pci_dev *pci)
     e1000_write(sc, E1000_IMS,
         E1000_ICR_TXDW | E1000_ICR_RXT0 | E1000_ICR_LSC | E1000_ICR_RXO);
     
-    /* Enable PCI interrupt */
-    pci_enable_irq(pci, ncpu - 1);
+    /* INTx needs IOAPIC routing; MSI/MSI-X vectors do not. */
+    if (pci_irq_mode(pci) == PCI_IRQ_MODE_INTX)
+        pci_enable_irq(pci, ncpu - 1);
     
     /* Set up ifnet structure */
     memset(&sc->ifn, 0, sizeof(sc->ifn));
@@ -553,12 +571,20 @@ e1000_probe(struct pci_dev *pci)
     /* Register with network stack */
     if (if_register(&sc->ifn) < 0) {
         cprintf("e1000: failed to register ifnet\n");
-        irq_unregister(pci->irq_line, "e1000");
+        irq_unregister(irq, "e1000");
+        pci_irq_free_vectors(pci);
         return -1;
     }
+
+    irq_mode = pci_irq_mode(pci);
+    irq_mode_name = "intx";
+    if (irq_mode == PCI_IRQ_MODE_MSI)
+        irq_mode_name = "msi";
+    else if (irq_mode == PCI_IRQ_MODE_MSIX)
+        irq_mode_name = "msix";
     
     e1000_count++;
-    cprintf("e1000: attached %s irq=%d\n", sc->ifn.if_xname, pci->irq_line);
+    cprintf("e1000: attached %s irq=%d mode=%s\n", sc->ifn.if_xname, irq, irq_mode_name);
     
     return 0;
 }
