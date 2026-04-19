@@ -23,6 +23,7 @@ struct {
     int is_part;
   } dev[NDEV];
 } bdevtable;
+static int bdevtable_ready;
 
 void
 bdevinit(void)
@@ -43,6 +44,13 @@ bdevinit(void)
 
   devsw[BLOCKDEV].read = blockdev_read;
   devsw[BLOCKDEV].write = blockdev_write;
+  bdevtable_ready = 1;
+}
+
+int
+bdev_ready(void)
+{
+  return bdevtable_ready;
 }
 
 static int

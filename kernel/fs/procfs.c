@@ -53,6 +53,7 @@
 #define PROCFS_MLFQ_TUNE_INO  35   /* /proc/mlfq_tune — runtime MLFQ tuning knobs */
 #define PROCFS_THUNDERBOLT_INO 36  /* /proc/thunderbolt — discovered Thunderbolt/USB4 host routers */
 #define PROCFS_LIGHTNING_INO   37  /* /proc/lightning — Apple Lightning/iAP2 scaffold state */
+#define PROCFS_USB_MSC_INO     38  /* /proc/usb_msc — USB mass-storage attach/runtime state */
 #define PROCFS_VERSION_STR  "a/ux86 aux86 i686\n"
 
 struct procfs_inode {
@@ -98,6 +99,7 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_MLFQ_TUNE_INO, "mlfq_tune", 192 },
   { PROCFS_THUNDERBOLT_INO, "thunderbolt", 2048 },
   { PROCFS_LIGHTNING_INO, "lightning", 512 },
+  { PROCFS_USB_MSC_INO, "usb_msc", 1024 },
   { 0, 0, 0 }
 };
 
@@ -478,6 +480,10 @@ procfs_fill_inode(struct inode *ip, uint inum)
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
     ip->size = 512;
+  } else if(inum == PROCFS_USB_MSC_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
+    ip->size = 1024;
   } else {
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
@@ -1617,6 +1623,12 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
   }
   if(ip->inum == PROCFS_LIGHTNING_INO){
     int r = lightning_procfs_dump(buf, sizeof(buf));
+    if(r < 0)
+      return -1;
+    return procfs_copy_data(dst, off, n, buf, (uint)r);
+  }
+  if(ip->inum == PROCFS_USB_MSC_INO){
+    int r = usb_msc_procfs_dump(buf, sizeof(buf));
     if(r < 0)
       return -1;
     return procfs_copy_data(dst, off, n, buf, (uint)r);

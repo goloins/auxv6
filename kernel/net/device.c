@@ -8,6 +8,7 @@ static struct spinlock if_lock;
 static struct ifnet *if_list;
 static uint if_next_index;
 static int if_list_poisoned;
+static int if_ready;
 
 static int
 if_ptr_valid(struct ifnet *ifp)
@@ -36,6 +37,7 @@ netdev_init(void)
 	if_list = 0;
 	if_next_index = 1;
 	if_list_poisoned = 0;
+	if_ready = 1;
 	route_init();
 	arp_init();
 	loopback_attach();
@@ -66,6 +68,12 @@ netdev_init(void)
 	nforce_init();
 	vmxnet3_init();
 	netvsc_init();
+}
+
+int
+netdev_ready(void)
+{
+	return if_ready;
 }
 
 void

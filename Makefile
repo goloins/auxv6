@@ -46,6 +46,7 @@ OBJS = \
 	kernel/driver/wifi.o\
 	kernel/driver/ieee802154.o\
 	kernel/driver/rtl815x.o\
+	kernel/driver/usb_msc.o\
 	kernel/driver/usb.o\
 	kernel/driver/usb_uhci.o\
 	kernel/driver/usb_ohci.o\

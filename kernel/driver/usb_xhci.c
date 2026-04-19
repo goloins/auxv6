@@ -103,6 +103,7 @@ struct xhci_bulk_state {
   uchar active;
   uchar in_flight;
   uchar port;
+  uchar ep_addr;
   uchar ep_in;
   uchar ep_out;
   ushort cur_len;
@@ -371,21 +372,31 @@ xhci_bulk_state_prepare(struct xhci_ctrl_state *xs, uchar port,
   uint *slot_ctx;
   uint *ep0_ctx;
   uint ctxsz;
+  uchar ep_addr;
   uint ep_num;
+  uint ep_type;
   uint mps0;
   uint slot_speed;
 
   if(!xs || !xs->initialized || port == 0)
     return -1;
-  if((ep_out & 0x80) != 0 || (ep_in & 0x80) == 0)
+  if(ep_in != 0 && (ep_in & 0x80) == 0)
+    return -1;
+  if(ep_out != 0 && (ep_out & 0x80) != 0)
+    return -1;
+  if(ep_in == 0 && ep_out == 0)
+    return -1;
+  if(ep_in != 0 && ep_out != 0 && ((ep_in & 0x0f) != (ep_out & 0x0f)))
     return -1;
 
-  ep_num = ep_out & 0x0f;
+  ep_addr = ep_in ? ep_in : ep_out;
+  ep_num = ep_addr & 0x0f;
   if(ep_num == 0)
     return -1;
+  ep_type = (ep_addr & 0x80) ? 6U : 2U;
 
   bs = &xs->bulk;
-  if(bs->active && bs->port == port && bs->ep_in == ep_in && bs->ep_out == ep_out)
+  if(bs->active && bs->port == port && bs->ep_addr == ep_addr)
     return 0;
 
   xhci_bulk_state_reset(xs);
@@ -405,9 +416,10 @@ xhci_bulk_state_prepare(struct xhci_ctrl_state *xs, uchar port,
   bs->output_ctx_pa = V2P(bs->output_ctx);
   bs->xfer_ring_pa = V2P(bs->xfer_ring);
   bs->port = port;
+  bs->ep_addr = ep_addr;
   bs->ep_in = ep_in;
   bs->ep_out = ep_out;
-  bs->ep_dci = ep_num * 2;
+  bs->ep_dci = ep_num * 2 + ((ep_addr & 0x80) ? 1U : 0U);
   bs->add_flags = (1U << 0) | (1U << 1) | (1U << bs->ep_dci);
 
   if(xhci_cmd_submit_wait(xs, XHCI_TRB_TYPE_ENABLE_SLOT, 0, 0, 0, 0,
@@ -438,6 +450,8 @@ xhci_bulk_state_prepare(struct xhci_ctrl_state *xs, uchar port,
   ep0_ctx[1] = (3U << 1) | (4U << 3) | ((mps0 & 0xffff) << 16);
   ep0_ctx[2] = bs->xfer_ring_pa | 1U;
   ep0_ctx[4] = 8;
+
+  (void)ep_type;
 
   if(xhci_cmd_submit_wait(xs, XHCI_TRB_TYPE_ADDRESS_DEVICE,
                           bs->input_ctx_pa, 0, 0,
@@ -837,9 +851,15 @@ xhci_bulk_submit_async(struct xhci_ctrl_state *xs, uchar port,
   uint ctxsz;
   uint *ctrl_ctx;
   uint *ep_ctx;
+  uchar ep_addr;
+  uint ep_type;
   if(!xs || !xs->initialized || !buf || len == 0 || port == 0)
     return -1;
-  if((ep_out & 0x80) != 0 || (ep_in & 0x80) == 0)
+  if(ep_in != 0 && (ep_in & 0x80) == 0)
+    return -1;
+  if(ep_out != 0 && (ep_out & 0x80) != 0)
+    return -1;
+  if(ep_in == 0 && ep_out == 0)
     return -1;
 
   if(xhci_bulk_state_prepare(xs, port, ep_in, ep_out) < 0)
@@ -848,6 +868,8 @@ xhci_bulk_submit_async(struct xhci_ctrl_state *xs, uchar port,
   bs = &xs->bulk;
   if(bs->in_flight)
     return 1;
+  ep_addr = ep_in ? ep_in : ep_out;
+  ep_type = (ep_addr & 0x80) ? 6U : 2U;
   buf_pa = V2P(buf);
 
   ctxsz = xhci_ctx_size(xs);
@@ -856,7 +878,7 @@ xhci_bulk_submit_async(struct xhci_ctrl_state *xs, uchar port,
   memset(bs->xfer_ring, 0, PGSIZE);
 
   ctrl_ctx[1] = bs->add_flags;
-  ep_ctx[1] = (3U << 1) | (2U << 3) | ((512U & 0xffff) << 16);
+  ep_ctx[1] = (3U << 1) | (ep_type << 3) | ((512U & 0xffff) << 16);
   ep_ctx[2] = bs->xfer_ring_pa | 1U;
   ep_ctx[4] = 512;
 
@@ -897,16 +919,23 @@ xhci_bulk_reap_async(struct xhci_ctrl_state *xs, uchar port,
   uint cc;
   uint ev2;
   uint ev3;
+  uchar ep_addr;
 
   if(!xs || !xs->initialized || port == 0)
     return -1;
-  if((ep_out & 0x80) != 0 || (ep_in & 0x80) == 0)
+  if(ep_in != 0 && (ep_in & 0x80) == 0)
     return -1;
+  if(ep_out != 0 && (ep_out & 0x80) != 0)
+    return -1;
+  if(ep_in == 0 && ep_out == 0)
+    return -1;
+
+  ep_addr = ep_in ? ep_in : ep_out;
 
   bs = &xs->bulk;
   if(!bs->active || !bs->in_flight)
     return -1;
-  if(bs->port != port || bs->ep_in != ep_in || bs->ep_out != ep_out)
+  if(bs->port != port || bs->ep_addr != ep_addr)
     return -1;
 
   if(out_len)

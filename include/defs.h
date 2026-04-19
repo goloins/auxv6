@@ -904,6 +904,7 @@ int             socket_get_table(struct socket_info_k *out, int max);
 
 // net device layer
 void            netdev_init(void);
+int             netdev_ready(void);
 void            netdev_poll(void);
 int             if_register(struct ifnet*);
 int             if_unregister(struct ifnet*);
@@ -948,9 +949,12 @@ void            firewire_init(void);
 int             firewire_procfs_dump(char *buf, uint max);
 void            rtl815x_init(void);
 void            rtl815x_runtime_service(void);
+int             bdev_ready(void);
 void            usb_init(void);
 void            usb_runtime_service(void);
 int             usb_procfs_dump(char *buf, uint max);
+void            usb_msc_runtime_service(void);
+int             usb_msc_procfs_dump(char *buf, uint max);
 int             usb_driver_ep0_probe_desc18(uint bind_handle, uchar *out18);
 int             usb_driver_bulk_submit(uint bind_handle,
 					   uchar ep_in, uchar ep_out,
@@ -970,6 +974,12 @@ int             rtl815x_usb_attach(ushort vendor, ushort product,
 								   uchar dev_speed, uchar mps0,
 								   uint *bind_handle);
 int             rtl815x_usb_detach(uint bind_handle);
+int             usb_msc_usb_attach(ushort vendor, ushort product,
+								   uchar ifnum, uchar ifalt,
+								   uchar bulk_in_ep, uchar bulk_out_ep,
+								   uchar dev_speed,
+								   uint *bind_handle);
+int             usb_msc_usb_detach(uint bind_handle);
 int             nforce_procfs_dump(char *buf, uint max);
 void            wifi_init(void);
 int             wifi_procfs_dump(char *buf, uint max);

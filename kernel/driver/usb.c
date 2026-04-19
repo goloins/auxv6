@@ -53,6 +53,7 @@ static int usb_select_bulk_pair(struct usb_device *ud, int iface_index,
 #define USB_ATTACH_NONE       0
 #define USB_ATTACH_R815X      1
 #define USB_ATTACH_WPAN       2
+#define USB_ATTACH_MSC        3
 
 #define USB_ENUM_STATE_NEW            0
 #define USB_ENUM_STATE_CONTROL_PENDING 1
@@ -610,6 +611,8 @@ usb_attach_driver_name(uchar driver)
     return "r815x";
   case USB_ATTACH_WPAN:
     return "wpan";
+  case USB_ATTACH_MSC:
+    return "msc";
   case USB_ATTACH_NONE:
   default:
     return "none";
@@ -628,6 +631,9 @@ usb_detach_class_driver(struct usb_device *ud)
     break;
   case USB_ATTACH_WPAN:
     (void)wpan_usb_detach(ud->attach_handle);
+    break;
+  case USB_ATTACH_MSC:
+    (void)usb_msc_usb_detach(ud->attach_handle);
     break;
   default:
     break;
@@ -782,6 +788,30 @@ usb_policy_select_wpan(struct usb_device *ud)
   return -1;
 }
 
+static int
+usb_policy_select_msc(struct usb_device *ud)
+{
+  uint i;
+
+  if(!ud)
+    return -1;
+
+  for(i = 0; i < ud->iface_count; i++){
+    struct usb_if_cap *ifc;
+
+    ifc = &ud->ifaces[i];
+    if(ifc->ifclass != 0x08)
+      continue;
+    if(ifc->proto != 0x50)
+      continue;
+    if(!usb_iface_has_bulk_pair(ud, (int)i))
+      continue;
+    return (int)i;
+  }
+
+  return -1;
+}
+
 static void
 usb_retire_device_slot(struct usb_device *ud)
 {
@@ -862,6 +892,11 @@ usb_try_class_attach(struct usb_device *ud)
     sel_if = usb_policy_select_wpan(ud);
     if(sel_if >= 0)
       driver = USB_ATTACH_WPAN;
+    else {
+      sel_if = usb_policy_select_msc(ud);
+      if(sel_if >= 0)
+        driver = USB_ATTACH_MSC;
+    }
   }
 
   if(driver == USB_ATTACH_NONE){
@@ -906,6 +941,10 @@ usb_try_class_attach(struct usb_device *ud)
      !usb_select_bulk_pair(ud, sel_if, &bulk_in, &bulk_out))
     return;
 
+  if(driver == USB_ATTACH_MSC &&
+     !usb_select_bulk_pair(ud, sel_if, &bulk_in, &bulk_out))
+    return;
+
   if(driver == USB_ATTACH_R815X &&
      rtl815x_usb_attach(ud->vendor_id, ud->product_id,
                         ifc->ifnum, ifc->alt,
@@ -945,6 +984,30 @@ usb_try_class_attach(struct usb_device *ud)
     ud->attach_if_proto = ifc->proto;
     ud->attach_ep_in = 0;
     ud->attach_ep_out = 0;
+    ud->attach_ep_sig = ep_sig;
+    ud->attach_generation = ud->generation;
+    ud->attach_successes++;
+    return;
+  }
+
+  if(driver == USB_ATTACH_MSC &&
+     usb_msc_usb_attach(ud->vendor_id, ud->product_id,
+                        ifc->ifnum, ifc->alt,
+                        bulk_in, bulk_out,
+                        ud->speed,
+                        &ud->attach_handle) == 0){
+    ud->attach_driver = USB_ATTACH_MSC;
+    ud->attach_ok = 1;
+    ud->attach_vid = ud->vendor_id;
+    ud->attach_pid = ud->product_id;
+    ud->attach_cfg = ud->cfg_value;
+    ud->attach_if_number = ifc->ifnum;
+    ud->attach_if_alt = ifc->alt;
+    ud->attach_if_class = ifc->ifclass;
+    ud->attach_if_subclass = ifc->subclass;
+    ud->attach_if_proto = ifc->proto;
+    ud->attach_ep_in = bulk_in;
+    ud->attach_ep_out = bulk_out;
     ud->attach_ep_sig = ep_sig;
     ud->attach_generation = ud->generation;
     ud->attach_successes++;
@@ -2101,6 +2164,7 @@ usb_runtime_service(void)
   release(&usb_lock);
 
   rtl815x_runtime_service();
+  usb_msc_runtime_service();
 }
 
 int

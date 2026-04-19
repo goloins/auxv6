@@ -95,6 +95,13 @@ struct flock {
 #define ND_DISK_BASE (VD_PART_BASE + VD_DISK_UNITS * VD_PARTS_PER_DISK)
 #define ND_DISK_DEV(unit) (ND_DISK_BASE + (unit))
 
+#define USB_DISK_UNITS 4
+#define USB_PARTS_PER_DISK 4
+#define USB_DISK_BASE (ND_DISK_BASE + ND_DISK_UNITS)
+#define USB_DISK_DEV(unit) (USB_DISK_BASE + (unit))
+#define USB_PART_BASE (USB_DISK_BASE + USB_DISK_UNITS)
+#define USB_PART_DEV(unit, partno) (USB_PART_BASE + (unit) * USB_PARTS_PER_DISK + ((partno) - 1))
+
 int open(const char *path, int oflag, ...);
 int creat(const char *path, int mode);
 int fcntl(int fd, int cmd, ...);

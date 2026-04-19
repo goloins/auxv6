@@ -7,7 +7,13 @@ Basis: Live source code audit only (no reliance on docs/historic)
 
 The current USB implementation is a strong host-controller discovery and root-port bring-up scaffold, but it is not yet a full USB stack. The system can discover USB host controllers, perform guarded reset/halt/start sequences, scan/service root ports, synthesize candidate device rows, and expose broad observability via /proc. It now includes descriptor-accurate interface-aware class routing with rebind reconciliation, a bounded USB-core runtime service cadence from the kernel tick path with rotating per-controller refresh, periodic full-controller sweep mode, change-driven accelerated follow-up refresh, a minimal interrupt-backed hint bridge, backend-aware IRQ event consumption for UHCI/OHCI/EHCI/xHCI, classified IRQ event policy mapping (port-change/transfer/error/resume) into bounded runtime boost budgets, bounded per-controller deferred runtime work slots fed by classified IRQ events, typed deferred reason handling with bounded error-recovery cooldown, and reason-accurate per-slot deferred queue semantics with per-controller backlog visibility, explicit USB-core stale/disconnect retirement during runtime churn, cached xHCI bulk transport state, split bulk submit/reap plumbing, first RX payload harvest telemetry from runtime bulk completions, and a minimal guarded `ifnet` handoff path, but still lacks production transfer scheduling and full class-driver datapaths.
 
-Estimated overall maturity: 99%
+Practical readiness is narrower than the generic telemetry suggests:
+- Meaningful subordinate-device enumeration and transfer work is currently xHCI-only; UHCI/OHCI/EHCI have lifecycle/port service coverage but no descriptor/config/bulk transport hooks.
+- USB Ethernet now has a first real RTL815x TX enqueue path, but remains a constrained single-flight transport slice.
+- USB mass storage now has a BOT-first class path (CBW/data/CSW + SCSI TUR/INQUIRY/READ CAPACITY/READ10/WRITE10) with block-device registration for 512-byte media; UAS, multi-block I/O, and wider media behavior remain pending.
+- USB Type-C policy, role/orientation state, and connector-specific management are not modeled yet.
+
+Estimated overall maturity: 80%
 
 ## Progress Delta (2026-04-19)
 
@@ -78,6 +84,9 @@ Landed since initial snapshot:
 Not yet landed in this tranche:
 - Multi-request in-flight transport scheduling for active USB endpoints.
 - Device-accurate RX framing/control path for RTL815x (current handoff is guarded and minimal).
+- Real RTL815x transmit datapath and device-specific control-plane programming.
+- Any USB mass storage class path (MSC/BOT/UAS/SCSI/block handoff).
+- Any USB Type-C connector/policy/role/orientation model.
 - Full interrupt-driven USB event model (runtime path is cadence-driven polling).
 - Full interrupt-driven USB scheduling/event handling beyond connect/change-bit flow.
 
@@ -98,6 +107,11 @@ Wiring and visibility:
 Related downstream USB-attached scaffolds:
 - kernel/driver/rtl815x.c
 - kernel/driver/ieee802154.c
+
+Current practical scope boundary:
+- xHCI is the only controller kind with descriptor/configuration/bulk hooks wired today.
+- Current class attach coverage is limited to RTL815x and WPAN scaffolds.
+- There is no in-tree USB Type-C manager, connector state machine, or mass-storage class driver.
 
 ## What Works Today
 
@@ -138,6 +152,7 @@ Related downstream USB-attached scaffolds:
 - Core now records a bounded endpoint capability table from config descriptors.
 - `/proc/usb` `udevN` rows now include per-endpoint capability tuples and attach attempt/result counters.
 - Core now calls first class-driver attach hooks for known USB scaffolds.
+- Today that practical attach coverage is limited to RTL815x and WPAN; there is no generic storage/HID/CDC attach path yet.
 
 9) Attach lifecycle hardening for churn
 - Device slot selection now retires stale same-port prior generations and reuses inactive slots.
@@ -213,58 +228,66 @@ Related downstream USB-attached scaffolds:
 - Successful harvested completions now attempt guarded ingress delivery into `if_input()` when payload length/type looks Ethernet-plausible.
 - `/proc/r815x` now reports ingress handoff telemetry (`rxif=deliver/drop`) and active interface name.
 
-23) USB-core runtime controller cadence
+23) xHCI-only practical subordinate-device path
+- xHCI is currently the only backend with `get_device_desc8`, `get_device_desc18`, `get_config_desc`, `set_configuration`, `bulk_submit`, and `bulk_reap` hooks.
+- UHCI/OHCI/EHCI remain useful for controller discovery, lifecycle, port scan/service, and event accounting, but not for practical subordinate-device transfer bring-up.
+
+24) No USB Type-C or mass-storage stack yet
+- There is no in-tree Type-C connector manager, role/orientation model, CC/power-delivery policy layer, or Alt Mode coordination.
+- There is no in-tree USB mass-storage class match/attach flow, BOT/UAS transport, CBW/CSW handling, SCSI command bridge, or block-device registration path.
+
+25) USB-core runtime controller cadence
 - `usb_runtime_service()` now performs bounded generic controller servicing (rotating HC cursor, periodic scan/service pass, fresh candidate collection, and materialization) instead of only delegating to class-driver runtime hooks.
 - Runtime candidate collection now refreshes snapshots per cadence pass to avoid unbounded candidate growth.
 - `/proc/usb` now exposes USB-core runtime counters (`usb_runtime_pulses`, `usb_runtime_scan`, `usb_runtime_service`, `usb_runtime_materialize`).
 
-24) USB-core churn retirement hardening
+26) USB-core churn retirement hardening
 - Runtime candidate refresh now retires stale/disconnected device rows per controller using active-port mask checks.
 - Runtime refresh also retires rows when port generation drifts, so re-enumeration does not keep stale identities alive.
 - `/proc/usb` now reports `usb_runtime_retired` to observe runtime detach/rebind churn directly.
 
-25) Periodic full-controller sweep mode
+27) Periodic full-controller sweep mode
 - USB-core runtime now supplements rotating per-controller cadence with bounded periodic all-controller sweeps.
 - Full sweeps rebuild a fresh multi-controller candidate snapshot before materialization, improving discovery and stale-row retirement under sparse activity.
 - `/proc/usb` now reports `usb_runtime_sweeps` alongside the other USB-core runtime counters.
 
-26) Change-driven accelerated runtime follow-up
+28) Change-driven accelerated runtime follow-up
 - USB-core runtime now treats controller `rh_change_bits` as a lightweight event hint and assigns a temporary fast-refresh budget to that controller.
 - This accelerates follow-up scan/service/materialize passes after detected change without abandoning the bounded timer-driven model.
 - `/proc/usb` now reports `usb_runtime_change_hints` and `usb_runtime_fast_refresh` to show when the accelerated path is engaged.
 
-27) Minimal interrupt-backed runtime hint bridge
+29) Minimal interrupt-backed runtime hint bridge
 - USB core now registers per-controller IRQ handlers during initialization and keeps ISR work intentionally tiny.
 - IRQ handlers now only record event counters and inject bounded fast-refresh budget, reusing the existing runtime service path for actual scan/service/materialize work.
 - `/proc/usb` now reports `usb_runtime_irq_events` and `usb_runtime_irq_boost` so interrupt-driven acceleration can be verified independently of cadence-only hints.
 
-28) Backend-aware IRQ event consumption (EHCI/xHCI)
+30) Backend-aware IRQ event consumption (EHCI/xHCI)
 - USB-core runtime now calls optional backend `consume_events` hooks for IRQ-registered controllers before scan/service.
 - EHCI/xHCI now consume controller status event bits and acknowledge per-port connect-change bits, returning a concrete change mask to core runtime.
 - Core merges this mask into existing change-hint acceleration and exports `usb_runtime_irq_consume` and `usb_runtime_irq_consume_fail` in `/proc/usb`.
 
-29) All-controller consume-events parity (UHCI/OHCI)
+31) All-controller consume-events parity (UHCI/OHCI)
 - USB core now wires `consume_events` for UHCI/OHCI so all supported HC kinds participate in the same IRQ-consume runtime path.
 - UHCI/OHCI now acknowledge controller interrupt status and per-port connect-change bits and return concrete change masks to USB core runtime.
 - This removes controller-kind blind spots in IRQ-consume accounting while preserving bounded timer fallback semantics.
 
-30) Classified IRQ event policy mapping
+32) Classified IRQ event policy mapping
 - HCD `consume_events` now returns both change-bit masks and classified event flags.
 - USB core runtime now tracks classified event counters (port-change/transfer/error/resume/other) and applies bounded boost tiers by event class.
 - This improves runtime signal quality without adding heavy ISR work or abandoning cadence fallback.
 
-31) Bounded deferred runtime event work
+33) Bounded deferred runtime event work
 - USB core now maintains per-controller bounded deferred work slots that are enqueued from classified non-port-change IRQ events.
 - Runtime service now consumes deferred slots in a round-robin, one-slot-per-pulse path after boost processing, preserving bounded scheduler behavior.
 - `/proc/usb` now exports deferred queue health (`usb_runtime_deferred_enqueued`, `usb_runtime_deferred_dropped`, `usb_runtime_deferred_runs`, `usb_runtime_deferred_materialize`).
 
-32) Typed deferred reasons + bounded error cooldown
+34) Typed deferred reasons + bounded error cooldown
 - Deferred work now carries typed reasons (`rescan`, `re-enumerate`, `error-recovery`) derived from event classes and change masks.
 - Dequeue now prioritizes `error-recovery` over `re-enumerate` over `rescan` per controller while staying bounded.
 - Error-recovery applies bounded streak and cooldown control to prevent persistent error-driven deferred churn loops.
 - `/proc/usb` now reports deferred reason counters and cooldown skip telemetry.
 
-33) Reason-accurate deferred queue accounting
+35) Reason-accurate deferred queue accounting
 - Deferred queue storage now tracks pending slots per reason class (`rescan`, `re-enumerate`, `error-recovery`) per controller.
 - Dequeue consumes one concrete reason slot at a time, ensuring pending-depth and reason counters stay consistent under multi-reason enqueue bursts.
 - Per-controller `hcN` rows now include `defer=` backlog tuple and cooldown exposure for direct controller-local deferred queue inspection.
@@ -275,20 +298,38 @@ Related downstream USB-attached scaffolds:
 - No active URB/TRB/QH/qTD/ED/TD scheduling path.
 - No generalized ring/schedule framework for broad USB traffic (current xHCI path is narrow bootstrap logic for descriptor reads).
 
-2) Incomplete protocol enumeration state machine
+2) Controller parity gap for real devices
+- Only xHCI currently exposes descriptor/configuration/bulk hooks needed for practical subordinate-device bring-up.
+- UHCI/OHCI/EHCI can discover/scan/service ports and consume events, but cannot currently carry a real device to configured bulk/control traffic.
+
+3) Incomplete protocol enumeration state machine
 - Initial xHCI endpoint-0 desc8+desc18+config descriptor reads and `SET_CONFIGURATION` exist, but endpoint activation/transfer scheduling is still incomplete.
 - Descriptor-derived stable object graph (device/interface/endpoint) is still incomplete.
 
-3) Runtime event model is still partial
+4) Runtime event model is still partial
 - Current path now includes bounded timer cadence, interrupt-backed hint injection, backend-aware UHCI/OHCI/EHCI/xHCI event consumption, classified event-to-boost policy mapping, bounded deferred per-controller event work slots, and typed deferred reason/cooldown handling.
 - It still lacks full interrupt-driven transfer scheduling and deep reason-specific execution semantics beyond bounded refresh/materialize pulses.
 
-4) Class-driver handoff is still scaffold-level
+5) Class-driver handoff is still scaffold-level
 - USB core now has descriptor-aware policy gating, explicit detach callbacks, rebind-on-signature-drift, handle-based bind identity, and endpoint-aware RTL815x bind contexts, but still lacks full class-driver transport datapaths.
+- Current attach coverage is effectively limited to RTL815x and WPAN.
 
-5) No production class datapath on USB
+6) No production class datapath on USB
 - RTL815x now has first real EP0 control probe plus bind-scoped bulk queue/retry state, timer-driven transport servicing, split submit/reap transport plumbing, first RX payload harvest telemetry, and a minimal guarded ifnet ingress handoff; it still lacks device-accurate full RX/TX datapath.
 - ieee802154 path remains scaffold/proc visibility only.
+
+7) No USB mass-storage path
+- USB core now class-routes MSC (`class=0x08`, BOT protocol) and binds a dedicated USB MSC driver.
+- BOT transport is now in tree (`CBW`/data/`CSW`) on top of existing USB bulk helpers.
+- SCSI bridge now includes `TEST UNIT READY`, `INQUIRY`, `READ CAPACITY(10)`, `READ(10)`, and `WRITE(10)`.
+- USB MSC now registers block devices in the existing `bdevsw` layer once media probe succeeds and `bdev` is ready.
+- Current constraints: BOT-only (no UAS), single-flight transport, 512-byte block-size requirement, single-block read/write path.
+
+8) No USB Type-C connector/policy model
+- No connector object model for partner/cable/orientation/role state.
+- No CC/PD/power-role/data-role policy handling.
+- No Alt Mode or billboard integration.
+- Current USB work should therefore be treated as downstream function-device enumeration work, not full Type-C platform support.
 
 ## Maturity Breakdown By Portion
 
@@ -300,10 +341,12 @@ Related downstream USB-attached scaffolds:
 - Transfer engine (scheduling/rings/descriptors): 58%
 - Enumeration state machine (EP0 + descriptors + config): 71%
 - Class-driver framework and handoff: 52%
-- USB class drivers with real datapath: 46%
+- USB class drivers with real datapath: 58%
+- USB Type-C connector/policy layer: 0%
+- USB mass storage (MSC/BOT/UAS/SCSI/block handoff): 55%
 - Diagnostics/telemetry: 95%
 
-Weighted overall estimate: 99%
+Weighted overall estimate: 80%
 
 ## Risks and Correctness Notes
 
@@ -319,41 +362,39 @@ Weighted overall estimate: 99%
 
 ## Recommended Maturity Plan
 
-Phase A (37% -> 55%): xHCI vertical slice
-- Introduce USB device object model (address, state, descriptors, endpoints).
-- Implement EP0 control transfer path for xHCI.
-- Add minimal enumeration: device descriptor fetch, SET_ADDRESS, config descriptor fetch, SET_CONFIGURATION.
-- Persist device table across runtime events.
+Phase A (80% -> 85%): xHCI completion for real subordinate devices
+- Finish xHCI endpoint activation and stabilize the narrow control/bulk transfer slice already in tree.
+- Keep xHCI as the proving ground before attempting EHCI parity.
+- Make the current runtime/deferred model device-aware enough to support repeatable attach/detach and transfer recovery.
 
-Phase A status:
-- `device object model`: in progress (landed core object/counters/state).
-- `EP0 control path`: in progress (landed xHCI desc8+desc18+config reads + set-configuration).
-- `minimal enumeration`: in progress (identity + config topology + set-configuration + endpoint capability persistence landed; endpoint activation still pending).
-- `runtime persistence`: partial-plus (state now survives init and participates in bounded timer-driven runtime churn handling, but not yet a full interrupt/hybrid event loop).
+Phase B (85% -> 88%): First production-usable USB NIC path
+- Complete RTL815x device-specific control-plane programming.
+- Implement a real transmit path instead of the current stub failure path.
+- Harden RX framing, ingress validation, and detach/rebind behavior under churn.
 
-Phase B (55% -> 65%): Runtime event model
-- Add continuous port-change handling (interrupt or periodic service path).
-- Implement detach/release lifecycle and address reclaim correctness.
-- Harden reconnect generation semantics and stale row retirement.
+Phase C (83% -> 88%): USB mass-storage vertical slice
+- Add USB core class routing for MSC (`class=0x08`) with BOT-first scope.
+- Implement BOT transport (`CBW`/data/`CSW`) on top of existing xHCI bulk submit/reap plumbing.
+- Add a minimal SCSI command bridge (`INQUIRY`, `TEST UNIT READY`, `READ CAPACITY`, `READ(10)`, `WRITE(10)`).
+- Register a block device and connect it to the existing storage stack.
 
-Phase C (65% -> 75%): First class-driver end-to-end
-- Build USB core class match/attach API.
-- Wire core to rtl815x attach path using parsed descriptors/endpoints.
-- Land first real control/bulk datapath and ifnet registration for one adapter family.
+Phase D (88% -> 92%): USB Type-C observability and policy baseline
+- Introduce a Type-C connector object model with partner presence, orientation, data-role, and power-role state.
+- Add telemetry-first procfs visibility before any policy-heavy enablement.
+- Keep scope realistic: focus first on connector/role visibility for USB data-path bring-up, not full PD/Alt Mode.
 
-Phase D (75%+): Controller parity and breadth
-- Backfill EHCI transfer path after xHCI proves architecture.
-- Keep UHCI/OHCI stable for legacy coverage.
-- Expand class coverage (HID, storage, CDC) and add stress/regression tests.
+Phase E (92%+): Controller parity and breadth
+- Backfill EHCI transfer support after xHCI proves the architecture.
+- Keep UHCI/OHCI stable for legacy hub/port visibility.
+- Expand class coverage beyond RTL815x/MSC (CDC ECM/NCM, HID, more USB NIC families) and add regression tests.
 
 ## Practical Next Step
 
-Immediate best next implementation target is reason-specific execution behavior:
-- Route typed deferred reasons into differentiated refresh actions (for example, selective re-enumeration paths vs lightweight rescan paths) instead of one generic refresh call.
-- Use the new per-controller deferred backlog tuple to tune reason-specific queue caps and cooldown policy by controller kind.
-- Follow with device-specific control/register access needed to get beyond descriptor-only identification.
+Immediate best next implementation target is the first production-usable class datapath:
+- Finish RTL815x transmit and control-plane programming so one supported USB Ethernet adapter can actually carry bidirectional traffic.
+- In parallel, shape USB-core class-routing APIs so MSC can slot in without reworking attach identity, endpoint selection, or detach semantics.
 
 Follow-up target after that:
-- Expand composite-device and altsetting-aware policy so class routing remains correct once more USB families are exercised.
+- Land BOT-based mass-storage support on xHCI first, then add Type-C connector/state observability so USB-C attached storage/network devices have an explicit platform model instead of being treated as anonymous downstream devices.
 
-That sequence is the shortest path from cached/polled transport pulses to a real running USB network datapath.
+That sequence is the shortest path to two user-visible outcomes: a working USB NIC and a working USB mass-storage device on xHCI, with Type-C support growing from telemetry and role-state truth instead of guesswork.
