@@ -39,6 +39,8 @@ OBJS = \
 	kernel/driver/ide.o\
 	kernel/driver/ioapic.o\
 	kernel/driver/pci.o\
+	kernel/driver/thunderbolt.o\
+	kernel/driver/lightning.o\
 	kernel/driver/modem.o\
 	kernel/driver/firewire.o\
 	kernel/driver/wifi.o\

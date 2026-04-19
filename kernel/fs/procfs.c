@@ -51,6 +51,8 @@
 #define PROCFS_WPAN_INO       33   /* /proc/wpan — discovered 802.15.4 coordinators */
 #define PROCFS_R815X_INO      34   /* /proc/r815x — discovered RTL8152/RTL8153 USB NICs */
 #define PROCFS_MLFQ_TUNE_INO  35   /* /proc/mlfq_tune — runtime MLFQ tuning knobs */
+#define PROCFS_THUNDERBOLT_INO 36  /* /proc/thunderbolt — discovered Thunderbolt/USB4 host routers */
+#define PROCFS_LIGHTNING_INO   37  /* /proc/lightning — Apple Lightning/iAP2 scaffold state */
 #define PROCFS_VERSION_STR  "a/ux86 aux86 i686\n"
 
 struct procfs_inode {
@@ -94,6 +96,8 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_WPAN_INO, "wpan", 1024 },
   { PROCFS_R815X_INO, "r815x", 2048 },
   { PROCFS_MLFQ_TUNE_INO, "mlfq_tune", 192 },
+  { PROCFS_THUNDERBOLT_INO, "thunderbolt", 2048 },
+  { PROCFS_LIGHTNING_INO, "lightning", 512 },
   { 0, 0, 0 }
 };
 
@@ -466,6 +470,14 @@ procfs_fill_inode(struct inode *ip, uint inum)
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
     ip->size = 2048;
+  } else if(inum == PROCFS_THUNDERBOLT_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
+    ip->size = 2048;
+  } else if(inum == PROCFS_LIGHTNING_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
+    ip->size = 512;
   } else {
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
@@ -1593,6 +1605,18 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
   }
   if(ip->inum == PROCFS_NFORCE_INO){
     int r = nforce_procfs_dump(buf, sizeof(buf));
+    if(r < 0)
+      return -1;
+    return procfs_copy_data(dst, off, n, buf, (uint)r);
+  }
+  if(ip->inum == PROCFS_THUNDERBOLT_INO){
+    int r = thunderbolt_procfs_dump(buf, sizeof(buf));
+    if(r < 0)
+      return -1;
+    return procfs_copy_data(dst, off, n, buf, (uint)r);
+  }
+  if(ip->inum == PROCFS_LIGHTNING_INO){
+    int r = lightning_procfs_dump(buf, sizeof(buf));
     if(r < 0)
       return -1;
     return procfs_copy_data(dst, off, n, buf, (uint)r);

@@ -46,6 +46,12 @@ functions and call paths, not outdated banners.
 - `schedperf` now carries an MLFQ-specific profile and tests aligned to the
   scheduler's real behavior, not legacy expectations.
 
+4. Thunderbolt/Lightning now have explicit kernel scaffolds.
+- Added a Thunderbolt/USB4 host-router probe scaffold with `/proc/thunderbolt`
+  visibility to anchor future tunnel/security/runtime work.
+- Added a Lightning/iAP2 scaffold with `/proc/lightning` visibility and a
+  future USB-observation hook for Apple accessory attach planning.
+
 ## System Snapshot (Honest Assessment)
 
 Legend:
@@ -156,6 +162,23 @@ What is mixed/scaffold:
   that path is still experimental rather than trustworthy.
 - Wi-Fi, WPAN, modem, and FireWire work remain mostly bring-up territory.
 
+### 6b) Thunderbolt And Lightning
+
+Status: `Scaffold`
+
+What is solid:
+- Thunderbolt has a concrete probe surface in tree (`thunderbolt_init`) and
+  `/proc` telemetry (`/proc/thunderbolt`) for discovered host routers.
+- Lightning has a concrete planning surface (`lightning_init`) and
+  `/proc/lightning` state telemetry with a dedicated USB-observation hook for
+  future iAP2 integration.
+
+What is mixed/scaffold:
+- No Thunderbolt tunnel manager, hotplug state machine, security-level policy,
+  or retimer handling yet.
+- No Lightning transport path (iAP2/usbmuxd/auth/control/data) yet.
+- No integration yet between Lightning observation and USB runtime attach paths.
+
 ### 7) libc / POSIX Surface
 
 Status: `Mixed`, improving through pressure from real software
@@ -229,6 +252,10 @@ The most important status change is this:
 4. Continue UI stabilization, not UI sprawl.
 - Keep `6wm`/X11 bring-up moving, but prioritize crash/hang removal over new features.
 
+5. Land first Thunderbolt/Lightning contracts.
+- Define the kernel/user contract for Thunderbolt security domains and tunnel policy.
+- Define Lightning attach semantics and where iAP2 control ownership lives.
+
 ## 31-60 Days (Capability Consolidation)
 
 1. Make one USB path genuinely trustworthy.
@@ -245,6 +272,14 @@ The most important status change is this:
 
 4. Push audio from single-path viability toward repeatable runtime behavior.
 
+5. Move Thunderbolt from probe-only to managed runtime.
+- Add bounded runtime event handling for Thunderbolt host-router changes.
+- Add first policy-only security-level reporting and enforcement stubs.
+
+6. Move Lightning from telemetry-only toward first attach lifecycle.
+- Wire `lightning_usb_observe` into USB runtime attach/detach flow.
+- Add first minimal iAP2 session-state scaffold (no data plane yet).
+
 ## 61-90 Days (Platform Credibility)
 
 1. Make a threading decision and start landing it.
@@ -257,6 +292,10 @@ The most important status change is this:
 - Keep per-driver status visible: `solid`, `mixed`, `probe-only`, `experimental datapath`.
 
 4. Harden the ports pipeline around what the kernel can really support.
+
+5. Decide platform position for Apple-adjacent accessory support.
+- Clarify if Thunderbolt and Lightning are first-class platform commitments,
+  or experimental subsystems with explicit support boundaries.
 
 ## Project-Level Priorities (Ordered)
 

@@ -26,12 +26,14 @@ main(void)
   ioapicinit();    // another interrupt controller
   display_init();  // display device registry
   pci_init();      // PCI bus enumeration
+  thunderbolt_init(); // thunderbolt/usb4 host-router probe scaffold
   modem_init();    // modem-class PCI probe stubs
   firewire_init(); // firewire/IEEE1394 PCI probe stubs
   wifi_init();     // 802.11 Wi-Fi PCI probe scaffold
   ieee802154_init(); // 802.15.4 WPAN scaffold (backburner; USB attach pending)
   rtl815x_init();  // Realtek RTL8152/RTL8153 USB Ethernet scaffold
   usb_init();      // usb host-controller discovery scaffold
+  lightning_init(); // apple lightning/iAP2 scaffold (USB hook pending)
   virtio_gpu_init(); // virtio-gpu subsystem
   intel_gfx_init();  // intel display-class PCI probe stub
   consoleinit();   // console hardware

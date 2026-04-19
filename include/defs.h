@@ -935,6 +935,13 @@ void            smartlink_init(void);
 void            pctel_init(void);
 void            intel_softmodem_init(void);
 void            motorola_sm56_init(void);
+void            thunderbolt_init(void);
+int             thunderbolt_procfs_dump(char *buf, uint max);
+void            lightning_init(void);
+void            lightning_usb_observe(ushort vendor, ushort product,
+									  uchar ifclass, uchar ifsubclass,
+									  uchar ifproto);
+int             lightning_procfs_dump(char *buf, uint max);
 int             modem_register_stub_probe(const char *family, struct pci_dev *dev);
 int             modem_procfs_dump(char *buf, uint max);
 void            firewire_init(void);

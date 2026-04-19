@@ -1,0 +1,136 @@
+# Thunderlight Status (041926)
+
+Date: 2026-04-19
+Basis: In-tree implementation + successful kernel build sentinel `TBT_LIGHTNING_STUB_OK`
+
+## Executive Summary
+
+Thunderbolt and Lightning support are now present as first-class scaffolds in auxv6, with boot wiring, procfs visibility, and initial lifecycle hooks. The implementation is intentionally telemetry-first and policy-first: discovery and observability are in place, while data-plane transport and production security flows remain roadmap work.
+
+Estimated combined maturity: 24%
+
+## Completed In This Tranche
+
+1. Thunderbolt scaffold landed
+- Added `thunderbolt_init()` lifecycle entry point.
+- Added PCI discovery for Thunderbolt/USB4-class host-router candidates.
+- Added state/telemetry export through `/proc/thunderbolt`.
+
+2. Lightning scaffold landed
+- Added `lightning_init()` lifecycle entry point.
+- Added `lightning_usb_observe(...)` placeholder hook for USB attach/detach integration.
+- Added state/telemetry export through `/proc/lightning`.
+
+3. Kernel wiring and visibility landed
+- Boot init now invokes both `thunderbolt_init()` and `lightning_init()`.
+- Procfs now includes inode registration, sizing, and read dispatch for:
+  - `/proc/thunderbolt`
+  - `/proc/lightning`
+- Build system now compiles and links both new drivers.
+
+4. Compile blocker resolved
+- Replaced non-existent PCI helper usage with in-tree supported API (`pci_set_master`).
+- Rebuilt kernel successfully with sentinel: `TBT_LIGHTNING_STUB_OK`.
+
+## Support Evaluation (Percent)
+
+### A) Thunderbolt/USB4
+
+Current support: 28%
+
+Breakdown:
+- Discovery and probe surface: 70%
+- Runtime event handling: 10%
+- Policy/security model: 5%
+- Tunnel lifecycle and transport: 0%
+- Observability/procfs: 60%
+
+Interpretation:
+- Good baseline for inventory and bring-up visibility.
+- Not yet suitable for tunnel bring-up or secure authorization workflows.
+
+### B) Lightning/iAP2
+
+Current support: 20%
+
+Breakdown:
+- Lifecycle scaffold and counters: 55%
+- USB integration hooks (attach/detach observation): 15%
+- Session state machine: 5%
+- Authentication/control-plane boundaries: 0%
+- Observability/procfs: 45%
+
+Interpretation:
+- Kernel-visible anchor exists and is measurable.
+- Still pre-session and pre-auth; no production accessory protocol behavior yet.
+
+### C) Combined Thunderlight Program
+
+Current combined support: 24%
+
+Method:
+- Simple average of Thunderbolt (28%) and Lightning (20%) while both tracks are in scaffold-first phase.
+
+## Roadmap and Goals
+
+### 30-Day Goals (Target: combined 35%)
+
+1. Lightning USB observation wiring
+- Wire `lightning_usb_observe(...)` into USB core attach/detach lifecycle.
+- Add candidate counters by VID:PID + interface tuple.
+
+2. Thunderbolt runtime pulse
+- Add bounded runtime service cadence for Thunderbolt controller event consume.
+- Add event counters and last-change snapshots in `/proc/thunderbolt`.
+
+3. Status hardening
+- Add boot/procfs invariants so both proc nodes are guaranteed present and stable.
+
+Exit criteria:
+- Both proc nodes show live counter movement under controlled hotplug/event activity.
+
+### 60-Day Goals (Target: combined 50%)
+
+1. Policy-only surfacing
+- Add Thunderbolt security-level/authorization placeholders.
+- Add Lightning minimal session states (`none`, `detected`, `negotiating`, `active`, `failed`).
+
+2. Runtime boundedness checks
+- Add telemetry proving bounded per-pulse work and queue pressure behavior.
+
+3. Contract clarity
+- Define explicit kernel/userland boundary for accessory policy and session control.
+
+Exit criteria:
+- Policy/session state shown in procfs with deterministic transitions in test scenarios.
+
+### 90-Day Goals (Target: combined 65%)
+
+1. Thunderbolt tunnel model scaffold
+- Introduce tunnel objects and state transitions without enabling full dataplane.
+
+2. Lightning session lifecycle scaffold
+- Add minimal handshake progression with failure-class telemetry.
+
+3. Regression gate
+- Add repeatable regression checks for init, procfs, and bounded runtime behavior.
+
+Exit criteria:
+- Structured object/session lifecycle visible end-to-end in telemetry with no unbounded runtime work.
+
+## Risks and Guardrails
+
+Top risks:
+1. Scope explosion into full transport stacks too early.
+2. Security ambiguity around Thunderbolt authorization and Apple accessory auth boundaries.
+3. Runtime churn destabilizing scheduler behavior under hotplug bursts.
+
+Guardrails:
+1. Keep ISR work minimal; do heavy work in bounded runtime pulses.
+2. Keep per-controller and per-session queues bounded.
+3. Land telemetry and policy contracts before enabling data-plane behavior.
+4. Preserve clean compile/build at each milestone increment.
+
+## Next Concrete Step
+
+Wire `lightning_usb_observe(...)` into USB attach/detach flow and extend `/proc/lightning` with candidate attach/detach counters keyed by selected interface tuple.
