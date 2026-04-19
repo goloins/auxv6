@@ -13,6 +13,7 @@
 #include "defs.h"
 #include "spinlock.h"
 #include "pci.h"
+#include "traps.h"
 #include "usb_hcd.h"
 
 static struct spinlock usb_lock;
@@ -37,6 +38,9 @@ static int usb_select_bulk_pair(struct usb_device *ud, int iface_index,
 #define USB_DEV_EP_MAX        8
 #define USB_DEV_IF_MAX        8
 #define USB_CFG_BLOB_MAX      4096
+#define USB_RUNTIME_HC_PULSE  25U
+#define USB_RUNTIME_SWEEP_PULSE 250U
+#define USB_RUNTIME_CHANGE_BOOST 8U
 
 #define USB_ATTACH_NONE       0
 #define USB_ATTACH_R815X      1
@@ -159,6 +163,25 @@ static uint usb_device_count;
 static uint usb_attach_dedup_count;
 static uint usb_attach_retired_count;
 static uint usb_attach_rebind_count;
+static uint usb_runtime_pulses;
+static uint usb_runtime_scan_runs;
+static uint usb_runtime_service_runs;
+static uint usb_runtime_materialize_runs;
+static uint usb_runtime_hc_cursor;
+static uint usb_runtime_retired;
+static uint usb_runtime_sweeps;
+static uint usb_runtime_change_hints;
+static uint usb_runtime_fast_refreshes;
+static uint usb_runtime_boost_budget[USB_HC_MAX];
+static uint usb_runtime_irq_events;
+static uint usb_runtime_irq_boosts;
+static uint usb_runtime_irq_consumes;
+static uint usb_runtime_irq_consume_failures;
+static uchar usb_runtime_irq_registered[USB_HC_MAX];
+static char usb_irq_name[USB_HC_MAX][12];
+
+static void usb_irq_handler(int irq, void *arg);
+static void usb_make_irq_name(uint hc_index, char *dst, uint dstlen);
 
 struct usb_bus_state {
   uint addr_bits[4];
@@ -177,6 +200,7 @@ static const struct usb_hc_ops usb_hc_ops_unknown = {
   .reset = 0,
   .halt = 0,
   .start = 0,
+  .consume_events = 0,
   .scan_ports = 0,
   .service_ports = 0,
   .get_device_desc8 = 0,
@@ -194,6 +218,7 @@ static const struct usb_hc_ops usb_hc_ops_uhci = {
   .reset = usb_uhci_reset,
   .halt = usb_uhci_halt,
   .start = usb_uhci_start,
+  .consume_events = 0,
   .scan_ports = usb_uhci_scan_ports,
   .service_ports = usb_uhci_service_ports,
   .get_device_desc8 = 0,
@@ -211,6 +236,7 @@ static const struct usb_hc_ops usb_hc_ops_ohci = {
   .reset = usb_ohci_reset,
   .halt = usb_ohci_halt,
   .start = usb_ohci_start,
+  .consume_events = 0,
   .scan_ports = usb_ohci_scan_ports,
   .service_ports = usb_ohci_service_ports,
   .get_device_desc8 = 0,
@@ -228,6 +254,7 @@ static const struct usb_hc_ops usb_hc_ops_ehci = {
   .reset = usb_ehci_reset,
   .halt = usb_ehci_halt,
   .start = usb_ehci_start,
+  .consume_events = usb_ehci_consume_events,
   .scan_ports = usb_ehci_scan_ports,
   .service_ports = usb_ehci_service_ports,
   .get_device_desc8 = 0,
@@ -245,6 +272,7 @@ static const struct usb_hc_ops usb_hc_ops_xhci = {
   .reset = usb_xhci_reset,
   .halt = usb_xhci_halt,
   .start = usb_xhci_start,
+  .consume_events = usb_xhci_consume_events,
   .scan_ports = usb_xhci_scan_ports,
   .service_ports = usb_xhci_service_ports,
   .get_device_desc8 = usb_xhci_get_device_desc8,
@@ -255,6 +283,67 @@ static const struct usb_hc_ops usb_hc_ops_xhci = {
   .bulk_reap = usb_xhci_bulk_reap,
   .bulk_probe_xfer = usb_xhci_bulk_probe_xfer,
 };
+
+static void
+usb_make_irq_name(uint hc_index, char *dst, uint dstlen)
+{
+  uint i;
+  uint n;
+  uint v;
+  char rev[10];
+  static const char prefix[] = "usb-hc";
+
+  if(!dst || dstlen == 0)
+    return;
+
+  for(i = 0; prefix[i] && i + 1 < dstlen; i++)
+    dst[i] = prefix[i];
+  if(prefix[i]){
+    dst[0] = 0;
+    return;
+  }
+
+  v = hc_index;
+  n = 0;
+  do {
+    rev[n++] = (char)('0' + (v % 10));
+    v /= 10;
+  } while(v && n < sizeof(rev));
+
+  if(i + n >= dstlen){
+    dst[0] = 0;
+    return;
+  }
+
+  while(n--)
+    dst[i++] = rev[n];
+  dst[i] = 0;
+}
+
+static void
+usb_irq_handler(int irq, void *arg)
+{
+  struct usb_hc_probe *sc;
+  uint hc_index;
+
+  (void)irq;
+  if(!arg)
+    return;
+
+  sc = (struct usb_hc_probe*)arg;
+  if(sc < &usb_hc[0] || sc >= &usb_hc[USB_HC_MAX])
+    return;
+
+  hc_index = (uint)(sc - &usb_hc[0]);
+  if(hc_index >= USB_HC_MAX)
+    return;
+
+  acquire(&usb_lock);
+  usb_runtime_irq_events++;
+  usb_runtime_irq_boosts++;
+  usb_runtime_boost_budget[hc_index] = USB_RUNTIME_CHANGE_BOOST;
+  release(&usb_lock);
+}
 
 static int
 usb_buf_putc(char *buf, uint max, uint *len, char c)
@@ -1332,6 +1421,42 @@ usb_scrub_inactive_ports(uint hc_index, uint active_mask)
 }
 
 static void
+usb_retire_unseen_devices(uint hc_index, uint active_mask,
+                          struct usb_bus_state *bus)
+{
+  uint i;
+
+  for(i = 0; i < usb_device_count; i++){
+    struct usb_device *ud;
+    uint port_index;
+
+    ud = &usb_devices[i];
+    if(!ud->active)
+      continue;
+    if(ud->hc_index != hc_index)
+      continue;
+    if(ud->port == 0 || ud->port > USB_ROOT_PORT_MAX){
+      usb_retire_device_slot(ud);
+      usb_runtime_retired++;
+      continue;
+    }
+
+    port_index = ud->port - 1;
+    if((active_mask & (1U << port_index)) == 0){
+      usb_retire_device_slot(ud);
+      usb_runtime_retired++;
+      continue;
+    }
+
+    if(bus && ud->generation != bus->port_generation[port_index]){
+      usb_retire_device_slot(ud);
+      usb_runtime_retired++;
+      continue;
+    }
+  }
+}
+
+static void
 usb_collect_candidates(uint hc_index, struct usb_hc_probe *sc)
 {
   struct usb_bus_state *bus;
@@ -1396,6 +1521,101 @@ usb_collect_candidates(uint hc_index, struct usb_hc_probe *sc)
   }
 
   usb_scrub_inactive_ports(hc_index, active_mask);
+  usb_retire_unseen_devices(hc_index, active_mask, bus);
+}
+
+static int
+usb_runtime_refresh_hc(uint hc_index)
+{
+  struct usb_hc_probe *sc;
+  const struct usb_hc_ops *ops;
+  struct pci_dev *pdev;
+  uint consumed_change_bits;
+  uint change_bits;
+  int refreshed;
+
+  if(hc_index >= usb_hc_count)
+    return 0;
+
+  sc = &usb_hc[hc_index];
+  if(sc->phase != USB_HC_PHASE_READY)
+    return 0;
+
+  ops = usb_get_ops(sc->kind);
+  if(!ops)
+    return 0;
+
+  pdev = pci_get_device((int)sc->pci_index);
+  if(!pdev)
+    return 0;
+
+  refreshed = 0;
+  consumed_change_bits = 0;
+
+  if(usb_runtime_irq_registered[hc_index] && ops->consume_events){
+    if(ops->consume_events(sc, pdev, &consumed_change_bits) < 0)
+      usb_runtime_irq_consume_failures++;
+    else
+      usb_runtime_irq_consumes++;
+  }
+
+  if(ops->scan_ports){
+    sc->scan_attempts++;
+    usb_runtime_scan_runs++;
+    if(ops->scan_ports(sc, pdev) < 0)
+      sc->scan_failures++;
+    else {
+      sc->scan_successes++;
+      refreshed = 1;
+    }
+  }
+
+  sc->rh_change_bits |= consumed_change_bits;
+
+  change_bits = sc->rh_change_bits;
+  if(change_bits){
+    usb_runtime_change_hints++;
+    usb_runtime_boost_budget[hc_index] = USB_RUNTIME_CHANGE_BOOST;
+  }
+
+  if(ops->service_ports){
+    sc->service_attempts++;
+    usb_runtime_service_runs++;
+    if(ops->service_ports(sc, pdev) < 0)
+      sc->service_failures++;
+    else {
+      sc->service_successes++;
+      refreshed = 1;
+    }
+  }
+
+  usb_collect_candidates(hc_index, sc);
+  return refreshed;
+}
+
+static int
+usb_runtime_next_boosted_hc(uint *out_hc_index)
+{
+  uint start;
+  uint n;
+  uint hc_index;
+
+  if(!out_hc_index || usb_hc_count == 0)
+    return 0;
+
+  start = usb_runtime_hc_cursor;
+  if(start >= usb_hc_count)
+    start = 0;
+
+  for(n = 0; n < usb_hc_count; n++){
+    hc_index = (start + n) % usb_hc_count;
+    if(usb_runtime_boost_budget[hc_index] == 0)
+      continue;
+    *out_hc_index = hc_index;
+    return 1;
+  }
+
+  return 0;
 }
 
 static const char*
@@ -1467,6 +1687,22 @@ usb_init(void)
   usb_attach_dedup_count = 0;
   usb_attach_retired_count = 0;
   usb_attach_rebind_count = 0;
+  usb_runtime_pulses = 0;
+  usb_runtime_scan_runs = 0;
+  usb_runtime_service_runs = 0;
+  usb_runtime_materialize_runs = 0;
+  usb_runtime_hc_cursor = 0;
+  usb_runtime_retired = 0;
+  usb_runtime_sweeps = 0;
+  usb_runtime_change_hints = 0;
+  usb_runtime_fast_refreshes = 0;
+  usb_runtime_irq_events = 0;
+  usb_runtime_irq_boosts = 0;
+  usb_runtime_irq_consumes = 0;
+  usb_runtime_irq_consume_failures = 0;
+  memset(usb_runtime_boost_budget, 0, sizeof(usb_runtime_boost_budget));
+  memset(usb_runtime_irq_registered, 0, sizeof(usb_runtime_irq_registered));
+  memset(usb_irq_name, 0, sizeof(usb_irq_name));
 
   ndev = pci_device_count();
   for(i = 0; i < ndev; i++){
@@ -1556,6 +1792,24 @@ usb_init(void)
                   sc->service_successes++;
               }
               usb_collect_candidates(usb_hc_count - 1, sc);
+
+              {
+                int irq;
+
+                irq = pci_irq_vector(dev, 0);
+                if(irq < 0)
+                  irq = (int)sc->irq_line;
+
+                if(irq >= 0 && irq < (256 - T_IRQ0)){
+                  uint idx;
+
+                  idx = usb_hc_count - 1;
+                  usb_make_irq_name(idx, usb_irq_name[idx], sizeof(usb_irq_name[idx]));
+                  if(usb_irq_name[idx][0] &&
+                     irq_register(irq, usb_irq_handler, sc, usb_irq_name[idx]) == 0)
+                    usb_runtime_irq_registered[idx] = 1;
+                }
+              }
             }
           }
         }
@@ -1579,6 +1833,49 @@ usb_init(void)
 void
 usb_runtime_service(void)
 {
+  uint hc_index;
+  uint i;
+  int refreshed;
+
+  refreshed = 0;
+
+  acquire(&usb_lock);
+  usb_runtime_pulses++;
+
+  if(usb_hc_count > 0 && (usb_runtime_pulses % USB_RUNTIME_SWEEP_PULSE) == 0){
+    usb_dev_count = 0;
+    usb_runtime_sweeps++;
+    for(i = 0; i < usb_hc_count; i++){
+      if(usb_runtime_refresh_hc(i))
+        refreshed = 1;
+    }
+  } else if(usb_runtime_next_boosted_hc(&hc_index)){
+    usb_dev_count = 0;
+    usb_runtime_fast_refreshes++;
+    if(usb_runtime_refresh_hc(hc_index))
+      refreshed = 1;
+    if(usb_runtime_boost_budget[hc_index] > 0)
+      usb_runtime_boost_budget[hc_index]--;
+  } else if(usb_hc_count > 0 && (usb_runtime_pulses % USB_RUNTIME_HC_PULSE) == 0){
+    hc_index = usb_runtime_hc_cursor;
+    if(hc_index >= usb_hc_count)
+      hc_index = 0;
+    usb_runtime_hc_cursor = hc_index + 1;
+    if(usb_runtime_hc_cursor >= usb_hc_count)
+      usb_runtime_hc_cursor = 0;
+
+    usb_dev_count = 0;
+    if(usb_runtime_refresh_hc(hc_index))
+      refreshed = 1;
+  }
+
+  if(refreshed){
+    usb_runtime_materialize_runs++;
+    usb_materialize_devices();
+  }
+
+  release(&usb_lock);
+
   rtl815x_runtime_service();
 }
 
@@ -1739,6 +2036,54 @@ usb_procfs_dump(char *buf, uint max)
 
   if(usb_buf_puts(buf, max, &len, "usb_attach_rebind ") < 0) goto out;
   if(usb_buf_putu(buf, max, &len, usb_attach_rebind_count) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_pulses ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_pulses) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_scan ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_scan_runs) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_service ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_service_runs) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_materialize ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_materialize_runs) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_retired ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_retired) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_sweeps ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_sweeps) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_change_hints ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_change_hints) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_fast_refresh ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_fast_refreshes) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_irq_events ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_irq_events) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_irq_boost ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_irq_boosts) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_irq_consume ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_irq_consumes) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_runtime_irq_consume_fail ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_runtime_irq_consume_failures) < 0) goto out;
   if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
 
   for(i = 0; i < usb_hc_count; i++){

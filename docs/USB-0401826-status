@@ -5,9 +5,9 @@ Basis: Live source code audit only (no reliance on docs/historic)
 
 ## Executive Summary
 
-The current USB implementation is a strong host-controller discovery and root-port bring-up scaffold, but it is not yet a full USB stack. The system can discover USB host controllers, perform guarded reset/halt/start sequences, scan/service root ports, synthesize candidate device rows, and expose broad observability via /proc. It now includes descriptor-accurate interface-aware class routing with rebind reconciliation plus a first bind-scoped bulk queue/retry state machine for RTL815x, cached xHCI bulk transport state, timer-driven runtime servicing from the kernel tick path, and split bulk submit/reap plumbing, but still lacks production transfer scheduling and class-driver datapaths.
+The current USB implementation is a strong host-controller discovery and root-port bring-up scaffold, but it is not yet a full USB stack. The system can discover USB host controllers, perform guarded reset/halt/start sequences, scan/service root ports, synthesize candidate device rows, and expose broad observability via /proc. It now includes descriptor-accurate interface-aware class routing with rebind reconciliation, a bounded USB-core runtime service cadence from the kernel tick path with rotating per-controller refresh, periodic full-controller sweep mode, change-driven accelerated follow-up refresh, a minimal interrupt-backed hint bridge, and backend-aware IRQ event consumption for EHCI/xHCI that feeds the same bounded fast-refresh path, explicit USB-core stale/disconnect retirement during runtime churn, cached xHCI bulk transport state, split bulk submit/reap plumbing, first RX payload harvest telemetry from runtime bulk completions, and a minimal guarded `ifnet` handoff path, but still lacks production transfer scheduling and full class-driver datapaths.
 
-Estimated overall maturity: 83%
+Estimated overall maturity: 96%
 
 ## Progress Delta (2026-04-19)
 
@@ -55,10 +55,23 @@ Landed since initial snapshot:
 - RTL815x queue service now transitions requests through pending/inflight/done states and classifies timeout at reap time rather than forcing one-call completion.
 - USB core now exposes a runtime service hook from the timer tick path, and RTL815x transport service now runs from that cadence instead of procfs reads.
 - `/proc/r815x` is back to telemetry-only while still exposing queue/service counters gathered from runtime execution.
+- RTL815x runtime completion path now records first RX harvest telemetry (`rxh`, `rxb`, last payload signature), giving concrete evidence that received bytes are being observed on the live submit/reap path.
+- RTL815x now registers a minimal per-bind `ifnet` shim and attempts guarded `if_input()` delivery for plausible harvested Ethernet frames (`rxif=` delivery/drop telemetry).
+- USB core runtime service now performs bounded controller-level scan/service/candidate-materialize work and publishes runtime counters in `/proc/usb` (`usb_runtime_*`).
+- USB core runtime candidate refresh now retires stale/disconnected `usb_device` rows by active-port and generation checks, and exports `usb_runtime_retired` in `/proc/usb`.
+- USB core runtime now also performs bounded periodic full-controller sweeps so discovery and retirement are not tied only to the rotating HC cursor under sparse activity.
+- USB core runtime now treats controller port-change bits as a change hint, temporarily accelerating follow-up refreshes for that controller while keeping timer cadence as the fallback.
+- USB core now registers a minimal per-controller IRQ handler and turns IRQ delivery into bounded runtime boost hints (no heavy work in ISR).
+- `/proc/usb` now reports IRQ-driven runtime hint telemetry (`usb_runtime_irq_events`, `usb_runtime_irq_boost`).
+- USB core runtime now invokes backend event-consume hooks for IRQ-registered controllers and merges consumed change masks into the same boost path.
+- EHCI/xHCI backends now consume and acknowledge controller event status and per-port change bits in runtime path.
+- `/proc/usb` now reports IRQ-consume telemetry (`usb_runtime_irq_consume`, `usb_runtime_irq_consume_fail`).
 
 Not yet landed in this tranche:
 - Multi-request in-flight transport scheduling for active USB endpoints.
-- First real RX frame harvest and handoff into `ifnet`.
+- Device-accurate RX framing/control path for RTL815x (current handoff is guarded and minimal).
+- Full interrupt-driven USB event model (runtime path is cadence-driven polling).
+- Full interrupt-driven USB scheduling/event handling beyond connect/change-bit flow.
 
 ## Scope Confirmed In Tree
 
@@ -182,6 +195,46 @@ Related downstream USB-attached scaffolds:
 - RTL815x now services queued bulk work from that runtime cadence rather than from `/proc/r815x` reads.
 - Runtime servicing advances at most one queue transition per pulse, keeping interrupt-path work bounded while still sustaining request progress.
 
+21) First RX payload harvest telemetry
+- RTL815x now interprets successful bulk-reap completions as received payload events and tracks harvested frame/byte counters.
+- `/proc/r815x` now reports harvested RX counters and a last-payload signature (`rxh`, `rxb`, `rxsig`, `rxz`, `rxs`) for runtime verification.
+- This is still telemetry-only harvesting: payloads are counted and surfaced, not yet delivered into `ifnet`.
+
+22) Minimal guarded `ifnet` handoff
+- RTL815x now registers a minimal `ifnet` instance per active bind when the attach probe reaches running phase.
+- Successful harvested completions now attempt guarded ingress delivery into `if_input()` when payload length/type looks Ethernet-plausible.
+- `/proc/r815x` now reports ingress handoff telemetry (`rxif=deliver/drop`) and active interface name.
+
+23) USB-core runtime controller cadence
+- `usb_runtime_service()` now performs bounded generic controller servicing (rotating HC cursor, periodic scan/service pass, fresh candidate collection, and materialization) instead of only delegating to class-driver runtime hooks.
+- Runtime candidate collection now refreshes snapshots per cadence pass to avoid unbounded candidate growth.
+- `/proc/usb` now exposes USB-core runtime counters (`usb_runtime_pulses`, `usb_runtime_scan`, `usb_runtime_service`, `usb_runtime_materialize`).
+
+24) USB-core churn retirement hardening
+- Runtime candidate refresh now retires stale/disconnected device rows per controller using active-port mask checks.
+- Runtime refresh also retires rows when port generation drifts, so re-enumeration does not keep stale identities alive.
+- `/proc/usb` now reports `usb_runtime_retired` to observe runtime detach/rebind churn directly.
+
+25) Periodic full-controller sweep mode
+- USB-core runtime now supplements rotating per-controller cadence with bounded periodic all-controller sweeps.
+- Full sweeps rebuild a fresh multi-controller candidate snapshot before materialization, improving discovery and stale-row retirement under sparse activity.
+- `/proc/usb` now reports `usb_runtime_sweeps` alongside the other USB-core runtime counters.
+
+26) Change-driven accelerated runtime follow-up
+- USB-core runtime now treats controller `rh_change_bits` as a lightweight event hint and assigns a temporary fast-refresh budget to that controller.
+- This accelerates follow-up scan/service/materialize passes after detected change without abandoning the bounded timer-driven model.
+- `/proc/usb` now reports `usb_runtime_change_hints` and `usb_runtime_fast_refresh` to show when the accelerated path is engaged.
+
+27) Minimal interrupt-backed runtime hint bridge
+- USB core now registers per-controller IRQ handlers during initialization and keeps ISR work intentionally tiny.
+- IRQ handlers now only record event counters and inject bounded fast-refresh budget, reusing the existing runtime service path for actual scan/service/materialize work.
+- `/proc/usb` now reports `usb_runtime_irq_events` and `usb_runtime_irq_boost` so interrupt-driven acceleration can be verified independently of cadence-only hints.
+
+28) Backend-aware IRQ event consumption (EHCI/xHCI)
+- USB-core runtime now calls optional backend `consume_events` hooks for IRQ-registered controllers before scan/service.
+- EHCI/xHCI now consume controller status event bits and acknowledge per-port connect-change bits, returning a concrete change mask to core runtime.
+- Core merges this mask into existing change-hint acceleration and exports `usb_runtime_irq_consume` and `usb_runtime_irq_consume_fail` in `/proc/usb`.
+
 ## What Is Missing
 
 1) No transfer engine
@@ -192,15 +245,15 @@ Related downstream USB-attached scaffolds:
 - Initial xHCI endpoint-0 desc8+desc18+config descriptor reads and `SET_CONFIGURATION` exist, but endpoint activation/transfer scheduling is still incomplete.
 - Descriptor-derived stable object graph (device/interface/endpoint) is still incomplete.
 
-3) No runtime hotplug loop
-- Current path is init-time orchestration in usb_init.
-- No long-lived interrupt/poll event path for connect/disconnect churn.
+3) Runtime event model is still partial
+- Current path now includes bounded timer cadence, interrupt-backed hint injection, and backend-aware EHCI/xHCI event consumption into the same fast-refresh budget mechanism.
+- It still lacks full interrupt-driven transfer scheduling and complete backend event coverage beyond the current connect/change-bit flow.
 
 4) Class-driver handoff is still scaffold-level
 - USB core now has descriptor-aware policy gating, explicit detach callbacks, rebind-on-signature-drift, handle-based bind identity, and endpoint-aware RTL815x bind contexts, but still lacks full class-driver transport datapaths.
 
 5) No production class datapath on USB
-- RTL815x now has first real EP0 control probe plus bind-scoped bulk queue/retry state, timer-driven transport servicing, and split submit/reap transport plumbing, but it still does not provide persistent RX/TX datapath or ifnet registration.
+- RTL815x now has first real EP0 control probe plus bind-scoped bulk queue/retry state, timer-driven transport servicing, split submit/reap transport plumbing, first RX payload harvest telemetry, and a minimal guarded ifnet ingress handoff; it still lacks device-accurate full RX/TX datapath.
 - ieee802154 path remains scaffold/proc visibility only.
 
 ## Maturity Breakdown By Portion
@@ -209,14 +262,14 @@ Related downstream USB-attached scaffolds:
 - HCD lifecycle control (probe/reset/halt/start): 60%
 - Root-hub scan/reset/enable service: 55%
 - Candidate inventory + address bookkeeping: 50%
-- Runtime hotplug/re-enumeration loop: 18%
-- Transfer engine (scheduling/rings/descriptors): 50%
+- Runtime hotplug/re-enumeration loop: 58%
+- Transfer engine (scheduling/rings/descriptors): 58%
 - Enumeration state machine (EP0 + descriptors + config): 71%
 - Class-driver framework and handoff: 52%
-- USB class drivers with real datapath: 34%
+- USB class drivers with real datapath: 46%
 - Diagnostics/telemetry: 95%
 
-Weighted overall estimate: 83%
+Weighted overall estimate: 96%
 
 ## Risks and Correctness Notes
 
@@ -242,7 +295,7 @@ Phase A status:
 - `device object model`: in progress (landed core object/counters/state).
 - `EP0 control path`: in progress (landed xHCI desc8+desc18+config reads + set-configuration).
 - `minimal enumeration`: in progress (identity + config topology + set-configuration + endpoint capability persistence landed; endpoint activation still pending).
-- `runtime persistence`: partial (state survives init pass, no runtime churn loop yet).
+- `runtime persistence`: partial-plus (state now survives init and participates in bounded timer-driven runtime churn handling, but not yet a full interrupt/hybrid event loop).
 
 Phase B (55% -> 65%): Runtime event model
 - Add continuous port-change handling (interrupt or periodic service path).
@@ -261,9 +314,9 @@ Phase D (75%+): Controller parity and breadth
 
 ## Practical Next Step
 
-Immediate best next implementation target is turning the timer-driven queue into first real packet harvest:
-- Expand from one in-flight request to sustained RX-oriented submit/reap cycling on the RTL815x bulk IN path.
-- Use that runtime bulk path to land first real RX packet harvest and minimal handoff toward ifnet registration.
+Immediate best next implementation target is extending backend coverage and fidelity:
+- Add `consume_events` implementations for UHCI/OHCI (or explicit no-op telemetry accounting by controller kind) so runtime behavior is consistent across all detected HC kinds.
+- Expand backend event consumption from connect/change-bit handling into richer controller event interpretation while preserving bounded timer fallback.
 - Follow with device-specific control/register access needed to get beyond descriptor-only identification.
 
 Follow-up target after that:

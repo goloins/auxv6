@@ -16,6 +16,8 @@
 
 #define XHCI_USBSTS_HCH      (1U << 0)
 #define XHCI_USBSTS_CNR      (1U << 11)
+#define XHCI_USBSTS_EINT     (1U << 3)
+#define XHCI_USBSTS_PCD      (1U << 4)
 
 #define XHCI_POLL_TRIES      4000
 #define XHCI_POLL_DELAY_US   10
@@ -1197,7 +1199,7 @@ usb_xhci_service_ports(struct usb_hc_probe *sc, struct pci_dev *dev)
     if(!(portsc & XHCI_PORTSC_CCS))
       continue;
 
-    portsc &= ~XHCI_PORTSC_CSC;
+    portsc |= XHCI_PORTSC_CSC;
     portsc |= XHCI_PORTSC_PR;
     xhci_write(regs, off, portsc);
 
@@ -1211,6 +1213,52 @@ usb_xhci_service_ports(struct usb_hc_probe *sc, struct pci_dev *dev)
       sc->rh_enabled_bits |= (1U << n);
   }
 
+  return 0;
+}
+
+int
+usb_xhci_consume_events(struct usb_hc_probe *sc, struct pci_dev *dev,
+                        uint *change_bits)
+{
+  volatile uint *regs;
+  uint opbase;
+  uint n;
+  uint changes;
+  uint st;
+
+  if(change_bits)
+    *change_bits = 0;
+  if(!sc || !sc->reg_probe_ok || sc->rh_ports == 0)
+    return 0;
+
+  regs = xhci_regs(dev);
+  if(!regs)
+    return -1;
+
+  opbase = (uint)sc->cap_length;
+  if(opbase < 0x10 || opbase > 0x80)
+    return -1;
+
+  st = xhci_read(regs, opbase + XHCI_OP_USBSTS);
+  st &= (XHCI_USBSTS_EINT | XHCI_USBSTS_PCD);
+  if(st)
+    xhci_write(regs, opbase + XHCI_OP_USBSTS, st);
+
+  changes = 0;
+  for(n = 0; n < sc->rh_ports && n < 32; n++){
+    uint off;
+    uint portsc;
+
+    off = opbase + XHCI_OP_PORTSC_BASE + n * 0x10;
+    portsc = xhci_read(regs, off);
+    if(!(portsc & XHCI_PORTSC_CSC))
+      continue;
+    changes |= (1U << n);
+    xhci_write(regs, off, portsc | XHCI_PORTSC_CSC);
+  }
+
+  if(change_bits)
+    *change_bits = changes;
   return 0;
 }
 

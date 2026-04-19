@@ -13,6 +13,9 @@
 #define EHCI_USBCMD_HCRESET  (1U << 1)
 
 #define EHCI_USBSTS_HALTED   (1U << 12)
+#define EHCI_USBSTS_USBINT   (1U << 0)
+#define EHCI_USBSTS_ERRINT   (1U << 1)
+#define EHCI_USBSTS_PCD      (1U << 2)
 
 #define EHCI_POLL_TRIES      2000
 #define EHCI_POLL_DELAY_US   10
@@ -251,14 +254,14 @@ usb_ehci_service_ports(struct usb_hc_probe *sc, struct pci_dev *dev)
     if(!(portsc & EHCI_PORTSC_CCS))
       continue;
 
-    portsc &= ~EHCI_PORTSC_CSC;
+    portsc |= EHCI_PORTSC_CSC;
     portsc |= EHCI_PORTSC_PR;
     ehci_write(regs, off, portsc);
     microdelay(50000);
 
     portsc = ehci_read(regs, off);
     portsc &= ~EHCI_PORTSC_PR;
-    portsc &= ~EHCI_PORTSC_CSC;
+    portsc |= EHCI_PORTSC_CSC;
     ehci_write(regs, off, portsc);
 
     if(ehci_wait_bits(regs, off, EHCI_PORTSC_PR, 0) < 0)
@@ -272,5 +275,51 @@ usb_ehci_service_ports(struct usb_hc_probe *sc, struct pci_dev *dev)
     }
   }
 
+  return 0;
+}
+
+int
+usb_ehci_consume_events(struct usb_hc_probe *sc, struct pci_dev *dev,
+                        uint *change_bits)
+{
+  volatile uint *regs;
+  uint opbase;
+  uint n;
+  uint changes;
+  uint st;
+
+  if(change_bits)
+    *change_bits = 0;
+  if(!sc || !sc->reg_probe_ok || sc->rh_ports == 0)
+    return 0;
+
+  regs = ehci_regs(dev);
+  if(!regs)
+    return -1;
+
+  opbase = (uint)sc->cap_length;
+  if(opbase < 0x10 || opbase > 0x40)
+    return -1;
+
+  st = ehci_read(regs, opbase + EHCI_OP_USBSTS);
+  st &= (EHCI_USBSTS_USBINT | EHCI_USBSTS_ERRINT | EHCI_USBSTS_PCD);
+  if(st)
+    ehci_write(regs, opbase + EHCI_OP_USBSTS, st);
+
+  changes = 0;
+  for(n = 0; n < sc->rh_ports && n < 32; n++){
+    uint off;
+    uint portsc;
+
+    off = opbase + EHCI_OP_PORTSC_BASE + n * 4;
+    portsc = ehci_read(regs, off);
+    if(!(portsc & EHCI_PORTSC_CSC))
+      continue;
+    changes |= (1U << n);
+    ehci_write(regs, off, portsc | EHCI_PORTSC_CSC);
+  }
+
+  if(change_bits)
+    *change_bits = changes;
   return 0;
 }

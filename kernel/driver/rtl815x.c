@@ -18,6 +18,7 @@
 #include "types.h"
 #include "defs.h"
 #include "spinlock.h"
+#include "net.h"
 
 #define R815X_STUB_MAX     8
 
@@ -95,9 +96,22 @@ struct r815x_probe {
   uchar bulk_qtail;
   uchar bulk_qcount;
   uint rx_frames;
+  uint rx_bytes;
+  uint rx_harvest_frames;
+  uint rx_harvest_bytes;
+  uint rx_harvest_zero_len;
+  uint rx_harvest_short_len;
+  uint rx_last_len;
+  uint rx_last_sig;
+  uint rx_ifnet_attempts;
+  uint rx_ifnet_deliver;
+  uint rx_ifnet_drop;
   uint tx_frames;
   uint rx_errors;
   uint tx_errors;
+  uchar if_slot;
+  uchar if_registered;
+  struct ifnet ifp;
   struct r815x_bulk_req bulkq[R815X_BULK_QUEUE_DEPTH];
   const char *model;
 };
@@ -131,6 +145,16 @@ static int r815x_bulk_submit_once(struct r815x_probe *sc, struct r815x_bulk_req 
 static int r815x_bulk_reap_once(struct r815x_probe *sc, struct r815x_bulk_req *req);
 static int r815x_bulk_service(struct r815x_probe *sc);
 static int r815x_service_runtime_probe(struct r815x_probe *sc);
+static void r815x_rx_harvest_done(struct r815x_probe *sc, struct r815x_bulk_req *req);
+static void r815x_rx_try_ifnet_input(struct r815x_probe *sc, const uchar *buf, uint len);
+static int r815x_if_output(struct ifnet *ifp, struct mbuf *m);
+static void r815x_if_poll(struct ifnet *ifp);
+static int r815x_ifnet_register(struct r815x_probe *sc);
+
+static struct ifnet_ops r815x_if_ops = {
+  .if_output = r815x_if_output,
+  .if_poll = r815x_if_poll,
+};
 
 static ushort
 r815x_probe_bulk_len(struct r815x_probe *sc)
@@ -346,11 +370,153 @@ r815x_bulk_service(struct r815x_probe *sc)
   return 0;
 }
 
+static void
+r815x_rx_harvest_done(struct r815x_probe *sc, struct r815x_bulk_req *req)
+{
+  uint sig;
+  uint frame_len;
+
+  if(!sc || !req)
+    return;
+
+  frame_len = req->done_len;
+  sc->rx_last_len = frame_len;
+  if(frame_len == 0){
+    sc->rx_harvest_zero_len++;
+    return;
+  }
+
+  sig = req->buf[0];
+  if(frame_len > 1)
+    sig |= ((uint)req->buf[1] << 8);
+  if(frame_len > 2)
+    sig |= ((uint)req->buf[2] << 16);
+  if(frame_len > 3)
+    sig |= ((uint)req->buf[3] << 24);
+  sc->rx_last_sig = sig;
+
+  if(frame_len < 14)
+    sc->rx_harvest_short_len++;
+
+  sc->rx_harvest_frames++;
+  sc->rx_harvest_bytes += frame_len;
+  sc->rx_frames++;
+  sc->rx_bytes += frame_len;
+}
+
+static void
+r815x_rx_try_ifnet_input(struct r815x_probe *sc, const uchar *buf, uint len)
+{
+  struct mbuf *m;
+  ushort etype;
+
+  if(!sc || !buf)
+    return;
+
+  acquire(&r815x_lock);
+  sc->rx_ifnet_attempts++;
+  release(&r815x_lock);
+
+  if(len < 14 || len > MBUF_SIZE){
+    acquire(&r815x_lock);
+    sc->rx_ifnet_drop++;
+    release(&r815x_lock);
+    return;
+  }
+
+  etype = (ushort)(((uint)buf[12] << 8) | buf[13]);
+  if(etype != NET_PROTO_IP && etype != 0x0806 && etype != 0x86dd){
+    acquire(&r815x_lock);
+    sc->rx_ifnet_drop++;
+    release(&r815x_lock);
+    return;
+  }
+
+  acquire(&r815x_lock);
+  if(!sc->active || !sc->if_registered ||
+     (sc->ifp.if_flags & IFF_UP) == 0 ||
+     (sc->ifp.if_flags & IFF_RUNNING) == 0){
+    sc->rx_ifnet_drop++;
+    release(&r815x_lock);
+    return;
+  }
+  release(&r815x_lock);
+
+  m = mbuf_alloc();
+  if(!m){
+    acquire(&r815x_lock);
+    sc->rx_ifnet_drop++;
+    sc->rx_errors++;
+    release(&r815x_lock);
+    return;
+  }
+
+  memmove(m->data, buf, len);
+  m->len = len;
+  m->rcvif = &sc->ifp;
+  if_input(&sc->ifp, m);
+
+  acquire(&r815x_lock);
+  sc->rx_ifnet_deliver++;
+  release(&r815x_lock);
+}
+
+static int
+r815x_if_output(struct ifnet *ifp, struct mbuf *m)
+{
+  struct r815x_probe *sc;
+
+  if(m)
+    mbuf_free(m);
+  if(!ifp)
+    return -1;
+
+  sc = (struct r815x_probe*)ifp->if_softc;
+  if(sc){
+    acquire(&r815x_lock);
+    sc->tx_errors++;
+    release(&r815x_lock);
+  }
+  return -1;
+}
+
+static void
+r815x_if_poll(struct ifnet *ifp)
+{
+  (void)ifp;
+}
+
+static int
+r815x_ifnet_register(struct r815x_probe *sc)
+{
+  if(!sc)
+    return -1;
+
+  memset(&sc->ifp, 0, sizeof(sc->ifp));
+  safestrcpy(sc->ifp.if_xname, "r815x0", sizeof(sc->ifp.if_xname));
+  sc->ifp.if_xname[5] = (char)('0' + (sc->if_slot % 10));
+  sc->ifp.if_xname[6] = 0;
+  sc->ifp.if_mtu = 1500;
+  sc->ifp.if_flags = IFF_UP | IFF_BROADCAST | IFF_RUNNING;
+  sc->ifp.if_link_state = LINK_STATE_UP;
+  sc->ifp.if_softc = sc;
+  sc->ifp.if_input = ether_input;
+  sc->ifp.if_ops = &r815x_if_ops;
+
+  if(if_register(&sc->ifp) < 0)
+    return -1;
+
+  sc->if_registered = 1;
+  return 0;
+}
+
 static int
 r815x_service_runtime_probe(struct r815x_probe *sc)
 {
   struct r815x_bulk_req *req;
+  uchar rx_buf[R815X_BULK_BUF_MAX];
   uint bind_id;
+  uint rx_len;
   uchar ep_in;
   uchar ep_out;
   ushort bulk_len;
@@ -359,6 +525,8 @@ r815x_service_runtime_probe(struct r815x_probe *sc)
 
   if(!sc)
     return -1;
+
+  rx_len = 0;
 
   acquire(&r815x_lock);
   if(!sc->active){
@@ -485,11 +653,17 @@ r815x_service_runtime_probe(struct r815x_probe *sc)
     req->state = R815X_BULK_REQ_DONE;
     sc->bulk_successes++;
     sc->bulk_complete_count++;
-    sc->rx_frames++;
+    r815x_rx_harvest_done(sc, req);
+    if(req->done_len > 0 && req->done_len <= R815X_BULK_BUF_MAX){
+      rx_len = req->done_len;
+      memmove(rx_buf, req->buf, rx_len);
+    }
     sc->tx_frames++;
     sc->bulk_qhead = (uchar)((sc->bulk_qhead + 1) % R815X_BULK_QUEUE_DEPTH);
     sc->bulk_qcount--;
     release(&r815x_lock);
+    if(rx_len)
+      r815x_rx_try_ifnet_input(sc, rx_buf, rx_len);
     return 0;
   }
 
@@ -707,6 +881,7 @@ rtl815x_usb_attach(ushort vendor, ushort product,
 {
   const struct r815x_usb_id *id;
   struct r815x_probe *sc;
+  int reg_ifnet;
   uint bind_id;
 
   if(!bind_handle)
@@ -725,9 +900,11 @@ rtl815x_usb_attach(ushort vendor, ushort product,
     return -1;
   }
 
-  sc = &r815x_probes[r815x_probe_count++];
+  sc = &r815x_probes[r815x_probe_count];
+  r815x_probe_count++;
   memset(sc, 0, sizeof(*sc));
   sc->active = 1;
+  sc->if_slot = (uchar)(r815x_probe_count - 1);
   bind_id = ++r815x_next_bind_id;
   if(bind_id == 0)
     bind_id = ++r815x_next_bind_id;
@@ -751,8 +928,18 @@ rtl815x_usb_attach(ushort vendor, ushort product,
   else
     sc->phase = R815X_PHASE_RUNNING;
 
+  reg_ifnet = (sc->phase == R815X_PHASE_RUNNING) ? 1 : 0;
+
   *bind_handle = bind_id;
   release(&r815x_lock);
+
+  if(reg_ifnet && r815x_ifnet_register(sc) < 0){
+    acquire(&r815x_lock);
+    if(sc->active && sc->bind_id == bind_id)
+      sc->phase = R815X_PHASE_DEGRADED;
+    release(&r815x_lock);
+    cprintf("r815x: bind=%d ifnet registration failed\n", bind_id);
+  }
 
   cprintf("r815x: %s [%x:%x] attached via USB (bind=%d speed=%d mps0=%d if=%d/%d ep=0x%x/0x%x phase=%s)\n",
       id->model, (uint)vendor, (uint)product, bind_id,
@@ -766,6 +953,8 @@ int
 rtl815x_usb_detach(uint bind_handle)
 {
   int i;
+  struct ifnet *ifp;
+  int if_registered;
 
   if(bind_handle == 0)
     return -1;
@@ -773,6 +962,8 @@ rtl815x_usb_detach(uint bind_handle)
   r815x_ensure_lock();
 
   acquire(&r815x_lock);
+  ifp = 0;
+  if_registered = 0;
   for(i = (int)r815x_probe_count - 1; i >= 0; i--){
     struct r815x_probe *sc;
 
@@ -781,9 +972,14 @@ rtl815x_usb_detach(uint bind_handle)
       continue;
     if(sc->bind_id != bind_handle)
       continue;
+    if_registered = sc->if_registered;
+    ifp = &sc->ifp;
+    sc->if_registered = 0;
     sc->active = 0;
     sc->phase = R815X_PHASE_DEGRADED;
     release(&r815x_lock);
+    if(if_registered)
+      (void)if_unregister(ifp);
     cprintf("r815x: bind=%d detached via USB retire\n", bind_handle);
     return 0;
   }
@@ -817,7 +1013,7 @@ rtl815x_procfs_dump(char *buf, uint max)
                     "# Realtek RTL8152/RTL8153 USB Ethernet\n") < 0)
     return -1;
   if(r815x_buf_puts(buf, max, &len,
-                    "# bind id speed mps0 if alt ep_in ep_out family phase chipver ctrl bulk blen brc retry tout short qdone qpoll qpulse qstate model\n") < 0)
+                    "# bind id speed mps0 if alt ep_in ep_out family phase chipver ctrl bulk blen brc retry tout short qdone qpoll qpulse qstate rxh rxb rxsig rxz rxs rxif if model\n") < 0)
     return -1;
 
   for(i = 0; i < count; i++){
@@ -908,6 +1104,34 @@ rtl815x_procfs_dump(char *buf, uint max)
                         r815x_bulk_req_state_name(p->bulkq[p->bulk_qhead].state)) < 0)
         return -1;
     }
+
+      if(r815x_buf_puts(buf, max, &len, " rxh=") < 0) return -1;
+      if(r815x_buf_putu(buf, max, &len, p->rx_harvest_frames) < 0) return -1;
+
+      if(r815x_buf_puts(buf, max, &len, " rxb=") < 0) return -1;
+      if(r815x_buf_putu(buf, max, &len, p->rx_harvest_bytes) < 0) return -1;
+
+      if(r815x_buf_puts(buf, max, &len, " rxsig=0x") < 0) return -1;
+      if(r815x_buf_puthex16(buf, max, &len, (ushort)(p->rx_last_sig >> 16)) < 0) return -1;
+      if(r815x_buf_puthex16(buf, max, &len, (ushort)(p->rx_last_sig & 0xffff)) < 0) return -1;
+
+      if(r815x_buf_puts(buf, max, &len, " rxz=") < 0) return -1;
+      if(r815x_buf_putu(buf, max, &len, p->rx_harvest_zero_len) < 0) return -1;
+
+      if(r815x_buf_puts(buf, max, &len, " rxs=") < 0) return -1;
+      if(r815x_buf_putu(buf, max, &len, p->rx_harvest_short_len) < 0) return -1;
+
+      if(r815x_buf_puts(buf, max, &len, " rxif=") < 0) return -1;
+      if(r815x_buf_putu(buf, max, &len, p->rx_ifnet_deliver) < 0) return -1;
+      if(r815x_buf_putc(buf, max, &len, '/') < 0) return -1;
+      if(r815x_buf_putu(buf, max, &len, p->rx_ifnet_drop) < 0) return -1;
+
+      if(r815x_buf_puts(buf, max, &len, " if=") < 0) return -1;
+      if(p->if_registered){
+        if(r815x_buf_puts(buf, max, &len, p->ifp.if_xname) < 0) return -1;
+      } else {
+        if(r815x_buf_puts(buf, max, &len, "-") < 0) return -1;
+      }
 
     if(r815x_buf_puts(buf, max, &len, " model=") < 0) return -1;
     if(r815x_buf_puts(buf, max, &len, p->model) < 0) return -1;

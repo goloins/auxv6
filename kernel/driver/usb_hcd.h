@@ -82,6 +82,8 @@ struct usb_hc_ops {
   int (*reset)(struct usb_hc_probe *sc, struct pci_dev *dev);
   int (*halt)(struct usb_hc_probe *sc, struct pci_dev *dev);
   int (*start)(struct usb_hc_probe *sc, struct pci_dev *dev);
+  int (*consume_events)(struct usb_hc_probe *sc, struct pci_dev *dev,
+                        uint *change_bits);
   int (*scan_ports)(struct usb_hc_probe *sc, struct pci_dev *dev);
   int (*service_ports)(struct usb_hc_probe *sc, struct pci_dev *dev);
   int (*get_device_desc8)(struct usb_hc_probe *sc, struct pci_dev *dev,
@@ -132,6 +134,10 @@ int usb_uhci_service_ports(struct usb_hc_probe *sc, struct pci_dev *dev);
 int usb_ohci_service_ports(struct usb_hc_probe *sc, struct pci_dev *dev);
 int usb_ehci_service_ports(struct usb_hc_probe *sc, struct pci_dev *dev);
 int usb_xhci_service_ports(struct usb_hc_probe *sc, struct pci_dev *dev);
+int usb_ehci_consume_events(struct usb_hc_probe *sc, struct pci_dev *dev,
+                            uint *change_bits);
+int usb_xhci_consume_events(struct usb_hc_probe *sc, struct pci_dev *dev,
+                            uint *change_bits);
 int usb_xhci_get_device_desc8(struct usb_hc_probe *sc, struct pci_dev *dev,
                               uchar port, uchar address, uchar *out8);
 int usb_xhci_get_device_desc18(struct usb_hc_probe *sc, struct pci_dev *dev,
