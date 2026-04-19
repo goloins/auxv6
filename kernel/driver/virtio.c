@@ -679,6 +679,35 @@ virtq_create(struct virtio_dev *vdev, int index, int size)
     return vq;
 }
 
+int
+virtq_set_vector(struct virtio_dev *vdev, int index, int vector_index)
+{
+    uint16_t vec;
+
+    if (!vdev || !vdev->common_cfg || !vdev->pci || index < 0)
+        return -1;
+
+    if (pci_irq_mode(vdev->pci) != PCI_IRQ_MODE_MSIX)
+        return 0;
+
+    if (vector_index < 0)
+        vec = 0xFFFF;
+    else if (vector_index > 0x7FFF)
+        return -1;
+    else
+        vec = (uint16_t)vector_index;
+
+    virtio_mmio_write16(vdev->common_cfg, VIRTIO_PCI_COMMON_Q_SELECT, (uint16_t)index);
+    if (virtio_mmio_read16(vdev->common_cfg, VIRTIO_PCI_COMMON_Q_SIZE) == 0)
+        return -1;
+
+    virtio_mmio_write16(vdev->common_cfg, VIRTIO_PCI_COMMON_Q_MSIX, vec);
+    if (virtio_mmio_read16(vdev->common_cfg, VIRTIO_PCI_COMMON_Q_MSIX) != vec)
+        return -1;
+
+    return 0;
+}
+
 /*
  * Destroy a virtqueue
  */

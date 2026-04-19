@@ -47,9 +47,16 @@ static struct spinlock pci_irqvec_lock;
 /* One bit per trap.c IRQ index in [PCI_MSI_IRQ_BASE, PCI_MSI_IRQ_LIMIT). */
 static uint32_t pci_irqvec_bitmap[(PCI_MSI_IRQ_LIMIT + 31) / 32];
 
+/* Debug: error injection for testing fallback paths */
+static int pci_inject_alloc_failure = 0;
+
 static int
 pci_irqvec_alloc_locked(void)
 {
+    /* Error injection: fail allocation if flag is set */
+    if (pci_inject_alloc_failure)
+        return -1;
+    
     for (int irq = PCI_MSI_IRQ_BASE; irq < PCI_MSI_IRQ_LIMIT; irq++) {
         int word = irq >> 5;
         uint32_t bit = 1U << (irq & 31);
@@ -959,6 +966,22 @@ pci_dump_devices(void)
                 dev->class_code, dev->subclass,
                 dev->irq_line);
     }
+}
+
+/*
+ * Debug: error injection control for testing fallback paths
+ */
+void
+pci_inject_alloc_failures(int enable)
+{
+    pci_inject_alloc_failure = enable;
+    cprintf("pci: error injection %s\n", enable ? "enabled" : "disabled");
+}
+
+int
+pci_get_inject_alloc_failures(void)
+{
+    return pci_inject_alloc_failure;
 }
 
 /* Helper: write hex nibble */

@@ -299,5 +299,7 @@ int      pci_irq_mode(struct pci_dev *dev);
 void     pci_dump_devices(void);
 int      pci_irq_audit_format(char *buf, int maxlen);
 void     pci_irq_audit_report(void);
+void     pci_inject_alloc_failures(int enable);
+int      pci_get_inject_alloc_failures(void);
 
 #endif /* _PCI_H_ */

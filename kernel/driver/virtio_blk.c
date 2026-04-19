@@ -131,6 +131,10 @@ struct virtio_blk_softc {
     /* Hardware-negotiated virtqueue depth (set once at probe, read-only thereafter) */
     uint32_t vq_size;
 
+    /* Multi-vector MSI-X support */
+    int irq_req;                /* Request queue IRQ */
+    int num_vecs;              /* Number of vectors allocated (1 or 2) */
+
     /* Pending request tracking */
     struct {
         struct buf *bp;
@@ -1284,22 +1288,39 @@ virtio_blk_probe(struct pci_dev *pci)
     sc->vdev.driver_data = sc;
     sc->vdev.isr_handler = virtio_blk_intr;
 
-    if (pci_irq_alloc_vectors(pci, 1, 1, PCI_IRQ_F_MSI | PCI_IRQ_F_INTX) < 1) {
+    /* Allocate up to 2 vectors (current queue + future expansion) */
+    int nvec = pci_irq_alloc_vectors(pci, 1, 2, PCI_IRQ_F_MSI | PCI_IRQ_F_INTX);
+    if (nvec < 1) {
         cprintf("virtio_blk: failed to allocate IRQ vectors\n");
         virtq_destroy(vq);
         virtio_reset(&sc->vdev);
         return -1;
     }
+    
+    sc->num_vecs = nvec;
     sc->vdev.irq = pci_irq_vector(pci, 0);
     if (sc->vdev.irq < 0) {
-        cprintf("virtio_blk: failed to get IRQ vector\n");
+        cprintf("virtio_blk: failed to get IRQ vector 0\n");
         pci_irq_free_vectors(pci);
         virtq_destroy(vq);
         virtio_reset(&sc->vdev);
         return -1;
     }
     
-    /* Register IRQ handler */
+    /* Try to get vector 1 for future admin queue */
+    sc->irq_req = pci_irq_vector(pci, 1);
+    if (sc->irq_req < 0)
+        sc->irq_req = sc->vdev.irq;  /* Fallback to vector 0 if vector 1 unavailable */
+
+    if (virtq_set_vector(&sc->vdev, 0, 0) < 0) {
+        cprintf("virtio_blk: failed to map queue 0 to vector 0\n");
+        pci_irq_free_vectors(pci);
+        virtq_destroy(vq);
+        virtio_reset(&sc->vdev);
+        return -1;
+    }
+    
+    /* Register IRQ handler on vector 0 */
     if (irq_register(sc->vdev.irq, virtio_blk_irq_handler, sc, "virtio_blk") < 0) {
         cprintf("virtio_blk: failed to register IRQ %d\n", sc->vdev.irq);
         pci_irq_free_vectors(pci);
@@ -1335,8 +1356,8 @@ virtio_blk_probe(struct pci_dev *pci)
         irq_mode_name = "msix";
     
     virtio_blk_count++;
-    cprintf("virtio_blk: attached device %d as dev=%d irq=%d mode=%s\n",
-            virtio_blk_count - 1, sc->dev_id, sc->vdev.irq, irq_mode_name);
+    cprintf("virtio_blk: attached device %d as dev=%d irq=%d mode=%s (nvecs=%d)\n",
+            virtio_blk_count - 1, sc->dev_id, sc->vdev.irq, irq_mode_name, sc->num_vecs);
     
     return 0;
 }

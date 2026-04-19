@@ -187,6 +187,10 @@ struct virtio_gpu_softc {
     struct virtio_dev vdev;
     struct spinlock lock;
     uint8_t irq_allocated;
+
+    /* Multi-vector MSI-X support */
+    int irq_ctrl;               /* Secondary queue IRQ (cursor when available) */
+    int num_vecs;              /* Number of vectors allocated (1 or 2) */
     
     /* Display info */
     struct display_device *display_dev;

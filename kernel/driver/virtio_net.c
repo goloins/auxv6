@@ -148,6 +148,11 @@ struct virtio_net_softc {
     ushort dbg_last_tx_used;
     ushort dbg_last_tx_avail;
     int dbg_last_tx_pending;
+    
+    /* Multi-vector IRQ tracking */
+    int irq_rx;                /* RX queue IRQ */
+    int irq_tx;                /* TX queue IRQ */
+    int num_vecs;              /* Number of vectors allocated (1 or 2) */
 };
 
 /* Global array of virtio-net devices */
@@ -640,16 +645,50 @@ virtio_net_probe(struct pci_dev *pci)
     sc->vdev.driver_data = sc;
     sc->vdev.isr_handler = virtio_net_intr;
 
-    if (pci_irq_alloc_vectors(pci, 1, 1, PCI_IRQ_F_MSI | PCI_IRQ_F_INTX) < 1) {
+    /* Try to allocate 2 vectors (RX and TX), fallback to 1 if needed */
+    int nvec = pci_irq_alloc_vectors(pci, 1, 2, PCI_IRQ_F_MSI | PCI_IRQ_F_INTX);
+    if (nvec < 1) {
         VNETDBG("virtio_net: failed to allocate IRQ vectors\n");
         virtq_destroy(rxq);
         virtq_destroy(txq);
         virtio_reset(&sc->vdev);
         return -1;
     }
+    
+    sc->num_vecs = nvec;
     sc->vdev.irq = pci_irq_vector(pci, 0);
     if (sc->vdev.irq < 0) {
-        VNETDBG("virtio_net: failed to get IRQ vector\n");
+        VNETDBG("virtio_net: failed to get IRQ vector 0\n");
+        pci_irq_free_vectors(pci);
+        virtq_destroy(rxq);
+        virtq_destroy(txq);
+        virtio_reset(&sc->vdev);
+        return -1;
+    }
+    
+    sc->irq_rx = sc->vdev.irq;
+    if (nvec >= 2) {
+        sc->irq_tx = pci_irq_vector(pci, 1);
+        if (sc->irq_tx < 0) {
+            VNETDBG("virtio_net: failed to get IRQ vector 1, falling back to single vector\n");
+            sc->irq_tx = sc->irq_rx;
+            sc->num_vecs = 1;
+        }
+    } else {
+        sc->irq_tx = sc->irq_rx;
+    }
+
+    if (virtq_set_vector(&sc->vdev, VIRTIO_NET_Q_RX, 0) < 0) {
+        VNETDBG("virtio_net: failed to map RX queue to vector 0\n");
+        pci_irq_free_vectors(pci);
+        virtq_destroy(rxq);
+        virtq_destroy(txq);
+        virtio_reset(&sc->vdev);
+        return -1;
+    }
+    if (virtq_set_vector(&sc->vdev, VIRTIO_NET_Q_TX,
+                         (sc->num_vecs > 1 && sc->irq_tx != sc->irq_rx) ? 1 : 0) < 0) {
+        VNETDBG("virtio_net: failed to map TX queue to vector\n");
         pci_irq_free_vectors(pci);
         virtq_destroy(rxq);
         virtq_destroy(txq);
@@ -657,21 +696,35 @@ virtio_net_probe(struct pci_dev *pci)
         return -1;
     }
 
-    if (irq_register(sc->vdev.irq, virtio_net_irq_handler, sc, "virtio_net") < 0) {
-        VNETDBG("virtio_net: irq register failed irq=%d\n", sc->vdev.irq);
+    /* Register RX handler */
+    if (irq_register(sc->irq_rx, virtio_net_irq_handler, sc, "virtio_net_rx") < 0) {
+        VNETDBG("virtio_net: irq register failed irq=%d\n", sc->irq_rx);
         pci_irq_free_vectors(pci);
         virtq_destroy(rxq);
         virtq_destroy(txq);
         virtio_reset(&sc->vdev);
         return -1;
+    }
+    
+    /* Register TX handler if we have a separate vector */
+    if (sc->irq_tx != sc->irq_rx) {
+        if (irq_register(sc->irq_tx, virtio_net_irq_handler, sc, "virtio_net_tx") < 0) {
+            VNETDBG("virtio_net: tx irq register failed irq=%d\n", sc->irq_tx);
+            irq_unregister(sc->irq_rx, "virtio_net_rx");
+            pci_irq_free_vectors(pci);
+            virtq_destroy(rxq);
+            virtq_destroy(txq);
+            virtio_reset(&sc->vdev);
+            return -1;
+        }
     }
 
     if (pci_irq_mode(pci) == PCI_IRQ_MODE_INTX) {
-        VNETDBG("virtio_net: irq=%d mode=intx enabling ioapic cpu=%d\n",
-                sc->vdev.irq, ncpu - 1);
+        VNETDBG("virtio_net: irq=%d mode=intx enabling ioapic cpu=%d (nvecs=%d)\n",
+                sc->vdev.irq, ncpu - 1, sc->num_vecs);
         pci_enable_irq(pci, ncpu - 1);
     } else {
-        VNETDBG("virtio_net: irq=%d mode=msi ioapic-bypass\n", sc->vdev.irq);
+        VNETDBG("virtio_net: irq=%d mode=msi ioapic-bypass (nvecs=%d)\n", sc->vdev.irq, sc->num_vecs);
     }
 
     virtio_net_fill_rx(sc);
@@ -703,7 +756,9 @@ virtio_net_probe(struct pci_dev *pci)
     if (if_register(&sc->ifp) < 0) {
         VNETDBG("virtio_net: if_register failed name=%s irq=%d\n",
                 sc->ifp.if_xname, sc->vdev.irq);
-        irq_unregister(sc->vdev.irq, "virtio_net");
+        if (sc->irq_tx != sc->irq_rx)
+            irq_unregister(sc->irq_tx, "virtio_net_tx");
+        irq_unregister(sc->irq_rx, "virtio_net_rx");
         pci_irq_free_vectors(pci);
         virtq_destroy(rxq);
         virtq_destroy(txq);
@@ -722,8 +777,8 @@ virtio_net_probe(struct pci_dev *pci)
         irq_mode_name = "msix";
     
     virtio_net_count++;
-    cprintf("virtio_net: attached %s irq=%d mode=%s\n",
-            sc->ifp.if_xname, sc->vdev.irq, irq_mode_name);
+    cprintf("virtio_net: attached %s irq=%d/%d mode=%s (nvecs=%d)\n",
+            sc->ifp.if_xname, sc->irq_rx, sc->irq_tx, irq_mode_name, sc->num_vecs);
     
     return 0;
 }

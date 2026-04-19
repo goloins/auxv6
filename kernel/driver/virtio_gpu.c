@@ -294,7 +294,9 @@ virtio_gpu_probe(struct pci_dev *pci)
         return -1;
     }
 
-    if(pci_irq_alloc_vectors(pci, 1, 1, PCI_IRQ_F_MSI | PCI_IRQ_F_INTX) < 1) {
+    /* Allocate up to 2 vectors (control + cursor queues) */
+    sc->num_vecs = pci_irq_alloc_vectors(pci, 1, 2, PCI_IRQ_F_MSI | PCI_IRQ_F_INTX);
+    if (sc->num_vecs < 1) {
         cprintf("virtio_gpu: failed to allocate IRQ vectors\n");
         virtq_destroy(ctrl_q);
         virtq_destroy(cursor_q);
@@ -302,9 +304,37 @@ virtio_gpu_probe(struct pci_dev *pci)
         return -1;
     }
     sc->irq_allocated = 1;
+    
     vdev->irq = pci_irq_vector(pci, 0);
     if(vdev->irq < 0) {
-        cprintf("virtio_gpu: failed to get IRQ vector\n");
+        cprintf("virtio_gpu: failed to get IRQ vector 0\n");
+        pci_irq_free_vectors(pci);
+        sc->irq_allocated = 0;
+        virtq_destroy(ctrl_q);
+        virtq_destroy(cursor_q);
+        release(&virtio_gpu_lock);
+        return -1;
+    }
+    
+    /* Try to get vector 1 for future cursor queue */
+    sc->irq_ctrl = pci_irq_vector(pci, 1);
+    if (sc->irq_ctrl < 0) {
+        sc->irq_ctrl = vdev->irq;  /* Fallback to vector 0 if vector 1 unavailable */
+        sc->num_vecs = 1;
+    }
+
+    if (virtq_set_vector(vdev, VIRTIO_GPU_Q_CONTROL, 0) < 0) {
+        cprintf("virtio_gpu: failed to map control queue to vector 0\n");
+        pci_irq_free_vectors(pci);
+        sc->irq_allocated = 0;
+        virtq_destroy(ctrl_q);
+        virtq_destroy(cursor_q);
+        release(&virtio_gpu_lock);
+        return -1;
+    }
+    if (virtq_set_vector(vdev, VIRTIO_GPU_Q_CURSOR,
+                         (sc->num_vecs > 1 && sc->irq_ctrl != vdev->irq) ? 1 : 0) < 0) {
+        cprintf("virtio_gpu: failed to map cursor queue to vector\n");
         pci_irq_free_vectors(pci);
         sc->irq_allocated = 0;
         virtq_destroy(ctrl_q);
@@ -329,6 +359,18 @@ virtio_gpu_probe(struct pci_dev *pci)
             virtq_destroy(cursor_q);
             release(&virtio_gpu_lock);
             return -1;
+        }
+        if(sc->irq_ctrl != vdev->irq) {
+            if(irq_register(sc->irq_ctrl, virtio_gpu_irq_handler, sc, "virtio-gpu-ctrl") < 0) {
+                cprintf("virtio_gpu: failed to register IRQ %d\n", sc->irq_ctrl);
+                irq_unregister(vdev->irq, "virtio-gpu");
+                pci_irq_free_vectors(pci);
+                sc->irq_allocated = 0;
+                virtq_destroy(ctrl_q);
+                virtq_destroy(cursor_q);
+                release(&virtio_gpu_lock);
+                return -1;
+            }
         }
         if(pci_irq_mode(pci) == PCI_IRQ_MODE_INTX)
             pci_enable_irq(pci, 0);
@@ -379,8 +421,8 @@ virtio_gpu_probe(struct pci_dev *pci)
 
     release(&virtio_gpu_lock);
 
-    cprintf("virtio_gpu: device initialized successfully irq=%d mode=%s\n",
-            vdev->irq, irq_mode_name);
+    cprintf("virtio_gpu: device initialized successfully irq=%d mode=%s (nvecs=%d)\n",
+            vdev->irq, irq_mode_name, sc->num_vecs);
     return 0;
 }
 
@@ -394,6 +436,8 @@ virtio_gpu_remove(struct virtio_gpu_softc *sc)
         return;
 
     if(sc->irq_allocated) {
+        if(sc->irq_ctrl > 0 && sc->irq_ctrl != sc->vdev.irq)
+            irq_unregister(sc->irq_ctrl, "virtio-gpu-ctrl");
         if(sc->vdev.irq > 0)
             irq_unregister(sc->vdev.irq, "virtio-gpu");
         if(sc->vdev.pci)

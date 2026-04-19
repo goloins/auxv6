@@ -212,6 +212,7 @@ int  virtio_finalize_features(struct virtio_dev *vdev);
 
 /* Virtqueue management */
 struct virtqueue *virtq_create(struct virtio_dev *vdev, int index, int size);
+int  virtq_set_vector(struct virtio_dev *vdev, int index, int vector_index);
 void virtq_destroy(struct virtqueue *vq);
 int  virtq_add_buf(struct virtqueue *vq, void **bufs, uint32_t *lens,
                    int out_num, int in_num, void *data);
