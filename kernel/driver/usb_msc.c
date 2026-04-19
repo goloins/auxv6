@@ -6,6 +6,7 @@
 #include "buf.h"
 #include "blockdev.h"
 #include "fcntl.h"
+#include "stdint.h"
 
 #define USB_MSC_MAX_DEV         8
 #define USB_MSC_MAX_LUN         0
@@ -14,6 +15,15 @@
 #define USB_MSC_CBW_LEN         31
 #define USB_MSC_CSW_LEN         13
 #define USB_MSC_CSW_STATUS_OK   0
+#define USB_MSC_CSW_STATUS_FAIL 1
+#define USB_MSC_CSW_STATUS_PHASE 2
+#define USB_MSC_RC_CHECK        -5
+#define USB_MSC_RC_RETRY        -6
+#define USB_MSC_PROBE_RETRY_MAX 3
+#define USB_MSC_RW10_MAX_BLOCKS 128
+
+#define USB_MSC_SENSE_NOT_READY      0x02
+#define USB_MSC_SENSE_UNIT_ATTENTION 0x06
 
 struct usb_msc_cbw {
   uint sig;
@@ -53,6 +63,12 @@ struct usb_msc_dev {
   uint probe_attempts;
   uint probe_successes;
   uint probe_failures;
+  uint probe_retries;
+  uint rw_retries;
+  uint sense_count;
+  uchar sense_key;
+  uchar sense_asc;
+  uchar sense_ascq;
   uint rw_ok;
   uint rw_fail;
   int last_rc;
@@ -72,6 +88,7 @@ static int usb_msc_buf_putu(char *buf, uint max, uint *len, uint v);
 static int usb_msc_buf_puthex16(char *buf, uint max, uint *len, ushort v);
 static int usb_msc_buf_puthex32(char *buf, uint max, uint *len, uint v);
 static uint usb_msc_be32(const uchar *p);
+static uint64_t usb_msc_be64(const uchar *p);
 static int usb_msc_bulk_out(struct usb_msc_dev *sc, uchar *buf, ushort len);
 static int usb_msc_bulk_in(struct usb_msc_dev *sc, uchar *buf, ushort len,
                            ushort *done_len, int allow_short);
@@ -79,10 +96,18 @@ static int usb_msc_bot_xfer(struct usb_msc_dev *sc,
                             const uchar *cdb, uchar cdb_len,
                             uchar *data, ushort data_len,
                             int dir_in, int allow_data_short);
+static int usb_msc_bot_xfer_sense(struct usb_msc_dev *sc,
+                                  const uchar *cdb, uchar cdb_len,
+                                  uchar *data, ushort data_len,
+                                  int dir_in, int allow_data_short);
+static int usb_msc_scsi_request_sense(struct usb_msc_dev *sc);
+static int usb_msc_sense_retriable(struct usb_msc_dev *sc);
 static int usb_msc_scsi_tur(struct usb_msc_dev *sc);
 static int usb_msc_scsi_inquiry(struct usb_msc_dev *sc, uchar *buf, ushort len);
 static int usb_msc_scsi_read_capacity10(struct usb_msc_dev *sc,
                                         uint *last_lba, uint *block_size);
+static int usb_msc_scsi_read_capacity16(struct usb_msc_dev *sc,
+                                        uint64_t *last_lba, uint *block_size);
 static int usb_msc_scsi_read10(struct usb_msc_dev *sc, uint lba, uchar *buf, ushort len);
 static int usb_msc_scsi_write10(struct usb_msc_dev *sc, uint lba, uchar *buf, ushort len);
 static int usb_msc_probe_media_locked(struct usb_msc_dev *sc);
@@ -179,6 +204,21 @@ usb_msc_be32(const uchar *p)
          ((uint)p[1] << 16) |
          ((uint)p[2] << 8) |
          (uint)p[3];
+}
+
+static uint64_t
+usb_msc_be64(const uchar *p)
+{
+  if(!p)
+    return 0;
+  return ((uint64_t)p[0] << 56) |
+         ((uint64_t)p[1] << 48) |
+         ((uint64_t)p[2] << 40) |
+         ((uint64_t)p[3] << 32) |
+         ((uint64_t)p[4] << 24) |
+         ((uint64_t)p[5] << 16) |
+         ((uint64_t)p[6] << 8) |
+         (uint64_t)p[7];
 }
 
 static struct usb_msc_dev *
@@ -350,10 +390,81 @@ usb_msc_bot_xfer(struct usb_msc_dev *sc,
     return -1;
   if(csw.residue > cbw.xfer_len)
     return -1;
-  if(csw.status != USB_MSC_CSW_STATUS_OK)
+  if(csw.status == USB_MSC_CSW_STATUS_OK)
+    return 0;
+  if(csw.status == USB_MSC_CSW_STATUS_FAIL)
+    return USB_MSC_RC_CHECK;
+  if(csw.status == USB_MSC_CSW_STATUS_PHASE)
     return -1;
 
+  return -1;
+}
+
+static int
+usb_msc_scsi_request_sense(struct usb_msc_dev *sc)
+{
+  uchar cdb[6];
+  uchar sense[18];
+  int rc;
+
+  if(!sc)
+    return -1;
+
+  memset(cdb, 0, sizeof(cdb));
+  memset(sense, 0, sizeof(sense));
+  cdb[0] = 0x03;
+  cdb[4] = sizeof(sense);
+
+  rc = usb_msc_bot_xfer(sc, cdb, 6, sense, sizeof(sense), 1, 1);
+  if(rc < 0)
+    return rc;
+
+  sc->sense_key = sense[2] & 0x0f;
+  sc->sense_asc = sense[12];
+  sc->sense_ascq = sense[13];
+  sc->sense_count++;
   return 0;
+}
+
+static int
+usb_msc_sense_retriable(struct usb_msc_dev *sc)
+{
+  if(!sc)
+    return 0;
+
+  if(sc->sense_key == USB_MSC_SENSE_UNIT_ATTENTION)
+    return 1;
+
+  if(sc->sense_key == USB_MSC_SENSE_NOT_READY && sc->sense_asc == 0x04){
+    if(sc->sense_ascq == 0x01 ||
+       sc->sense_ascq == 0x02 ||
+       sc->sense_ascq == 0x07)
+      return 1;
+  }
+
+  return 0;
+}
+
+static int
+usb_msc_bot_xfer_sense(struct usb_msc_dev *sc,
+                       const uchar *cdb, uchar cdb_len,
+                       uchar *data, ushort data_len,
+                       int dir_in, int allow_data_short)
+{
+  int rc;
+
+  rc = usb_msc_bot_xfer(sc, cdb, cdb_len, data, data_len,
+                        dir_in, allow_data_short);
+  if(rc != USB_MSC_RC_CHECK)
+    return rc;
+
+  if(cdb_len > 0 && cdb[0] != 0x03)
+    (void)usb_msc_scsi_request_sense(sc);
+
+  if(usb_msc_sense_retriable(sc))
+    return USB_MSC_RC_RETRY;
+
+  return rc;
 }
 
 static int
@@ -363,7 +474,7 @@ usb_msc_scsi_tur(struct usb_msc_dev *sc)
 
   memset(cdb, 0, sizeof(cdb));
   cdb[0] = 0x00;
-  return usb_msc_bot_xfer(sc, cdb, 6, 0, 0, 1, 0);
+  return usb_msc_bot_xfer_sense(sc, cdb, 6, 0, 0, 1, 0);
 }
 
 static int
@@ -378,7 +489,7 @@ usb_msc_scsi_inquiry(struct usb_msc_dev *sc, uchar *buf, ushort len)
   cdb[0] = 0x12;
   cdb[4] = (uchar)len;
   memset(buf, 0, len);
-  return usb_msc_bot_xfer(sc, cdb, 6, buf, len, 1, 1);
+  return usb_msc_bot_xfer_sense(sc, cdb, 6, buf, len, 1, 1);
 }
 
 static int
@@ -396,7 +507,7 @@ usb_msc_scsi_read_capacity10(struct usb_msc_dev *sc,
   cdb[0] = 0x25;
   memset(out, 0, sizeof(out));
 
-  rc = usb_msc_bot_xfer(sc, cdb, 10, out, sizeof(out), 1, 0);
+  rc = usb_msc_bot_xfer_sense(sc, cdb, 10, out, sizeof(out), 1, 0);
   if(rc < 0)
     return rc;
 
@@ -409,11 +520,47 @@ usb_msc_scsi_read_capacity10(struct usb_msc_dev *sc,
 }
 
 static int
+usb_msc_scsi_read_capacity16(struct usb_msc_dev *sc,
+                             uint64_t *last_lba, uint *block_size)
+{
+  uchar cdb[16];
+  uchar out[32];
+  int rc;
+
+  if(!last_lba || !block_size)
+    return -1;
+
+  memset(cdb, 0, sizeof(cdb));
+  cdb[0] = 0x9e;
+  cdb[1] = 0x10;
+  cdb[13] = sizeof(out);
+  memset(out, 0, sizeof(out));
+
+  rc = usb_msc_bot_xfer_sense(sc, cdb, 16, out, sizeof(out), 1, 0);
+  if(rc < 0)
+    return rc;
+
+  *last_lba = usb_msc_be64(&out[0]);
+  *block_size = usb_msc_be32(&out[8]);
+  if(*block_size == 0)
+    return -1;
+
+  return 0;
+}
+
+static int
 usb_msc_scsi_read10(struct usb_msc_dev *sc, uint lba, uchar *buf, ushort len)
 {
   uchar cdb[10];
+  ushort blocks;
 
   if(!buf || len == 0)
+    return -1;
+  if((len % BSIZE) != 0)
+    return -1;
+
+  blocks = (ushort)(len / BSIZE);
+  if(blocks == 0 || blocks > USB_MSC_RW10_MAX_BLOCKS)
     return -1;
 
   memset(cdb, 0, sizeof(cdb));
@@ -422,18 +569,25 @@ usb_msc_scsi_read10(struct usb_msc_dev *sc, uint lba, uchar *buf, ushort len)
   cdb[3] = (uchar)(lba >> 16);
   cdb[4] = (uchar)(lba >> 8);
   cdb[5] = (uchar)(lba);
-  cdb[7] = 0;
-  cdb[8] = 1;
+  cdb[7] = (uchar)(blocks >> 8);
+  cdb[8] = (uchar)blocks;
 
-  return usb_msc_bot_xfer(sc, cdb, 10, buf, len, 1, 0);
+  return usb_msc_bot_xfer_sense(sc, cdb, 10, buf, len, 1, 0);
 }
 
 static int
 usb_msc_scsi_write10(struct usb_msc_dev *sc, uint lba, uchar *buf, ushort len)
 {
   uchar cdb[10];
+  ushort blocks;
 
   if(!buf || len == 0)
+    return -1;
+  if((len % BSIZE) != 0)
+    return -1;
+
+  blocks = (ushort)(len / BSIZE);
+  if(blocks == 0 || blocks > USB_MSC_RW10_MAX_BLOCKS)
     return -1;
 
   memset(cdb, 0, sizeof(cdb));
@@ -442,10 +596,10 @@ usb_msc_scsi_write10(struct usb_msc_dev *sc, uint lba, uchar *buf, ushort len)
   cdb[3] = (uchar)(lba >> 16);
   cdb[4] = (uchar)(lba >> 8);
   cdb[5] = (uchar)(lba);
-  cdb[7] = 0;
-  cdb[8] = 1;
+  cdb[7] = (uchar)(blocks >> 8);
+  cdb[8] = (uchar)blocks;
 
-  return usb_msc_bot_xfer(sc, cdb, 10, buf, len, 0, 0);
+  return usb_msc_bot_xfer_sense(sc, cdb, 10, buf, len, 0, 0);
 }
 
 static int
@@ -453,30 +607,59 @@ usb_msc_probe_media_locked(struct usb_msc_dev *sc)
 {
   uchar inquiry[36];
   uint last_lba;
+  uint64_t last_lba64;
+  uint64_t nblocks64;
   uint block_size;
+  int attempt;
 
   if(!sc)
     return -1;
 
   sc->probe_attempts++;
 
-  if(usb_msc_scsi_tur(sc) < 0)
-    return -1;
-  if(usb_msc_scsi_inquiry(sc, inquiry, sizeof(inquiry)) < 0)
-    return -1;
-  if(usb_msc_scsi_read_capacity10(sc, &last_lba, &block_size) < 0)
-    return -1;
+  for(attempt = 0; attempt < USB_MSC_PROBE_RETRY_MAX; attempt++){
+    if(usb_msc_scsi_tur(sc) < 0)
+      goto retry;
+    if(usb_msc_scsi_inquiry(sc, inquiry, sizeof(inquiry)) < 0)
+      goto retry;
+    if(usb_msc_scsi_read_capacity10(sc, &last_lba, &block_size) < 0)
+      goto retry;
 
-  if(block_size != BSIZE)
-    return -1;
-  if(last_lba == 0xffffffffU)
-    return -1;
+    if(last_lba == 0xffffffffU){
+      if(usb_msc_scsi_read_capacity16(sc, &last_lba64, &block_size) < 0)
+        goto retry;
+      if(last_lba64 == 0xffffffffffffffffULL)
+        goto retry;
+      nblocks64 = last_lba64 + 1ULL;
+      if(nblocks64 == 0)
+        goto retry;
+      if(nblocks64 > 0xffffffffULL){
+        sc->block_count = 0xffffffffU;
+      } else {
+        sc->block_count = (uint)nblocks64;
+      }
+    } else {
+      sc->block_count = last_lba + 1;
+    }
 
-  sc->block_size = block_size;
-  sc->block_count = last_lba + 1;
-  sc->online = 1;
-  sc->probe_successes++;
-  return 0;
+    if(block_size != BSIZE)
+      goto retry;
+    if(sc->block_count == 0)
+      goto retry;
+
+    sc->block_size = block_size;
+    sc->online = 1;
+    sc->probe_successes++;
+    return 0;
+
+retry:
+    if((attempt + 1) < USB_MSC_PROBE_RETRY_MAX){
+      sc->probe_retries++;
+      microdelay(5000);
+    }
+  }
+
+  return -1;
 }
 
 static int
@@ -533,6 +716,14 @@ usb_msc_rw(struct buf *b)
     rc = usb_msc_scsi_write10(sc, blockno, b->data, BSIZE);
   else
     rc = usb_msc_scsi_read10(sc, blockno, b->data, BSIZE);
+  if(rc == USB_MSC_RC_RETRY){
+    sc->rw_retries++;
+    microdelay(5000);
+    if(is_write)
+      rc = usb_msc_scsi_write10(sc, blockno, b->data, BSIZE);
+    else
+      rc = usb_msc_scsi_read10(sc, blockno, b->data, BSIZE);
+  }
   releasesleep(&sc->io_lock);
 
   acquire(&usb_msc_lock);
@@ -802,6 +993,18 @@ usb_msc_procfs_dump(char *buf, uint max)
     if(usb_msc_buf_putu(buf, max, &len, sc->rw_ok) < 0) return -1;
     if(usb_msc_buf_putc(buf, max, &len, '/') < 0) return -1;
     if(usb_msc_buf_putu(buf, max, &len, sc->rw_fail) < 0) return -1;
+    if(usb_msc_buf_puts(buf, max, &len, " rw_retry=") < 0) return -1;
+    if(usb_msc_buf_putu(buf, max, &len, sc->rw_retries) < 0) return -1;
+    if(usb_msc_buf_puts(buf, max, &len, " retries=") < 0) return -1;
+    if(usb_msc_buf_putu(buf, max, &len, sc->probe_retries) < 0) return -1;
+    if(usb_msc_buf_puts(buf, max, &len, " sense=") < 0) return -1;
+    if(usb_msc_buf_putu(buf, max, &len, sc->sense_count) < 0) return -1;
+    if(usb_msc_buf_putc(buf, max, &len, ':') < 0) return -1;
+    if(usb_msc_buf_puthex16(buf, max, &len, sc->sense_key) < 0) return -1;
+    if(usb_msc_buf_putc(buf, max, &len, '/') < 0) return -1;
+    if(usb_msc_buf_puthex16(buf, max, &len, sc->sense_asc) < 0) return -1;
+    if(usb_msc_buf_putc(buf, max, &len, '/') < 0) return -1;
+    if(usb_msc_buf_puthex16(buf, max, &len, sc->sense_ascq) < 0) return -1;
     if(usb_msc_buf_puts(buf, max, &len, " last_rc=0x") < 0) return -1;
     if(usb_msc_buf_puthex32(buf, max, &len, (uint)sc->last_rc) < 0) return -1;
     if(usb_msc_buf_putc(buf, max, &len, '\n') < 0) return -1;
