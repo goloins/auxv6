@@ -39,6 +39,8 @@ struct r815x_usb_id {
 };
 
 struct r815x_probe {
+  uchar active;
+  uint bind_id;
   ushort vendor_id;
   ushort product_id;
   ushort chip_version;
@@ -69,6 +71,7 @@ static struct spinlock r815x_lock;
 static int r815x_lock_ready;
 static struct r815x_probe r815x_probes[R815X_STUB_MAX];
 static uint r815x_probe_count;
+static uint r815x_next_bind_id;
 
 static void
 r815x_ensure_lock(void)
@@ -181,11 +184,20 @@ r815x_buf_puthex16(char *buf, uint max, uint *len, ushort v)
 }
 
 int
-rtl815x_usb_attach(ushort vendor, ushort product)
+rtl815x_usb_match(ushort vendor, ushort product)
+{
+  return r815x_lookup(vendor, product) ? 1 : 0;
+}
+
+int
+rtl815x_usb_attach(ushort vendor, ushort product, uint *bind_handle)
 {
   const struct r815x_usb_id *id;
   struct r815x_probe *sc;
+  uint bind_id;
 
+  if(!bind_handle)
+    return -1;
   id = r815x_lookup(vendor, product);
   if(!id)
     return -1;
@@ -200,16 +212,51 @@ rtl815x_usb_attach(ushort vendor, ushort product)
 
   sc = &r815x_probes[r815x_probe_count++];
   memset(sc, 0, sizeof(*sc));
+  sc->active = 1;
+  bind_id = ++r815x_next_bind_id;
+  if(bind_id == 0)
+    bind_id = ++r815x_next_bind_id;
+  sc->bind_id = bind_id;
   sc->vendor_id = vendor;
   sc->product_id = product;
   sc->family = id->family;
   sc->phase = R815X_PHASE_INIT;
   sc->model = id->model;
+  *bind_handle = bind_id;
   release(&r815x_lock);
 
-  cprintf("r815x: %s [%x:%x] attached via USB (scaffold)\n",
-          id->model, (uint)vendor, (uint)product);
+  cprintf("r815x: %s [%x:%x] attached via USB (scaffold, bind=%d)\n",
+          id->model, (uint)vendor, (uint)product, bind_id);
   return 0;
+}
+
+int
+rtl815x_usb_detach(uint bind_handle)
+{
+  int i;
+
+  if(bind_handle == 0)
+    return -1;
+
+  r815x_ensure_lock();
+
+  acquire(&r815x_lock);
+  for(i = (int)r815x_probe_count - 1; i >= 0; i--){
+    struct r815x_probe *sc;
+
+    sc = &r815x_probes[i];
+    if(!sc->active)
+      continue;
+    if(sc->bind_id != bind_handle)
+      continue;
+    sc->active = 0;
+    sc->phase = R815X_PHASE_DEGRADED;
+    release(&r815x_lock);
+    cprintf("r815x: bind=%d detached via USB retire\n", bind_handle);
+    return 0;
+  }
+  release(&r815x_lock);
+  return -1;
 }
 
 int
@@ -217,6 +264,7 @@ rtl815x_procfs_dump(char *buf, uint max)
 {
   struct r815x_probe snap[R815X_STUB_MAX];
   uint count;
+  uint active;
   uint len;
   uint i;
 
@@ -230,18 +278,26 @@ rtl815x_procfs_dump(char *buf, uint max)
     snap[i] = r815x_probes[i];
   release(&r815x_lock);
 
+  active = 0;
+
   len = 0;
   if(r815x_buf_puts(buf, max, &len,
                     "# Realtek RTL8152/RTL8153 USB Ethernet\n") < 0)
     return -1;
   if(r815x_buf_puts(buf, max, &len,
-                    "# id family phase chipver model\n") < 0)
+                    "# bind id family phase chipver model\n") < 0)
     return -1;
 
   for(i = 0; i < count; i++){
     struct r815x_probe *p;
 
     p = &snap[i];
+    if(!p->active)
+      continue;
+    active++;
+    if(r815x_buf_puts(buf, max, &len, "dev bind=") < 0) return -1;
+    if(r815x_buf_putu(buf, max, &len, p->bind_id) < 0) return -1;
+    if(r815x_buf_putc(buf, max, &len, ' ') < 0) return -1;
     if(r815x_buf_puts(buf, max, &len, "dev id=") < 0) return -1;
     if(r815x_buf_puthex16(buf, max, &len, p->vendor_id) < 0) return -1;
     if(r815x_buf_putc(buf, max, &len, ':') < 0) return -1;
@@ -265,7 +321,9 @@ rtl815x_procfs_dump(char *buf, uint max)
     if(r815x_buf_putc(buf, max, &len, '\n') < 0) return -1;
   }
 
-  if(r815x_buf_puts(buf, max, &len, "summary total=") < 0) return -1;
+  if(r815x_buf_puts(buf, max, &len, "summary active=") < 0) return -1;
+  if(r815x_buf_putu(buf, max, &len, active) < 0) return -1;
+  if(r815x_buf_puts(buf, max, &len, " seen=") < 0) return -1;
   if(r815x_buf_putu(buf, max, &len, count) < 0) return -1;
   if(r815x_buf_puts(buf, max, &len,
                     " note=usb-subordinate-enumeration-pending control-bulk-path-unimplemented\n") < 0)
@@ -281,6 +339,7 @@ rtl815x_init(void)
 
   acquire(&r815x_lock);
   r815x_probe_count = 0;
+  r815x_next_bind_id = 0;
   release(&r815x_lock);
 
   BOOTDBG("r815x: RTL8152/RTL8153 USB scaffold ready (USB attach pending)\n");

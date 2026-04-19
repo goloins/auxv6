@@ -1,0 +1,208 @@
+# USB Subsystem Status (0401826)
+
+Date: 2026-04-18
+Basis: Live source code audit only (no reliance on docs/historic)
+
+## Executive Summary
+
+The current USB implementation is a strong host-controller discovery and root-port bring-up scaffold, but it is not yet a full USB stack. The system can discover USB host controllers, perform guarded reset/halt/start sequences, scan/service root ports, synthesize candidate device rows, and expose broad observability via /proc. It now includes descriptor-accurate interface-aware class routing with rebind reconciliation, but still lacks production transfer scheduling and class-driver datapaths.
+
+Estimated overall maturity: 67%
+
+## Progress Delta (2026-04-18)
+
+Landed since initial snapshot:
+- USB core device model added (`usb_device_count`, per-device enum state/error/counters, `udevN` rows in `/proc/usb`).
+- HCD contract extended with EP0 descriptor hook (`get_device_desc8`).
+- xHCI path now includes minimal runtime objects and a synchronous EP0 `GET_DESCRIPTOR(Device, 8)` attempt path.
+- Core now attempts desc8 materialization from candidate rows and tracks outcomes (`usb_enum_ok`, `usb_enum_pending`, `usb_enum_failed`).
+- HCD contract extended with full device descriptor hook (`get_device_desc18`).
+- xHCI now supports synchronous `GET_DESCRIPTOR(Device, 18)` and core parsing of `bcdUSB`, `vid/pid`, class/subclass/proto.
+- `/proc/usb` `udevN` rows now include `addr_set`, descriptor readiness (`desc=8/18`), and parsed identity fields.
+- HCD contract now includes config descriptor fetch hook (`get_config_desc`).
+- xHCI now supports synchronous config descriptor reads (header + full blob).
+- Core now parses config descriptor payload for baseline topology (`cfg`, `cfg_total`, interface count, endpoint count).
+- HCD contract now includes `set_configuration` hook.
+- xHCI now performs synchronous `SET_CONFIGURATION` control transaction.
+- Core now tracks configured state (`cfg_set`) and exposes class-match tuple (`if_match=class/subclass/proto`) in `udev` rows.
+- Core now persists endpoint capability entries (address/attributes/max-packet/interval) from configuration descriptors.
+- Core now performs first class-driver dispatch attempts to USB-attached scaffolds (`rtl815x_usb_attach`, `wpan_usb_attach`) and reports attach status in `udev` rows.
+- Core now retires stale per-port/per-generation device slots and reuses inactive slots to avoid stale growth during churn.
+- Core now deduplicates class attach dispatch for unchanged configured signatures and exposes dedup/retire counters in `/proc/usb`.
+- Core now applies policy-gated class routing using VID:PID match + interface tuple + endpoint capability checks.
+- Core now invokes explicit class detach callbacks when retiring attached slots.
+- Core now parses and persists bounded per-interface capability table and endpoint-to-interface mapping.
+- Core now performs descriptor-signature rebind reconciliation (detach + reattach) when a configured device signature changes.
+- `/proc/usb` now exports rebind counters and selected attach interface tuple (`attach_if`) in `udev` rows.
+- USB class attach now returns driver-owned bind handles, and detach is now by handle (not vendor/product pair), improving identity safety under churn.
+- `/proc/r815x` and `/proc/wpan` now report bind IDs for active scaffolds.
+
+Not yet landed in this tranche:
+- Full endpoint activation/transfer scheduling after configuration.
+- Runtime hotplug/event loop and robust lifetime cleanup/retry logic.
+
+## Scope Confirmed In Tree
+
+Primary implementation files:
+- kernel/driver/usb.c
+- kernel/driver/usb_hcd.h
+- kernel/driver/usb_uhci.c
+- kernel/driver/usb_ohci.c
+- kernel/driver/usb_ehci.c
+- kernel/driver/usb_xhci.c
+
+Wiring and visibility:
+- kernel/core/main.c (usb_init invoked at boot)
+- kernel/fs/procfs.c (/proc/usb integration)
+
+Related downstream USB-attached scaffolds:
+- kernel/driver/rtl815x.c
+- kernel/driver/ieee802154.c
+
+## What Works Today
+
+1) PCI USB controller discovery and classification
+- Detects class/subclass USB PCI functions.
+- Classifies by prog-if to UHCI/OHCI/EHCI/xHCI.
+- Captures vendor/device IDs, BAR0, IRQ, and controller metadata.
+
+2) Backend split with common host-controller contract
+- usb_hc_ops dispatches probe/reset/halt/start/scan_ports/service_ports plus optional desc8/desc18/config/set-config EP0 hooks.
+- All four backend files provide real implementations for those stages.
+
+3) Guarded lifecycle sequencing
+- Core executes probe -> reset -> halt -> start.
+- Tracks attempts/success/failure counters and degraded state.
+
+4) Root-hub port scan and service
+- scan_ports captures connect/change bitmaps.
+- service_ports applies per-port reset/enable handling.
+- Speed masks are populated (low/full/high/super depending on backend rules).
+
+5) Candidate-device synthesis and address bookkeeping scaffold
+- Core creates candidate rows with hc/kind/port/present/enabled/speed.
+- Per-controller address allocator state exists (1..127).
+- Per-port generation tracking exists for change epochs.
+
+6) Observability
+- /proc/usb exports controller counts, states, lifecycle counters, scan/service counters, root-port masks, candidate rows, and device-model enumeration rows/counters.
+
+7) xHCI EP0 descriptor vertical-slice start
+- xHCI backend now provides a first synchronous EP0 path for `GET_DESCRIPTOR(Device, 8)`.
+- xHCI backend now also provides synchronous `GET_DESCRIPTOR(Device, 18)`.
+- xHCI backend now also provides synchronous `GET_DESCRIPTOR(Configuration)` reads.
+- xHCI backend now also provides synchronous `SET_CONFIGURATION`.
+- Core consumes these hooks and tracks `desc8_ok`/`desc18_ok`, `addr_set`, and parsed device identity.
+
+8) Endpoint capability persistence and attach dispatch
+- Core now records a bounded endpoint capability table from config descriptors.
+- `/proc/usb` `udevN` rows now include per-endpoint capability tuples and attach attempt/result counters.
+- Core now calls first class-driver attach hooks for known USB scaffolds.
+
+9) Attach lifecycle hardening for churn
+- Device slot selection now retires stale same-port prior generations and reuses inactive slots.
+- Class attach dispatch now skips duplicate attach calls when the configured identity signature is unchanged.
+- `/proc/usb` now reports global attach dedup and retire counters.
+
+10) Policy-gated attach and explicit detach callbacks
+- USB core now gates class attach attempts through driver matchers plus interface/endpoint policy checks.
+- USB core now calls class detach hooks on slot retirement (`rtl815x_usb_detach`, `wpan_usb_detach`).
+- rtl815x/wpan scaffolds now expose `*_usb_match` and `*_usb_detach` hooks and track active vs seen probes in proc summaries.
+
+11) Descriptor-accurate routing and rebind reconciliation
+- USB core policy now selects candidate interfaces from parsed interface descriptors (bounded table) rather than relying on first-interface heuristics.
+- Endpoint capability entries now carry interface association, enabling per-interface endpoint policy checks.
+- Attach signature now includes selected interface identity + endpoint signature and triggers detach/rebind on drift.
+
+12) Driver-owned bind context contract
+- `rtl815x_usb_attach` / `wpan_usb_attach` now allocate and return bind handles to USB core.
+- `rtl815x_usb_detach` / `wpan_usb_detach` now consume bind handles, avoiding ambiguous detach among same VID:PID devices.
+- USB core now stores and surfaces attach handle state per `udev` row.
+
+## What Is Missing
+
+1) No transfer engine
+- No active URB/TRB/QH/qTD/ED/TD scheduling path.
+- No generalized ring/schedule framework for broad USB traffic (current xHCI path is narrow bootstrap logic for descriptor reads).
+
+2) Incomplete protocol enumeration state machine
+- Initial xHCI endpoint-0 desc8+desc18+config descriptor reads and `SET_CONFIGURATION` exist, but endpoint activation/transfer scheduling is still incomplete.
+- Descriptor-derived stable object graph (device/interface/endpoint) is still incomplete.
+
+3) No runtime hotplug loop
+- Current path is init-time orchestration in usb_init.
+- No long-lived interrupt/poll event path for connect/disconnect churn.
+
+4) Class-driver handoff is still scaffold-level
+- USB core now has descriptor-aware policy gating, explicit detach callbacks, rebind-on-signature-drift, and handle-based bind identity, but it still lacks full class-driver transport datapaths.
+
+5) No production class datapath on USB
+- rtl815x and ieee802154 paths are explicit scaffolds and proc visibility only.
+
+## Maturity Breakdown By Portion
+
+- PCI USB discovery/classification: 90%
+- HCD lifecycle control (probe/reset/halt/start): 60%
+- Root-hub scan/reset/enable service: 55%
+- Candidate inventory + address bookkeeping: 50%
+- Runtime hotplug/re-enumeration loop: 16%
+- Transfer engine (scheduling/rings/descriptors): 28%
+- Enumeration state machine (EP0 + descriptors + config): 69%
+- Class-driver framework and handoff: 46%
+- USB class drivers with real datapath: 5%
+- Diagnostics/telemetry: 93%
+
+Weighted overall estimate: 67%
+
+## Risks and Correctness Notes
+
+1) Potential change-bit acknowledge semantics issue in EHCI/xHCI service flow
+- Connect Status Change bits are RW1C/RWC by spec.
+- Current service code clears these bits in local value before write, which may not correctly acknowledge on all hardware.
+- Needs controller-accurate RW1C handling review.
+
+2) Header comment drift in usb.c
+- Top comment still states no operational register programming.
+- Current code now performs real lifecycle register programming in backends.
+- Comment should be refreshed to reflect present behavior.
+
+## Recommended Maturity Plan
+
+Phase A (37% -> 55%): xHCI vertical slice
+- Introduce USB device object model (address, state, descriptors, endpoints).
+- Implement EP0 control transfer path for xHCI.
+- Add minimal enumeration: device descriptor fetch, SET_ADDRESS, config descriptor fetch, SET_CONFIGURATION.
+- Persist device table across runtime events.
+
+Phase A status:
+- `device object model`: in progress (landed core object/counters/state).
+- `EP0 control path`: in progress (landed xHCI desc8+desc18+config reads + set-configuration).
+- `minimal enumeration`: in progress (identity + config topology + set-configuration + endpoint capability persistence landed; endpoint activation still pending).
+- `runtime persistence`: partial (state survives init pass, no runtime churn loop yet).
+
+Phase B (55% -> 65%): Runtime event model
+- Add continuous port-change handling (interrupt or periodic service path).
+- Implement detach/release lifecycle and address reclaim correctness.
+- Harden reconnect generation semantics and stale row retirement.
+
+Phase C (65% -> 75%): First class-driver end-to-end
+- Build USB core class match/attach API.
+- Wire core to rtl815x attach path using parsed descriptors/endpoints.
+- Land first real control/bulk datapath and ifnet registration for one adapter family.
+
+Phase D (75%+): Controller parity and breadth
+- Backfill EHCI transfer path after xHCI proves architecture.
+- Keep UHCI/OHCI stable for legacy coverage.
+- Expand class coverage (HID, storage, CDC) and add stress/regression tests.
+
+## Practical Next Step
+
+Immediate best next implementation target is transport bring-up on top of the new bind contract:
+- Expand interface-policy support for composite devices (multi-altsetting and class-specific companion descriptors).
+- Add bind-handle backed per-driver context blocks (endpoint selection, interface index, device speed snapshot).
+- Start first control/bulk path stubs in rtl815x using selected interface and endpoint mapping.
+
+Follow-up target after that:
+- Convert parsed endpoint inventory into class-match inputs so USB class-driver handoff can start.
+
+That sequence is the shortest path to a true attach-ready USB core and the remaining jump toward ~55% maturity.

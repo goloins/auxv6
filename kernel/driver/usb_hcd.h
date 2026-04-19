@@ -25,6 +25,7 @@ struct pci_dev;
 #define USB_HC_ERR_START        5
 
 struct usb_hc_probe {
+  uint pci_index;
   ushort vendor_id;
   ushort device_id;
   uchar bus;
@@ -83,6 +84,15 @@ struct usb_hc_ops {
   int (*start)(struct usb_hc_probe *sc, struct pci_dev *dev);
   int (*scan_ports)(struct usb_hc_probe *sc, struct pci_dev *dev);
   int (*service_ports)(struct usb_hc_probe *sc, struct pci_dev *dev);
+  int (*get_device_desc8)(struct usb_hc_probe *sc, struct pci_dev *dev,
+                          uchar port, uchar address, uchar *out8);
+  int (*get_device_desc18)(struct usb_hc_probe *sc, struct pci_dev *dev,
+                           uchar port, uchar address, uchar *out18);
+  int (*get_config_desc)(struct usb_hc_probe *sc, struct pci_dev *dev,
+                         uchar port, uchar address, ushort length,
+                         uchar *outbuf);
+  int (*set_configuration)(struct usb_hc_probe *sc, struct pci_dev *dev,
+                           uchar port, uchar address, uchar cfg_value);
 };
 
 int usb_probe_uhci_regs(struct usb_hc_probe *sc, struct pci_dev *dev);
@@ -109,5 +119,14 @@ int usb_uhci_service_ports(struct usb_hc_probe *sc, struct pci_dev *dev);
 int usb_ohci_service_ports(struct usb_hc_probe *sc, struct pci_dev *dev);
 int usb_ehci_service_ports(struct usb_hc_probe *sc, struct pci_dev *dev);
 int usb_xhci_service_ports(struct usb_hc_probe *sc, struct pci_dev *dev);
+int usb_xhci_get_device_desc8(struct usb_hc_probe *sc, struct pci_dev *dev,
+                              uchar port, uchar address, uchar *out8);
+int usb_xhci_get_device_desc18(struct usb_hc_probe *sc, struct pci_dev *dev,
+                               uchar port, uchar address, uchar *out18);
+int usb_xhci_get_config_desc(struct usb_hc_probe *sc, struct pci_dev *dev,
+                             uchar port, uchar address, ushort length,
+                             uchar *outbuf);
+int usb_xhci_set_configuration(struct usb_hc_probe *sc, struct pci_dev *dev,
+                               uchar port, uchar address, uchar cfg_value);
 
 #endif

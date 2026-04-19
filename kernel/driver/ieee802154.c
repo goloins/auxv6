@@ -82,6 +82,8 @@ static const struct wpan_usb_id wpan_usb_table[] = {
 
 /* --- per-controller descriptor ----------------------------------------- */
 struct wpan_probe {
+  uchar   active;
+  uint    bind_id;
   ushort  vendor_id;
   ushort  product_id;
   uchar   transport;       /* WPAN_TRANSPORT_* */
@@ -105,6 +107,7 @@ static struct spinlock wpan_lock;
 static int wpan_lock_ready;
 static struct wpan_probe wpan_probes[WPAN_STUB_MAX];
 static uint wpan_probe_count;
+static uint wpan_next_bind_id;
 
 /* --- helpers ------------------------------------------------------------ */
 
@@ -181,11 +184,28 @@ wpan_buf_putu(char *buf, uint max, uint *len, uint v)
  * registers a probe record so /proc/wpan reflects the find.
  */
 int
-wpan_usb_attach(ushort vendor, ushort product)
+wpan_usb_match(ushort vendor, ushort product)
+{
+  uint i;
+
+  for(i = 0; i < WPAN_USB_TABLE_LEN; i++){
+    if(wpan_usb_table[i].vendor_id == vendor &&
+       wpan_usb_table[i].product_id == product)
+      return 1;
+  }
+  return 0;
+}
+
+int
+wpan_usb_attach(ushort vendor, ushort product, uint *bind_handle)
 {
   uint i;
   struct wpan_probe *sc;
   const char *model = 0;
+  uint bind_id;
+
+  if(!bind_handle)
+    return -1;
 
   for(i = 0; i < WPAN_USB_TABLE_LEN; i++){
     if(wpan_usb_table[i].vendor_id == vendor &&
@@ -205,6 +225,12 @@ wpan_usb_attach(ushort vendor, ushort product)
   sc = &wpan_probes[wpan_probe_count++];
   release(&wpan_lock);
 
+  bind_id = ++wpan_next_bind_id;
+  if(bind_id == 0)
+    bind_id = ++wpan_next_bind_id;
+
+  sc->active     = 1;
+  sc->bind_id    = bind_id;
   sc->vendor_id  = vendor;
   sc->product_id = product;
   sc->transport  = WPAN_TRANSPORT_USB;
@@ -214,10 +240,38 @@ wpan_usb_attach(ushort vendor, ushort product)
   sc->pan_id     = 0xffff;
   sc->short_addr = 0xffff;
   sc->model      = model;
+  *bind_handle   = bind_id;
 
-  cprintf("ieee802154: %s [%x:%x] attached via USB (stub)\n",
-    model, (uint)vendor, (uint)product);
+  cprintf("ieee802154: %s [%x:%x] attached via USB (stub, bind=%d)\n",
+    model, (uint)vendor, (uint)product, bind_id);
   return 0;
+}
+
+int
+wpan_usb_detach(uint bind_handle)
+{
+  int i;
+
+  if(bind_handle == 0)
+    return -1;
+
+  acquire(&wpan_lock);
+  for(i = (int)wpan_probe_count - 1; i >= 0; i--){
+    struct wpan_probe *sc;
+
+    sc = &wpan_probes[i];
+    if(!sc->active)
+      continue;
+    if(sc->bind_id != bind_handle)
+      continue;
+    sc->active = 0;
+    sc->phase = WPAN_PHASE_ABSENT;
+    release(&wpan_lock);
+    cprintf("ieee802154: bind=%d detached via USB retire\n", bind_handle);
+    return 0;
+  }
+  release(&wpan_lock);
+  return -1;
 }
 
 /* --- /proc/wpan dump ---------------------------------------------------- */
@@ -227,6 +281,7 @@ ieee802154_procfs_dump(char *buf, uint max)
 {
   struct wpan_probe snap[WPAN_STUB_MAX];
   uint count;
+  uint active = 0;
   uint len = 0;
   uint i;
 
@@ -239,12 +294,20 @@ ieee802154_procfs_dump(char *buf, uint max)
   release(&wpan_lock);
 
   if(wpan_buf_puts(buf, max, &len, "# IEEE 802.15.4 WPAN controllers\n") < 0) return -1;
-  if(wpan_buf_puts(buf, max, &len, "# transport vendor:product phase channel pan_id\n") < 0) return -1;
+  if(wpan_buf_puts(buf, max, &len, "# bind transport vendor:product phase channel pan_id\n") < 0) return -1;
 
   for(i = 0; i < count; i++){
     struct wpan_probe *p = &snap[i];
     static const char hx[] = "0123456789abcdef";
     int shift;
+
+    if(!p->active)
+      continue;
+    active++;
+
+    if(wpan_buf_puts(buf, max, &len, "dev bind=") < 0) return -1;
+    if(wpan_buf_putu(buf, max, &len, p->bind_id) < 0) return -1;
+    if(wpan_buf_putc(buf, max, &len, ' ') < 0) return -1;
 
     if(wpan_buf_puts(buf, max, &len, "dev transport=") < 0) return -1;
     if(wpan_buf_puts(buf, max, &len, wpan_transport_name(p->transport)) < 0) return -1;
@@ -276,7 +339,9 @@ ieee802154_procfs_dump(char *buf, uint max)
     if(wpan_buf_putc(buf, max, &len, '\n') < 0) return -1;
   }
 
-  if(wpan_buf_puts(buf, max, &len, "summary total=") < 0) return -1;
+  if(wpan_buf_puts(buf, max, &len, "summary active=") < 0) return -1;
+  if(wpan_buf_putu(buf, max, &len, active) < 0) return -1;
+  if(wpan_buf_puts(buf, max, &len, " seen=") < 0) return -1;
   if(wpan_buf_putu(buf, max, &len, count) < 0) return -1;
   if(wpan_buf_puts(buf, max, &len,
     " note=usb-attach-pending pending-usb-class-driver\n") < 0) return -1;
@@ -297,6 +362,7 @@ ieee802154_init(void)
 
   acquire(&wpan_lock);
   wpan_probe_count = 0;
+  wpan_next_bind_id = 0;
   release(&wpan_lock);
 
   /*

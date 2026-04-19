@@ -18,6 +18,7 @@
 static struct spinlock usb_lock;
 static struct usb_hc_probe usb_hc[USB_HC_MAX];
 static uint usb_hc_count;
+static const struct usb_hc_ops* usb_get_ops(uchar kind);
 
 #define USB_DEV_CAND_MAX      64
 #define USB_DEV_SPEED_UNKNOWN 0
@@ -29,6 +30,36 @@ static uint usb_hc_count;
 #define USB_DEV_ADDR_MIN      1
 #define USB_DEV_ADDR_MAX      127
 #define USB_ROOT_PORT_MAX     32
+#define USB_DEV_MAX           64
+#define USB_DEV_EP_MAX        8
+#define USB_DEV_IF_MAX        8
+#define USB_CFG_BLOB_MAX      4096
+
+#define USB_ATTACH_NONE       0
+#define USB_ATTACH_R815X      1
+#define USB_ATTACH_WPAN       2
+
+#define USB_ENUM_STATE_NEW            0
+#define USB_ENUM_STATE_CONTROL_PENDING 1
+#define USB_ENUM_STATE_DESC8_OK       2
+#define USB_ENUM_STATE_DESC18_OK      3
+#define USB_ENUM_STATE_CFG_OK         4
+#define USB_ENUM_STATE_CONFIGURED     5
+#define USB_ENUM_STATE_FAILED         6
+
+#define USB_ENUM_ERR_NONE             0
+#define USB_ENUM_ERR_BAD_CANDIDATE    1
+#define USB_ENUM_ERR_NO_CONTROLLER    2
+#define USB_ENUM_ERR_NO_PCI_DEV       3
+#define USB_ENUM_ERR_NO_EP0_BACKEND   4
+#define USB_ENUM_ERR_EP0              5
+#define USB_ENUM_ERR_DESC8_FORMAT     6
+#define USB_ENUM_ERR_NO_DESC18_BACKEND 7
+#define USB_ENUM_ERR_DESC18_FORMAT    8
+#define USB_ENUM_ERR_NO_CFG_BACKEND   9
+#define USB_ENUM_ERR_CFG_FORMAT       10
+#define USB_ENUM_ERR_NO_SETCFG_BACKEND 11
+#define USB_ENUM_ERR_SETCFG           12
 
 struct usb_dev_candidate {
   uchar hc_index;
@@ -44,6 +75,85 @@ struct usb_dev_candidate {
 
 static struct usb_dev_candidate usb_dev[USB_DEV_CAND_MAX];
 static uint usb_dev_count;
+
+struct usb_ep_cap {
+  uchar iface_index;
+  uchar addr;
+  uchar attr;
+  ushort max_packet;
+  uchar interval;
+};
+
+struct usb_if_cap {
+  uchar ifnum;
+  uchar alt;
+  uchar ifclass;
+  uchar subclass;
+  uchar proto;
+  uchar ep_count;
+};
+
+struct usb_device {
+  uchar active;
+  uchar hc_index;
+  uchar kind;
+  uchar port;
+  uchar address;
+  uchar speed;
+  uchar enum_state;
+  uchar address_set;
+  uchar max_packet0;
+  ushort bcd_usb;
+  ushort vendor_id;
+  ushort product_id;
+  uchar dev_class;
+  uchar dev_subclass;
+  uchar dev_proto;
+  uchar desc8_ok;
+  uchar desc18_ok;
+  uchar cfg_desc_ok;
+  uchar cfg_value;
+  uchar cfg_num_ifaces;
+  uchar cfg_parsed_ifaces;
+  uchar cfg_num_eps;
+  uchar cfg_set_ok;
+  uchar match_if_class;
+  uchar match_if_subclass;
+  uchar match_if_proto;
+  uchar attach_driver;
+  uchar attach_ok;
+  uchar iface_count;
+  uchar ep_count;
+  ushort attach_vid;
+  ushort attach_pid;
+  uchar attach_cfg;
+  uchar attach_if_number;
+  uchar attach_if_alt;
+  uchar attach_if_class;
+  uchar attach_if_subclass;
+  uchar attach_if_proto;
+  uint attach_handle;
+  uint attach_ep_sig;
+  ushort cfg_total_len;
+  struct usb_if_cap ifaces[USB_DEV_IF_MAX];
+  struct usb_ep_cap eps[USB_DEV_EP_MAX];
+  uint generation;
+  uint attach_generation;
+  uint enum_attempts;
+  uint enum_successes;
+  uint enum_failures;
+  uint attach_attempts;
+  uint attach_successes;
+  uint attach_skips;
+  uint attach_rebinds;
+  uint last_error;
+};
+
+static struct usb_device usb_devices[USB_DEV_MAX];
+static uint usb_device_count;
+static uint usb_attach_dedup_count;
+static uint usb_attach_retired_count;
+static uint usb_attach_rebind_count;
 
 struct usb_bus_state {
   uint addr_bits[4];
@@ -64,6 +174,10 @@ static const struct usb_hc_ops usb_hc_ops_unknown = {
   .start = 0,
   .scan_ports = 0,
   .service_ports = 0,
+  .get_device_desc8 = 0,
+  .get_device_desc18 = 0,
+  .get_config_desc = 0,
+  .set_configuration = 0,
 };
 
 static const struct usb_hc_ops usb_hc_ops_uhci = {
@@ -74,6 +188,10 @@ static const struct usb_hc_ops usb_hc_ops_uhci = {
   .start = usb_uhci_start,
   .scan_ports = usb_uhci_scan_ports,
   .service_ports = usb_uhci_service_ports,
+  .get_device_desc8 = 0,
+  .get_device_desc18 = 0,
+  .get_config_desc = 0,
+  .set_configuration = 0,
 };
 
 static const struct usb_hc_ops usb_hc_ops_ohci = {
@@ -84,6 +202,10 @@ static const struct usb_hc_ops usb_hc_ops_ohci = {
   .start = usb_ohci_start,
   .scan_ports = usb_ohci_scan_ports,
   .service_ports = usb_ohci_service_ports,
+  .get_device_desc8 = 0,
+  .get_device_desc18 = 0,
+  .get_config_desc = 0,
+  .set_configuration = 0,
 };
 
 static const struct usb_hc_ops usb_hc_ops_ehci = {
@@ -94,6 +216,10 @@ static const struct usb_hc_ops usb_hc_ops_ehci = {
   .start = usb_ehci_start,
   .scan_ports = usb_ehci_scan_ports,
   .service_ports = usb_ehci_service_ports,
+  .get_device_desc8 = 0,
+  .get_device_desc18 = 0,
+  .get_config_desc = 0,
+  .set_configuration = 0,
 };
 
 static const struct usb_hc_ops usb_hc_ops_xhci = {
@@ -104,6 +230,10 @@ static const struct usb_hc_ops usb_hc_ops_xhci = {
   .start = usb_xhci_start,
   .scan_ports = usb_xhci_scan_ports,
   .service_ports = usb_xhci_service_ports,
+  .get_device_desc8 = usb_xhci_get_device_desc8,
+  .get_device_desc18 = usb_xhci_get_device_desc18,
+  .get_config_desc = usb_xhci_get_config_desc,
+  .set_configuration = usb_xhci_set_configuration,
 };
 
 static int
@@ -270,6 +400,701 @@ usb_dev_speed_name(uchar speed)
   default:
     return "unknown";
   }
+}
+
+static const char*
+usb_enum_state_name(uchar state)
+{
+  switch(state){
+  case USB_ENUM_STATE_NEW:
+    return "new";
+  case USB_ENUM_STATE_CONTROL_PENDING:
+    return "control_pending";
+  case USB_ENUM_STATE_DESC8_OK:
+    return "desc8_ok";
+  case USB_ENUM_STATE_DESC18_OK:
+    return "desc18_ok";
+  case USB_ENUM_STATE_CFG_OK:
+    return "cfg_ok";
+  case USB_ENUM_STATE_CONFIGURED:
+    return "configured";
+  case USB_ENUM_STATE_FAILED:
+    return "failed";
+  default:
+    return "unknown";
+  }
+}
+
+static const char*
+usb_enum_error_name(uint err)
+{
+  switch(err){
+  case USB_ENUM_ERR_NONE:
+    return "none";
+  case USB_ENUM_ERR_BAD_CANDIDATE:
+    return "bad_candidate";
+  case USB_ENUM_ERR_NO_CONTROLLER:
+    return "no_controller";
+  case USB_ENUM_ERR_NO_PCI_DEV:
+    return "no_pci_dev";
+  case USB_ENUM_ERR_NO_EP0_BACKEND:
+    return "no_ep0_backend";
+  case USB_ENUM_ERR_EP0:
+    return "ep0";
+  case USB_ENUM_ERR_DESC8_FORMAT:
+    return "desc8_format";
+  case USB_ENUM_ERR_NO_DESC18_BACKEND:
+    return "no_desc18_backend";
+  case USB_ENUM_ERR_DESC18_FORMAT:
+    return "desc18_format";
+  case USB_ENUM_ERR_NO_CFG_BACKEND:
+    return "no_cfg_backend";
+  case USB_ENUM_ERR_CFG_FORMAT:
+    return "cfg_format";
+  case USB_ENUM_ERR_NO_SETCFG_BACKEND:
+    return "no_setcfg_backend";
+  case USB_ENUM_ERR_SETCFG:
+    return "setcfg";
+  default:
+    return "unknown";
+  }
+}
+
+static const char*
+usb_attach_driver_name(uchar driver)
+{
+  switch(driver){
+  case USB_ATTACH_R815X:
+    return "r815x";
+  case USB_ATTACH_WPAN:
+    return "wpan";
+  case USB_ATTACH_NONE:
+  default:
+    return "none";
+  }
+}
+
+static void
+usb_detach_class_driver(struct usb_device *ud)
+{
+  if(!ud || !ud->attach_ok)
+    return;
+
+  switch(ud->attach_driver){
+  case USB_ATTACH_R815X:
+    (void)rtl815x_usb_detach(ud->attach_handle);
+    break;
+  case USB_ATTACH_WPAN:
+    (void)wpan_usb_detach(ud->attach_handle);
+    break;
+  default:
+    break;
+  }
+}
+
+static int
+usb_iface_has_bulk_pair(struct usb_device *ud, int iface_index)
+{
+  uint i;
+  int in;
+  int out;
+
+  if(!ud)
+    return 0;
+
+  in = 0;
+  out = 0;
+  for(i = 0; i < ud->ep_count; i++){
+    uchar type;
+    uchar addr;
+
+    if(iface_index >= 0 && (int)ud->eps[i].iface_index != iface_index)
+      continue;
+
+    type = ud->eps[i].attr & 0x3;
+    if(type != 2)
+      continue;
+    addr = ud->eps[i].addr;
+    if(addr & 0x80)
+      in = 1;
+    else
+      out = 1;
+  }
+
+  return (in && out) ? 1 : 0;
+}
+
+static int
+usb_iface_has_any_in_out(struct usb_device *ud, int iface_index)
+{
+  uint i;
+  int in;
+  int out;
+
+  if(!ud)
+    return 0;
+
+  in = 0;
+  out = 0;
+  for(i = 0; i < ud->ep_count; i++){
+    if(iface_index >= 0 && (int)ud->eps[i].iface_index != iface_index)
+      continue;
+    if(ud->eps[i].addr & 0x80)
+      in = 1;
+    else
+      out = 1;
+  }
+
+  return (in && out) ? 1 : 0;
+}
+
+static uint
+usb_compute_ep_signature(struct usb_device *ud)
+{
+  uint i;
+  uint sig;
+
+  if(!ud)
+    return 0;
+
+  sig = 2166136261U;
+  for(i = 0; i < ud->ep_count; i++){
+    sig ^= (uint)ud->eps[i].iface_index;
+    sig *= 16777619U;
+    sig ^= (uint)ud->eps[i].addr;
+    sig *= 16777619U;
+    sig ^= (uint)ud->eps[i].attr;
+    sig *= 16777619U;
+    sig ^= (uint)ud->eps[i].max_packet;
+    sig *= 16777619U;
+    sig ^= (uint)ud->eps[i].interval;
+    sig *= 16777619U;
+  }
+  return sig;
+}
+
+static int
+usb_policy_select_r815x(struct usb_device *ud)
+{
+  uint i;
+
+  if(!ud)
+    return -1;
+  if(!rtl815x_usb_match(ud->vendor_id, ud->product_id))
+    return -1;
+
+  for(i = 0; i < ud->iface_count; i++){
+    struct usb_if_cap *ifc;
+
+    ifc = &ud->ifaces[i];
+    if(!(ifc->ifclass == 0xff || ifc->ifclass == 0x02 || ifc->ifclass == 0x0a))
+      continue;
+    if(!usb_iface_has_bulk_pair(ud, (int)i))
+      continue;
+    return (int)i;
+  }
+
+  return -1;
+}
+
+static int
+usb_policy_select_wpan(struct usb_device *ud)
+{
+  uint i;
+
+  if(!ud)
+    return -1;
+  if(!wpan_usb_match(ud->vendor_id, ud->product_id))
+    return -1;
+
+  for(i = 0; i < ud->iface_count; i++){
+    struct usb_if_cap *ifc;
+
+    ifc = &ud->ifaces[i];
+    if(!(ifc->ifclass == 0xff || ifc->ifclass == 0x02 || ifc->ifclass == 0x0a))
+      continue;
+    if(!usb_iface_has_any_in_out(ud, (int)i))
+      continue;
+    return (int)i;
+  }
+
+  return -1;
+}
+
+static void
+usb_retire_device_slot(struct usb_device *ud)
+{
+  if(!ud || !ud->active)
+    return;
+
+  usb_detach_class_driver(ud);
+
+  if(ud->attach_ok)
+    usb_attach_retired_count++;
+
+  ud->active = 0;
+  ud->attach_ok = 0;
+  ud->attach_driver = USB_ATTACH_NONE;
+  ud->attach_generation = 0;
+  ud->attach_handle = 0;
+}
+
+static int
+usb_attach_signature_matches(struct usb_device *ud, uchar driver,
+                             struct usb_if_cap *ifc, uint ep_sig)
+{
+  if(!ud)
+    return 0;
+  if(!ifc)
+    return 0;
+  if(driver == USB_ATTACH_NONE)
+    return 0;
+  if(!ud->attach_ok)
+    return 0;
+  if(ud->attach_driver != driver)
+    return 0;
+  if(ud->attach_generation != ud->generation)
+    return 0;
+  if(ud->attach_vid != ud->vendor_id || ud->attach_pid != ud->product_id)
+    return 0;
+  if(ud->attach_cfg != ud->cfg_value)
+    return 0;
+  if(ud->attach_if_number != ifc->ifnum)
+    return 0;
+  if(ud->attach_if_alt != ifc->alt)
+    return 0;
+  if(ud->attach_if_class != ifc->ifclass)
+    return 0;
+  if(ud->attach_if_subclass != ifc->subclass)
+    return 0;
+  if(ud->attach_if_proto != ifc->proto)
+    return 0;
+  if(ud->attach_ep_sig != ep_sig)
+    return 0;
+  return 1;
+}
+
+static void
+usb_try_class_attach(struct usb_device *ud)
+{
+  int sel_if;
+  uchar driver;
+  struct usb_if_cap *ifc;
+  uint ep_sig;
+
+  if(!ud)
+    return;
+  if(!ud->cfg_set_ok)
+    return;
+
+  driver = USB_ATTACH_NONE;
+  sel_if = usb_policy_select_r815x(ud);
+  if(sel_if >= 0)
+    driver = USB_ATTACH_R815X;
+  else {
+    sel_if = usb_policy_select_wpan(ud);
+    if(sel_if >= 0)
+      driver = USB_ATTACH_WPAN;
+  }
+
+  if(driver == USB_ATTACH_NONE){
+    if(ud->attach_ok){
+      usb_detach_class_driver(ud);
+      ud->attach_rebinds++;
+      usb_attach_rebind_count++;
+      ud->attach_ok = 0;
+      ud->attach_driver = USB_ATTACH_NONE;
+      ud->attach_generation = 0;
+      ud->attach_handle = 0;
+    }
+    return;
+  }
+
+  ifc = &ud->ifaces[sel_if];
+  ep_sig = usb_compute_ep_signature(ud);
+
+  if(usb_attach_signature_matches(ud, driver, ifc, ep_sig)){
+    ud->attach_skips++;
+    usb_attach_dedup_count++;
+    return;
+  }
+
+  if(ud->attach_ok){
+    usb_detach_class_driver(ud);
+    ud->attach_rebinds++;
+    usb_attach_rebind_count++;
+  }
+
+  ud->attach_attempts++;
+  ud->attach_driver = USB_ATTACH_NONE;
+  ud->attach_ok = 0;
+  ud->attach_generation = 0;
+    ud->attach_handle = 0;
+
+  if(driver == USB_ATTACH_R815X &&
+      rtl815x_usb_attach(ud->vendor_id, ud->product_id,
+                  &ud->attach_handle) == 0){
+    ud->attach_driver = USB_ATTACH_R815X;
+    ud->attach_ok = 1;
+    ud->attach_vid = ud->vendor_id;
+    ud->attach_pid = ud->product_id;
+    ud->attach_cfg = ud->cfg_value;
+    ud->attach_if_number = ifc->ifnum;
+    ud->attach_if_alt = ifc->alt;
+    ud->attach_if_class = ifc->ifclass;
+    ud->attach_if_subclass = ifc->subclass;
+    ud->attach_if_proto = ifc->proto;
+    ud->attach_ep_sig = ep_sig;
+    ud->attach_generation = ud->generation;
+    ud->attach_successes++;
+    return;
+  }
+
+  if(driver == USB_ATTACH_WPAN &&
+      wpan_usb_attach(ud->vendor_id, ud->product_id,
+                &ud->attach_handle) == 0){
+    ud->attach_driver = USB_ATTACH_WPAN;
+    ud->attach_ok = 1;
+    ud->attach_vid = ud->vendor_id;
+    ud->attach_pid = ud->product_id;
+    ud->attach_cfg = ud->cfg_value;
+    ud->attach_if_number = ifc->ifnum;
+    ud->attach_if_alt = ifc->alt;
+    ud->attach_if_class = ifc->ifclass;
+    ud->attach_if_subclass = ifc->subclass;
+    ud->attach_if_proto = ifc->proto;
+    ud->attach_ep_sig = ep_sig;
+    ud->attach_generation = ud->generation;
+    ud->attach_successes++;
+    return;
+  }
+}
+
+static struct usb_device*
+usb_find_device_slot(uint hc_index, uchar port, uint generation)
+{
+  uint i;
+  int free_index;
+
+  free_index = -1;
+
+  for(i = 0; i < usb_device_count; i++){
+    struct usb_device *ud;
+
+    ud = &usb_devices[i];
+    if(!ud->active){
+      if(free_index < 0)
+        free_index = (int)i;
+      continue;
+    }
+
+    if(ud->hc_index != hc_index)
+      continue;
+    if(ud->port != port)
+      continue;
+
+    if(ud->generation == generation)
+      return ud;
+
+    usb_retire_device_slot(ud);
+    if(free_index < 0)
+      free_index = (int)i;
+  }
+
+  if(free_index >= 0){
+    memset(&usb_devices[free_index], 0, sizeof(usb_devices[free_index]));
+    usb_devices[free_index].active = 1;
+    return &usb_devices[free_index];
+  }
+
+  if(usb_device_count >= USB_DEV_MAX)
+    return 0;
+
+  memset(&usb_devices[usb_device_count], 0, sizeof(usb_devices[usb_device_count]));
+  usb_devices[usb_device_count].active = 1;
+  return &usb_devices[usb_device_count++];
+}
+
+static void
+usb_device_set_fail(struct usb_device *ud, uint err)
+{
+  if(!ud)
+    return;
+  ud->enum_failures++;
+  ud->enum_state = USB_ENUM_STATE_FAILED;
+  ud->last_error = err;
+}
+
+static void
+usb_enumerate_desc8(uint hc_index, struct usb_dev_candidate *dc)
+{
+  struct usb_hc_probe *sc;
+  const struct usb_hc_ops *ops;
+  struct pci_dev *pdev;
+  struct usb_device *ud;
+  uchar desc8[8];
+  uchar desc18[18];
+  uchar cfg9[9];
+  uchar *cfg_blob;
+  ushort cfg_total;
+  uint off;
+  uchar cfg_ifaces;
+  uchar parsed_ifaces;
+  uchar parsed_eps;
+  uchar first_if_seen;
+  int current_if_slot;
+
+  cfg_blob = 0;
+  cfg_total = 0;
+  cfg_ifaces = 0;
+  parsed_ifaces = 0;
+  parsed_eps = 0;
+  first_if_seen = 0;
+  current_if_slot = -1;
+
+  if(!dc || !dc->present || !dc->enabled || !dc->addr_ready){
+    return;
+  }
+
+  if(hc_index >= usb_hc_count)
+    return;
+
+  ud = usb_find_device_slot(hc_index, dc->port, dc->generation);
+  if(!ud)
+    return;
+
+  ud->hc_index = (uchar)hc_index;
+  ud->kind = dc->kind;
+  ud->port = dc->port;
+  ud->address = dc->address;
+  ud->speed = dc->speed;
+  ud->generation = dc->generation;
+  ud->enum_attempts++;
+  ud->desc8_ok = 0;
+  ud->desc18_ok = 0;
+  ud->cfg_desc_ok = 0;
+  ud->cfg_total_len = 0;
+  ud->cfg_value = 0;
+  ud->cfg_num_ifaces = 0;
+  ud->cfg_parsed_ifaces = 0;
+  ud->cfg_num_eps = 0;
+  ud->cfg_set_ok = 0;
+  ud->iface_count = 0;
+  ud->match_if_class = 0;
+  ud->match_if_subclass = 0;
+  ud->match_if_proto = 0;
+  memset(ud->ifaces, 0, sizeof(ud->ifaces));
+  ud->ep_count = 0;
+  memset(ud->eps, 0, sizeof(ud->eps));
+  ud->address_set = 0;
+
+  sc = &usb_hc[hc_index];
+  ops = usb_get_ops(sc->kind);
+  if(!ops){
+    usb_device_set_fail(ud, USB_ENUM_ERR_NO_CONTROLLER);
+    return;
+  }
+  if(!ops->get_device_desc8){
+    ud->enum_state = USB_ENUM_STATE_CONTROL_PENDING;
+    ud->last_error = USB_ENUM_ERR_NO_EP0_BACKEND;
+    return;
+  }
+
+  pdev = pci_get_device((int)sc->pci_index);
+  if(!pdev){
+    usb_device_set_fail(ud, USB_ENUM_ERR_NO_PCI_DEV);
+    return;
+  }
+
+  memset(desc8, 0, sizeof(desc8));
+  if(ops->get_device_desc8(sc, pdev, dc->port, dc->address, desc8) < 0){
+    ud->enum_state = USB_ENUM_STATE_CONTROL_PENDING;
+    ud->last_error = USB_ENUM_ERR_EP0;
+    return;
+  }
+
+  if(desc8[0] < 8 || desc8[1] != 1 || desc8[7] == 0){
+    usb_device_set_fail(ud, USB_ENUM_ERR_DESC8_FORMAT);
+    return;
+  }
+
+  ud->max_packet0 = desc8[7];
+  ud->desc8_ok = 1;
+  if(ud->kind == USB_HC_KIND_XHCI)
+    ud->address_set = 1;
+
+  if(!ops->get_device_desc18){
+    ud->enum_state = USB_ENUM_STATE_CONTROL_PENDING;
+    ud->last_error = USB_ENUM_ERR_NO_DESC18_BACKEND;
+    return;
+  }
+
+  memset(desc18, 0, sizeof(desc18));
+  if(ops->get_device_desc18(sc, pdev, dc->port, dc->address, desc18) < 0){
+    ud->enum_state = USB_ENUM_STATE_CONTROL_PENDING;
+    ud->last_error = USB_ENUM_ERR_EP0;
+    return;
+  }
+
+  if(desc18[0] < 18 || desc18[1] != 1){
+    usb_device_set_fail(ud, USB_ENUM_ERR_DESC18_FORMAT);
+    return;
+  }
+
+  ud->bcd_usb = (ushort)(desc18[2] | (desc18[3] << 8));
+  ud->dev_class = desc18[4];
+  ud->dev_subclass = desc18[5];
+  ud->dev_proto = desc18[6];
+  ud->vendor_id = (ushort)(desc18[8] | (desc18[9] << 8));
+  ud->product_id = (ushort)(desc18[10] | (desc18[11] << 8));
+  ud->desc18_ok = 1;
+
+  if(!ops->get_config_desc){
+    ud->enum_state = USB_ENUM_STATE_CONTROL_PENDING;
+    ud->last_error = USB_ENUM_ERR_NO_CFG_BACKEND;
+    return;
+  }
+
+  memset(cfg9, 0, sizeof(cfg9));
+  if(ops->get_config_desc(sc, pdev, dc->port, dc->address, 9, cfg9) < 0){
+    ud->enum_state = USB_ENUM_STATE_CONTROL_PENDING;
+    ud->last_error = USB_ENUM_ERR_EP0;
+    return;
+  }
+
+  if(cfg9[0] < 9 || cfg9[1] != 2){
+    usb_device_set_fail(ud, USB_ENUM_ERR_CFG_FORMAT);
+    return;
+  }
+
+  cfg_total = (ushort)(cfg9[2] | (cfg9[3] << 8));
+  cfg_ifaces = cfg9[4];
+  if(cfg_total < 9 || cfg_total > USB_CFG_BLOB_MAX){
+    usb_device_set_fail(ud, USB_ENUM_ERR_CFG_FORMAT);
+    return;
+  }
+
+  cfg_blob = (uchar*)kalloc();
+  if(!cfg_blob){
+    ud->enum_state = USB_ENUM_STATE_CONTROL_PENDING;
+    ud->last_error = USB_ENUM_ERR_EP0;
+    return;
+  }
+  memset(cfg_blob, 0, USB_CFG_BLOB_MAX);
+
+  if(ops->get_config_desc(sc, pdev, dc->port, dc->address,
+                          cfg_total, cfg_blob) < 0){
+    kfree((char*)cfg_blob);
+    ud->enum_state = USB_ENUM_STATE_CONTROL_PENDING;
+    ud->last_error = USB_ENUM_ERR_EP0;
+    return;
+  }
+
+  off = 0;
+  while(off + 2 <= cfg_total){
+    uchar blen;
+    uchar btype;
+
+    blen = cfg_blob[off];
+    btype = cfg_blob[off + 1];
+    if(blen < 2 || off + blen > cfg_total){
+      kfree((char*)cfg_blob);
+      usb_device_set_fail(ud, USB_ENUM_ERR_CFG_FORMAT);
+      return;
+    }
+
+    if(btype == 4)
+      parsed_ifaces++;
+    else if(btype == 5)
+      parsed_eps++;
+
+    if(btype == 4 && blen >= 9){
+      if(!first_if_seen){
+        ud->match_if_class = cfg_blob[off + 5];
+        ud->match_if_subclass = cfg_blob[off + 6];
+        ud->match_if_proto = cfg_blob[off + 7];
+        first_if_seen = 1;
+      }
+
+      current_if_slot = -1;
+      if(ud->iface_count < USB_DEV_IF_MAX){
+        struct usb_if_cap *ifc;
+
+        current_if_slot = (int)ud->iface_count;
+        ifc = &ud->ifaces[ud->iface_count++];
+        ifc->ifnum = cfg_blob[off + 2];
+        ifc->alt = cfg_blob[off + 3];
+        ifc->ifclass = cfg_blob[off + 5];
+        ifc->subclass = cfg_blob[off + 6];
+        ifc->proto = cfg_blob[off + 7];
+        ifc->ep_count = 0;
+      }
+    }
+
+    if(btype == 5 && blen >= 7 && ud->ep_count < USB_DEV_EP_MAX){
+      struct usb_ep_cap *ep;
+
+      ep = &ud->eps[ud->ep_count++];
+      ep->iface_index = (current_if_slot >= 0) ? (uchar)current_if_slot : 0xff;
+      ep->addr = cfg_blob[off + 2];
+      ep->attr = cfg_blob[off + 3];
+      ep->max_packet = (ushort)(cfg_blob[off + 4] | (cfg_blob[off + 5] << 8));
+      ep->interval = cfg_blob[off + 6];
+      if(current_if_slot >= 0 && current_if_slot < (int)ud->iface_count)
+        ud->ifaces[current_if_slot].ep_count++;
+    }
+
+    off += blen;
+    if(off == cfg_total)
+      break;
+  }
+
+  if(off != cfg_total){
+    kfree((char*)cfg_blob);
+    usb_device_set_fail(ud, USB_ENUM_ERR_CFG_FORMAT);
+    return;
+  }
+
+  ud->cfg_desc_ok = 1;
+  ud->cfg_total_len = cfg_total;
+  ud->cfg_value = cfg9[5];
+  ud->cfg_num_ifaces = cfg_ifaces;
+  ud->cfg_parsed_ifaces = parsed_ifaces;
+  ud->cfg_num_eps = parsed_eps;
+  ud->enum_state = USB_ENUM_STATE_CFG_OK;
+  ud->last_error = USB_ENUM_ERR_NONE;
+
+  if(!ops->set_configuration){
+    kfree((char*)cfg_blob);
+    ud->enum_state = USB_ENUM_STATE_CONTROL_PENDING;
+    ud->last_error = USB_ENUM_ERR_NO_SETCFG_BACKEND;
+    return;
+  }
+
+  if(ops->set_configuration(sc, pdev, dc->port, dc->address,
+                            ud->cfg_value) < 0){
+    kfree((char*)cfg_blob);
+    ud->enum_state = USB_ENUM_STATE_CONTROL_PENDING;
+    ud->last_error = USB_ENUM_ERR_SETCFG;
+    return;
+  }
+
+  ud->cfg_set_ok = 1;
+  usb_try_class_attach(ud);
+  kfree((char*)cfg_blob);
+
+  ud->enum_successes++;
+  ud->enum_state = USB_ENUM_STATE_CONFIGURED;
+  ud->last_error = USB_ENUM_ERR_NONE;
+}
+
+static void
+usb_materialize_devices(void)
+{
+  uint i;
+
+  for(i = 0; i < usb_dev_count; i++)
+    usb_enumerate_desc8(usb_dev[i].hc_index, &usb_dev[i]);
 }
 
 static struct usb_bus_state*
@@ -574,9 +1399,14 @@ usb_init(void)
   acquire(&usb_lock);
   memset(usb_hc, 0, sizeof(usb_hc));
   memset(usb_dev, 0, sizeof(usb_dev));
+  memset(usb_devices, 0, sizeof(usb_devices));
   memset(usb_bus, 0, sizeof(usb_bus));
   usb_hc_count = 0;
   usb_dev_count = 0;
+  usb_device_count = 0;
+  usb_attach_dedup_count = 0;
+  usb_attach_retired_count = 0;
+  usb_attach_rebind_count = 0;
 
   ndev = pci_device_count();
   for(i = 0; i < ndev; i++){
@@ -593,6 +1423,7 @@ usb_init(void)
     sc = &usb_hc[usb_hc_count++];
     memset(sc, 0, sizeof(*sc));
 
+    sc->pci_index = (uint)i;
     sc->vendor_id = dev->vendor_id;
     sc->device_id = dev->device_id;
     sc->bus = dev->bus;
@@ -679,6 +1510,8 @@ usb_init(void)
             sc->irq_line, sc->bar0, sc->bar0_size);
   }
 
+  usb_materialize_devices();
+
   BOOTDBG("usb: host-controller scaffold discovered %d controller(s)\n", usb_hc_count);
   release(&usb_lock);
 }
@@ -698,6 +1531,9 @@ usb_procfs_dump(char *buf, uint max)
   uint addr_assigned;
   uint addr_conflicts;
   uint addr_exhausted;
+  uint enum_ok;
+  uint enum_pending;
+  uint enum_failed;
 
   if(!buf || max == 0)
     return -1;
@@ -715,6 +1551,9 @@ usb_procfs_dump(char *buf, uint max)
   addr_assigned = 0;
   addr_conflicts = 0;
   addr_exhausted = 0;
+  enum_ok = 0;
+  enum_pending = 0;
+  enum_failed = 0;
 
   for(i = 0; i < usb_hc_count; i++){
     switch(usb_hc[i].kind){
@@ -780,6 +1619,10 @@ usb_procfs_dump(char *buf, uint max)
   if(usb_buf_putu(buf, max, &len, usb_dev_count) < 0) goto out;
   if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
 
+  if(usb_buf_puts(buf, max, &len, "usb_device_count ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_device_count) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
   if(usb_buf_puts(buf, max, &len, "usb_addr_assigned ") < 0) goto out;
   if(usb_buf_putu(buf, max, &len, addr_assigned) < 0) goto out;
   if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
@@ -790,6 +1633,46 @@ usb_procfs_dump(char *buf, uint max)
 
   if(usb_buf_puts(buf, max, &len, "usb_addr_exhausted ") < 0) goto out;
   if(usb_buf_putu(buf, max, &len, addr_exhausted) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  for(i = 0; i < usb_device_count; i++){
+    struct usb_device *ud = &usb_devices[i];
+
+    if(!ud->active)
+      continue;
+     if(ud->enum_state == USB_ENUM_STATE_DESC8_OK ||
+       ud->enum_state == USB_ENUM_STATE_DESC18_OK ||
+       ud->enum_state == USB_ENUM_STATE_CFG_OK ||
+       ud->enum_state == USB_ENUM_STATE_CONFIGURED)
+      enum_ok++;
+    else if(ud->enum_state == USB_ENUM_STATE_CONTROL_PENDING)
+      enum_pending++;
+    else if(ud->enum_state == USB_ENUM_STATE_FAILED)
+      enum_failed++;
+  }
+
+  if(usb_buf_puts(buf, max, &len, "usb_enum_ok ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, enum_ok) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_enum_pending ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, enum_pending) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_enum_failed ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, enum_failed) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_attach_dedup ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_attach_dedup_count) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_attach_retired ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_attach_retired_count) < 0) goto out;
+  if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+
+  if(usb_buf_puts(buf, max, &len, "usb_attach_rebind ") < 0) goto out;
+  if(usb_buf_putu(buf, max, &len, usb_attach_rebind_count) < 0) goto out;
   if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
 
   for(i = 0; i < usb_hc_count; i++){
@@ -932,6 +1815,117 @@ usb_procfs_dump(char *buf, uint max)
     if(usb_buf_putu(buf, max, &len, dc->addr_ready) < 0) goto out;
     if(usb_buf_puts(buf, max, &len, " gen=") < 0) goto out;
     if(usb_buf_putu(buf, max, &len, dc->generation) < 0) goto out;
+    if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
+  }
+
+  for(i = 0; i < usb_device_count; i++){
+    struct usb_device *ud = &usb_devices[i];
+    uint e;
+
+    if(!ud->active)
+      continue;
+
+    if(usb_buf_puts(buf, max, &len, "udev") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, i) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " hc=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->hc_index) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " kind=") < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, usb_hc_kind_name(ud->kind)) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " port=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->port) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " speed=") < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, usb_dev_speed_name(ud->speed)) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " addr=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->address) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " state=") < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, usb_enum_state_name(ud->enum_state)) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " err=") < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, usb_enum_error_name(ud->last_error)) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " addr_set=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->address_set) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " mps0=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->max_packet0) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " bcd=0x") < 0) goto out;
+    if(usb_buf_puthex16(buf, max, &len, ud->bcd_usb) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " vid=0x") < 0) goto out;
+    if(usb_buf_puthex16(buf, max, &len, ud->vendor_id) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " pid=0x") < 0) goto out;
+    if(usb_buf_puthex16(buf, max, &len, ud->product_id) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " class=0x") < 0) goto out;
+    if(usb_buf_puthex8(buf, max, &len, ud->dev_class) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " subclass=0x") < 0) goto out;
+    if(usb_buf_puthex8(buf, max, &len, ud->dev_subclass) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " proto=0x") < 0) goto out;
+    if(usb_buf_puthex8(buf, max, &len, ud->dev_proto) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " desc=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->desc8_ok) < 0) goto out;
+    if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->desc18_ok) < 0) goto out;
+    if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->cfg_desc_ok) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " cfg=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->cfg_value) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " cfg_set=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->cfg_set_ok) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " cfg_total=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->cfg_total_len) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " if=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->cfg_num_ifaces) < 0) goto out;
+    if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->cfg_parsed_ifaces) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " if_tbl=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->iface_count) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " ep=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->cfg_num_eps) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " if_match=0x") < 0) goto out;
+    if(usb_buf_puthex8(buf, max, &len, ud->match_if_class) < 0) goto out;
+    if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+    if(usb_buf_puthex8(buf, max, &len, ud->match_if_subclass) < 0) goto out;
+    if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+    if(usb_buf_puthex8(buf, max, &len, ud->match_if_proto) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " attach=") < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, usb_attach_driver_name(ud->attach_driver)) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " a=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->attach_attempts) < 0) goto out;
+    if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->attach_successes) < 0) goto out;
+    if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->attach_skips) < 0) goto out;
+    if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->attach_rebinds) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " h=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->attach_handle) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " attach_if=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->attach_if_number) < 0) goto out;
+    if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->attach_if_alt) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " ep_tbl=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->ep_count) < 0) goto out;
+    for(e = 0; e < ud->ep_count; e++){
+      struct usb_ep_cap *ep;
+
+      ep = &ud->eps[e];
+      if(usb_buf_puts(buf, max, &len, " ep") < 0) goto out;
+      if(usb_buf_putu(buf, max, &len, e) < 0) goto out;
+      if(usb_buf_puts(buf, max, &len, "=0x") < 0) goto out;
+      if(usb_buf_puthex8(buf, max, &len, ep->addr) < 0) goto out;
+      if(usb_buf_puts(buf, max, &len, "/0x") < 0) goto out;
+      if(usb_buf_puthex8(buf, max, &len, ep->attr) < 0) goto out;
+      if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+      if(usb_buf_putu(buf, max, &len, ep->max_packet) < 0) goto out;
+      if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+      if(usb_buf_putu(buf, max, &len, ep->interval) < 0) goto out;
+      if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+      if(usb_buf_putu(buf, max, &len, ep->iface_index) < 0) goto out;
+    }
+    if(usb_buf_puts(buf, max, &len, " gen=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->generation) < 0) goto out;
+    if(usb_buf_puts(buf, max, &len, " e=") < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->enum_attempts) < 0) goto out;
+    if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->enum_successes) < 0) goto out;
+    if(usb_buf_putc(buf, max, &len, '/') < 0) goto out;
+    if(usb_buf_putu(buf, max, &len, ud->enum_failures) < 0) goto out;
     if(usb_buf_putc(buf, max, &len, '\n') < 0) goto out;
   }
 
