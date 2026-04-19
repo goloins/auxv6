@@ -93,6 +93,11 @@ struct usb_hc_ops {
                          uchar *outbuf);
   int (*set_configuration)(struct usb_hc_probe *sc, struct pci_dev *dev,
                            uchar port, uchar address, uchar cfg_value);
+  int (*bulk_probe_xfer)(struct usb_hc_probe *sc, struct pci_dev *dev,
+                         uchar port, uchar address,
+                         uchar ep_in, uchar ep_out,
+                         uchar *buf, ushort len,
+                         ushort *out_len);
 };
 
 int usb_probe_uhci_regs(struct usb_hc_probe *sc, struct pci_dev *dev);
@@ -128,5 +133,10 @@ int usb_xhci_get_config_desc(struct usb_hc_probe *sc, struct pci_dev *dev,
                              uchar *outbuf);
 int usb_xhci_set_configuration(struct usb_hc_probe *sc, struct pci_dev *dev,
                                uchar port, uchar address, uchar cfg_value);
+int usb_xhci_bulk_probe_xfer(struct usb_hc_probe *sc, struct pci_dev *dev,
+                             uchar port, uchar address,
+                             uchar ep_in, uchar ep_out,
+                             uchar *buf, ushort len,
+                             ushort *out_len);
 
 #endif

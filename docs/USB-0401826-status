@@ -7,7 +7,7 @@ Basis: Live source code audit only (no reliance on docs/historic)
 
 The current USB implementation is a strong host-controller discovery and root-port bring-up scaffold, but it is not yet a full USB stack. The system can discover USB host controllers, perform guarded reset/halt/start sequences, scan/service root ports, synthesize candidate device rows, and expose broad observability via /proc. It now includes descriptor-accurate interface-aware class routing with rebind reconciliation, but still lacks production transfer scheduling and class-driver datapaths.
 
-Estimated overall maturity: 67%
+Estimated overall maturity: 74%
 
 ## Progress Delta (2026-04-18)
 
@@ -36,6 +36,17 @@ Landed since initial snapshot:
 - `/proc/usb` now exports rebind counters and selected attach interface tuple (`attach_if`) in `udev` rows.
 - USB class attach now returns driver-owned bind handles, and detach is now by handle (not vendor/product pair), improving identity safety under churn.
 - `/proc/r815x` and `/proc/wpan` now report bind IDs for active scaffolds.
+- USB core now passes selected interface/altsetting and selected bulk IN/OUT endpoints into RTL815x attach bind context.
+- `/proc/usb` now reports selected attach endpoints (`attach_ep`) and `/proc/r815x` reports bind+interface+endpoint mapping per active scaffold.
+- RTL815x bind context now also snapshots device speed and EP0 max packet (`mps0`) for transport sizing decisions.
+- RTL815x bulk probe stub now reports bounded transfer length metadata (`blen`) in `/proc/r815x`.
+- USB core now exposes backend-routed bulk probe helper by class bind handle (`usb_driver_bulk_probe_xfer`).
+- xHCI now implements first bulk probe submission path (configure endpoint + normal TRB submit + transfer event wait).
+- RTL815x bulk probe now requires backend-routed bulk transfer success (synthetic fallback removed).
+- Backend bulk probe path now propagates completion length to class drivers; RTL815x records that into `blen`.
+- RTL815x scaffold now executes first real EP0 control probe on attach context (bind-handle routed `GET_DESCRIPTOR(Device,18)`) and records control counters.
+- RTL815x scaffold now executes first bulk-transfer probe stub on attach context and records bulk stub counters.
+- RTL815x scaffold now promotes active binds to `running` on successful control+bulk stub probe.
 
 Not yet landed in this tranche:
 - Full endpoint activation/transfer scheduling after configuration.
@@ -119,6 +130,30 @@ Related downstream USB-attached scaffolds:
 - `rtl815x_usb_detach` / `wpan_usb_detach` now consume bind handles, avoiding ambiguous detach among same VID:PID devices.
 - USB core now stores and surfaces attach handle state per `udev` row.
 
+13) RTL815x endpoint-aware bind context
+- USB core now resolves a concrete bulk endpoint pair on the selected interface before RTL815x attach.
+- RTL815x bind context now captures `ifnum/ifalt/bulk_in/bulk_out` for transport bring-up readiness.
+- RTL815x scaffold phase now advances to `configured` when attach context is complete.
+
+13b) RTL815x bind context enrichment
+- USB core now passes device speed + `mps0` snapshot into RTL815x bind context.
+- RTL815x now tracks bulk probe sizing metadata (`blen`) to prepare the transition from stub pulses to real bulk submissions.
+
+14) First RTL815x transport stubs
+- Added first real EP0 control probe in RTL815x attach flow using USB core bind-handle lookup and `GET_DESCRIPTOR(Device,18)` transaction.
+- Added first bulk-transfer probe stub in RTL815x attach flow (stub-only accounting pulse on selected bulk endpoints).
+- `/proc/r815x` now reports `ctrl=` and `bulk=` triplets (`attempt/success/fail`) per active bind.
+
+15) Core-assisted class EP0 bridge
+- Added USB core helper to execute EP0 descriptor probe by class bind handle (`usb_driver_ep0_probe_desc18`).
+- RTL815x now uses that helper for its control probe, deriving `chipver` from real descriptor data (`bcdDevice`).
+
+16) Backend-routed bulk probe path
+- Added HCD bulk probe hook and USB core bind-handle helper (`usb_driver_bulk_probe_xfer`).
+- Added xHCI bulk probe backend path using endpoint configure + normal TRB submit/completion wait.
+- RTL815x now invokes backend bulk probe on selected endpoints and counts success/failure strictly from backend result.
+- Bulk completion length now propagates from backend to RTL815x telemetry.
+
 ## What Is Missing
 
 1) No transfer engine
@@ -134,10 +169,11 @@ Related downstream USB-attached scaffolds:
 - No long-lived interrupt/poll event path for connect/disconnect churn.
 
 4) Class-driver handoff is still scaffold-level
-- USB core now has descriptor-aware policy gating, explicit detach callbacks, rebind-on-signature-drift, and handle-based bind identity, but it still lacks full class-driver transport datapaths.
+- USB core now has descriptor-aware policy gating, explicit detach callbacks, rebind-on-signature-drift, handle-based bind identity, and endpoint-aware RTL815x bind contexts, but still lacks full class-driver transport datapaths.
 
 5) No production class datapath on USB
-- rtl815x and ieee802154 paths are explicit scaffolds and proc visibility only.
+- RTL815x now has first real EP0 control probe and first backend-routed bulk probe path, but no persistent bulk queueing/RX-TX datapath or ifnet registration yet.
+- ieee802154 path remains scaffold/proc visibility only.
 
 ## Maturity Breakdown By Portion
 
@@ -146,13 +182,13 @@ Related downstream USB-attached scaffolds:
 - Root-hub scan/reset/enable service: 55%
 - Candidate inventory + address bookkeeping: 50%
 - Runtime hotplug/re-enumeration loop: 16%
-- Transfer engine (scheduling/rings/descriptors): 28%
-- Enumeration state machine (EP0 + descriptors + config): 69%
-- Class-driver framework and handoff: 46%
-- USB class drivers with real datapath: 5%
-- Diagnostics/telemetry: 93%
+- Transfer engine (scheduling/rings/descriptors): 34%
+- Enumeration state machine (EP0 + descriptors + config): 71%
+- Class-driver framework and handoff: 52%
+- USB class drivers with real datapath: 15%
+- Diagnostics/telemetry: 95%
 
-Weighted overall estimate: 67%
+Weighted overall estimate: 74%
 
 ## Risks and Correctness Notes
 
@@ -197,10 +233,11 @@ Phase D (75%+): Controller parity and breadth
 
 ## Practical Next Step
 
-Immediate best next implementation target is transport bring-up on top of the new bind contract:
+Immediate best next implementation target is hardening first real bulk path:
 - Expand interface-policy support for composite devices (multi-altsetting and class-specific companion descriptors).
 - Add bind-handle backed per-driver context blocks (endpoint selection, interface index, device speed snapshot).
-- Start first control/bulk path stubs in rtl815x using selected interface and endpoint mapping.
+- Add retry/backoff and timeout classification for backend bulk probe failures.
+- Promote one-shot probe path into persistent queue+completion state machine.
 
 Follow-up target after that:
 - Convert parsed endpoint inventory into class-match inputs so USB class-driver handoff can start.

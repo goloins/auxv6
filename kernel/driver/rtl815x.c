@@ -43,9 +43,22 @@ struct r815x_probe {
   uint bind_id;
   ushort vendor_id;
   ushort product_id;
+  uchar dev_speed;
+  uchar max_packet0;
+  uchar ifnum;
+  uchar ifalt;
+  uchar bulk_in_ep;
+  uchar bulk_out_ep;
   ushort chip_version;
   uchar family;
   uchar phase;
+  uint ctrl_attempts;
+  uint ctrl_successes;
+  uint ctrl_failures;
+  uint bulk_attempts;
+  uint bulk_successes;
+  uint bulk_failures;
+  uint bulk_last_len;
   uint rx_frames;
   uint tx_frames;
   uint rx_errors;
@@ -72,6 +85,83 @@ static int r815x_lock_ready;
 static struct r815x_probe r815x_probes[R815X_STUB_MAX];
 static uint r815x_probe_count;
 static uint r815x_next_bind_id;
+
+static int
+r815x_real_control_probe(struct r815x_probe *sc)
+{
+  uchar desc18[18];
+
+  if(!sc)
+    return -1;
+
+  sc->ctrl_attempts++;
+  if(!sc->active){
+    sc->ctrl_failures++;
+    return -1;
+  }
+  if((sc->bulk_in_ep & 0x80) == 0 || (sc->bulk_out_ep & 0x80) != 0){
+    sc->ctrl_failures++;
+    return -1;
+  }
+
+  memset(desc18, 0, sizeof(desc18));
+  if(usb_driver_ep0_probe_desc18(sc->bind_id, desc18) < 0){
+    sc->ctrl_failures++;
+    return -1;
+  }
+  if(desc18[0] < 18 || desc18[1] != 1){
+    sc->ctrl_failures++;
+    return -1;
+  }
+
+  sc->chip_version = (ushort)(desc18[12] | (desc18[13] << 8));
+
+  sc->ctrl_successes++;
+  return 0;
+}
+
+static int
+r815x_stub_bulk_probe(struct r815x_probe *sc)
+{
+  uint bulk_len;
+  uchar probe_buf[512];
+  ushort done_len;
+
+  if(!sc)
+    return -1;
+
+  sc->bulk_attempts++;
+  if(!sc->active){
+    sc->bulk_failures++;
+    return -1;
+  }
+  if((sc->bulk_in_ep & 0x80) == 0 || (sc->bulk_out_ep & 0x80) != 0){
+    sc->bulk_failures++;
+    return -1;
+  }
+
+  /* First backend-routed bulk submission attempt; keep synthetic fallback. */
+  bulk_len = sc->max_packet0 ? sc->max_packet0 : 64;
+  if(bulk_len > 512)
+    bulk_len = 512;
+  done_len = 0;
+
+  memset(probe_buf, 0, sizeof(probe_buf));
+  if(usb_driver_bulk_probe_xfer(sc->bind_id,
+                                sc->bulk_in_ep, sc->bulk_out_ep,
+                                probe_buf, (ushort)bulk_len,
+                                &done_len) < 0){
+    sc->bulk_failures++;
+    sc->bulk_last_len = 0;
+    return -1;
+  }
+
+  sc->bulk_last_len = done_len;
+  sc->rx_frames++;
+  sc->tx_frames++;
+  sc->bulk_successes++;
+  return 0;
+}
 
 static void
 r815x_ensure_lock(void)
@@ -190,13 +280,19 @@ rtl815x_usb_match(ushort vendor, ushort product)
 }
 
 int
-rtl815x_usb_attach(ushort vendor, ushort product, uint *bind_handle)
+rtl815x_usb_attach(ushort vendor, ushort product,
+                   uchar ifnum, uchar ifalt,
+                   uchar bulk_in_ep, uchar bulk_out_ep,
+                   uchar dev_speed, uchar mps0,
+                   uint *bind_handle)
 {
   const struct r815x_usb_id *id;
   struct r815x_probe *sc;
   uint bind_id;
 
   if(!bind_handle)
+    return -1;
+  if((bulk_in_ep & 0x80) == 0 || (bulk_out_ep & 0x80) != 0)
     return -1;
   id = r815x_lookup(vendor, product);
   if(!id)
@@ -219,14 +315,30 @@ rtl815x_usb_attach(ushort vendor, ushort product, uint *bind_handle)
   sc->bind_id = bind_id;
   sc->vendor_id = vendor;
   sc->product_id = product;
+  sc->dev_speed = dev_speed;
+  sc->max_packet0 = mps0;
+  sc->ifnum = ifnum;
+  sc->ifalt = ifalt;
+  sc->bulk_in_ep = bulk_in_ep;
+  sc->bulk_out_ep = bulk_out_ep;
   sc->family = id->family;
-  sc->phase = R815X_PHASE_INIT;
+  sc->phase = R815X_PHASE_CONFIGURED;
   sc->model = id->model;
+
+  if(r815x_real_control_probe(sc) < 0 ||
+     r815x_stub_bulk_probe(sc) < 0)
+    sc->phase = R815X_PHASE_DEGRADED;
+  else
+    sc->phase = R815X_PHASE_RUNNING;
+
   *bind_handle = bind_id;
   release(&r815x_lock);
 
-  cprintf("r815x: %s [%x:%x] attached via USB (scaffold, bind=%d)\n",
-          id->model, (uint)vendor, (uint)product, bind_id);
+  cprintf("r815x: %s [%x:%x] attached via USB (bind=%d speed=%d mps0=%d if=%d/%d ep=0x%x/0x%x phase=%s)\n",
+      id->model, (uint)vendor, (uint)product, bind_id,
+      (uint)dev_speed, (uint)mps0,
+      (uint)ifnum, (uint)ifalt, (uint)bulk_in_ep, (uint)bulk_out_ep,
+      r815x_phase_name(sc->phase));
   return 0;
 }
 
@@ -285,7 +397,7 @@ rtl815x_procfs_dump(char *buf, uint max)
                     "# Realtek RTL8152/RTL8153 USB Ethernet\n") < 0)
     return -1;
   if(r815x_buf_puts(buf, max, &len,
-                    "# bind id family phase chipver model\n") < 0)
+                    "# bind id speed mps0 if alt ep_in ep_out family phase chipver ctrl bulk blen model\n") < 0)
     return -1;
 
   for(i = 0; i < count; i++){
@@ -298,11 +410,25 @@ rtl815x_procfs_dump(char *buf, uint max)
     if(r815x_buf_puts(buf, max, &len, "dev bind=") < 0) return -1;
     if(r815x_buf_putu(buf, max, &len, p->bind_id) < 0) return -1;
     if(r815x_buf_putc(buf, max, &len, ' ') < 0) return -1;
-    if(r815x_buf_puts(buf, max, &len, "dev id=") < 0) return -1;
+    if(r815x_buf_puts(buf, max, &len, "id=") < 0) return -1;
     if(r815x_buf_puthex16(buf, max, &len, p->vendor_id) < 0) return -1;
     if(r815x_buf_putc(buf, max, &len, ':') < 0) return -1;
     if(r815x_buf_puthex16(buf, max, &len, p->product_id) < 0) return -1;
 
+    if(r815x_buf_puts(buf, max, &len, " speed=") < 0) return -1;
+    if(r815x_buf_putu(buf, max, &len, p->dev_speed) < 0) return -1;
+    if(r815x_buf_puts(buf, max, &len, " mps0=") < 0) return -1;
+    if(r815x_buf_putu(buf, max, &len, p->max_packet0) < 0) return -1;
+
+    if(r815x_buf_puts(buf, max, &len, " if=") < 0) return -1;
+    if(r815x_buf_putu(buf, max, &len, p->ifnum) < 0) return -1;
+    if(r815x_buf_putc(buf, max, &len, '/') < 0) return -1;
+    if(r815x_buf_putu(buf, max, &len, p->ifalt) < 0) return -1;
+    if(r815x_buf_puts(buf, max, &len, " ep=0x") < 0) return -1;
+    if(r815x_buf_puthex16(buf, max, &len, p->bulk_in_ep) < 0) return -1;
+    if(r815x_buf_putc(buf, max, &len, '/') < 0) return -1;
+    if(r815x_buf_puts(buf, max, &len, "0x") < 0) return -1;
+    if(r815x_buf_puthex16(buf, max, &len, p->bulk_out_ep) < 0) return -1;
     if(r815x_buf_puts(buf, max, &len, " family=") < 0) return -1;
     if(r815x_buf_puts(buf, max, &len, r815x_family_name(p->family)) < 0) return -1;
 
@@ -316,6 +442,23 @@ rtl815x_procfs_dump(char *buf, uint max)
       if(r815x_buf_putc(buf, max, &len, '?') < 0) return -1;
     }
 
+    if(r815x_buf_puts(buf, max, &len, " ctrl=") < 0) return -1;
+    if(r815x_buf_putu(buf, max, &len, p->ctrl_attempts) < 0) return -1;
+    if(r815x_buf_putc(buf, max, &len, '/') < 0) return -1;
+    if(r815x_buf_putu(buf, max, &len, p->ctrl_successes) < 0) return -1;
+    if(r815x_buf_putc(buf, max, &len, '/') < 0) return -1;
+    if(r815x_buf_putu(buf, max, &len, p->ctrl_failures) < 0) return -1;
+
+    if(r815x_buf_puts(buf, max, &len, " bulk=") < 0) return -1;
+    if(r815x_buf_putu(buf, max, &len, p->bulk_attempts) < 0) return -1;
+    if(r815x_buf_putc(buf, max, &len, '/') < 0) return -1;
+    if(r815x_buf_putu(buf, max, &len, p->bulk_successes) < 0) return -1;
+    if(r815x_buf_putc(buf, max, &len, '/') < 0) return -1;
+    if(r815x_buf_putu(buf, max, &len, p->bulk_failures) < 0) return -1;
+
+    if(r815x_buf_puts(buf, max, &len, " blen=") < 0) return -1;
+    if(r815x_buf_putu(buf, max, &len, p->bulk_last_len) < 0) return -1;
+
     if(r815x_buf_puts(buf, max, &len, " model=") < 0) return -1;
     if(r815x_buf_puts(buf, max, &len, p->model) < 0) return -1;
     if(r815x_buf_putc(buf, max, &len, '\n') < 0) return -1;
@@ -326,7 +469,7 @@ rtl815x_procfs_dump(char *buf, uint max)
   if(r815x_buf_puts(buf, max, &len, " seen=") < 0) return -1;
   if(r815x_buf_putu(buf, max, &len, count) < 0) return -1;
   if(r815x_buf_puts(buf, max, &len,
-                    " note=usb-subordinate-enumeration-pending control-bulk-path-unimplemented\n") < 0)
+                    " note=usb-bind-context-ready control-bulk-probe-stubs-landed datapath-unimplemented\n") < 0)
     return -1;
 
   return (int)len;
