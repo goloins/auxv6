@@ -1,15 +1,15 @@
 # USB Subsystem Status (0401826)
 
-Date: 2026-04-18
+Date: 2026-04-19
 Basis: Live source code audit only (no reliance on docs/historic)
 
 ## Executive Summary
 
-The current USB implementation is a strong host-controller discovery and root-port bring-up scaffold, but it is not yet a full USB stack. The system can discover USB host controllers, perform guarded reset/halt/start sequences, scan/service root ports, synthesize candidate device rows, and expose broad observability via /proc. It now includes descriptor-accurate interface-aware class routing with rebind reconciliation, but still lacks production transfer scheduling and class-driver datapaths.
+The current USB implementation is a strong host-controller discovery and root-port bring-up scaffold, but it is not yet a full USB stack. The system can discover USB host controllers, perform guarded reset/halt/start sequences, scan/service root ports, synthesize candidate device rows, and expose broad observability via /proc. It now includes descriptor-accurate interface-aware class routing with rebind reconciliation plus a first bind-scoped bulk queue/retry state machine for RTL815x, cached xHCI bulk transport state, timer-driven runtime servicing from the kernel tick path, and split bulk submit/reap plumbing, but still lacks production transfer scheduling and class-driver datapaths.
 
-Estimated overall maturity: 74%
+Estimated overall maturity: 83%
 
-## Progress Delta (2026-04-18)
+## Progress Delta (2026-04-19)
 
 Landed since initial snapshot:
 - USB core device model added (`usb_device_count`, per-device enum state/error/counters, `udevN` rows in `/proc/usb`).
@@ -44,13 +44,21 @@ Landed since initial snapshot:
 - xHCI now implements first bulk probe submission path (configure endpoint + normal TRB submit + transfer event wait).
 - RTL815x bulk probe now requires backend-routed bulk transfer success (synthetic fallback removed).
 - Backend bulk probe path now propagates completion length to class drivers; RTL815x records that into `blen`.
+- xHCI bulk path now classifies transfer completion into success vs timeout vs short/hardware error and returns actual completed length.
 - RTL815x scaffold now executes first real EP0 control probe on attach context (bind-handle routed `GET_DESCRIPTOR(Device,18)`) and records control counters.
 - RTL815x scaffold now executes first bulk-transfer probe stub on attach context and records bulk stub counters.
 - RTL815x scaffold now promotes active binds to `running` on successful control+bulk stub probe.
+- RTL815x now maintains a bind-scoped bulk request queue with bounded retry/backoff and completion/failure telemetry.
+- xHCI now caches bulk slot/address/context state across repeated submissions instead of rebuilding the full transport context every time.
+- RTL815x now advances queued bulk work from a procfs-driven polled service path, making transport activity possible after attach.
+- USB core and xHCI now expose split bulk submit/reap operations, allowing requests to remain in flight across service pulses instead of completing synchronously in one helper call.
+- RTL815x queue service now transitions requests through pending/inflight/done states and classifies timeout at reap time rather than forcing one-call completion.
+- USB core now exposes a runtime service hook from the timer tick path, and RTL815x transport service now runs from that cadence instead of procfs reads.
+- `/proc/r815x` is back to telemetry-only while still exposing queue/service counters gathered from runtime execution.
 
 Not yet landed in this tranche:
-- Full endpoint activation/transfer scheduling after configuration.
-- Runtime hotplug/event loop and robust lifetime cleanup/retry logic.
+- Multi-request in-flight transport scheduling for active USB endpoints.
+- First real RX frame harvest and handoff into `ifnet`.
 
 ## Scope Confirmed In Tree
 
@@ -154,6 +162,26 @@ Related downstream USB-attached scaffolds:
 - RTL815x now invokes backend bulk probe on selected endpoints and counts success/failure strictly from backend result.
 - Bulk completion length now propagates from backend to RTL815x telemetry.
 
+17) Bind-scoped bulk retry/completion state
+- xHCI bulk probe backend now reports timeout/short/hardware-error outcomes instead of collapsing all failures to generic error.
+- RTL815x now stages bulk work through a persistent per-bind queue structure rather than a one-off callsite-local buffer.
+- RTL815x now applies bounded retry/backoff on bulk failures and tracks retry/timeout/short/completion counters in `/proc/r815x`.
+
+18) Cached bulk transport state and first sustained servicing
+- xHCI now retains bulk slot/address/input-context state across repeated submissions for the same port/endpoint tuple and only tears it down on controller reset/halt or transport error.
+- Repeated RTL815x bulk pulses now reuse cached xHCI transport state instead of paying full slot bring-up on every submission.
+- RTL815x queue state now records repeated service opportunities (`qpoll`) and pulse injection (`qpulse`) as transport stays active.
+
+19) Split bulk submit/reap path
+- USB core now exports bind-handle keyed bulk submit and bulk reap helpers in addition to the legacy synchronous bulk probe wrapper.
+- xHCI now supports one cached in-flight bulk request, with explicit submit and reap phases layered on top of the retained slot/address state.
+- RTL815x queue service now uses that split contract so requests can persist across service opportunities instead of completing inside one synchronous backend call.
+
+20) Timer-driven runtime transport cadence
+- USB core now exposes `usb_runtime_service()` and invokes it from the timer interrupt path alongside other periodic device work.
+- RTL815x now services queued bulk work from that runtime cadence rather than from `/proc/r815x` reads.
+- Runtime servicing advances at most one queue transition per pulse, keeping interrupt-path work bounded while still sustaining request progress.
+
 ## What Is Missing
 
 1) No transfer engine
@@ -172,7 +200,7 @@ Related downstream USB-attached scaffolds:
 - USB core now has descriptor-aware policy gating, explicit detach callbacks, rebind-on-signature-drift, handle-based bind identity, and endpoint-aware RTL815x bind contexts, but still lacks full class-driver transport datapaths.
 
 5) No production class datapath on USB
-- RTL815x now has first real EP0 control probe and first backend-routed bulk probe path, but no persistent bulk queueing/RX-TX datapath or ifnet registration yet.
+- RTL815x now has first real EP0 control probe plus bind-scoped bulk queue/retry state, timer-driven transport servicing, and split submit/reap transport plumbing, but it still does not provide persistent RX/TX datapath or ifnet registration.
 - ieee802154 path remains scaffold/proc visibility only.
 
 ## Maturity Breakdown By Portion
@@ -181,14 +209,14 @@ Related downstream USB-attached scaffolds:
 - HCD lifecycle control (probe/reset/halt/start): 60%
 - Root-hub scan/reset/enable service: 55%
 - Candidate inventory + address bookkeeping: 50%
-- Runtime hotplug/re-enumeration loop: 16%
-- Transfer engine (scheduling/rings/descriptors): 34%
+- Runtime hotplug/re-enumeration loop: 18%
+- Transfer engine (scheduling/rings/descriptors): 50%
 - Enumeration state machine (EP0 + descriptors + config): 71%
 - Class-driver framework and handoff: 52%
-- USB class drivers with real datapath: 15%
+- USB class drivers with real datapath: 34%
 - Diagnostics/telemetry: 95%
 
-Weighted overall estimate: 74%
+Weighted overall estimate: 83%
 
 ## Risks and Correctness Notes
 
@@ -233,13 +261,12 @@ Phase D (75%+): Controller parity and breadth
 
 ## Practical Next Step
 
-Immediate best next implementation target is hardening first real bulk path:
-- Expand interface-policy support for composite devices (multi-altsetting and class-specific companion descriptors).
-- Add bind-handle backed per-driver context blocks (endpoint selection, interface index, device speed snapshot).
-- Add retry/backoff and timeout classification for backend bulk probe failures.
-- Promote one-shot probe path into persistent queue+completion state machine.
+Immediate best next implementation target is turning the timer-driven queue into first real packet harvest:
+- Expand from one in-flight request to sustained RX-oriented submit/reap cycling on the RTL815x bulk IN path.
+- Use that runtime bulk path to land first real RX packet harvest and minimal handoff toward ifnet registration.
+- Follow with device-specific control/register access needed to get beyond descriptor-only identification.
 
 Follow-up target after that:
-- Convert parsed endpoint inventory into class-match inputs so USB class-driver handoff can start.
+- Expand composite-device and altsetting-aware policy so class routing remains correct once more USB families are exercised.
 
-That sequence is the shortest path to a true attach-ready USB core and the remaining jump toward ~55% maturity.
+That sequence is the shortest path from cached/polled transport pulses to a real running USB network datapath.

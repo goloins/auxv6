@@ -183,6 +183,8 @@ static const struct usb_hc_ops usb_hc_ops_unknown = {
   .get_device_desc18 = 0,
   .get_config_desc = 0,
   .set_configuration = 0,
+  .bulk_submit = 0,
+  .bulk_reap = 0,
   .bulk_probe_xfer = 0,
 };
 
@@ -198,6 +200,8 @@ static const struct usb_hc_ops usb_hc_ops_uhci = {
   .get_device_desc18 = 0,
   .get_config_desc = 0,
   .set_configuration = 0,
+  .bulk_submit = 0,
+  .bulk_reap = 0,
   .bulk_probe_xfer = 0,
 };
 
@@ -213,6 +217,8 @@ static const struct usb_hc_ops usb_hc_ops_ohci = {
   .get_device_desc18 = 0,
   .get_config_desc = 0,
   .set_configuration = 0,
+  .bulk_submit = 0,
+  .bulk_reap = 0,
   .bulk_probe_xfer = 0,
 };
 
@@ -228,6 +234,8 @@ static const struct usb_hc_ops usb_hc_ops_ehci = {
   .get_device_desc18 = 0,
   .get_config_desc = 0,
   .set_configuration = 0,
+  .bulk_submit = 0,
+  .bulk_reap = 0,
   .bulk_probe_xfer = 0,
 };
 
@@ -243,6 +251,8 @@ static const struct usb_hc_ops usb_hc_ops_xhci = {
   .get_device_desc18 = usb_xhci_get_device_desc18,
   .get_config_desc = usb_xhci_get_config_desc,
   .set_configuration = usb_xhci_set_configuration,
+  .bulk_submit = usb_xhci_bulk_submit,
+  .bulk_reap = usb_xhci_bulk_reap,
   .bulk_probe_xfer = usb_xhci_bulk_probe_xfer,
 };
 
@@ -1566,6 +1576,12 @@ usb_init(void)
   release(&usb_lock);
 }
 
+void
+usb_runtime_service(void)
+{
+  rtl815x_runtime_service();
+}
+
 int
 usb_procfs_dump(char *buf, uint max)
 {
@@ -2054,6 +2070,126 @@ usb_driver_ep0_probe_desc18(uint bind_handle, uchar *out18)
 
   release(&usb_lock);
   return 0;
+}
+
+int
+usb_driver_bulk_submit(uint bind_handle,
+                       uchar ep_in, uchar ep_out,
+                       uchar *buf, ushort len)
+{
+  struct usb_device *ud;
+  struct usb_hc_probe *sc;
+  const struct usb_hc_ops *ops;
+  struct pci_dev *pdev;
+  uint i;
+
+  if(bind_handle == 0)
+    return -1;
+  if(!buf || len == 0)
+    return -1;
+
+  acquire(&usb_lock);
+
+  ud = 0;
+  for(i = 0; i < usb_device_count; i++){
+    struct usb_device *cand;
+
+    cand = &usb_devices[i];
+    if(!cand->active)
+      continue;
+    if(!cand->attach_ok)
+      continue;
+    if(cand->attach_handle != bind_handle)
+      continue;
+    ud = cand;
+    break;
+  }
+  if(!ud){
+    release(&usb_lock);
+    return -1;
+  }
+
+  if(ud->hc_index >= usb_hc_count){
+    release(&usb_lock);
+    return -1;
+  }
+
+  sc = &usb_hc[ud->hc_index];
+  ops = usb_get_ops(sc->kind);
+  if(!ops || !ops->bulk_submit){
+    release(&usb_lock);
+    return -1;
+  }
+
+  pdev = pci_get_device((int)sc->pci_index);
+  if(!pdev){
+    release(&usb_lock);
+    return -1;
+  }
+
+  i = (uint)ops->bulk_submit(sc, pdev, ud->port, ud->address,
+                             ep_in, ep_out, buf, len);
+  release(&usb_lock);
+  return (int)i;
+}
+
+int
+usb_driver_bulk_reap(uint bind_handle,
+                     uchar ep_in, uchar ep_out,
+                     ushort *out_len)
+{
+  struct usb_device *ud;
+  struct usb_hc_probe *sc;
+  const struct usb_hc_ops *ops;
+  struct pci_dev *pdev;
+  uint i;
+
+  if(bind_handle == 0)
+    return -1;
+
+  acquire(&usb_lock);
+
+  ud = 0;
+  for(i = 0; i < usb_device_count; i++){
+    struct usb_device *cand;
+
+    cand = &usb_devices[i];
+    if(!cand->active)
+      continue;
+    if(!cand->attach_ok)
+      continue;
+    if(cand->attach_handle != bind_handle)
+      continue;
+    ud = cand;
+    break;
+  }
+  if(!ud){
+    release(&usb_lock);
+    return -1;
+  }
+
+  if(ud->hc_index >= usb_hc_count){
+    release(&usb_lock);
+    return -1;
+  }
+
+  sc = &usb_hc[ud->hc_index];
+  ops = usb_get_ops(sc->kind);
+  if(!ops || !ops->bulk_reap){
+    release(&usb_lock);
+    return -1;
+  }
+
+  pdev = pci_get_device((int)sc->pci_index);
+  if(!pdev){
+    release(&usb_lock);
+    return -1;
+  }
+
+  i = (uint)ops->bulk_reap(sc, pdev, ud->port, ud->address,
+                           ep_in, ep_out, out_len);
+  release(&usb_lock);
+  return (int)i;
 }
 
 int

@@ -31,11 +31,36 @@
 #define R815X_PHASE_RUNNING    3
 #define R815X_PHASE_DEGRADED   4
 
+#define R815X_BULK_BUF_MAX       512
+#define R815X_BULK_QUEUE_DEPTH   4
+#define R815X_BULK_RETRY_MAX     3
+#define R815X_BULK_POLL_MAX      32
+
+#define R815X_BULK_REQ_FREE      0
+#define R815X_BULK_REQ_PENDING   1
+#define R815X_BULK_REQ_INFLIGHT  2
+#define R815X_BULK_REQ_DONE      3
+#define R815X_BULK_REQ_FAILED    4
+
+#define R815X_BULK_RC_TIMEOUT   -2
+#define R815X_BULK_RC_SHORT     -3
+#define R815X_BULK_RC_HCERR     -4
+
 struct r815x_usb_id {
   ushort vendor_id;
   ushort product_id;
   uchar family;
   const char *model;
+};
+
+struct r815x_bulk_req {
+  uchar state;
+  uchar attempts;
+  uchar polls;
+  short rc;
+  ushort want_len;
+  ushort done_len;
+  uchar buf[R815X_BULK_BUF_MAX];
 };
 
 struct r815x_probe {
@@ -59,10 +84,21 @@ struct r815x_probe {
   uint bulk_successes;
   uint bulk_failures;
   uint bulk_last_len;
+  uint bulk_retry_count;
+  uint bulk_timeout_count;
+  uint bulk_short_count;
+  uint bulk_complete_count;
+  uint bulk_polled_count;
+  uint bulk_pulse_count;
+  short bulk_last_rc;
+  uchar bulk_qhead;
+  uchar bulk_qtail;
+  uchar bulk_qcount;
   uint rx_frames;
   uint tx_frames;
   uint rx_errors;
   uint tx_errors;
+  struct r815x_bulk_req bulkq[R815X_BULK_QUEUE_DEPTH];
   const char *model;
 };
 
@@ -85,6 +121,402 @@ static int r815x_lock_ready;
 static struct r815x_probe r815x_probes[R815X_STUB_MAX];
 static uint r815x_probe_count;
 static uint r815x_next_bind_id;
+
+static ushort r815x_probe_bulk_len(struct r815x_probe *sc);
+static void r815x_bulk_queue_reset(struct r815x_probe *sc);
+static const char *r815x_bulk_rc_name(int rc);
+static const char *r815x_bulk_req_state_name(uchar state);
+static int r815x_bulk_enqueue(struct r815x_probe *sc, const uchar *src, ushort len);
+static int r815x_bulk_submit_once(struct r815x_probe *sc, struct r815x_bulk_req *req);
+static int r815x_bulk_reap_once(struct r815x_probe *sc, struct r815x_bulk_req *req);
+static int r815x_bulk_service(struct r815x_probe *sc);
+static int r815x_service_runtime_probe(struct r815x_probe *sc);
+
+static ushort
+r815x_probe_bulk_len(struct r815x_probe *sc)
+{
+  uint bulk_len;
+
+  if(!sc)
+    return 0;
+
+  bulk_len = sc->max_packet0 ? sc->max_packet0 : 64;
+  if(bulk_len > R815X_BULK_BUF_MAX)
+    bulk_len = R815X_BULK_BUF_MAX;
+  return (ushort)bulk_len;
+}
+
+static void
+r815x_bulk_queue_reset(struct r815x_probe *sc)
+{
+  if(!sc)
+    return;
+
+  memset(sc->bulkq, 0, sizeof(sc->bulkq));
+  sc->bulk_qhead = 0;
+  sc->bulk_qtail = 0;
+  sc->bulk_qcount = 0;
+  sc->bulk_last_len = 0;
+  sc->bulk_last_rc = 0;
+}
+
+static const char *
+r815x_bulk_rc_name(int rc)
+{
+  switch(rc){
+  case 0:
+    return "ok";
+  case R815X_BULK_RC_TIMEOUT:
+    return "timeout";
+  case R815X_BULK_RC_SHORT:
+    return "short";
+  case R815X_BULK_RC_HCERR:
+    return "hcerr";
+  default:
+    return "error";
+  }
+}
+
+static const char *
+r815x_bulk_req_state_name(uchar state)
+{
+  switch(state){
+  case R815X_BULK_REQ_FREE:
+    return "free";
+  case R815X_BULK_REQ_PENDING:
+    return "pending";
+  case R815X_BULK_REQ_INFLIGHT:
+    return "inflight";
+  case R815X_BULK_REQ_DONE:
+    return "done";
+  case R815X_BULK_REQ_FAILED:
+    return "failed";
+  default:
+    return "unknown";
+  }
+}
+
+static int
+r815x_bulk_enqueue(struct r815x_probe *sc, const uchar *src, ushort len)
+{
+  struct r815x_bulk_req *req;
+
+  if(!sc || len == 0 || len > R815X_BULK_BUF_MAX)
+    return -1;
+  if(sc->bulk_qcount >= R815X_BULK_QUEUE_DEPTH)
+    return -1;
+
+  req = &sc->bulkq[sc->bulk_qtail];
+  memset(req, 0, sizeof(*req));
+  req->state = R815X_BULK_REQ_PENDING;
+  req->rc = -1;
+  req->want_len = len;
+  if(src)
+    memmove(req->buf, src, len);
+
+  sc->bulk_qtail = (uchar)((sc->bulk_qtail + 1) % R815X_BULK_QUEUE_DEPTH);
+  sc->bulk_qcount++;
+  return 0;
+}
+
+static int
+r815x_bulk_submit_once(struct r815x_probe *sc, struct r815x_bulk_req *req)
+{
+  int rc;
+
+  if(!sc || !req)
+    return -1;
+
+  rc = usb_driver_bulk_submit(sc->bind_id,
+                              sc->bulk_in_ep, sc->bulk_out_ep,
+                              req->buf, req->want_len);
+  if(rc < 0)
+    rc = R815X_BULK_RC_HCERR;
+  req->rc = (short)rc;
+  return rc;
+}
+
+static int
+r815x_bulk_reap_once(struct r815x_probe *sc, struct r815x_bulk_req *req)
+{
+  ushort done_len;
+  int rc;
+
+  if(!sc || !req)
+    return -1;
+
+  done_len = 0;
+  rc = usb_driver_bulk_reap(sc->bind_id,
+                            sc->bulk_in_ep, sc->bulk_out_ep,
+                            &done_len);
+  req->done_len = done_len;
+  if(rc == 0 && done_len < req->want_len)
+    rc = R815X_BULK_RC_SHORT;
+  req->rc = (short)rc;
+  return rc;
+}
+
+static int
+r815x_bulk_service(struct r815x_probe *sc)
+{
+  struct r815x_bulk_req *req;
+  int rc;
+
+  if(!sc)
+    return -1;
+
+  while(sc->bulk_qcount){
+    req = &sc->bulkq[sc->bulk_qhead];
+    if(req->state == R815X_BULK_REQ_PENDING){
+      sc->bulk_attempts++;
+      req->attempts++;
+      req->polls = 0;
+      rc = r815x_bulk_submit_once(sc, req);
+      if(rc == 0){
+        req->state = R815X_BULK_REQ_INFLIGHT;
+        return 0;
+      }
+
+      req->rc = R815X_BULK_RC_HCERR;
+      if(req->attempts < R815X_BULK_RETRY_MAX){
+        sc->bulk_retry_count++;
+        microdelay(50 * req->attempts);
+        continue;
+      }
+
+      req->state = R815X_BULK_REQ_FAILED;
+      sc->bulk_last_len = 0;
+      sc->bulk_last_rc = R815X_BULK_RC_HCERR;
+      sc->bulk_failures++;
+      sc->rx_errors++;
+      sc->tx_errors++;
+      sc->bulk_qhead = (uchar)((sc->bulk_qhead + 1) % R815X_BULK_QUEUE_DEPTH);
+      sc->bulk_qcount--;
+      return -1;
+    }
+
+    if(req->state != R815X_BULK_REQ_INFLIGHT)
+      return -1;
+
+    rc = r815x_bulk_reap_once(sc, req);
+    if(rc == 1){
+      req->polls++;
+      if(req->polls < R815X_BULK_POLL_MAX)
+        return 0;
+      rc = R815X_BULK_RC_TIMEOUT;
+      req->rc = (short)rc;
+    }
+
+    sc->bulk_last_len = req->done_len;
+    sc->bulk_last_rc = (short)rc;
+    if(rc == 0){
+      req->state = R815X_BULK_REQ_DONE;
+      sc->bulk_successes++;
+      sc->bulk_complete_count++;
+      sc->rx_frames++;
+      sc->tx_frames++;
+      sc->bulk_qhead = (uchar)((sc->bulk_qhead + 1) % R815X_BULK_QUEUE_DEPTH);
+      sc->bulk_qcount--;
+      continue;
+    }
+
+    if(rc == R815X_BULK_RC_TIMEOUT)
+      sc->bulk_timeout_count++;
+    else if(rc == R815X_BULK_RC_SHORT)
+      sc->bulk_short_count++;
+
+    if(req->attempts < R815X_BULK_RETRY_MAX){
+      sc->bulk_retry_count++;
+      req->state = R815X_BULK_REQ_PENDING;
+      req->polls = 0;
+      req->done_len = 0;
+      microdelay(50 * req->attempts);
+      continue;
+    }
+
+    req->state = R815X_BULK_REQ_FAILED;
+    sc->bulk_failures++;
+    sc->rx_errors++;
+    sc->tx_errors++;
+    sc->bulk_qhead = (uchar)((sc->bulk_qhead + 1) % R815X_BULK_QUEUE_DEPTH);
+    sc->bulk_qcount--;
+    return -1;
+  }
+
+  return 0;
+}
+
+static int
+r815x_service_runtime_probe(struct r815x_probe *sc)
+{
+  struct r815x_bulk_req *req;
+  uint bind_id;
+  uchar ep_in;
+  uchar ep_out;
+  ushort bulk_len;
+  ushort done_len;
+  int rc;
+
+  if(!sc)
+    return -1;
+
+  acquire(&r815x_lock);
+  if(!sc->active){
+    release(&r815x_lock);
+    return 0;
+  }
+
+  sc->bulk_polled_count++;
+
+  if(sc->phase != R815X_PHASE_RUNNING){
+    release(&r815x_lock);
+    return 0;
+  }
+
+  if(sc->bulk_qcount == 0){
+    bulk_len = r815x_probe_bulk_len(sc);
+    if(bulk_len == 0){
+      sc->phase = R815X_PHASE_DEGRADED;
+      release(&r815x_lock);
+      return -1;
+    }
+    if(r815x_bulk_enqueue(sc, 0, bulk_len) < 0){
+      sc->phase = R815X_PHASE_DEGRADED;
+      release(&r815x_lock);
+      return -1;
+    }
+    sc->bulk_pulse_count++;
+  }
+
+  req = &sc->bulkq[sc->bulk_qhead];
+  bind_id = sc->bind_id;
+  ep_in = sc->bulk_in_ep;
+  ep_out = sc->bulk_out_ep;
+
+  if(req->state == R815X_BULK_REQ_PENDING){
+    sc->bulk_attempts++;
+    req->attempts++;
+    req->polls = 0;
+    release(&r815x_lock);
+
+    rc = usb_driver_bulk_submit(bind_id, ep_in, ep_out,
+                                req->buf, req->want_len);
+    acquire(&r815x_lock);
+
+    if(!sc->active || sc->bind_id != bind_id){
+      release(&r815x_lock);
+      return 0;
+    }
+
+    req = &sc->bulkq[sc->bulk_qhead];
+    if(req->state != R815X_BULK_REQ_PENDING){
+      release(&r815x_lock);
+      return 0;
+    }
+
+    if(rc == 0){
+      req->state = R815X_BULK_REQ_INFLIGHT;
+      req->rc = 0;
+      release(&r815x_lock);
+      return 0;
+    }
+
+    req->rc = R815X_BULK_RC_HCERR;
+    sc->bulk_last_len = 0;
+    sc->bulk_last_rc = R815X_BULK_RC_HCERR;
+    if(req->attempts < R815X_BULK_RETRY_MAX){
+      sc->bulk_retry_count++;
+      release(&r815x_lock);
+      return 0;
+    }
+
+    req->state = R815X_BULK_REQ_FAILED;
+    sc->bulk_failures++;
+    sc->rx_errors++;
+    sc->tx_errors++;
+    sc->phase = R815X_PHASE_DEGRADED;
+    sc->bulk_qhead = (uchar)((sc->bulk_qhead + 1) % R815X_BULK_QUEUE_DEPTH);
+    sc->bulk_qcount--;
+    release(&r815x_lock);
+    return -1;
+  }
+
+  if(req->state != R815X_BULK_REQ_INFLIGHT){
+    sc->phase = R815X_PHASE_DEGRADED;
+    release(&r815x_lock);
+    return -1;
+  }
+
+  release(&r815x_lock);
+
+  done_len = 0;
+  rc = usb_driver_bulk_reap(bind_id, ep_in, ep_out, &done_len);
+
+  acquire(&r815x_lock);
+  if(!sc->active || sc->bind_id != bind_id){
+    release(&r815x_lock);
+    return 0;
+  }
+
+  req = &sc->bulkq[sc->bulk_qhead];
+  if(req->state != R815X_BULK_REQ_INFLIGHT){
+    release(&r815x_lock);
+    return 0;
+  }
+
+  req->done_len = done_len;
+  if(rc == 1){
+    req->polls++;
+    if(req->polls < R815X_BULK_POLL_MAX){
+      release(&r815x_lock);
+      return 0;
+    }
+    rc = R815X_BULK_RC_TIMEOUT;
+  } else if(rc == 0 && done_len < req->want_len){
+    rc = R815X_BULK_RC_SHORT;
+  } else if(rc < 0 && rc != R815X_BULK_RC_TIMEOUT && rc != R815X_BULK_RC_SHORT){
+    rc = R815X_BULK_RC_HCERR;
+  }
+
+  req->rc = (short)rc;
+  sc->bulk_last_len = req->done_len;
+  sc->bulk_last_rc = (short)rc;
+  if(rc == 0){
+    req->state = R815X_BULK_REQ_DONE;
+    sc->bulk_successes++;
+    sc->bulk_complete_count++;
+    sc->rx_frames++;
+    sc->tx_frames++;
+    sc->bulk_qhead = (uchar)((sc->bulk_qhead + 1) % R815X_BULK_QUEUE_DEPTH);
+    sc->bulk_qcount--;
+    release(&r815x_lock);
+    return 0;
+  }
+
+  if(rc == R815X_BULK_RC_TIMEOUT)
+    sc->bulk_timeout_count++;
+  else if(rc == R815X_BULK_RC_SHORT)
+    sc->bulk_short_count++;
+
+  if(req->attempts < R815X_BULK_RETRY_MAX){
+    sc->bulk_retry_count++;
+    req->state = R815X_BULK_REQ_PENDING;
+    req->polls = 0;
+    req->done_len = 0;
+    release(&r815x_lock);
+    return 0;
+  }
+
+  req->state = R815X_BULK_REQ_FAILED;
+  sc->bulk_failures++;
+  sc->rx_errors++;
+  sc->tx_errors++;
+  sc->phase = R815X_PHASE_DEGRADED;
+  sc->bulk_qhead = (uchar)((sc->bulk_qhead + 1) % R815X_BULK_QUEUE_DEPTH);
+  sc->bulk_qcount--;
+  release(&r815x_lock);
+  return -1;
+}
 
 static int
 r815x_real_control_probe(struct r815x_probe *sc)
@@ -123,14 +555,11 @@ r815x_real_control_probe(struct r815x_probe *sc)
 static int
 r815x_stub_bulk_probe(struct r815x_probe *sc)
 {
-  uint bulk_len;
-  uchar probe_buf[512];
-  ushort done_len;
+  ushort bulk_len;
+  uchar probe_buf[R815X_BULK_BUF_MAX];
 
   if(!sc)
     return -1;
-
-  sc->bulk_attempts++;
   if(!sc->active){
     sc->bulk_failures++;
     return -1;
@@ -140,27 +569,17 @@ r815x_stub_bulk_probe(struct r815x_probe *sc)
     return -1;
   }
 
-  /* First backend-routed bulk submission attempt; keep synthetic fallback. */
-  bulk_len = sc->max_packet0 ? sc->max_packet0 : 64;
-  if(bulk_len > 512)
-    bulk_len = 512;
-  done_len = 0;
+  bulk_len = r815x_probe_bulk_len(sc);
+  if(bulk_len == 0)
+    return -1;
 
   memset(probe_buf, 0, sizeof(probe_buf));
-  if(usb_driver_bulk_probe_xfer(sc->bind_id,
-                                sc->bulk_in_ep, sc->bulk_out_ep,
-                                probe_buf, (ushort)bulk_len,
-                                &done_len) < 0){
+  if(r815x_bulk_enqueue(sc, probe_buf, bulk_len) < 0){
     sc->bulk_failures++;
-    sc->bulk_last_len = 0;
     return -1;
   }
 
-  sc->bulk_last_len = done_len;
-  sc->rx_frames++;
-  sc->tx_frames++;
-  sc->bulk_successes++;
-  return 0;
+  return r815x_bulk_service(sc);
 }
 
 static void
@@ -324,6 +743,7 @@ rtl815x_usb_attach(ushort vendor, ushort product,
   sc->family = id->family;
   sc->phase = R815X_PHASE_CONFIGURED;
   sc->model = id->model;
+  r815x_bulk_queue_reset(sc);
 
   if(r815x_real_control_probe(sc) < 0 ||
      r815x_stub_bulk_probe(sc) < 0)
@@ -397,7 +817,7 @@ rtl815x_procfs_dump(char *buf, uint max)
                     "# Realtek RTL8152/RTL8153 USB Ethernet\n") < 0)
     return -1;
   if(r815x_buf_puts(buf, max, &len,
-                    "# bind id speed mps0 if alt ep_in ep_out family phase chipver ctrl bulk blen model\n") < 0)
+                    "# bind id speed mps0 if alt ep_in ep_out family phase chipver ctrl bulk blen brc retry tout short qdone qpoll qpulse qstate model\n") < 0)
     return -1;
 
   for(i = 0; i < count; i++){
@@ -459,6 +879,36 @@ rtl815x_procfs_dump(char *buf, uint max)
     if(r815x_buf_puts(buf, max, &len, " blen=") < 0) return -1;
     if(r815x_buf_putu(buf, max, &len, p->bulk_last_len) < 0) return -1;
 
+    if(r815x_buf_puts(buf, max, &len, " brc=") < 0) return -1;
+    if(r815x_buf_puts(buf, max, &len, r815x_bulk_rc_name(p->bulk_last_rc)) < 0) return -1;
+
+    if(r815x_buf_puts(buf, max, &len, " retry=") < 0) return -1;
+    if(r815x_buf_putu(buf, max, &len, p->bulk_retry_count) < 0) return -1;
+
+    if(r815x_buf_puts(buf, max, &len, " tout=") < 0) return -1;
+    if(r815x_buf_putu(buf, max, &len, p->bulk_timeout_count) < 0) return -1;
+
+    if(r815x_buf_puts(buf, max, &len, " short=") < 0) return -1;
+    if(r815x_buf_putu(buf, max, &len, p->bulk_short_count) < 0) return -1;
+
+    if(r815x_buf_puts(buf, max, &len, " qdone=") < 0) return -1;
+    if(r815x_buf_putu(buf, max, &len, p->bulk_complete_count) < 0) return -1;
+
+    if(r815x_buf_puts(buf, max, &len, " qpoll=") < 0) return -1;
+    if(r815x_buf_putu(buf, max, &len, p->bulk_polled_count) < 0) return -1;
+
+    if(r815x_buf_puts(buf, max, &len, " qpulse=") < 0) return -1;
+    if(r815x_buf_putu(buf, max, &len, p->bulk_pulse_count) < 0) return -1;
+
+    if(r815x_buf_puts(buf, max, &len, " qstate=") < 0) return -1;
+    if(p->bulk_qcount == 0){
+      if(r815x_buf_puts(buf, max, &len, "idle") < 0) return -1;
+    } else {
+      if(r815x_buf_puts(buf, max, &len,
+                        r815x_bulk_req_state_name(p->bulkq[p->bulk_qhead].state)) < 0)
+        return -1;
+    }
+
     if(r815x_buf_puts(buf, max, &len, " model=") < 0) return -1;
     if(r815x_buf_puts(buf, max, &len, p->model) < 0) return -1;
     if(r815x_buf_putc(buf, max, &len, '\n') < 0) return -1;
@@ -469,10 +919,31 @@ rtl815x_procfs_dump(char *buf, uint max)
   if(r815x_buf_puts(buf, max, &len, " seen=") < 0) return -1;
   if(r815x_buf_putu(buf, max, &len, count) < 0) return -1;
   if(r815x_buf_puts(buf, max, &len,
-                    " note=usb-bind-context-ready control-bulk-probe-stubs-landed datapath-unimplemented\n") < 0)
+                    " note=usb-bind-context-ready control-probe-landed bulk-queue-retry-state-machine-landed timer-service-active datapath-unimplemented\n") < 0)
     return -1;
 
   return (int)len;
+}
+
+void
+rtl815x_runtime_service(void)
+{
+  struct r815x_probe *active[R815X_STUB_MAX];
+  uint count;
+  uint i;
+
+  r815x_ensure_lock();
+
+  acquire(&r815x_lock);
+  count = r815x_probe_count;
+  if(count > R815X_STUB_MAX)
+    count = R815X_STUB_MAX;
+  for(i = 0; i < count; i++)
+    active[i] = &r815x_probes[i];
+  release(&r815x_lock);
+
+  for(i = 0; i < count; i++)
+    (void)r815x_service_runtime_probe(active[i]);
 }
 
 void

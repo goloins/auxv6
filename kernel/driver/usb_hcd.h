@@ -93,6 +93,14 @@ struct usb_hc_ops {
                          uchar *outbuf);
   int (*set_configuration)(struct usb_hc_probe *sc, struct pci_dev *dev,
                            uchar port, uchar address, uchar cfg_value);
+  int (*bulk_submit)(struct usb_hc_probe *sc, struct pci_dev *dev,
+                     uchar port, uchar address,
+                     uchar ep_in, uchar ep_out,
+                     uchar *buf, ushort len);
+  int (*bulk_reap)(struct usb_hc_probe *sc, struct pci_dev *dev,
+                   uchar port, uchar address,
+                   uchar ep_in, uchar ep_out,
+                   ushort *out_len);
   int (*bulk_probe_xfer)(struct usb_hc_probe *sc, struct pci_dev *dev,
                          uchar port, uchar address,
                          uchar ep_in, uchar ep_out,
@@ -133,6 +141,14 @@ int usb_xhci_get_config_desc(struct usb_hc_probe *sc, struct pci_dev *dev,
                              uchar *outbuf);
 int usb_xhci_set_configuration(struct usb_hc_probe *sc, struct pci_dev *dev,
                                uchar port, uchar address, uchar cfg_value);
+int usb_xhci_bulk_submit(struct usb_hc_probe *sc, struct pci_dev *dev,
+                         uchar port, uchar address,
+                         uchar ep_in, uchar ep_out,
+                         uchar *buf, ushort len);
+int usb_xhci_bulk_reap(struct usb_hc_probe *sc, struct pci_dev *dev,
+                       uchar port, uchar address,
+                       uchar ep_in, uchar ep_out,
+                       ushort *out_len);
 int usb_xhci_bulk_probe_xfer(struct usb_hc_probe *sc, struct pci_dev *dev,
                              uchar port, uchar address,
                              uchar ep_in, uchar ep_out,

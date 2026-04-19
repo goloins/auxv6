@@ -81,6 +81,7 @@
 #define XHCI_RING_TRBS      256
 
 #define XHCI_CC_SUCCESS     1
+#define XHCI_CC_SHORT_PKT   13
 
 struct xhci_trb {
   uint d0;
@@ -94,6 +95,24 @@ struct xhci_erst_ent {
   uint seg_base_hi;
   uint seg_size;
   uint rsvd;
+};
+
+struct xhci_bulk_state {
+  uchar active;
+  uchar in_flight;
+  uchar port;
+  uchar ep_in;
+  uchar ep_out;
+  ushort cur_len;
+  uint slot_id;
+  uint ep_dci;
+  uint add_flags;
+  char *input_ctx;
+  char *output_ctx;
+  struct xhci_trb *xfer_ring;
+  uint input_ctx_pa;
+  uint output_ctx_pa;
+  uint xfer_ring_pa;
 };
 
 struct xhci_ctrl_state {
@@ -116,6 +135,7 @@ struct xhci_ctrl_state {
   uint erst_pa;
   uint dcbaa_pa;
   uint *dcbaa;
+  struct xhci_bulk_state bulk;
 };
 
 static struct xhci_ctrl_state xhci_state[XHCI_CTRL_MAX];
@@ -123,6 +143,15 @@ static struct xhci_ctrl_state xhci_state[XHCI_CTRL_MAX];
 static volatile uint* xhci_regs(struct pci_dev *dev);
 static uint xhci_read(volatile uint *base, uint off);
 static void xhci_write(volatile uint *base, uint off, uint val);
+static void xhci_bulk_state_reset(struct xhci_ctrl_state *xs);
+static int xhci_bulk_state_prepare(struct xhci_ctrl_state *xs, uchar port,
+                                   uchar ep_in, uchar ep_out);
+static int xhci_bulk_submit_async(struct xhci_ctrl_state *xs, uchar port,
+                                  uchar ep_in, uchar ep_out,
+                                  uchar *buf, ushort len);
+static int xhci_bulk_reap_async(struct xhci_ctrl_state *xs, uchar port,
+                                uchar ep_in, uchar ep_out,
+                                ushort *out_len);
 
 static void
 xhci_write64(volatile uint *base, uint off, uint val)
@@ -307,6 +336,116 @@ xhci_slot_speed_for_port(struct xhci_ctrl_state *xs, uchar port)
   if(psiv == 0)
     return 1;
   return psiv & 0x0f;
+}
+
+static void
+xhci_bulk_state_reset(struct xhci_ctrl_state *xs)
+{
+  struct xhci_bulk_state *bs;
+
+  if(!xs)
+    return;
+
+  bs = &xs->bulk;
+  if(bs->active && bs->slot_id != 0 && xs->initialized && xs->regs)
+    (void)xhci_cmd_submit_wait(xs, XHCI_TRB_TYPE_DISABLE_SLOT,
+                               0, 0, 0, (bs->slot_id << 24), 0);
+
+  if(bs->xfer_ring)
+    kfree((char*)bs->xfer_ring);
+  if(bs->output_ctx)
+    kfree(bs->output_ctx);
+  if(bs->input_ctx)
+    kfree(bs->input_ctx);
+  memset(bs, 0, sizeof(*bs));
+}
+
+static int
+xhci_bulk_state_prepare(struct xhci_ctrl_state *xs, uchar port,
+                        uchar ep_in, uchar ep_out)
+{
+  struct xhci_bulk_state *bs;
+  uint *ctrl_ctx;
+  uint *slot_ctx;
+  uint *ep0_ctx;
+  uint ctxsz;
+  uint ep_num;
+  uint mps0;
+  uint slot_speed;
+
+  if(!xs || !xs->initialized || port == 0)
+    return -1;
+  if((ep_out & 0x80) != 0 || (ep_in & 0x80) == 0)
+    return -1;
+
+  ep_num = ep_out & 0x0f;
+  if(ep_num == 0)
+    return -1;
+
+  bs = &xs->bulk;
+  if(bs->active && bs->port == port && bs->ep_in == ep_in && bs->ep_out == ep_out)
+    return 0;
+
+  xhci_bulk_state_reset(xs);
+
+  bs->input_ctx = kalloc();
+  bs->output_ctx = kalloc();
+  bs->xfer_ring = (struct xhci_trb *)kalloc();
+  if(!bs->input_ctx || !bs->output_ctx || !bs->xfer_ring){
+    xhci_bulk_state_reset(xs);
+    return -1;
+  }
+
+  memset(bs->input_ctx, 0, PGSIZE);
+  memset(bs->output_ctx, 0, PGSIZE);
+  memset(bs->xfer_ring, 0, PGSIZE);
+  bs->input_ctx_pa = V2P(bs->input_ctx);
+  bs->output_ctx_pa = V2P(bs->output_ctx);
+  bs->xfer_ring_pa = V2P(bs->xfer_ring);
+  bs->port = port;
+  bs->ep_in = ep_in;
+  bs->ep_out = ep_out;
+  bs->ep_dci = ep_num * 2;
+  bs->add_flags = (1U << 0) | (1U << 1) | (1U << bs->ep_dci);
+
+  if(xhci_cmd_submit_wait(xs, XHCI_TRB_TYPE_ENABLE_SLOT, 0, 0, 0, 0,
+                          &bs->slot_id) < 0){
+    xhci_bulk_state_reset(xs);
+    return -1;
+  }
+  if(bs->slot_id == 0 || bs->slot_id >= 256){
+    xhci_bulk_state_reset(xs);
+    return -1;
+  }
+
+  xs->dcbaa[bs->slot_id * 2] = bs->output_ctx_pa;
+  xs->dcbaa[bs->slot_id * 2 + 1] = 0;
+
+  ctxsz = xhci_ctx_size(xs);
+  ctrl_ctx = xhci_ctx_dwords(bs->input_ctx, 0);
+  slot_ctx = xhci_ctx_dwords(bs->input_ctx, ctxsz);
+  ep0_ctx = xhci_ctx_dwords(bs->input_ctx, ctxsz * 2);
+
+  mps0 = xhci_mps0_for_port(xs, port);
+  slot_speed = xhci_slot_speed_for_port(xs, port);
+
+  ctrl_ctx[1] = (1U << 0) | (1U << 1);
+  slot_ctx[0] = ((slot_speed & 0x0f) << 20) | (1U << 27);
+  slot_ctx[1] = ((uint)port << 16);
+
+  ep0_ctx[1] = (3U << 1) | (4U << 3) | ((mps0 & 0xffff) << 16);
+  ep0_ctx[2] = bs->xfer_ring_pa | 1U;
+  ep0_ctx[4] = 8;
+
+  if(xhci_cmd_submit_wait(xs, XHCI_TRB_TYPE_ADDRESS_DEVICE,
+                          bs->input_ctx_pa, 0, 0,
+                          (bs->slot_id << 24), 0) < 0){
+    xhci_bulk_state_reset(xs);
+    return -1;
+  }
+
+  bs->active = 1;
+  return 0;
 }
 
 static int
@@ -687,146 +826,116 @@ out:
 }
 
 static int
-xhci_bulk_probe_submit(struct xhci_ctrl_state *xs, uchar port,
+xhci_bulk_submit_async(struct xhci_ctrl_state *xs, uchar port,
                        uchar ep_in, uchar ep_out,
                        uchar *buf, ushort len)
 {
-  char *input_ctx;
-  char *output_ctx;
-  struct xhci_trb *xfer_ring;
-  uint input_ctx_pa;
-  uint output_ctx_pa;
-  uint xfer_ring_pa;
+  struct xhci_bulk_state *bs;
   uint buf_pa;
-  uint slot_id;
   uint ctxsz;
   uint *ctrl_ctx;
-  uint *slot_ctx;
-  uint *ep0_ctx;
   uint *ep_ctx;
-  uint mps0;
-  uint slot_speed;
-  uint ep_num;
-  uint ep_dci;
-  uint add_flags;
-  int slot_enabled;
-  int ret;
-  uint ev2;
-  uint ev3;
-
   if(!xs || !xs->initialized || !buf || len == 0 || port == 0)
     return -1;
   if((ep_out & 0x80) != 0 || (ep_in & 0x80) == 0)
     return -1;
 
-  ep_num = ep_out & 0x0f;
-  if(ep_num == 0)
-    return -1;
-  ep_dci = ep_num * 2;
-  if(ep_dci > 31)
+  if(xhci_bulk_state_prepare(xs, port, ep_in, ep_out) < 0)
     return -1;
 
-  ret = -1;
-  slot_enabled = 0;
-  slot_id = 0;
-  input_ctx = 0;
-  output_ctx = 0;
-  xfer_ring = 0;
-
-  input_ctx = kalloc();
-  output_ctx = kalloc();
-  xfer_ring = (struct xhci_trb *)kalloc();
-  if(!input_ctx || !output_ctx || !xfer_ring)
-    goto out;
-
-  memset(input_ctx, 0, PGSIZE);
-  memset(output_ctx, 0, PGSIZE);
-  memset(xfer_ring, 0, PGSIZE);
-
-  input_ctx_pa = V2P(input_ctx);
-  output_ctx_pa = V2P(output_ctx);
-  xfer_ring_pa = V2P(xfer_ring);
+  bs = &xs->bulk;
+  if(bs->in_flight)
+    return 1;
   buf_pa = V2P(buf);
 
-  if(xhci_cmd_submit_wait(xs, XHCI_TRB_TYPE_ENABLE_SLOT, 0, 0, 0, 0,
-                          &slot_id) < 0)
-    goto out;
-  slot_enabled = 1;
-  if(slot_id == 0 || slot_id >= 256)
-    goto out;
-
-  xs->dcbaa[slot_id * 2] = output_ctx_pa;
-  xs->dcbaa[slot_id * 2 + 1] = 0;
-
   ctxsz = xhci_ctx_size(xs);
-  ctrl_ctx = xhci_ctx_dwords(input_ctx, 0);
-  slot_ctx = xhci_ctx_dwords(input_ctx, ctxsz);
-  ep0_ctx = xhci_ctx_dwords(input_ctx, ctxsz * 2);
+  ctrl_ctx = xhci_ctx_dwords(bs->input_ctx, 0);
+  ep_ctx = xhci_ctx_dwords(bs->input_ctx, ctxsz * (bs->ep_dci + 1));
+  memset(bs->xfer_ring, 0, PGSIZE);
 
-  mps0 = xhci_mps0_for_port(xs, port);
-  slot_speed = xhci_slot_speed_for_port(xs, port);
-
-  ctrl_ctx[1] = (1U << 0) | (1U << 1);
-  slot_ctx[0] = ((slot_speed & 0x0f) << 20) | (1U << 27);
-  slot_ctx[1] = ((uint)port << 16);
-
-  ep0_ctx[1] = (3U << 1) | (4U << 3) | ((mps0 & 0xffff) << 16);
-  ep0_ctx[2] = xfer_ring_pa | 1U;
-  ep0_ctx[4] = 8;
-
-  if(xhci_cmd_submit_wait(xs, XHCI_TRB_TYPE_ADDRESS_DEVICE,
-                          input_ctx_pa, 0, 0, (slot_id << 24), 0) < 0)
-    goto out;
-
-  add_flags = (1U << 0) | (1U << 1) | (1U << ep_dci);
-  ctrl_ctx[1] = add_flags;
-
-  ep_ctx = xhci_ctx_dwords(input_ctx, ctxsz * (ep_dci + 1));
+  ctrl_ctx[1] = bs->add_flags;
   ep_ctx[1] = (3U << 1) | (2U << 3) | ((512U & 0xffff) << 16);
-  ep_ctx[2] = xfer_ring_pa | 1U;
-  ep_ctx[4] = len;
+  ep_ctx[2] = bs->xfer_ring_pa | 1U;
+  ep_ctx[4] = 512;
 
   if(xhci_cmd_submit_wait(xs, XHCI_TRB_TYPE_CONFIG_ENDPOINT,
-                          input_ctx_pa, 0, 0, (slot_id << 24), 0) < 0)
-    goto out;
+                          bs->input_ctx_pa, 0, 0,
+                          (bs->slot_id << 24), 0) < 0){
+    xhci_bulk_state_reset(xs);
+    return -1;
+  }
 
-  xfer_ring[0].d0 = buf_pa;
-  xfer_ring[0].d1 = 0;
-  xfer_ring[0].d2 = len;
-  xfer_ring[0].d3 = XHCI_TRB_CYCLE |
-                    (XHCI_TRB_TYPE_NORMAL << 10) |
-                    XHCI_TRB_IOC;
+  bs->xfer_ring[0].d0 = buf_pa;
+  bs->xfer_ring[0].d1 = 0;
+  bs->xfer_ring[0].d2 = len;
+  bs->xfer_ring[0].d3 = XHCI_TRB_CYCLE |
+                       (XHCI_TRB_TYPE_NORMAL << 10) |
+                       XHCI_TRB_IOC;
 
-  xfer_ring[1].d0 = xfer_ring_pa;
-  xfer_ring[1].d1 = 0;
-  xfer_ring[1].d2 = 0;
-  xfer_ring[1].d3 = XHCI_TRB_CYCLE |
-                    (XHCI_TRB_TYPE_LINK << 10) |
-                    XHCI_TRB_ENT;
+  bs->xfer_ring[1].d0 = bs->xfer_ring_pa;
+  bs->xfer_ring[1].d1 = 0;
+  bs->xfer_ring[1].d2 = 0;
+  bs->xfer_ring[1].d3 = XHCI_TRB_CYCLE |
+                       (XHCI_TRB_TYPE_LINK << 10) |
+                       XHCI_TRB_ENT;
 
-  xhci_write(xs->regs, xs->db_off + (slot_id * 4), ep_dci);
+  bs->cur_len = len;
+  bs->in_flight = 1;
+  xhci_write(xs->regs, xs->db_off + (bs->slot_id * 4), bs->ep_dci);
 
-  if(xhci_wait_event(xs, XHCI_EVENT_TYPE_TRANSFER, 0, &ev2, &ev3,
-                     200000) < 0)
-    goto out;
-  if(((ev2 >> 24) & 0xff) != XHCI_CC_SUCCESS)
-    goto out;
-  if(((ev3 >> 24) & 0xff) != slot_id)
-    goto out;
+  return 0;
+}
 
-  ret = 0;
+static int
+xhci_bulk_reap_async(struct xhci_ctrl_state *xs, uchar port,
+                     uchar ep_in, uchar ep_out,
+                     ushort *out_len)
+{
+  struct xhci_bulk_state *bs;
+  uint cc;
+  uint ev2;
+  uint ev3;
 
-out:
-  if(slot_enabled)
-    (void)xhci_cmd_submit_wait(xs, XHCI_TRB_TYPE_DISABLE_SLOT,
-                               0, 0, 0, (slot_id << 24), 0);
-  if(xfer_ring)
-    kfree((char*)xfer_ring);
-  if(output_ctx)
-    kfree(output_ctx);
-  if(input_ctx)
-    kfree(input_ctx);
-  return ret;
+  if(!xs || !xs->initialized || port == 0)
+    return -1;
+  if((ep_out & 0x80) != 0 || (ep_in & 0x80) == 0)
+    return -1;
+
+  bs = &xs->bulk;
+  if(!bs->active || !bs->in_flight)
+    return -1;
+  if(bs->port != port || bs->ep_in != ep_in || bs->ep_out != ep_out)
+    return -1;
+
+  if(out_len)
+    *out_len = 0;
+
+  if(xhci_wait_event(xs, XHCI_EVENT_TYPE_TRANSFER, 0, &ev2, &ev3, 1) < 0)
+    return 1;
+
+  bs->in_flight = 0;
+  cc = (ev2 >> 24) & 0xff;
+  if(cc != XHCI_CC_SUCCESS && cc != XHCI_CC_SHORT_PKT){
+    xhci_bulk_state_reset(xs);
+    return -4;
+  }
+  if(((ev3 >> 24) & 0xff) != bs->slot_id){
+    xhci_bulk_state_reset(xs);
+    return -4;
+  }
+
+  if(out_len){
+    uint residual;
+
+    residual = ev2 & 0x00ffffffU;
+    if(residual > bs->cur_len)
+      residual = bs->cur_len;
+    *out_len = (ushort)(bs->cur_len - residual);
+  }
+
+  if(cc == XHCI_CC_SHORT_PKT || (out_len && *out_len < bs->cur_len))
+    return -3;
+  return 0;
 }
 
 static volatile uint*
@@ -910,6 +1019,9 @@ usb_xhci_reset(struct usb_hc_probe *sc, struct pci_dev *dev)
   if(!sc || !sc->reg_probe_ok)
     return -1;
 
+  if(sc->pci_index < XHCI_CTRL_MAX)
+    xhci_bulk_state_reset(&xhci_state[sc->pci_index]);
+
   regs = xhci_regs(dev);
   if(!regs)
     return -1;
@@ -945,6 +1057,9 @@ usb_xhci_halt(struct usb_hc_probe *sc, struct pci_dev *dev)
 
   if(!sc || !sc->reg_probe_ok)
     return -1;
+
+  if(sc->pci_index < XHCI_CTRL_MAX)
+    xhci_bulk_state_reset(&xhci_state[sc->pci_index]);
 
   regs = xhci_regs(dev);
   if(!regs)
@@ -1203,16 +1318,14 @@ usb_xhci_set_configuration(struct usb_hc_probe *sc, struct pci_dev *dev,
 }
 
 int
-usb_xhci_bulk_probe_xfer(struct usb_hc_probe *sc, struct pci_dev *dev,
-                         uchar port, uchar address,
-                         uchar ep_in, uchar ep_out,
-                         uchar *buf, ushort len,
-                         ushort *out_len)
+usb_xhci_bulk_submit(struct usb_hc_probe *sc, struct pci_dev *dev,
+                     uchar port, uchar address,
+                     uchar ep_in, uchar ep_out,
+                     uchar *buf, ushort len)
 {
   struct xhci_ctrl_state *xs;
 
   (void)address;
-  (void)ep_in;
 
   if(!sc || !dev || !buf)
     return -1;
@@ -1224,9 +1337,52 @@ usb_xhci_bulk_probe_xfer(struct usb_hc_probe *sc, struct pci_dev *dev,
   if(!xs)
     return -1;
 
-  if(xhci_bulk_probe_submit(xs, port, ep_in, ep_out, buf, len) < 0)
+  return xhci_bulk_submit_async(xs, port, ep_in, ep_out, buf, len);
+}
+
+int
+usb_xhci_bulk_reap(struct usb_hc_probe *sc, struct pci_dev *dev,
+                   uchar port, uchar address,
+                   uchar ep_in, uchar ep_out,
+                   ushort *out_len)
+{
+  struct xhci_ctrl_state *xs;
+
+  (void)address;
+
+  if(!sc || !dev)
     return -1;
-  if(out_len)
-    *out_len = len;
-  return 0;
+  if(port == 0)
+    return -1;
+
+  if(xhci_runtime_init(sc, dev, &xs) < 0)
+    return -1;
+  if(!xs)
+    return -1;
+
+  return xhci_bulk_reap_async(xs, port, ep_in, ep_out, out_len);
+}
+
+int
+usb_xhci_bulk_probe_xfer(struct usb_hc_probe *sc, struct pci_dev *dev,
+                         uchar port, uchar address,
+                         uchar ep_in, uchar ep_out,
+                         uchar *buf, ushort len,
+                         ushort *out_len)
+{
+  int tries;
+  int ret;
+
+  if(usb_xhci_bulk_submit(sc, dev, port, address, ep_in, ep_out,
+                          buf, len) < 0)
+    return -1;
+
+  for(tries = 0; tries < 200000; tries++){
+    ret = usb_xhci_bulk_reap(sc, dev, port, address, ep_in, ep_out, out_len);
+    if(ret != 1)
+      return ret;
+    microdelay(10);
+  }
+
+  return -2;
 }

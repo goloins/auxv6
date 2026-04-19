@@ -940,9 +940,17 @@ int             modem_procfs_dump(char *buf, uint max);
 void            firewire_init(void);
 int             firewire_procfs_dump(char *buf, uint max);
 void            rtl815x_init(void);
+void            rtl815x_runtime_service(void);
 void            usb_init(void);
+void            usb_runtime_service(void);
 int             usb_procfs_dump(char *buf, uint max);
 int             usb_driver_ep0_probe_desc18(uint bind_handle, uchar *out18);
+int             usb_driver_bulk_submit(uint bind_handle,
+					   uchar ep_in, uchar ep_out,
+					   uchar *buf, ushort len);
+int             usb_driver_bulk_reap(uint bind_handle,
+					 uchar ep_in, uchar ep_out,
+					 ushort *out_len);
 int             usb_driver_bulk_probe_xfer(uint bind_handle,
 										   uchar ep_in, uchar ep_out,
 										   uchar *buf, ushort len,

@@ -84,6 +84,7 @@ void            vm_get_addrspace_guard_stats(uint *checks, uint *allows,
                                              uint *bypass_vm_size);
 void            bdevinit(void);
 int             bdev_register(uint dev, const struct bdevsw *ops);
+int             bdev_unregister(uint dev);
 int             bdev_register_part(uint dev, uint parent, uint start, uint nblocks);
 int             bdev_set_nblocks(uint dev, uint nblocks);
 int             bdevrw(struct buf *b);
@@ -942,6 +943,12 @@ void            rtl815x_init(void);
 void            usb_init(void);
 int             usb_procfs_dump(char *buf, uint max);
 int             usb_driver_ep0_probe_desc18(uint bind_handle, uchar *out18);
+int             usb_driver_bulk_submit(uint bind_handle,
+					   uchar ep_in, uchar ep_out,
+					   uchar *buf, ushort len);
+int             usb_driver_bulk_reap(uint bind_handle,
+					 uchar ep_in, uchar ep_out,
+					 ushort *out_len);
 int             usb_driver_bulk_probe_xfer(uint bind_handle,
 										   uchar ep_in, uchar ep_out,
 										   uchar *buf, ushort len,

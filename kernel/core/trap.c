@@ -75,6 +75,7 @@ trap(struct trapframe *tf)
       // Update load averages every 500 ticks (5 seconds at 100Hz)
       if((current_ticks % 500) == 0)
         proc_tick_loadavg();
+      usb_runtime_service();
       // Poll network devices for RX/TX completions.
       netdev_poll();
       // TCP slow timer - every 10 ticks (100ms)
