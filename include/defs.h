@@ -412,6 +412,7 @@ uint            vfs_root_dev(void);
 int             vfs_is_system_root_inode(struct inode*);
 int             vfs_dirent_visible(struct inode*, struct dirent*);
 struct inode*   vfs_mount_crossover(struct inode*, char*);
+struct inode*   vfs_cross_into_mount(struct inode*);
 int             vfs_mount_count(void);
 int             vfs_get_mounts(struct vfs_mount_info*, int);
 int             vfs_dev_is_mounted(uint);

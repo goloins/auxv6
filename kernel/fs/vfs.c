@@ -666,7 +666,7 @@ vfs_dirent_visible(struct inode *dir, struct dirent *de)
 // If ip is a mountpoint (underlying directory), return the root inode
 // of the mounted filesystem (with idup). Otherwise return 0.
 // This enables crossing INTO a mounted filesystem during path resolution.
-static struct inode*
+struct inode*
 vfs_cross_into_mount(struct inode *ip)
 {
   int i;

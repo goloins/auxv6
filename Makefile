@@ -27,8 +27,10 @@ OBJS = \
 	kernel/fs/file.o\
 	kernel/fs/fs.o\
 	kernel/fs/vfs.o\
+	kernel/fs/ext_common.o\
 	kernel/fs/procfs.o\
 	kernel/fs/vfs_ext2.o\
+	kernel/fs/vfs_ext3.o\
 	kernel/fs/vfs_msdosfs.o\
 	kernel/fs/vfs_exfat.o\
 	kernel/fs/vfs_btrfs.o\
@@ -1475,6 +1477,7 @@ clean:
 	vblk0.img \
 	vblk1.img \
 	vblk-stress.img \
+	$(EXT3VBLKIMG) \
 	ahci-stress.img \
 	nvme-ext2.img \
 	nvme-fat.img \
@@ -1490,6 +1493,7 @@ clean:
 	.auxv6root \
 	.fatroot \
 	.fat32root \
+	$(EXT3VBLK_STAGE) \
 	.exfatroot \
 	.btrfsroot \
 	.ufs2root \
@@ -1573,7 +1577,7 @@ ROOTFS_LEGACY_FILES =
 ifeq ($(LEGACY_XV6FS),1)
 ROOTFS_LEGACY_FILES += $(TARGETFS_SBIN)/mount.xv6fs
 endif
-ROOTFS_COMMON_FILES = README $(TARGETFS_ETC)/hosts $(EXT2ROOT_FSTAB) $(TARGETFS_ETC)/profile $(TARGETFS_ETC)/termcap $(TARGETFS_ETC)/passwd $(TARGETFS_ETC)/group $(TARGETFS_ETC)/hostname $(TARGETFS_ETC)/motd $(TARGETFS_ETC)/resolv.conf $(TARGETFS_SBIN)/mount.ext2 $(TARGETFS_SBIN)/mount.msdosfs $(TARGETFS_SBIN)/mount.exfat $(TARGETFS_SBIN)/mount.isofs $(TARGETFS_LIBC_A) $(TARGETFS_INCLUDE_HEADERS) $(ROOTFS_LEGACY_FILES) $(TARGETFS_DIR)/tmp/test.iso
+ROOTFS_COMMON_FILES = README $(TARGETFS_ETC)/hosts $(EXT2ROOT_FSTAB) $(TARGETFS_ETC)/profile $(TARGETFS_ETC)/termcap $(TARGETFS_ETC)/passwd $(TARGETFS_ETC)/group $(TARGETFS_ETC)/hostname $(TARGETFS_ETC)/motd $(TARGETFS_ETC)/resolv.conf $(TARGETFS_SBIN)/mount.ext2 $(TARGETFS_SBIN)/mount.ext3 $(TARGETFS_SBIN)/mount.msdosfs $(TARGETFS_SBIN)/mount.exfat $(TARGETFS_SBIN)/mount.isofs $(TARGETFS_LIBC_A) $(TARGETFS_INCLUDE_HEADERS) $(ROOTFS_LEGACY_FILES) $(TARGETFS_DIR)/tmp/test.iso
 ROOTFS_RC_FILES = $(TARGETFS_ETC)/rc.S $(TARGETFS_ETC)/rc.0 $(TARGETFS_ETC)/rc.1 $(TARGETFS_ETC)/rc.2 $(TARGETFS_ETC)/rc.3 $(TARGETFS_ETC)/rc.6
 ROOTFS_RC_FILES_SERVER7 = $(filter-out $(TARGETFS_ETC)/rc.2,$(ROOTFS_RC_FILES)) $(TARGETFS_ETC)/rc.2.server7
 ROOTFS_MAN_FILES = $(wildcard $(TARGETFS_MAN_DIR)/*.md)
@@ -1588,6 +1592,8 @@ BTRFSIMG ?= nvme-btrfs.img
 BTRFSROOT_STAGE ?= .btrfsroot
 UFS2IMG ?= nvme-ufs2.img
 UFS2ROOT_STAGE ?= .ufs2root
+EXT3VBLKIMG ?= vblk-ext3.img
+EXT3VBLK_STAGE ?= .ext3vblkroot
 # qemu* targets already depend on $(EXT2IMG), so always attach it as index=2.
 EXT2QEMU = -drive file=$(EXT2IMG)$(comma)index=2$(comma)media=disk$(comma)format=raw
 FATQEMU = -drive file=$(FATIMG)$(comma)index=3$(comma)media=disk$(comma)format=raw
@@ -1681,6 +1687,9 @@ vblk-stress.img:
 		exit 1; \
 	fi
 
+$(EXT3VBLKIMG): tools/stage-ext3-volume.sh
+	sh tools/stage-ext3-volume.sh $(EXT3VBLK_STAGE) $(EXT3VBLKIMG)
+
 ahci-stress.img:
 	@if command -v mke2fs >/dev/null 2>&1; then \
 		mke2fs -q -t ext2 -F $@ 65536; \
@@ -1721,6 +1730,10 @@ fat32-reset:
 exfat-reset:
 	rm -f $(EXFATIMG)
 	$(MAKE) $(EXFATIMG)
+
+ext3-vblk-reset:
+	rm -f $(EXT3VBLKIMG)
+	$(MAKE) $(EXT3VBLKIMG)
 
 # NVMe FAT test image: 16 MB FAT16 volume for NVMe + msdosfs driver validation.
 # Mount inside the guest with: mount -t msdosfs n0 /mnt/nvme
@@ -1851,6 +1864,14 @@ qemu-nox-virtioblkstress: aux.bootkern $(EXT2IMG) vblk-stress.img
 		-drive file=aux.bootkern,index=0,media=disk,format=raw \
 		-drive file=$(EXT2IMG),index=2,media=disk,format=raw \
 		-drive file=vblk-stress.img,if=virtio,format=raw \
+		$(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
+# Virtio-blk ext3 probe test: attach a journaled ext3 image as a secondary disk.
+qemu-nox-virtioblkext3: aux.bootkern $(EXT2IMG) $(EXT3VBLKIMG)
+	$(QEMU) -nographic \
+		-drive file=aux.bootkern,index=0,media=disk,format=raw \
+		-drive file=$(EXT2IMG),index=2,media=disk,format=raw \
+		-drive file=$(EXT3VBLKIMG),if=virtio,format=raw \
 		$(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 # AHCI mount stress: one extra AHCI-backed ext2 disk attached on port 3.
@@ -2072,6 +2093,11 @@ test-virtioblk-mount-stress: aux.bootkern $(EXT2IMG) vblk-stress.img
 		AUXV6_QEMU_TARGET=qemu-nox-virtioblkstress \
 		AUXV6_TEST_SCRIPT=tools/tests/virtioblk-mount-stress.cmds
 
+test-virtioblk-ext3-ro: aux.bootkern $(EXT2IMG) $(EXT3VBLKIMG)
+	@$(MAKE) qemu-guesttest-template \
+		AUXV6_QEMU_TARGET=qemu-nox-virtioblkext3 \
+		AUXV6_TEST_SCRIPT=tools/tests/virtioblk-ext3-ro.cmds
+
 test-ahci-mount-stress: aux.bootkern $(EXT2IMG) ahci-stress.img
 	@$(MAKE) qemu-guesttest-template \
 		AUXV6_QEMU_TARGET=qemu-nox-ahcistress \
@@ -2171,4 +2197,4 @@ tar:
 	cp dist/* config/.gdbinit.tmpl /tmp/xv6
 	(cd /tmp; tar cf - xv6) | gzip >xv6-rev10.tar.gz  # the next one will be 10 (9/17)
 
-.PHONY: dist-test dist ext2-reset fat-reset fat32-reset exfat-reset btrfs-reset ufs2-reset ext2root qemu-ext2root qemu-nox-ext2root qemu-gdb-ext2root qemu-nox-gdb-ext2root qemu-fat qemu-nox-fat qemu-oldinit e1000 qemu-nvme-btrfs qemu-nox-nvme-btrfs qemu-nvme-ufs2 qemu-nox-nvme-ufs2 qemu-nvme-fat32 qemu-nox-nvme-fat32 qemu-nvme-exfat qemu-nox-nvme-exfat btrfs-host-verify test-btrfs-smoke test-btrfs-regression
+.PHONY: dist-test dist ext2-reset fat-reset fat32-reset exfat-reset ext3-vblk-reset btrfs-reset ufs2-reset ext2root qemu-ext2root qemu-nox-ext2root qemu-gdb-ext2root qemu-nox-gdb-ext2root qemu-fat qemu-nox-fat qemu-oldinit e1000 qemu-nox-virtioblkext3 qemu-nvme-btrfs qemu-nox-nvme-btrfs qemu-nvme-ufs2 qemu-nox-nvme-ufs2 qemu-nvme-fat32 qemu-nox-nvme-fat32 qemu-nvme-exfat qemu-nox-nvme-exfat btrfs-host-verify test-btrfs-smoke test-btrfs-regression test-virtioblk-ext3-ro

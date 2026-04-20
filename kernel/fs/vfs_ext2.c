@@ -16,54 +16,8 @@
 #include "file.h"
 #include "stat.h"
 #include "fcntl.h"
-
-// ext2 superblock structure (starts at byte offset 1024)
-struct ext2_superblock {
-  uint s_inodes_count;      // Total inode count
-  uint s_blocks_count;      // Total block count
-  uint s_r_blocks_count;    // Reserved block count
-  uint s_free_blocks_count; // Free block count
-  uint s_free_inodes_count; // Free inode count
-  uint s_first_data_block;  // First Data Block (usually 1)
-  uint s_log_block_size;    // Block size = 1024 << s_log_block_size
-  uint s_log_frag_size;     // Fragment size = 1024 << s_log_frag_size
-  uint s_blocks_per_group;   // Blocks per group
-  uint s_frags_per_group;    // Fragments per group
-  uint s_inodes_per_group;   // Inodes per group
-  uint s_mtime;             // Mounting time
-  uint s_wtime;             // Last write time
-  ushort s_mnt_count;       // Mount count
-  short s_max_mnt_count;    // Max mount count
-  ushort s_magic;           // 0xEF53 - ext2 signature
-  ushort s_state;           // Filesystem state
-  ushort s_errors;          // Error handling
-  ushort s_minor_rev_level; // Minor revision level
-  uint s_lastcheck;         // Last check time
-  uint s_checkinterval;     // Max time between checks
-  uint s_creator_os;        // Creator OS
-  uint s_rev_level;         // Revision level
-  ushort s_def_resuid;      // Default reserved UID
-  ushort s_def_resgid;      // Default reserved GID
-  uint s_first_ino;
-  ushort s_inode_size;
-  ushort s_block_group_nr;
-};
-
-#define EXT2_SUPER_MAGIC 0xEF53
-#define EXT2_SB_OFFSET 1024
-#define EXT2_SB_SIZE 1024
-
-// ext2 block group descriptor
-struct ext2_group_desc {
-  uint bg_block_bitmap;     // Block bitmap block
-  uint bg_inode_bitmap;     // Inode bitmap block
-  uint bg_inode_table;      // Inode table start block
-  ushort bg_free_blocks_count;
-  ushort bg_free_inodes_count;
-  ushort bg_used_dirs_count;
-  ushort bg_pad;
-  uint bg_reserved[3];
-};
+#include "ext_common.h"
+#include "vfs_ext2_shared.h"
 
 #define EXT2_BLOCK_GROUP_DESC_SIZE 32
 
@@ -90,7 +44,6 @@ struct ext2_inode {
 };
 
 #define EXT2_MIN_INODE_SIZE 128
-#define EXT2_ROOT_INO 2
 #define EXT2_NAME_MAX 255
 
 #define EXT2_S_IFMT  0xF000
@@ -110,16 +63,6 @@ struct ext2_inode {
 #define EXT2_FAST_SYMLINK_MAX 60
 
 #define EXT2_DIRENT_MIN_SIZE 8
-
-// ext2 filesystem mountpoint data
-struct ext2_mount_data {
-  struct ext2_superblock sb;
-  struct ext2_group_desc *group_descs;
-  uint group_count;
-  uint block_size;
-  uint inode_size;
-  int dev;
-};
 
 struct ext2_dirent_hdr {
   uint inode;
@@ -172,13 +115,13 @@ static int ext2_inode_blockno(struct ext2_mount_data *data, struct ext2_inode *d
 static int ext2_read_data(struct ext2_mount_data *data, struct ext2_inode *dip,
                           char *dst, uint off, uint n);
 static int ext2_name_equal(char *want, char *got, uint gotlen);
-static struct inode* ext2_dirlookup(struct inode *dp, char *name, uint *poff);
+struct inode* ext2_dirlookup(struct inode *dp, char *name, uint *poff);
 static int ext2_read_disk_inode(struct ext2_mount_data *data, uint inum,
                                 struct ext2_inode *out);
 static int ext2_write_disk_inode(struct ext2_mount_data *data, uint inum,
                                  struct ext2_inode *in);
 static struct inode* ext2_make_inode(uint dev, uint inum);
-static int ext2_readlink(struct inode *ip, char *buf, uint size);
+int ext2_readlink(struct inode *ip, char *buf, uint size);
 static uint ext2_encode_dev(short major, short minor);
 static void ext2_decode_dev(uint raw, short *major, short *minor);
 
@@ -384,7 +327,7 @@ ext2_write_super(struct ext2_mount_data *data)
 {
   if(data == 0)
     return -1;
-  return ext2_dev_write(data->dev, EXT2_SB_OFFSET, (char*)&data->sb, sizeof(data->sb));
+  return ext2_dev_write(data->dev, EXT_SB_OFFSET, (char*)&data->sb, sizeof(data->sb));
 }
 
 static int
@@ -1578,7 +1521,7 @@ ext2_block_in_list(uint *list, uint n, uint bno)
   return 0;
 }
 
-static struct inode*
+struct inode*
 ext2_dirlookup(struct inode *dp, char *name, uint *poff)
 {
   struct ext2_mount_data *data;
@@ -1743,6 +1686,19 @@ restart:
       return 0;
     }
 
+    // Cross into mounted filesystems during component-by-component traversal
+    // so relative paths like "mntfs/subdir/file" work when the mountpoint is
+    // not the final pathname element.
+    {
+      struct inode *mounted_root;
+
+      mounted_root = vfs_cross_into_mount(next);
+      if(mounted_root){
+        iput(next);
+        next = mounted_root;
+      }
+    }
+
     // Follow symlinks in non-final components (e.g. /a/linkdir/file).
     // Final component symlink following is handled by vfs_lookup_follow().
     if(next->type == T_SYMLINK && *p != 0){
@@ -1827,7 +1783,7 @@ restart:
   return ip;
 }
 
-static int
+int
 ext2_read(struct inode *ip, char *dst, uint64_t off, uint n)
 {
   struct ext2_mount_data *data;
@@ -2263,7 +2219,7 @@ fail:
   return -1;
 }
 
-static int
+int
 ext2_stat(struct inode *ip, struct stat *st)
 {
   struct ext2_mount_data *data;
@@ -2393,7 +2349,7 @@ ext2_settimes(struct inode *ip,
 
 // Read the target of a symbolic link
 // Returns number of bytes read, or -1 on error
-static int
+int
 ext2_readlink(struct inode *ip, char *buf, uint size)
 {
   struct ext2_mount_data *data;
@@ -2509,7 +2465,7 @@ ext2_symlink(struct inode *dp, char *name, char *target)
   return 0;
 }
 
-static int
+int
 ext2_access(struct inode *ip, int mode)
 {
   return iaccess(ip, mode);
@@ -2930,7 +2886,7 @@ ext2_rename(struct inode *olddp, char *oldname, struct inode *newdp, char *newna
   return 0;
 }
 
-static struct inode*
+struct inode*
 ext2_root_inode(struct vfs *fs)
 {
   struct ext2_mount_data *md;
@@ -2948,37 +2904,38 @@ ext2_root_inode(struct vfs *fs)
   return ext2_make_inode(md->dev, EXT2_ROOT_INO);
 }
 
-static struct inode*
+struct inode*
 ext2_namei(struct vfs *fs, char *path)
 {
   return ext2_walk(fs, path, 0, 0);
 }
 
-static struct inode*
+struct inode*
 ext2_nameiparent(struct vfs *fs, char *path, char *name)
 {
   return ext2_walk(fs, path, 1, name);
 }
 
-static void
+void
 ext2_inode_put(struct inode *ip)
 {
   iput(ip);
 }
 
-static int
-ext2_mount_init(struct mount *m)
+int
+ext2_mount_setup(struct mount *m, int target, struct ext2_mount_data **out_data)
 {
   struct ext2_mount_data *data;
+  struct ext_mount_probe probe;
   uint gd_off;
   uint gd_bytes;
   uint gd_capacity;
   int stage;
 
   stage = 0;
-  if(m == 0)
+  if(m == 0 || out_data == 0)
     return -1;
-  EXT2DBG("ext2: mount_init dev=%d path=%s flags=%x\n", m->dev, m->path, m->flags);
+  *out_data = 0;
   stage = 1;
   if(bdev_nblocks(m->dev) == 0)
     return -1;
@@ -2990,34 +2947,30 @@ ext2_mount_init(struct mount *m)
 
   data->dev = m->dev;
   stage = 2;
-  if(ext2_dev_read(data->dev, EXT2_SB_OFFSET, (char*)&data->sb, sizeof(data->sb)) < 0)
+  if(ext2_dev_read(data->dev, EXT_SB_OFFSET, (char*)&data->sb, sizeof(data->sb)) < 0)
     goto fail;
 
   stage = 3;
-  if(data->sb.s_magic != EXT2_SUPER_MAGIC){
-        EXT2DBG("ext2: bad magic dev=%d got=%x want=%x\n",
-          data->dev, data->sb.s_magic, EXT2_SUPER_MAGIC);
+  if(ext_mount_probe_superblock(&data->sb, target,
+                                (m->flags & MNT_RDONLY) != 0, &probe) < 0){
+    MOUNTDBG("ext: mount reject dev=%d target=%d reason=%s compat=%x incompat=%x ro=%x\n",
+             data->dev, target, ext_mount_reject_reason_name(probe.reason),
+             probe.compat, probe.incompat, probe.ro_compat);
     goto fail;
   }
 
   stage = 4;
-  data->block_size = 1024U << data->sb.s_log_block_size;
-  if(data->block_size < 1024 || data->block_size > 4096)
-    goto fail;
+  data->block_size = probe.block_size;
+  data->inode_size = probe.inode_size;
 
   stage = 5;
-  data->inode_size = data->sb.s_inode_size;
-  if(data->inode_size == 0)
-    data->inode_size = EXT2_MIN_INODE_SIZE;
-
-  stage = 6;
   data->group_count = (data->sb.s_blocks_count - data->sb.s_first_data_block +
                        data->sb.s_blocks_per_group - 1) /
                       data->sb.s_blocks_per_group;
   if(data->group_count == 0)
     goto fail;
 
-  stage = 7;
+  stage = 6;
   gd_bytes = data->group_count * sizeof(struct ext2_group_desc);
   gd_capacity = PGSIZE - sizeof(*data);
   if(gd_bytes > gd_capacity)
@@ -3026,10 +2979,33 @@ ext2_mount_init(struct mount *m)
   data->group_descs = (struct ext2_group_desc*)((char*)data + sizeof(*data));
   memset((char*)data->group_descs, 0, gd_capacity);
 
-  stage = 8;
+  stage = 7;
   gd_off = (data->sb.s_first_data_block + 1) * data->block_size;
   if(ext2_dev_read(data->dev, gd_off, (char*)data->group_descs, gd_bytes) < 0)
     goto fail;
+
+  *out_data = data;
+  return 0;
+
+fail:
+  MOUNTDBG("ext: mount failed dev=%d target=%d stage=%d\n",
+           m ? m->dev : -1, target, stage);
+  kfree((char*)data);
+  return -1;
+}
+
+static int
+ext2_mount_init(struct mount *m)
+{
+  struct ext2_mount_data *data;
+
+  if(m == 0)
+    return -1;
+  EXT2DBG("ext2: mount_init dev=%d path=%s flags=%x\n", m->dev, m->path, m->flags);
+
+  data = 0;
+  if(ext2_mount_setup(m, EXT_MOUNT_TARGET_EXT2, &data) < 0)
+    return -1;
 
   m->fs_data = (void *)data;
   ext2_active_dev = data->dev;
@@ -3037,11 +3013,6 @@ ext2_mount_init(struct mount *m)
     ext2_bootstrap_data = data;
   EXT2DBG("ext2: mount ok dev=%d block=%d groups=%d\n", data->dev, data->block_size, data->group_count);
   return 0;
-
-fail:
-  EXT2DBG("ext2: mount failed dev=%d stage=%d\n", m ? m->dev : -1, stage);
-  kfree((char*)data);
-  return -1;
 }
 
 void
