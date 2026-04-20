@@ -1422,14 +1422,23 @@ int XFindContext(Display *display, XID rid, XContext context, char **data_return
 int XDeleteContext(Display *display, XID rid, XContext context);
 
 int XAllocColor(Display *display, Colormap colormap, XColor *screen_in_out);
+int XAllocColorCells(Display *display, Colormap colormap, Bool contig,
+                     unsigned long *plane_masks_return, unsigned int nplanes,
+                     unsigned long *pixels_return, unsigned int npixels);
 int XAllocNamedColor(Display *display, Colormap colormap, const char *color_name,
                      XColor *screen_def_return, XColor *exact_def_return);
+int XFreeColors(Display *display, Colormap colormap, unsigned long *pixels,
+                int npixels, unsigned long planes);
 int XInstallColormap(Display *display, Colormap colormap);
 Colormap *XListInstalledColormaps(Display *display, Window w,
                                   int *num_return);
 int XLookupColor(Display *display, Colormap colormap, const char *spec,
                  XColor *exact_def_return, XColor *screen_def_return);
 int XQueryColor(Display *display, Colormap colormap, XColor *def_in_out);
+int XQueryColors(Display *display, Colormap colormap, XColor *defs_in_out,
+                 int ncolors);
+int XStoreColors(Display *display, Colormap colormap, XColor *defs,
+                 int ncolors);
 
 int XTextPropertyToStringList(void *text_prop, char ***list_return,
                               int *count_return);

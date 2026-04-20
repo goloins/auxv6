@@ -1561,6 +1561,17 @@ x11_alloc_color(unsigned short red, unsigned short green, unsigned short blue)
   return 0;
 }
 
+static struct x11_color_entry *
+x11_find_color(unsigned long pixel)
+{
+  int i;
+  for (i = 0; i < X11_MAX_COLORS; i++) {
+    if (g_colors[i].in_use && g_colors[i].pixel == (pixel & 0x00ffffffUL))
+      return &g_colors[i];
+  }
+  return 0;
+}
+
 static struct x11_font_state *
 x11_find_font(Font fid)
 {
@@ -5006,6 +5017,132 @@ int XAllocColor(Display *display, Colormap colormap, XColor *screen_in_out) {
   screen_in_out->flags = DoRed | DoGreen | DoBlue;
   
   return 1;
+}
+
+int
+XAllocColorCells(Display *display, Colormap colormap, Bool contig,
+                 unsigned long *plane_masks_return, unsigned int nplanes,
+                 unsigned long *pixels_return, unsigned int npixels)
+{
+  unsigned int i;
+
+  (void)display;
+  (void)colormap;
+  (void)contig;
+
+  if (!pixels_return)
+    return 0;
+
+  for (i = 0; i < nplanes; i++) {
+    if (plane_masks_return)
+      plane_masks_return[i] = 0;
+  }
+
+  for (i = 0; i < npixels; i++) {
+    struct x11_color_entry *ce = x11_alloc_color(0, 0, 0);
+    if (!ce)
+      return 0;
+    pixels_return[i] = ce->pixel;
+  }
+
+  return 1;
+}
+
+int
+XFreeColors(Display *display, Colormap colormap, unsigned long *pixels,
+            int npixels, unsigned long planes)
+{
+  int i;
+
+  (void)display;
+  (void)colormap;
+  (void)planes;
+
+  if (!pixels || npixels <= 0)
+    return 0;
+
+  for (i = 0; i < npixels; i++) {
+    struct x11_color_entry *ce = x11_find_color(pixels[i]);
+    if (ce)
+      ce->in_use = 0;
+  }
+
+  return 0;
+}
+
+int
+XQueryColor(Display *display, Colormap colormap, XColor *def_in_out)
+{
+  struct x11_color_entry *ce;
+  unsigned long px;
+  unsigned int r8;
+  unsigned int g8;
+  unsigned int b8;
+
+  (void)display;
+  (void)colormap;
+
+  if (!def_in_out)
+    return 0;
+
+  ce = x11_find_color(def_in_out->pixel);
+  if (ce) {
+    def_in_out->pixel = ce->pixel;
+    def_in_out->red = ce->red;
+    def_in_out->green = ce->green;
+    def_in_out->blue = ce->blue;
+    def_in_out->flags = DoRed | DoGreen | DoBlue;
+    return 1;
+  }
+
+  px = def_in_out->pixel & 0x00ffffffUL;
+  r8 = (unsigned int)((px >> 16) & 0xffUL);
+  g8 = (unsigned int)((px >> 8) & 0xffUL);
+  b8 = (unsigned int)(px & 0xffUL);
+  def_in_out->red = (unsigned short)((r8 << 8) | r8);
+  def_in_out->green = (unsigned short)((g8 << 8) | g8);
+  def_in_out->blue = (unsigned short)((b8 << 8) | b8);
+  def_in_out->flags = DoRed | DoGreen | DoBlue;
+  return 1;
+}
+
+int
+XQueryColors(Display *display, Colormap colormap, XColor *defs_in_out,
+             int ncolors)
+{
+  int i;
+
+  if (!defs_in_out || ncolors < 0)
+    return 0;
+
+  for (i = 0; i < ncolors; i++)
+    (void)XQueryColor(display, colormap, &defs_in_out[i]);
+
+  return 1;
+}
+
+int
+XStoreColors(Display *display, Colormap colormap, XColor *defs, int ncolors)
+{
+  int i;
+
+  (void)display;
+  (void)colormap;
+
+  if (!defs || ncolors < 0)
+    return 0;
+
+  /* TrueColor model: color-map writes are effectively no-ops. */
+  for (i = 0; i < ncolors; i++) {
+    struct x11_color_entry *ce = x11_find_color(defs[i].pixel);
+    if (ce) {
+      ce->red = defs[i].red;
+      ce->green = defs[i].green;
+      ce->blue = defs[i].blue;
+    }
+  }
+
+  return 0;
 }
 
 Colormap XCreateColormap(Display *display, Window w, Visual *visual, int alloc) {
