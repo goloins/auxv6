@@ -1,6 +1,6 @@
 # VFS Refactor Plan
 **Date**: April 20, 2026
-**Goal**: Move auxv6 toward a BSD-like, mount-centric VFS contract so filesystem growth in both breadth and functionality does not keep tripping over legacy ownership, lifecycle, and dispatch constraints, and so the remaining xv6fs-era assumptions can finally be removed from the VFS core.
+**Goal**: Move auxv6 toward a BSD-like, mount-centric VFS contract that is correct, safe, and conservative enough that the BSDs would recognize it as sane VFS engineering, while also removing xv6fs and the remaining xv6fs-era assumptions from the shared kernel and VFS code.
 
 ## Target Model
 
@@ -38,7 +38,7 @@ The first structural fix should be this:
 - destroy becomes mount-scoped rather than `fs`-scoped
 - VFS stops generically freeing backend-private state
 
-If this is done first, ext3 replay work, synthetic filesystem work, and future backends all get a cleaner foundation, and the remaining xv6fs-style shortcuts in VFS can be retired instead of carried forward.
+If this is done first, ext3 replay work, synthetic filesystem work, and future backends all get a cleaner foundation, and xv6fs-era shortcuts can be retired along with xv6fs itself instead of being carried forward.
 
 ## Core Problems
 
@@ -377,14 +377,14 @@ Current state:
 
 Best path forward:
 
-- stop treating xv6fs compatibility as a reason to preserve VFS-wide special cases
-- either quarantine xv6fs explicitly as a legacy shim with no influence on VFS contracts, or rewrite it fully as a mount-scoped backend
-- remove any remaining root, device, or pathname assumptions in VFS that only still exist to accommodate xv6fs semantics
-- prefer ext2/msdosfs-era behavior as the architectural baseline for conventional local filesystems, not xv6fs-era shortcuts
+- remove xv6fs from the tree during this refactor rather than preserving it as a compatibility target
+- remove mount, root, device, and pathname assumptions in shared code that only still exist to accommodate xv6fs semantics
+- remove mount syscall dispatch and configuration support that still allows xv6fs to be selected
+- treat ext2 and msdosfs, not xv6fs, as the baseline references for conventional local filesystems under the new VFS
 
-This backend should not drive the new contract. The refactor should actively shed VFS-level xv6fs-isms even if xv6fs itself remains as an intentionally legacy backend for a while.
+This filesystem should not survive the new contract. Its continued presence would keep pressure on the VFS to preserve obsolete assumptions that auxv6 no longer needs.
 
-Priority: medium as an architectural cleanup target, even if full backend rewrite remains lower priority
+Priority: high as part of the shared-code cleanup and definition of done
 
 ## Storage Stacking Constraints
 
@@ -504,7 +504,7 @@ Best path:
 - document them as transitional
 - move toward a clearer vnode/mount ownership model before adding more backend complexity
 
-This should include auditing whether any inode or dispatch conventions remain mostly because xv6fs historically made them convenient rather than because the broader VFS still needs them.
+This should include auditing whether any inode or dispatch conventions remain mostly because xv6fs historically made them convenient rather than because the broader VFS still needs them, and deleting those conventions rather than preserving them for a removed backend.
 
 ### Section J: Formalize Mount Data And Mount Options
 
@@ -608,7 +608,7 @@ Observed facts:
 - tmpfs destroy tears down the tree via `fs->fs_data`, but generic VFS still frees the container.
 - exfat, btrfs, ufs2, isofs, and nfs currently free mount state from `fs->fs_data` in destroy hooks.
 - msdosfs has no destroy hook yet, but still recovers state through `vfs_dev_fs_data(dev)`.
-- xv6fs and procfs have no mount lifecycle and remain the main sources of “stateless special-case” assumptions.
+- xv6fs and procfs have no mount lifecycle, but unlike procfs, xv6fs is now a removal target rather than a contract to preserve.
 
 Immediate conclusion:
 
@@ -704,7 +704,7 @@ Completion condition:
 
 - `fs->fs_data` is either removed entirely or left unused long enough to delete confidently
 
-### Stage 4: Quarantine And Remove xv6fs-Specific Generic Fallbacks
+### Stage 4: Remove xv6fs And Its Generic Fallbacks
 
 Primary files:
 
@@ -713,15 +713,22 @@ Primary files:
 - [kernel/fs/vfs_xv6fs.c](kernel/fs/vfs_xv6fs.c)
 - [kernel/fs/vfs.c](kernel/fs/vfs.c)
 
+Additional likely files:
+
+- build/config paths that still allow `ROOTFS_TYPE_XV6FS`
+- any userland or kernel headers that still expose xv6fs-specific VFS helpers
+
 Concrete changes:
 
 - remove generic branches that check `vfs_dev_is_xv6fs()` to decide whether fallback inode allocation, truncate, or create logic should run
-- keep xv6fs operational only through its own backend ops, not through special behavior in generic VFS or inode code
+- remove `vfs_xv6fs_init()` call paths and mount syscall support for selecting xv6fs
+- delete [kernel/fs/vfs_xv6fs.c](kernel/fs/vfs_xv6fs.c) once no shared code depends on it
 - audit mount-root directory synthesis and root special-casing for logic that only exists because xv6fs historically lacked mount-scoped behavior
 
 Completion condition:
 
 - generic code does not need to know whether a filesystem is xv6fs in order to preserve correctness
+- xv6fs is no longer mountable, selectable as root, or present as an in-tree VFS backend
 
 ### Stage 5: Hide The Static Mount Table Behind Stable Iteration And Lookup APIs
 
@@ -789,7 +796,7 @@ If implementation starts now, the safest order is:
 3. add inode- or vnode-based helper wrappers in VFS while keeping `vfs_dev_*` compatibility
 4. convert shared consumers in [kernel/fs/file.c](kernel/fs/file.c), [kernel/core/exec.c](kernel/core/exec.c), [kernel/core/vm.c](kernel/core/vm.c), [kernel/fs/fs.c](kernel/fs/fs.c), and [kernel/core/sysfile.c](kernel/core/sysfile.c)
 5. convert msdosfs and the remaining block-backed backends away from `vfs_dev_fs_data()`
-6. remove xv6fs-specific generic fallbacks
+6. remove xv6fs-specific generic fallbacks, root-selection support, and backend registration, then delete xv6fs
 7. only then deprecate the fixed mount table in code rather than just in documentation
 
 ## Recommended Staged Execution Plan
@@ -836,8 +843,8 @@ It should also leave the VFS able to treat md-backed or encrypted-volume-backed 
 ### Stage 7: Retire Final xv6fs-isms From VFS
 
 - audit root handling, lookup flow, helper naming, and dispatch paths for logic that only survives because xv6fs used to be the dominant model
-- remove or isolate those assumptions from shared VFS code
-- leave xv6fs either as a contained legacy backend or bring it up to the new mount-centric contract
+- remove those assumptions from shared VFS code
+- verify xv6fs has already been deleted and that no remaining shared code is retaining compatibility for it
 - treat ext2 and msdosfs as the stronger reference points for conventional mounted filesystems
 
 ### Stage 8: Deprecate The Fixed Mount Table
@@ -853,10 +860,22 @@ It should also leave the VFS able to treat md-backed or encrypted-volume-backed 
 - convert ext2 and ext3 first because they are already actively evolving
 - convert tmpfs early as the synthetic reference implementation
 - convert exfat and nfs early because they already expose destroy/ownership bugs under the current contract
-- audit shared VFS code for behavior that only exists to preserve xv6fs-era assumptions and mark each instance for removal or isolation
+- audit shared VFS code for behavior that only exists to preserve xv6fs-era assumptions and mark each instance for removal
+- remove xv6fs backend selection and root-configuration support during this refactor rather than preserving a compatibility path
 - mark `MOUNT_MAX` and the static global mount registry as deprecated design debt, not a long-term contract
 - avoid introducing new VFS interfaces that assume a mount is identified completely by one raw backing device number
 - record any backend that still depends on `fs->fs_data` or bootstrap globals as incomplete until those dependencies are removed
+
+## Refactor Standard
+
+The design bar for this work should be a VFS layer that is correct, safe, unsurprising, and mount-centric enough that BSD VFS engineers would view the overall structure as disciplined rather than ad hoc.
+
+That means in practice:
+
+- shared code should not preserve obsolete behavior solely because xv6fs used to be the original filesystem
+- ownership and teardown rules should be explicit enough to make allocator and lifecycle bugs hard to introduce
+- root handling should be policy-specific where necessary, but not architecturally exceptional
+- local, synthetic, network, layered, and future encrypted or md-backed filesystems should fit one coherent mount contract
 
 ## Success Criteria
 
@@ -868,6 +887,7 @@ The refactor should be considered successful when:
 - synthetic, network, and block-backed filesystems all fit the same lifecycle contract
 - pathname semantics are primarily VFS-owned rather than backend-fragmented
 - shared VFS code no longer carries special cases whose main purpose is preserving xv6fs-era behavior
+- xv6fs has been removed from the codebase and no root, mount, dispatch, or inode path retains compatibility logic for it
 - the VFS no longer depends architecturally on a fixed global mount table
 - a filesystem mounted on top of future md or encrypted storage can fit the same mount contract without new VFS special cases
 - adding a new filesystem no longer requires bending the VFS around device-centric or legacy assumptions
