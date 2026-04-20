@@ -562,6 +562,15 @@ void            ktime_get_monotonic(struct timespec *ts);
 void            ktime_get_realtime(struct timespec *ts);
 int             ktime_set_realtime(const struct timespec *ts);
 
+// hpet.c
+int             hpet_init(void);
+int             hpet_available(void);
+unsigned long long hpet_read_counter(void);
+uint            hpet_period_fs(void);
+uint            hpet_num_timers(void);
+int             hpet_counter_is_64bit(void);
+void            hpet_stop(void);
+
 // timer.c
 extern struct spinlock tickslock;
 extern uint     ticks;

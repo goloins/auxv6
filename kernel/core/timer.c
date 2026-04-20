@@ -37,6 +37,10 @@ timerinit(void)
   lockdep_set_rank(&tickslock, LOCK_RANK_TICKS, "ticks");
   ticks = 0;
   ktime_init();
+
+  // Best-effort Phase 1/2 probe: bring up the HPET counter if discovered,
+  // while keeping LAPIC as the active interrupt source for scheduling.
+  hpet_init();
 }
 
 void
