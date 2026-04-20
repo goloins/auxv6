@@ -35,6 +35,83 @@ Even the symbols that exist are not semantically complete:
 - `float.h` currently defines only a small double-precision subset, which is not
   enough for a serious libm port.
 
+### Phase 0 Progress
+
+The first header pass is now started in-tree:
+
+- `include/math.h` has been expanded from a stub into a musl-shaped public
+  contract with classification macros, constants, and declarations for the full
+  real-math surface.
+- `include/float.h` now includes `float`, `double`, and `long double` limit
+  definitions suitable for i386 ld80 math work.
+
+### Phase 1 Progress
+
+The private helper substrate is also in place:
+
+- `libc/libm.h` now holds private bit-cast helpers, floating-point barriers,
+  ld80 shape support, and declarations for shared math error helpers.
+- `libc/libm.c` now provides the shared helper implementations, including
+  classification helpers, overflow/underflow/divide-by-zero helpers, and the
+  `signgam` storage used by gamma-family code.
+
+### Phase 2 Progress
+
+The first low-risk math primitives are now started:
+
+- `libc/math.c` now provides `fabs`, `copysign`, `fmax`, `fmin`, `fdim`, and
+  the legacy `finite` wrappers for both `float` and `double`, all routed through
+  the private helper layer.
+
+The decomposition and scaling family is also underway:
+
+- `libc/math.c` now provides `frexp`, `frexpf`, `frexpl`, `ldexp`, `ldexpf`,
+  `ldexpl`, `scalbn`, `scalbnf`, `scalbnl`, `scalbln`, `scalblnf`, `scalblnl`,
+  `ilogb`, `ilogbf`, `ilogbl`, `logb`, `logbf`, `logbl`, `modf`, `modff`, and
+  `modfl`.
+
+The rounding and integer-conversion family is also in place:
+
+- `libc/math.c` now provides `trunc`, `truncf`, `truncl`, `rint`, `rintf`,
+  `rintl`, `nearbyint`, `nearbyintf`, `nearbyintl`, `round`, `roundf`, `roundl`,
+  `lrint`, `lrintf`, `lrintl`, `llrint`, `llrintf`, `llrintl`, `lround`,
+  `lroundf`, `lroundl`, `llround`, `llroundf`, and `llroundl`.
+
+The first core transcendental batch is also started:
+
+- `include/math.h` now declares `hypot`, `hypotf`, and `hypotl` alongside the
+  existing core families.
+- `libc/math.c` now provides `exp`, `expf`, `expl`, `exp2`, `exp2f`, `exp2l`,
+  `expm1`, `expm1f`, `expm1l`, `sqrt`, `sqrtf`, `sqrtl`, `cbrt`, `cbrtf`,
+  `cbrtl`, `hypot`, `hypotf`, `hypotl`, `log`, `logf`, `logl`, `log10`,
+  `log10f`, `log10l`, `log1p`, `log1pf`, `log1pl`, `log2`, `log2f`, `log2l`,
+  and a full real-valued `pow` family.
+
+The trig and hyperbolic family is also in place:
+
+- `libc/math.c` now provides `sin`, `sinf`, `sinl`, `cos`, `cosf`, `cosl`,
+  `tan`, `tanf`, `tanl`, `atan`, `atanf`, `atanl`, `atan2`, `atan2f`, `atan2l`,
+  `asin`, `asinf`, `asinl`, `acos`, `acosf`, `acosl`, `sinh`, `sinhf`, `sinhl`,
+  `cosh`, `coshf`, `coshl`, `tanh`, `tanhf`, `tanhl`, `asinh`, `asinhf`,
+  `asinhl`, `acosh`, `acoshf`, `acoshl`, `atanh`, `atanhf`, and `atanhl`.
+
+The special-function family is also started:
+
+- `libc/math.c` now provides `erf`, `erff`, `erfl`, `erfc`, `erfcf`, `erfcl`,
+  `tgamma`, `tgammaf`, `tgammal`, `lgamma`, `lgammaf`, `lgammal`,
+  `lgamma_r`, `lgammaf_r`, and `lgammal_r`, with shared `signgam` state.
+
+The BSD/GNU compatibility layer is also started:
+
+- `libc/math.c` now provides `remainder`, `remainderf`, `remainderl`, `remquo`,
+  `remquof`, `remquol`, `drem`, `dremf`, `scalb`, `scalbf`, `significand`, and
+  `significandf`.
+
+The Bessel family is also in place:
+
+- `libc/math.c` now provides `j0`, `j1`, `jn`, `y0`, `y1`, `yn`, and the float
+  variants `j0f`, `j1f`, `jnf`, `y0f`, `y1f`, and `ynf`.
+
 ## Missing Public Surface
 
 ### 1. C99 core families
@@ -245,6 +322,11 @@ Implement:
   musl exposes them.
 - Compatibility aliases/functions: `drem`, `finite`, `scalb`, `significand`.
 - GNU helpers: `sincos`, `exp10`, `pow10`.
+
+Status:
+
+- GNU helpers are now implemented in `libc/math.c` alongside the existing BSD
+  compatibility wrappers.
 
 Policy note:
 

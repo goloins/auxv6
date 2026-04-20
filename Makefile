@@ -385,7 +385,7 @@ tags: $(OBJS) kernel/boot/entryother.S user/_init
 kernel/core/vectors.S: tools/vectors.pl
 	./tools/vectors.pl > kernel/core/vectors.S
 
-LIBC_OBJS = libc/ulib.o libc/string.o libc/errstr.o libc/umalloc.o libc/tty.o libc/inet.o libc/fmt.o libc/dirent.o libc/fnmatch.o libc/glob.o libc/ftw.o libc/fts.o libc/locale.o libc/pwdgrp.o libc/env.o libc/conf.o libc/path.o libc/tempfile.o libc/timecore.o libc/resource.o libc/netdb.o libc/stdlib.o libc/randlib.o libc/mman.o libc/posix_fs.o libc/posix.o libc/pthread.o libc/syslog.o libc/stdio.o libc/regex.o libc/calloc.o libc/setjmp.o libc/sigjmp.o libc/math.o libc/usys.o libc/printf.o libc/resolve.o libc/crypt.o libc/utmpx.o
+LIBC_OBJS = libc/ulib.o libc/string.o libc/errstr.o libc/umalloc.o libc/tty.o libc/inet.o libc/fmt.o libc/dirent.o libc/fnmatch.o libc/glob.o libc/ftw.o libc/fts.o libc/locale.o libc/pwdgrp.o libc/env.o libc/conf.o libc/path.o libc/tempfile.o libc/timecore.o libc/resource.o libc/netdb.o libc/stdlib.o libc/randlib.o libc/mman.o libc/posix_fs.o libc/posix.o libc/pthread.o libc/syslog.o libc/stdio.o libc/regex.o libc/calloc.o libc/setjmp.o libc/sigjmp.o libc/libm.o libc/math.o libc/usys.o libc/printf.o libc/resolve.o libc/crypt.o libc/utmpx.o
 LIBAUXRT_OBJS = libc/libterm.o libc/checksum.o libc/gzip.o libc/bzip2.o libc/bzlib.o libc/compress.o libc/decompress.o libc/huffman.o libc/crctable.o libc/randtable.o libc/blocksort.o libc/user_font.o
 CRT0_OBJ = libc/crt0.o
 LIBC_A = libc/libc.a
