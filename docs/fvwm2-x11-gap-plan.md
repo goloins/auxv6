@@ -99,6 +99,8 @@ Tier 5 additions now present: `XShapeCombineRegion`, `XShapeGetRectangles`,
 
 ### Tier 6 — Keyboard / screen metadata
 
+Status (2026-04-19): implemented in-tree in `user/x11.c` and headers (`XGetKeyboardControl`, `XGetMotionEvents`, `XListDepths`, `XScreenResourceString`).
+
 | Function | Description | Notes |
 |----------|-------------|-------|
 | `XGetKeyboardControl` | Query autorepeat, bell, LED state | used before `XAutoRepeatOff` |
@@ -297,7 +299,7 @@ make -C ports/fvwm-fvwm2-stable -f Makefile.auxv6 clean all 2>&1 | grep -c 'unde
 | T3 Text / font | 5 | implemented in-tree (2026-04-19), pending runtime verification |
 | T4 Image / bitmap | 5 | implemented in-tree (2026-04-19), pending runtime verification |
 | T5 Shape completions | 4 | implemented in-tree (2026-04-19), pending runtime verification |
-| T6 Keyboard / screen meta | 4 | implement with T5 |
+| T6 Keyboard / screen meta | 4 | implemented in-tree (2026-04-19), pending runtime verification |
 | T7 ICCCM / property helpers | 2 | implement with T5 |
 | T8 Misc GC / region | 5 | implement with T5 |
 | TR XRender (deferred) | 8 | deferred — re-enable `HAVE_XRENDER` after |

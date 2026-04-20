@@ -844,6 +844,22 @@ typedef struct {
   KeyCode *modifiermap;
 } XModifierKeymap;
 
+typedef struct {
+  int key_click_percent;
+  int bell_percent;
+  unsigned int bell_pitch;
+  unsigned int bell_duration;
+  unsigned long led_mask;
+  int global_auto_repeat;
+  char auto_repeats[32];
+} XKeyboardState;
+
+typedef struct {
+  Time time;
+  short x;
+  short y;
+} XTimeCoord;
+
 #define None 0L
 #define ParentRelative 1L
 #define CopyFromParent 0
@@ -1360,6 +1376,13 @@ Screen *XScreenOfDisplay(Display *display, int screen_number);
 int XBell(Display *display, int percent);
 int XAutoRepeatOff(Display *display);
 int XAutoRepeatOn(Display *display);
+int XGetKeyboardControl(Display *display, XKeyboardState *values_return);
+XTimeCoord *XGetMotionEvents(Display *display, Window w,
+                             Time start, Time stop,
+                             int *nevents_return);
+int *XListDepths(Display *display, int screen_number,
+                 int *count_return);
+char *XScreenResourceString(Screen *screen);
 int (*XSynchronize(Display *display, Bool onoff))(Display *);
 void XSetCloseDownMode(Display *display, int close_mode);
 void XGrabServer(Display *display);

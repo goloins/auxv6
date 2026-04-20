@@ -6471,6 +6471,63 @@ int (*XSynchronize(Display *display, Bool onoff))(Display *) {
 int XBell(Display *display, int percent) { (void)display; (void)percent; return 0; }
 int XAutoRepeatOff(Display *display) { (void)display; return 0; }
 int XAutoRepeatOn(Display *display) { (void)display; return 0; }
+int XGetKeyboardControl(Display *display, XKeyboardState *values_return) {
+  (void)display;
+
+  if (!values_return)
+    return 0;
+
+  memset(values_return, 0, sizeof(*values_return));
+  values_return->global_auto_repeat = 1;
+  values_return->bell_percent = 50;
+  values_return->bell_pitch = 440;
+  values_return->bell_duration = 100;
+  memset(values_return->auto_repeats, 1, sizeof(values_return->auto_repeats));
+  return 1;
+}
+
+XTimeCoord *XGetMotionEvents(Display *display, Window w,
+                             Time start, Time stop,
+                             int *nevents_return) {
+  (void)display;
+  (void)w;
+  (void)start;
+  (void)stop;
+
+  if (nevents_return)
+    *nevents_return = 0;
+  return 0;
+}
+
+int *XListDepths(Display *display, int screen_number,
+                 int *count_return) {
+  int *depths;
+  int depth;
+
+  (void)screen_number;
+
+  if (count_return)
+    *count_return = 0;
+
+  depth = (display && display->depth > 0) ? display->depth : 24;
+  depths = (int *)malloc(sizeof(*depths));
+  if (!depths)
+    return 0;
+  depths[0] = depth;
+
+  if (count_return)
+    *count_return = 1;
+  return depths;
+}
+
+char *XScreenResourceString(Screen *screen) {
+  Display *display;
+
+  if (!screen)
+    return 0;
+  display = (Display *)screen;
+  return XResourceManagerString(display);
+}
 int XAddToSaveSet(Display *display, Window w) { (void)display; (void)w; return 0; }
 int XRemoveFromSaveSet(Display *display, Window w) { (void)display; (void)w; return 0; }
 int XInstallColormap(Display *display, Colormap colormap) {
