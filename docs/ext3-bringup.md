@@ -21,7 +21,7 @@
 ## Immediate Next Goals
 
 - Add a short manual validation recipe for the supported journal-discovery path, including the expected login-prompt-driven guest workflow.
-- Start Phase 2 replay work from the discovered journal superblock state and last fully committed transaction summary rather than adding any new mount-surface complexity.
+- Start Phase 2 replay work from the discovered journal superblock state, last fully committed transaction summary, and journal-relative data range rather than adding any new mount-surface complexity.
 
 ### Goals
 - Add a dedicated ext3 filesystem backend selectable via mount fstype ext3/ext3fs.
@@ -262,7 +262,7 @@ Phase 1 status: complete for the intended probe-only split.
 - Recovery replays committed metadata changes after crash simulation.
 - No replay of uncommitted transactions.
 
-Phase 2 status: journal discovery, read-only journal record scanning, and last-committed-transaction summary are in place; committed-transaction application and checkpoint handling remain unimplemented.
+Phase 2 status: journal discovery, read-only journal record scanning, last-committed-transaction summary, and journal-relative payload range capture are in place; committed-transaction application and checkpoint handling remain unimplemented.
 
 ---
 

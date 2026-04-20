@@ -73,6 +73,8 @@ struct ext2_mount_data {
     uint last_commit_block;
     uint last_data_blocks;
     uint last_revoke_blocks;
+    uint last_data_start_block;
+    uint last_data_end_block;
     int replay_seed_valid;
     uint end_sequence;
     int valid;

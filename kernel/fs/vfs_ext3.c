@@ -33,7 +33,7 @@ ext3_mount_init(struct mount *m)
   }
 
   m->fs_data = data;
-  MOUNTDBG("ext3: mount ok dev=%d block=%d groups=%d journal_inum=%u journal_max=%u tx=%u desc=%u data=%u rev=%u commit=%u committed_data=%u open_data=%u last_commit=%u last_desc_blk=%u last_commit_blk=%u replay_seed=%d readonly-probe\n",
+  MOUNTDBG("ext3: mount ok dev=%d block=%d groups=%d journal_inum=%u journal_max=%u tx=%u desc=%u data=%u rev=%u commit=%u committed_data=%u open_data=%u last_commit=%u last_desc_blk=%u last_commit_blk=%u last_data_start=%u last_data_end=%u replay_seed=%d readonly-probe\n",
            data->dev, data->block_size, data->group_count,
            data->journal.inode_num, data->journal.maxlen,
            data->journal.transaction_count, data->journal.descriptor_blocks,
@@ -41,6 +41,7 @@ ext3_mount_init(struct mount *m)
            data->journal.commit_blocks, data->journal.committed_data_blocks,
            data->journal.open_data_blocks, data->journal.last_commit_sequence,
            data->journal.last_descriptor_block, data->journal.last_commit_block,
+           data->journal.last_data_start_block, data->journal.last_data_end_block,
            data->journal.replay_seed_valid);
   return 0;
 }

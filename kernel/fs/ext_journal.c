@@ -126,6 +126,8 @@ ext3_journal_scan(struct ext2_mount_data *data, struct ext2_inode *journal_inode
   data->journal.last_commit_block = 0;
   data->journal.last_data_blocks = 0;
   data->journal.last_revoke_blocks = 0;
+  data->journal.last_data_start_block = 0;
+  data->journal.last_data_end_block = 0;
   data->journal.replay_seed_valid = 0;
   data->journal.end_sequence = data->journal.sequence;
 
@@ -226,6 +228,10 @@ ext3_journal_scan(struct ext2_mount_data *data, struct ext2_inode *journal_inode
       data->journal.last_commit_block = cur;
       data->journal.last_data_blocks = open_data_blocks;
       data->journal.last_revoke_blocks = open_revoke_blocks;
+      data->journal.last_data_start_block =
+        ext3_journal_advance(data, open_descriptor_block, 1);
+      data->journal.last_data_end_block =
+        ext3_journal_advance(data, open_descriptor_block, open_data_blocks);
       data->journal.replay_seed_valid = 1;
       open_descriptor_block = 0;
       open_data_blocks = 0;
