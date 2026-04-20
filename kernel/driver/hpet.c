@@ -297,6 +297,12 @@ hpet_irq_line(void)
 }
 
 int
+hpet_test_enabled(void)
+{
+  return hpet_test_armed;
+}
+
+int
 hpet_counter_is_64bit(void)
 {
   return hpet_counter_64bit_cached;

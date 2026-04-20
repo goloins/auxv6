@@ -11,6 +11,7 @@ uint               hpet_period_fs(void);
 uint               hpet_num_timers(void);
 uint               hpet_irq_count(void);
 int                hpet_irq_line(void);
+int                hpet_test_enabled(void);
 int                hpet_counter_is_64bit(void);
 void               hpet_stop(void);
 

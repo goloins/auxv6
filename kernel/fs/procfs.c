@@ -54,6 +54,7 @@
 #define PROCFS_THUNDERBOLT_INO 36  /* /proc/thunderbolt — discovered Thunderbolt/USB4 host routers */
 #define PROCFS_LIGHTNING_INO   37  /* /proc/lightning — Apple Lightning/iAP2 scaffold state */
 #define PROCFS_USB_MSC_INO     38  /* /proc/usb_msc — USB mass-storage attach/runtime state */
+#define PROCFS_TIMER_INO       39  /* /proc/timer — timer and HPET diagnostics */
 #define PROCFS_VERSION_STR  "a/ux86 aux86 i686\n"
 
 struct procfs_inode {
@@ -100,6 +101,7 @@ static struct procfs_inode procfs_inodes[] = {
   { PROCFS_THUNDERBOLT_INO, "thunderbolt", 2048 },
   { PROCFS_LIGHTNING_INO, "lightning", 512 },
   { PROCFS_USB_MSC_INO, "usb_msc", 1024 },
+  { PROCFS_TIMER_INO, "timer", 512 },
   { 0, 0, 0 }
 };
 
@@ -468,6 +470,10 @@ procfs_fill_inode(struct inode *ip, uint inum)
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
     ip->size = 2048;
+  } else if(inum == PROCFS_TIMER_INO){
+    ip->type = T_FILE;
+    ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
+    ip->size = 512;
   } else if(inum == PROCFS_NFORCE_INO){
     ip->type = T_FILE;
     ip->mode = M_IRUSR | M_IRGRP | M_IROTH;
@@ -1881,6 +1887,50 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
       return -1;
     if(procfs_buf_puts(buf, sizeof(buf), &len,
                        "write_usage echo <ticks> > /proc/mlfq_tune\n") < 0)
+      return -1;
+    return procfs_copy_data(dst, off, n, buf, len);
+  }
+  if(ip->inum == PROCFS_TIMER_INO){
+    unsigned long long ctr;
+    uint ctr_hi;
+    uint ctr_lo;
+    int irq_line;
+
+    acquire(&tickslock);
+    now = ticks;
+    release(&tickslock);
+
+    ctr = hpet_read_counter();
+    ctr_hi = (uint)(ctr >> 32);
+    ctr_lo = (uint)ctr;
+    irq_line = hpet_irq_line();
+
+    len = 0;
+    if(procfs_buf_puts(buf, sizeof(buf), &len, "backend lapic\n") < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "ticks ", now) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "tick_hz ", 100) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "tick_sleepers ", (uint)proc_has_tick_sleepers()) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "hpet_available ", (uint)hpet_available()) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "hpet_test_enabled ", (uint)hpet_test_enabled()) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "hpet_irq_line ", irq_line >= 0 ? (uint)irq_line : 0U) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "hpet_irq_count ", hpet_irq_count()) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "hpet_period_fs ", hpet_period_fs()) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "hpet_num_timers ", hpet_num_timers()) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "hpet_counter_64bit ", (uint)hpet_counter_is_64bit()) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "hpet_counter_hi ", ctr_hi) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "hpet_counter_lo ", ctr_lo) < 0)
       return -1;
     return procfs_copy_data(dst, off, n, buf, len);
   }
