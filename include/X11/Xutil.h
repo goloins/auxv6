@@ -81,5 +81,9 @@ int XGetNormalHints(Display *display, Window w, XSizeHints *hints_return);
 int XGetSizeHints(Display *display, Window w, XSizeHints *hints_return,
                   Atom property);
 int XSetClassHint(Display *display, Window w, XClassHint *class_hints);
+int XGetCommand(Display *display, Window w,
+                char ***argv_return, int *argc_return);
+int XStringListToTextProperty(char **list, int count,
+                              XTextProperty *text_prop_return);
 
 #endif

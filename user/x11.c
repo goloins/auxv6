@@ -6910,6 +6910,108 @@ int XTextPropertyToStringList(void *text_prop, char ***list_return,
 
   return Success;
 }
+
+int XStringListToTextProperty(char **list, int count,
+                              XTextProperty *text_prop_return) {
+  int i;
+  int len;
+  int off;
+  char *buf;
+
+  if (!text_prop_return)
+    return 0;
+
+  text_prop_return->value = 0;
+  text_prop_return->encoding = XA_STRING;
+  text_prop_return->format = 8;
+  text_prop_return->nitems = 0;
+
+  if (!list || count <= 0)
+    return 0;
+
+  len = 0;
+  for (i = 0; i < count; i++) {
+    if (!list[i])
+      continue;
+    len += (int)strlen(list[i]) + 1;
+  }
+  if (len <= 0)
+    return 0;
+
+  buf = (char *)malloc((size_t)len);
+  if (!buf)
+    return 0;
+
+  off = 0;
+  for (i = 0; i < count; i++) {
+    int n;
+    if (!list[i])
+      continue;
+    n = (int)strlen(list[i]);
+    memmove(buf + off, list[i], (size_t)n);
+    off += n;
+    buf[off++] = '\0';
+  }
+
+  text_prop_return->value = buf;
+  text_prop_return->nitems = (unsigned long)off;
+  return 1;
+}
+
+int XGetCommand(Display *display, Window w,
+                char ***argv_return, int *argc_return) {
+  Atom wm_command;
+  Atom actual;
+  int format;
+  unsigned long nitems;
+  unsigned long bytes_after;
+  unsigned char *prop;
+
+  if (argv_return)
+    *argv_return = 0;
+  if (argc_return)
+    *argc_return = 0;
+
+  if (!display || !argv_return || !argc_return)
+    return 0;
+
+  wm_command = XInternAtom(display, "WM_COMMAND", False);
+  prop = 0;
+  if (XGetWindowProperty(display, w, wm_command,
+                         0, 1L << 20, False, XA_STRING,
+                         &actual, &format, &nitems, &bytes_after,
+                         &prop) != Success)
+    return 0;
+
+  if (!prop || actual != XA_STRING || format != 8 || nitems == 0) {
+    if (prop)
+      XFree(prop);
+    return 0;
+  }
+
+  {
+    XTextProperty tp;
+    char **list;
+    int count;
+
+    tp.value = (char *)prop;
+    tp.encoding = actual;
+    tp.format = format;
+    tp.nitems = nitems;
+
+    if (XTextPropertyToStringList(&tp, &list, &count) != Success ||
+        !list || count <= 0) {
+      XFree(prop);
+      return 0;
+    }
+
+    *argv_return = list;
+    *argc_return = count;
+  }
+
+  XFree(prop);
+  return 1;
+}
 void XFreeStringList(char **list) {
   int i;
   if (!list) return;
