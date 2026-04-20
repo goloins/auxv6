@@ -14,6 +14,7 @@ Desired properties:
 - synthetic, network, readonly, and block-backed filesystems all fit the same lifecycle contract
 - rootfs is a normal mount instance with limited special policy, not a distinct architecture
 - remaining xv6fs-isms are treated as migration debt to remove, not compatibility constraints to preserve
+- mounted filesystems are attached to an abstract storage provider and topology, not hard-wired to the assumption of one filesystem per raw physical device
 
 This document is intentionally actionable. It describes the current deficiencies, the best migration path for each in-tree backend, and the additional VFS interfaces that should be modernized while this work is underway.
 
@@ -117,6 +118,12 @@ That means capability policy is not trustworthy enough to be architectural.
 ### 7. Static Global Mount Table Will Age Poorly
 
 The mount registry is a fixed-size global array with `MOUNT_MAX` in [include/limits.h](include/limits.h). That is acceptable for now, but it should be documented as an intentional limitation, not an invisible architectural assumption.
+
+Today this is not just an internal implementation detail. The fixed bound is baked into the VFS registry in [kernel/fs/vfs.c](kernel/fs/vfs.c), mirrored into the user-visible `mountinfo` ABI in [include/auxv6/user.h](include/auxv6/user.h), enforced in [kernel/core/sysfile.c](kernel/core/sysfile.c), and reused by procfs mount reporting in [kernel/fs/procfs.c](kernel/fs/procfs.c).
+
+That means `MOUNT_MAX` already influences both kernel behavior and user-facing enumeration semantics. It exists today mainly because a fixed array is simple, xv6-style, allocation-free state management for a small kernel. That simplicity was reasonable early on, but it is now something to deprecate rather than design around.
+
+Modern Unix-like systems generally do not model mount state this way. Older systems often had fixed global tables for mounts, files, or processes, but modern Linux and BSD kernels keep mount objects in dynamically allocated structures and global trees/lists, even if they still impose operational limits elsewhere. auxv6 should treat the static table as transitional legacy, not a target architecture.
 
 ### 8. Unmount Semantics Are Too Shallow
 
@@ -379,6 +386,20 @@ This backend should not drive the new contract. The refactor should actively she
 
 Priority: medium as an architectural cleanup target, even if full backend rewrite remains lower priority
 
+## Storage Stacking Constraints
+
+The VFS refactor does not need to make md, RAID, dm-crypt-style, or other encrypted-volume support a primary goal right now, but it should avoid cementing assumptions that would force another refactor once those layers arrive.
+
+Relevant design implications:
+
+- a mounted filesystem may sit on top of a storage stack, not directly on a single physical disk
+- mount identity should not depend on one raw `dev` number being the whole truth about the backing object
+- storage transforms such as RAID assembly, integrity layers, or encryption should remain below the filesystem contract where possible
+- VFS should care about mount topology, vnode dispatch, and mount options, not about whether the underlying block provider is direct, mirrored, striped, or decrypted
+- any future storage-stack metadata or unlock/configuration arguments should have a cleaner home than ad hoc device-number conventions
+
+The practical consequence for this document is that device-centric helpers and fixed global assumptions are even more important to retire. A future ext2, ext3, msdosfs, or other backend mounted on md or encrypted storage should still look like an ordinary mount instance to the VFS layer.
+
 ## Stubbed, Scaffolded, And Future Filesystem Families
 
 Some in-tree backends are more scaffold than mature implementation from a VFS perspective, even if they expose many vnode operations. The refactor plan should treat lifecycle cleanup as a prerequisite for future feature work in:
@@ -439,6 +460,7 @@ Best path:
 - add a stable way to recover the owning mount from a live vnode/inode
 - gradually replace `vfs_dev_*` consumers
 - make synthetic and network backends equal citizens
+- avoid assuming the backing store is a single raw device rather than a composed storage provider such as md or an encrypted volume layer
 
 ### Section E: Rework Capability And Mount Flag Policy
 
@@ -469,8 +491,10 @@ Best path:
 
 Best path:
 
-- keep `MOUNT_MAX` for now, but document it as a transitional limit
+- keep `MOUNT_MAX` for now only as a transitional limit
 - isolate mount-table assumptions so later dynamic growth or namespaces are possible
+- stop expanding ABI or procfs surfaces that hard-code the fixed mount-table size
+- plan to replace the static global mount array with dynamically managed mount objects once lifecycle ownership is cleaned up
 
 ### Section I: Plan A Medium-Term Vnode API Cleanup
 
@@ -491,6 +515,282 @@ Best path:
 - define a clearer contract for mount arguments/options
 - make option parsing backend-owned but lifecycle-owned by the mount instance
 - use this for future FAT/NTFS/NFS/tmpfs option growth
+
+This is also the natural place to keep room for future storage-adjacent configuration that may accompany layered devices, such as unlock state, labels, provider names, or other non-filesystem mount context, without pushing those concerns into device-number hacks.
+
+## Code-Level Audit And Refactor Plan
+
+This section records the current code shape in enough detail to drive the first implementation passes.
+
+### Audit Snapshot: VFS Core
+
+Files:
+
+- [include/vfs.h](include/vfs.h)
+- [kernel/fs/vfs.c](kernel/fs/vfs.c)
+- [kernel/core/sysfile.c](kernel/core/sysfile.c)
+
+Observed facts:
+
+- `struct vfs` still combines type-level data with mount-instance fields such as `fs_data` and `fs_destroy`.
+- [kernel/fs/vfs.c](kernel/fs/vfs.c) stores the real mount registry in `static struct mount mounts[VFS_MOUNTS_MAX]`, but mount registration still aliases mount-private state into both `mounts[slot].fs_data` and `fs->fs_data`.
+- `vfs_init()` builds root through the same general `mount_init` shape, but still keeps a separate static `rootvfs` object and root-specific wiring.
+- `vfs_unmount()` removes a slot, drops the mountpoint, calls `fs->fs_destroy(fs)`, then raw-frees `mount_fs_data` and finally frees `fs` for non-root mounts. This is the current ownership hazard.
+- `vfs_lookup()` and `vfs_lookup_parent()` still route path resolution through backend full-string `namei` and `nameiparent`, while VFS also injects mount-root `..` rewriting and mount-crossing behavior.
+- `vfs_cross_into_mount()` and `vfs_mount_crossover()` still implement mount traversal by scanning the global mount table and matching `(dev, inum)` pairs.
+
+Immediate conclusion:
+
+- the first implementation stage should stabilize mount lifecycle and ownership without simultaneously rewriting lookup semantics
+- mount registry internals should be hidden behind helpers before the static table is replaced
+
+### Audit Snapshot: Mount Syscall Path
+
+Files:
+
+- [kernel/core/sysfile.c](kernel/core/sysfile.c)
+
+Observed facts:
+
+- `sys_mount()` heap-allocates one `struct vfs` per mounted instance, then initializes it by string-dispatch on filesystem type.
+- device selection is still part policy, part backend default, part special-case allocator for tmpfs and nfs.
+- mount data is staged as an opaque byte buffer and handed to `vfs_register_mount()`.
+- `sys_mountinfo()` clamps requests to `VFS_MOUNTS_MAX`, so the static mount-table size has already escaped into syscall behavior.
+
+Immediate conclusion:
+
+- type registration and mount-instance creation should eventually be separated
+- in the near term, the syscall path can keep string dispatch if the backend descriptor remains per-mount, but the lifecycle contract must become mount-scoped first
+- tmpfs/nfs device allocation logic should be treated as temporary mount-identity policy, not as the long-term shape for abstract storage providers
+
+### Audit Snapshot: Dev-Keyed Dispatch Surface
+
+Files:
+
+- [kernel/fs/file.c](kernel/fs/file.c)
+- [kernel/fs/fs.c](kernel/fs/fs.c)
+- [kernel/core/sysfile.c](kernel/core/sysfile.c)
+- [kernel/core/exec.c](kernel/core/exec.c)
+- [kernel/core/vm.c](kernel/core/vm.c)
+- [kernel/driver/loop.c](kernel/driver/loop.c)
+
+Observed facts:
+
+- `vfs_dev_vops()` is used throughout file I/O, metadata syscalls, exec loading, VM segment loading, inode drop, and loop-device handling.
+- `vfs_dev_has_cap()` is used as a write/read/create gate in common file paths.
+- `vfs_dev_fs_data()` is used by multiple backends as their primary way to recover mount-private state from `ip->dev`.
+- `vfs_dev_is_xv6fs()` still gates fallback behavior in generic inode and create/remove paths.
+
+Immediate conclusion:
+
+- this surface is too wide to replace in one shot
+- the refactor needs a compatibility stage where new mount-based helpers exist alongside the current `vfs_dev_*` helpers
+- generic code should move first to inode- or vnode-based helpers, while backend-local `data_for_dev()` helpers are converted afterward
+
+### Audit Snapshot: Backend Ownership Patterns
+
+Representative files:
+
+- [kernel/fs/vfs_ext2.c](kernel/fs/vfs_ext2.c)
+- [kernel/fs/vfs_ext3.c](kernel/fs/vfs_ext3.c)
+- [kernel/fs/vfs_tmpfs.c](kernel/fs/vfs_tmpfs.c)
+- [kernel/fs/vfs_exfat.c](kernel/fs/vfs_exfat.c)
+- [kernel/fs/vfs_nfs.c](kernel/fs/vfs_nfs.c)
+- [kernel/fs/vfs_msdosfs.c](kernel/fs/vfs_msdosfs.c)
+- [kernel/fs/vfs_btrfs.c](kernel/fs/vfs_btrfs.c)
+- [kernel/fs/vfs_ufs2.c](kernel/fs/vfs_ufs2.c)
+- [kernel/fs/vfs_isofs.c](kernel/fs/vfs_isofs.c)
+- [kernel/fs/vfs_xv6fs.c](kernel/fs/vfs_xv6fs.c)
+
+Observed facts:
+
+- ext2/ext3 already receive `struct mount *` during init, but runtime lookup still depends on `fs->fs_data` and bootstrap fallbacks.
+- tmpfs destroy tears down the tree via `fs->fs_data`, but generic VFS still frees the container.
+- exfat, btrfs, ufs2, isofs, and nfs currently free mount state from `fs->fs_data` in destroy hooks.
+- msdosfs has no destroy hook yet, but still recovers state through `vfs_dev_fs_data(dev)`.
+- xv6fs and procfs have no mount lifecycle and remain the main sources of “stateless special-case” assumptions.
+
+Immediate conclusion:
+
+- ext2/ext3/tmpfs/exfat/nfs are the right first conversion set because they expose the most important ownership and mount-state issues
+- msdosfs should follow soon after because it is one of the primary non-xv6 local filesystems and still uses dev-keyed state recovery
+- btrfs/ufs2/isofs can follow once the mount-destroy and mount-state access pattern is stable
+
+## Detailed Staged Execution Plan
+
+### Stage 1: Introduce A Mount-Scoped Lifecycle Contract
+
+Primary files:
+
+- [include/vfs.h](include/vfs.h)
+- [kernel/fs/vfs.c](kernel/fs/vfs.c)
+- [kernel/core/sysfile.c](kernel/core/sysfile.c)
+
+Concrete changes:
+
+- replace `void (*fs_destroy)(struct vfs *fs)` with a mount-scoped destroy hook, for example `void (*mount_destroy)(struct mount *m)`
+- keep `mount_init(struct mount *m)` as the creation hook
+- make `struct mount` the only authoritative owner of mount-private state
+- stop having VFS generically free `mount_fs_data`
+- keep freeing dynamically allocated per-mount `struct vfs` objects in VFS for now, since `sys_mount()` still allocates them
+- add one internal helper to clear/free a mount slot so slot teardown becomes explicit and reusable
+
+Compatibility rule:
+
+- for one transition stage, VFS may still mirror `m->fs_data` into `fs->fs_data` for old backends, but that mirror should be documented as compatibility-only and removed in Stage 3
+
+First backend conversions:
+
+- ext2
+- ext3
+- tmpfs
+- exfat
+- nfs
+
+Reason:
+
+- these backends either already behave like mount-scoped instances or they currently demonstrate the destroy/ownership bug most clearly
+
+### Stage 2: Add Mount-Based Dispatch Helpers Without Removing The Old Ones
+
+Primary files:
+
+- [include/vfs.h](include/vfs.h)
+- [include/defs.h](include/defs.h)
+- [kernel/fs/vfs.c](kernel/fs/vfs.c)
+
+Concrete changes:
+
+- add helpers that recover mount-facing state from a live inode or vnode rather than from raw `dev` alone
+- candidates include helpers such as `vfs_inode_mount(ip)`, `vfs_inode_vops(ip)`, `vfs_inode_has_cap(ip, cap)`, and `vfs_inode_fs_data(ip)`
+- internally, those helpers may still use the current dev-based lookup where necessary, but callers stop depending on that detail
+- keep existing `vfs_dev_*` helpers as wrappers during this stage so the tree remains buildable while call sites convert incrementally
+
+First generic call sites to convert:
+
+- [kernel/fs/file.c](kernel/fs/file.c)
+- [kernel/core/exec.c](kernel/core/exec.c)
+- [kernel/core/vm.c](kernel/core/vm.c)
+- [kernel/fs/fs.c](kernel/fs/fs.c)
+- [kernel/core/sysfile.c](kernel/core/sysfile.c)
+
+Reason:
+
+- these files contain the highest-value shared paths and most of the `vfs_dev_*` surface area
+
+### Stage 3: Remove `fs->fs_data` As The Runtime Source Of Truth
+
+Primary files:
+
+- [kernel/fs/vfs_ext2.c](kernel/fs/vfs_ext2.c)
+- [kernel/fs/vfs_ext3.c](kernel/fs/vfs_ext3.c)
+- [kernel/fs/vfs_tmpfs.c](kernel/fs/vfs_tmpfs.c)
+- [kernel/fs/vfs_msdosfs.c](kernel/fs/vfs_msdosfs.c)
+- [kernel/fs/vfs_exfat.c](kernel/fs/vfs_exfat.c)
+- [kernel/fs/vfs_btrfs.c](kernel/fs/vfs_btrfs.c)
+- [kernel/fs/vfs_ufs2.c](kernel/fs/vfs_ufs2.c)
+- [kernel/fs/vfs_isofs.c](kernel/fs/vfs_isofs.c)
+- [kernel/fs/vfs_nfs.c](kernel/fs/vfs_nfs.c)
+
+Concrete changes:
+
+- convert backend-local `data_for_dev()` helpers to use the new mount-facing helpers
+- stop reading mount state from `fs->fs_data` inside backend runtime operations
+- remove ext2 bootstrap/global fallbacks once root mount state is reliably mount-owned
+- convert tmpfs to free its mount container in mount destroy, not half in backend and half in VFS
+- convert readonly backends that currently free `fs->fs_data` directly to the new mount destroy hook
+
+Completion condition:
+
+- `fs->fs_data` is either removed entirely or left unused long enough to delete confidently
+
+### Stage 4: Quarantine And Remove xv6fs-Specific Generic Fallbacks
+
+Primary files:
+
+- [kernel/fs/fs.c](kernel/fs/fs.c)
+- [kernel/core/sysfile.c](kernel/core/sysfile.c)
+- [kernel/fs/vfs_xv6fs.c](kernel/fs/vfs_xv6fs.c)
+- [kernel/fs/vfs.c](kernel/fs/vfs.c)
+
+Concrete changes:
+
+- remove generic branches that check `vfs_dev_is_xv6fs()` to decide whether fallback inode allocation, truncate, or create logic should run
+- keep xv6fs operational only through its own backend ops, not through special behavior in generic VFS or inode code
+- audit mount-root directory synthesis and root special-casing for logic that only exists because xv6fs historically lacked mount-scoped behavior
+
+Completion condition:
+
+- generic code does not need to know whether a filesystem is xv6fs in order to preserve correctness
+
+### Stage 5: Hide The Static Mount Table Behind Stable Iteration And Lookup APIs
+
+Primary files:
+
+- [kernel/fs/vfs.c](kernel/fs/vfs.c)
+- [kernel/fs/procfs.c](kernel/fs/procfs.c)
+- [kernel/core/sysfile.c](kernel/core/sysfile.c)
+- [include/auxv6/user.h](include/auxv6/user.h)
+
+Concrete changes:
+
+- keep the current array temporarily, but stop letting new code know about `VFS_MOUNTS_MAX`
+- make procfs and `mountinfo` consume mount iteration helpers rather than relying on fixed-size shared arrays as the conceptual model
+- ensure all table scans are confined to VFS internals so the eventual switch to dynamic mount objects touches fewer files
+
+Completion condition:
+
+- `MOUNT_MAX` remains only as a compatibility bound, not as a cross-subsystem design input
+
+### Stage 6: Rework Lookup And Cross-Mount Semantics Around Mount Instances
+
+Primary files:
+
+- [kernel/fs/vfs.c](kernel/fs/vfs.c)
+- [include/vfs.h](include/vfs.h)
+- backend `namei` implementations as needed
+
+Concrete changes:
+
+- keep current string-based backend lookup until lifecycle and state ownership are stable
+- then begin shrinking backend responsibilities toward component lookup instead of whole-path policy
+- keep `..`, symlink following, mount crossing, and mount-root parent behavior in shared VFS code
+- reduce or eliminate direct mount-table scans in crossover helpers where a more explicit mount/inode association becomes available
+
+Reason:
+
+- this is architecturally important, but it should follow ownership cleanup rather than compete with it
+
+### Stage 7: Replace The Static Mount Registry
+
+Primary files:
+
+- [kernel/fs/vfs.c](kernel/fs/vfs.c)
+- [include/vfs.h](include/vfs.h)
+- [kernel/fs/procfs.c](kernel/fs/procfs.c)
+- [kernel/core/sysfile.c](kernel/core/sysfile.c)
+
+Concrete changes:
+
+- replace `static struct mount mounts[VFS_MOUNTS_MAX]` with dynamically managed mount objects plus an internal list/tree
+- keep external enumeration behavior stable while removing the fixed-table assumption internally
+- revisit mount IDs or stable handles if later namespace or richer storage-stack work needs them
+
+Reason:
+
+- doing this after ownership and helper cleanup avoids coupling two high-risk refactors together
+
+## Immediate Coding Order
+
+If implementation starts now, the safest order is:
+
+1. change the lifecycle contract in [include/vfs.h](include/vfs.h) and [kernel/fs/vfs.c](kernel/fs/vfs.c)
+2. convert ext2, ext3, tmpfs, exfat, and nfs to mount-scoped destroy
+3. add inode- or vnode-based helper wrappers in VFS while keeping `vfs_dev_*` compatibility
+4. convert shared consumers in [kernel/fs/file.c](kernel/fs/file.c), [kernel/core/exec.c](kernel/core/exec.c), [kernel/core/vm.c](kernel/core/vm.c), [kernel/fs/fs.c](kernel/fs/fs.c), and [kernel/core/sysfile.c](kernel/core/sysfile.c)
+5. convert msdosfs and the remaining block-backed backends away from `vfs_dev_fs_data()`
+6. remove xv6fs-specific generic fallbacks
+7. only then deprecate the fixed mount table in code rather than just in documentation
 
 ## Recommended Staged Execution Plan
 
@@ -531,12 +831,21 @@ Best path:
 
 This stage should explicitly remove the remaining VFS assumptions that only make sense if xv6fs-style global or device-root semantics are still the mental model.
 
+It should also leave the VFS able to treat md-backed or encrypted-volume-backed filesystems as ordinary mounts rather than special cases.
+
 ### Stage 7: Retire Final xv6fs-isms From VFS
 
 - audit root handling, lookup flow, helper naming, and dispatch paths for logic that only survives because xv6fs used to be the dominant model
 - remove or isolate those assumptions from shared VFS code
 - leave xv6fs either as a contained legacy backend or bring it up to the new mount-centric contract
 - treat ext2 and msdosfs as the stronger reference points for conventional mounted filesystems
+
+### Stage 8: Deprecate The Fixed Mount Table
+
+- stop treating `MOUNT_MAX` as an architectural constant outside temporary compatibility boundaries
+- narrow the number of call sites that directly know about the global mount array
+- move procfs and `mountinfo` enumeration toward mount iteration APIs that do not encode the table size into shared interfaces
+- replace the static registry with dynamically managed mount objects once the mount lifecycle and lookup contracts are stable
 
 ## Immediate Action Items
 
@@ -545,6 +854,8 @@ This stage should explicitly remove the remaining VFS assumptions that only make
 - convert tmpfs early as the synthetic reference implementation
 - convert exfat and nfs early because they already expose destroy/ownership bugs under the current contract
 - audit shared VFS code for behavior that only exists to preserve xv6fs-era assumptions and mark each instance for removal or isolation
+- mark `MOUNT_MAX` and the static global mount registry as deprecated design debt, not a long-term contract
+- avoid introducing new VFS interfaces that assume a mount is identified completely by one raw backing device number
 - record any backend that still depends on `fs->fs_data` or bootstrap globals as incomplete until those dependencies are removed
 
 ## Success Criteria
@@ -557,4 +868,6 @@ The refactor should be considered successful when:
 - synthetic, network, and block-backed filesystems all fit the same lifecycle contract
 - pathname semantics are primarily VFS-owned rather than backend-fragmented
 - shared VFS code no longer carries special cases whose main purpose is preserving xv6fs-era behavior
+- the VFS no longer depends architecturally on a fixed global mount table
+- a filesystem mounted on top of future md or encrypted storage can fit the same mount contract without new VFS special cases
 - adding a new filesystem no longer requires bending the VFS around device-centric or legacy assumptions
