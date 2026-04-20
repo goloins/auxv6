@@ -27,3 +27,6 @@ openssh|https://mirror.planetunix.net/pub/OpenBSD/OpenSSH/portable/openssh-10.3p
 
 # Non-first-class plan9port rio preparation lane: first configure/build pass only.
 rio|https://github.com/9fans/plan9port/archive/refs/heads/master.zip|user|plan9port-master|rio
+
+# Non-first-class fvwm2 preparation lane: X11 gap discovery WM.
+fvwm2|https://github.com/fvwmorg/fvwm/archive/fvwm2-stable.zip|user|fvwm-fvwm2-stable|fvwm

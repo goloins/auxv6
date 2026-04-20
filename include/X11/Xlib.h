@@ -1166,6 +1166,7 @@ Window XCreateSimpleWindow(Display *display, Window parent, int x, int y,
 int XDestroyWindow(Display *display, Window w);
 int XMapWindow(Display *display, Window w);
 int XMapRaised(Display *display, Window w);
+int XMapSubwindows(Display *display, Window w);
 int XUnmapWindow(Display *display, Window w);
 int XMoveResizeWindow(Display *display, Window w, int x, int y, unsigned int width, unsigned int height);
 int XMoveWindow(Display *display, Window w, int x, int y);
@@ -1186,10 +1187,18 @@ Bool XCheckIfEvent(Display *display, XEvent *event_return,
 Bool XCheckTypedEvent(Display *display, int event_type, XEvent *event_return);
 Bool XCheckTypedWindowEvent(Display *display, Window w, int event_type, XEvent *event_return);
 Bool XCheckWindowEvent(Display *display, Window w, long event_mask, XEvent *event_return);
+int XIfEvent(Display *display, XEvent *event_return,
+             Bool (*predicate)(Display *, XEvent *, XPointer),
+             XPointer arg);
+int XPeekIfEvent(Display *display, XEvent *event_return,
+                 Bool (*predicate)(Display *, XEvent *, XPointer),
+                 XPointer arg);
 int XWindowEvent(Display *display, Window w, long event_mask, XEvent *event_return);
 int XEventsQueued(Display *display, int mode);
+int XQLength(Display *display);
 int XLookupString(XKeyEvent *event_struct, char *buffer_return, int bytes_buffer,
                   KeySym *keysym_return, void *status_in_out);
+KeySym XLookupKeysym(XKeyEvent *key_event, int index);
 int XPending(Display *display);
 
 Atom XInternAtom(Display *display, char *atom_name, Bool only_if_exists);
@@ -1268,6 +1277,7 @@ int XFillArc(Display *display, Drawable d, GC gc, int x, int y, unsigned int wid
 int XFillArcs(Display *display, Drawable d, GC gc, void *arcs, int narcs);
 int XFillPolygon(Display *display, Drawable d, GC gc, XPoint *points, int npoints, int shape, int mode);
 int XFillRectangles(Display *display, Drawable d, GC gc, XRectangle *rectangles, int nrectangles);
+int XCopyGC(Display *display, GC src, unsigned long valuemask, GC dest);
 int XChangeGC(Display *display, GC gc, unsigned long valuemask, XGCValues *values);
 int XSetBackground(Display *display, GC gc, unsigned long background);
 int XSetFillStyle(Display *display, GC gc, int fill_style);
@@ -1319,8 +1329,13 @@ Bool XQueryExtension(Display *display, const char *name,
                      int *first_error_return);
 
 int (*XSetErrorHandler(int (*handler)(Display *, XErrorEvent *)))(Display *, XErrorEvent *);
+int (*XSetIOErrorHandler(int (*handler)(Display *)))(Display *);
 char *XDisplayName(const char *string);
+char *XDisplayString(Display *display);
+Screen *XScreenOfDisplay(Display *display, int screen_number);
 int XBell(Display *display, int percent);
+int XAutoRepeatOff(Display *display);
+int XAutoRepeatOn(Display *display);
 int (*XSynchronize(Display *display, Bool onoff))(Display *);
 void XSetCloseDownMode(Display *display, int close_mode);
 void XGrabServer(Display *display);
@@ -1359,6 +1374,7 @@ int XTextWidth(XFontStruct *font_struct, const char *string, int count);
 XVisualInfo *XGetVisualInfo(Display *display, long vinfo_mask,
                             XVisualInfo *vinfo_template,
                             int *nitems_return);
+VisualID XVisualIDFromVisual(Visual *visual);
 int XGetGeometry(Display *display, Drawable d, Window *root_return,
                  int *x_return, int *y_return,
                  unsigned int *width_return, unsigned int *height_return,

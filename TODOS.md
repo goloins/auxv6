@@ -24,3 +24,12 @@ Loosely formatted list of goals of various scope and effort levels
 - Non-PCI follow-up: adopt bdev_unregister in other block providers/detach paths (loop, nvme, ahci where applicable)
 - Non-PCI follow-up: add blockdev lifecycle tests for bdev_unregister (including parent-with-partitions refusal path)
 - Non-PCI follow-up: add operator-facing blockdev registration/unregistration observability in proc/debug output
+
+## fvwm2 port X11 gap work (see docs/fvwm2-x11-gap-plan.md)
+- Implement Tier 1 core WM / event-loop gaps in user/x11.c
+- Implement Tier 2 color management gaps in user/x11.c
+- Implement Tier 3 text / font gaps in user/x11.c
+- Implement Tier 4 image / bitmap gaps in user/x11.c
+- Complete Shape extension (XShapeCombineRegion, XShapeGetRectangles, XShapeInputSelected, XShapeOffsetShape)
+- Implement Tier X Xft gaps (37 symbols: XftInit, XftFontSet*, XftPattern{Add,Get,Dup,Find}, XftObjectSet*, XftListFonts*, XftNameParse, XftValue*) then re-enable HAVE_XFT
+- Evaluate re-enabling HAVE_XRENDER after Render gaps are closed

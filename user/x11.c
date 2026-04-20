@@ -98,6 +98,8 @@ static unsigned long g_next_atom = 128;
 static atom_entry g_atoms[X11_MAX_ATOMS];
 static int g_atom_count;
 static int (*g_error_handler)(Display *, XErrorEvent *);
+static int (*g_io_error_handler)(Display *);
+static int (*g_sync_callback)(Display *);
 static unsigned long g_next_gc = 1;
 static GC g_xft_gc;
 static int g_x11_dbg_count;
@@ -147,6 +149,13 @@ x11_event_queue(Display *display)
   if (!display || !display->event_queue)
     return 0;
   return (XEvent *)display->event_queue;
+}
+
+static int
+x11_sync_noop(Display *display)
+{
+  (void)display;
+  return 0;
 }
 
 static void x11dbg(const char *fmt, ...);
@@ -2844,6 +2853,26 @@ XMapRaised(Display *display, Window w)
 }
 
 int
+XMapSubwindows(Display *display, Window w)
+{
+  Window *children = 0;
+  unsigned int nchildren = 0;
+  unsigned int i;
+
+  if (!display)
+    return -1;
+
+  if (!XQueryTree(display, w, 0, 0, &children, &nchildren) || !children)
+    return 0;
+
+  for (i = 0; i < nchildren; i++)
+    (void)XMapWindow(display, children[i]);
+
+  XFree(children);
+  return 0;
+}
+
+int
 XUnmapWindow(Display *display, Window w)
 {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
@@ -3219,6 +3248,64 @@ XCheckIfEvent(Display *display, XEvent *event_return,
     return True;
 
   return False;
+}
+
+int
+XIfEvent(Display *display, XEvent *event_return,
+         Bool (*predicate)(Display *, XEvent *, XPointer),
+         XPointer arg)
+{
+  XEvent ev;
+
+  if (!display || !event_return || !predicate)
+    return -1;
+
+  while (1) {
+    if (x11_event_find_and_pop_predicate(display, event_return, predicate, arg) == 0)
+      return 0;
+
+    if (x11_read_event_from_wire(display, &ev) < 0) {
+      if (g_io_error_handler)
+        g_io_error_handler(display);
+      return -1;
+    }
+    x11_event_push_back(display, &ev);
+  }
+}
+
+int
+XPeekIfEvent(Display *display, XEvent *event_return,
+             Bool (*predicate)(Display *, XEvent *, XPointer),
+             XPointer arg)
+{
+  XEvent ev;
+
+  if (!display || !event_return || !predicate)
+    return -1;
+
+  while (1) {
+    XEvent *events;
+    int i;
+
+    events = x11_event_queue(display);
+    if (!events)
+      return -1;
+
+    for (i = 0; i < display->event_count; i++) {
+      XEvent candidate = events[i];
+      if (predicate(display, &candidate, arg)) {
+        *event_return = candidate;
+        return 0;
+      }
+    }
+
+    if (x11_read_event_from_wire(display, &ev) < 0) {
+      if (g_io_error_handler)
+        g_io_error_handler(display);
+      return -1;
+    }
+    x11_event_push_back(display, &ev);
+  }
 }
 
 Bool
@@ -4482,6 +4569,46 @@ int XChangeGC(Display *display, GC gc, unsigned long valuemask, XGCValues *value
     gs->dash_offset = values->dash_offset;
   if (valuemask & GCDashList)
     gs->dashes = values->dashes;
+  return 0;
+}
+
+int
+XCopyGC(Display *display, GC src, unsigned long valuemask, GC dest)
+{
+  struct x11_gc_state *src_gs;
+  struct x11_gc_state *dst_gs;
+
+  (void)display;
+  src_gs = x11_find_gc(src);
+  dst_gs = x11_find_gc(dest);
+  if (!src_gs || !dst_gs)
+    return 0;
+
+  if (valuemask & GCForeground)
+    dst_gs->fg = src_gs->fg;
+  if (valuemask & GCBackground)
+    dst_gs->bg = src_gs->bg;
+  if (valuemask & GCFunction)
+    dst_gs->function = src_gs->function;
+  if (valuemask & GCFillStyle)
+    dst_gs->fill_style = src_gs->fill_style;
+  if (valuemask & GCTile)
+    dst_gs->tile = src_gs->tile;
+  if (valuemask & GCTileStipXOrigin)
+    dst_gs->ts_x_origin = src_gs->ts_x_origin;
+  if (valuemask & GCTileStipYOrigin)
+    dst_gs->ts_y_origin = src_gs->ts_y_origin;
+  if (valuemask & GCClipMask)
+    dst_gs->clip_mask = src_gs->clip_mask;
+  if (valuemask & GCClipXOrigin)
+    dst_gs->clip_x_origin = src_gs->clip_x_origin;
+  if (valuemask & GCClipYOrigin)
+    dst_gs->clip_y_origin = src_gs->clip_y_origin;
+  if (valuemask & GCDashOffset)
+    dst_gs->dash_offset = src_gs->dash_offset;
+  if (valuemask & GCDashList)
+    dst_gs->dashes = src_gs->dashes;
+
   return 0;
 }
 
@@ -6064,12 +6191,37 @@ XEventsQueued(Display *display, int mode)
   return display->event_count;
 }
 
+int
+XQLength(Display *display)
+{
+  if (!display)
+    return 0;
+  return display->event_count;
+}
+
 int (*XSetErrorHandler(int (*handler)(Display *, XErrorEvent *)))(Display *, XErrorEvent *) {
   int (*old)(Display *, XErrorEvent *) = g_error_handler;
   g_error_handler = handler;
   return old;
 }
+int (*XSetIOErrorHandler(int (*handler)(Display *)))(Display *) {
+  int (*old)(Display *) = g_io_error_handler;
+  g_io_error_handler = handler;
+  return old;
+}
+int (*XSynchronize(Display *display, Bool onoff))(Display *) {
+  int (*old)(Display *) = g_sync_callback;
+  if (onoff)
+    g_sync_callback = x11_sync_noop;
+  else
+    g_sync_callback = 0;
+  if (display && onoff)
+    (void)XSync(display, False);
+  return old;
+}
 int XBell(Display *display, int percent) { (void)display; (void)percent; return 0; }
+int XAutoRepeatOff(Display *display) { (void)display; return 0; }
+int XAutoRepeatOn(Display *display) { (void)display; return 0; }
 int XAddToSaveSet(Display *display, Window w) { (void)display; (void)w; return 0; }
 int XRemoveFromSaveSet(Display *display, Window w) { (void)display; (void)w; return 0; }
 int XInstallColormap(Display *display, Colormap colormap) {
@@ -6197,6 +6349,17 @@ KeySym XKeycodeToKeysym(Display *display, KeyCode keycode, int index) {
   ks = x11_keycode_to_keysym(keycode);
   if (keycode == 10)
     x11dbg("x11:keycode->keysym keycode=%u -> keysym=0x%lx", (uint)keycode, (unsigned long)ks);
+  return ks;
+}
+KeySym XLookupKeysym(XKeyEvent *key_event, int index) {
+  KeySym ks;
+  if (!key_event)
+    return NoSymbol;
+  ks = x11_keycode_to_keysym((KeyCode)key_event->keycode);
+  if ((key_event->state & ShiftMask) || index > 0) {
+    if (ks >= 'a' && ks <= 'z')
+      ks = (KeySym)(ks - 'a' + 'A');
+  }
   return ks;
 }
 void XDisplayKeycodes(Display *display, int *min_keycodes_return, int *max_keycodes_return) {
@@ -8896,11 +9059,99 @@ XDisplayName(const char *string)
 }
 
 char *
+XDisplayString(Display *display)
+{
+  (void)display;
+  return XDisplayName((const char *)0);
+}
+
+Screen *
+XScreenOfDisplay(Display *display, int screen_number)
+{
+  if (!display)
+    return 0;
+  if (screen_number != 0 && screen_number != display->screen)
+    return 0;
+  return (Screen *)display;
+}
+
+VisualID
+XVisualIDFromVisual(Visual *visual)
+{
+  if (!visual)
+    return 0;
+  return visual->visualid;
+}
+
+char *
 XKeysymToString(KeySym keysym)
 {
-  /* minimal stub — rio only uses this in debug/print paths */
-  (void)keysym;
+  switch ((unsigned long)keysym) {
+    case XK_BackSpace: return "BackSpace";
+    case XK_Tab:       return "Tab";
+    case XK_Return:    return "Return";
+    case XK_Escape:    return "Escape";
+    case XK_Delete:    return "Delete";
+    case XK_Left:      return "Left";
+    case XK_Right:     return "Right";
+    case XK_Up:        return "Up";
+    case XK_Down:      return "Down";
+    case XK_Home:      return "Home";
+    case XK_End:       return "End";
+    case XK_Prior:     return "Prior";
+    case XK_Next:      return "Next";
+    case XK_space:     return "space";
+    default:
+      break;
+  }
+
+  if (keysym >= 32 && keysym < 127) {
+    static char one[2];
+    one[0] = (char)keysym;
+    one[1] = '\0';
+    return one;
+  }
+
   return "?";
+}
+
+KeySym
+XStringToKeysym(const char *string)
+{
+  const char *name;
+  int fnum;
+
+  if (!string || !*string)
+    return NoSymbol;
+
+  if (string[0] && string[1] == '\0')
+    return (KeySym)(unsigned char)string[0];
+
+  name = string;
+  if (strncmp(name, "XK_", 3) == 0)
+    name += 3;
+
+  if (strcmp(name, "BackSpace") == 0) return XK_BackSpace;
+  if (strcmp(name, "Tab") == 0)       return XK_Tab;
+  if (strcmp(name, "Return") == 0)    return XK_Return;
+  if (strcmp(name, "Escape") == 0)    return XK_Escape;
+  if (strcmp(name, "Delete") == 0)    return XK_Delete;
+  if (strcmp(name, "Left") == 0)      return XK_Left;
+  if (strcmp(name, "Right") == 0)     return XK_Right;
+  if (strcmp(name, "Up") == 0)        return XK_Up;
+  if (strcmp(name, "Down") == 0)      return XK_Down;
+  if (strcmp(name, "Home") == 0)      return XK_Home;
+  if (strcmp(name, "End") == 0)       return XK_End;
+  if (strcmp(name, "Prior") == 0 || strcmp(name, "Page_Up") == 0) return XK_Prior;
+  if (strcmp(name, "Next") == 0 || strcmp(name, "Page_Down") == 0) return XK_Next;
+  if (strcmp(name, "space") == 0)     return XK_space;
+
+  if (name[0] == 'F' && sscanf(name + 1, "%d", &fnum) == 1) {
+    if (fnum >= 1 && fnum <= 12)
+      return (KeySym)(XK_F1 + (fnum - 1));
+  }
+
+  return NoSymbol;
 }
 
 Status
