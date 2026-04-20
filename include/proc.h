@@ -1,4 +1,6 @@
 // Shared signal constants/types used by kernel and user ABI.
+#include "types.h"
+#include "param.h"
 #include "stdint.h"
 #include "signal.h"
 #include "sys/types.h"

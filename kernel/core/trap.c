@@ -24,8 +24,8 @@ tvinit(void)
     SETGATE(idt[i], 0, SEG_KCODE<<3, vectors[i], 0);
   SETGATE(idt[T_SYSCALL], 1, SEG_KCODE<<3, vectors[T_SYSCALL], DPL_USER);
 
+  irq_init();   // Initialize dynamic IRQ handlers
   timerinit();
-  irq_init();  // Initialize dynamic IRQ handlers
 }
 
 void

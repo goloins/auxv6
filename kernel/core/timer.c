@@ -40,7 +40,8 @@ timerinit(void)
 
   // Best-effort Phase 1/2 probe: bring up the HPET counter if discovered,
   // while keeping LAPIC as the active interrupt source for scheduling.
-  hpet_init();
+  if(hpet_init() == 0)
+    hpet_start_periodic_test(2);
 }
 
 void
