@@ -20,6 +20,7 @@ main(void)
   kinit1(end, P2V(BOOT_EARLY_PHYSTOP)); // phys page allocator (early mapped window)
   kvmalloc();      // kernel page table
   mpinit();        // detect other processors
+  acpi_init();     // discover ACPI tables (MADT/HPET)
   timercpuinit();  // active timer backend (Phase 0: LAPIC)
   seginit();       // segment descriptors
   picinit();       // disable pic

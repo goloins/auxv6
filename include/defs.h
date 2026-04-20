@@ -32,6 +32,7 @@ struct vaddr_range;
 struct bdevsw;
 struct pci_dev;
 struct vfs;
+struct acpi_hpet_info;
 struct vnode_ops;
 struct mount;
 struct vfs_mount_info;
@@ -216,6 +217,12 @@ int             tty_ldisc_process_output(const struct termios *tp,
 										 int in_len,
 										 char *master_out,
 										 int master_cap);
+
+// acpi.c
+int             acpi_init(void);
+void*           acpi_find_table(const char sig[4]);
+int             acpi_get_hpet_info(struct acpi_hpet_info *out);
+int             acpi_get_interrupt_override(uchar source_irq, uint *gsi_out, ushort *flags_out);
 
 // audio_core.c
 void            audio_init(void);

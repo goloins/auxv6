@@ -36,6 +36,7 @@ OBJS = \
 	kernel/fs/vfs_isofs.o\
 	kernel/fs/vfs_tmpfs.o\
 	kernel/fs/vfs_nfs.o\
+	kernel/driver/acpi.o\
 	kernel/driver/ide.o\
 	kernel/driver/ioapic.o\
 	kernel/driver/pci.o\
