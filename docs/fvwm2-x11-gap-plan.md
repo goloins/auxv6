@@ -89,17 +89,13 @@ Status (2026-04-19): implemented in-tree in `user/x11.c` and headers (`XAddPixel
 
 ### Tier 5 — Shape extension completions
 
+Status (2026-04-19): implemented in-tree in `user/x11.c` and headers (`XShapeCombineRegion`, `XShapeGetRectangles`, `XShapeInputSelected`, `XShapeOffsetShape`).
+
 We have: `XShapeCombineMask`, `XShapeCombineRectangles`, `XShapeCombineShape`,
 `XShapeQueryExtension`, `XShapeQueryExtents`, `XShapeQueryVersion`, `XShapeSelectInput`.
 
-Missing:
-
-| Function | Description |
-|----------|-------------|
-| `XShapeCombineRegion` | Set window shape from an `XRegion` |
-| `XShapeGetRectangles` | Retrieve the shape rect list of a window |
-| `XShapeInputSelected` | Test whether ShapeNotify events are selected |
-| `XShapeOffsetShape` | Translate a window's existing shape |
+Tier 5 additions now present: `XShapeCombineRegion`, `XShapeGetRectangles`,
+`XShapeInputSelected`, `XShapeOffsetShape`.
 
 ### Tier 6 — Keyboard / screen metadata
 
@@ -300,7 +296,7 @@ make -C ports/fvwm-fvwm2-stable -f Makefile.auxv6 clean all 2>&1 | grep -c 'unde
 | T2 Color management | 5 | implemented in-tree (2026-04-19), pending runtime verification |
 | T3 Text / font | 5 | implemented in-tree (2026-04-19), pending runtime verification |
 | T4 Image / bitmap | 5 | implemented in-tree (2026-04-19), pending runtime verification |
-| T5 Shape completions | 4 | implement after T4 |
+| T5 Shape completions | 4 | implemented in-tree (2026-04-19), pending runtime verification |
 | T6 Keyboard / screen meta | 4 | implement with T5 |
 | T7 ICCCM / property helpers | 2 | implement with T5 |
 | T8 Misc GC / region | 5 | implement with T5 |

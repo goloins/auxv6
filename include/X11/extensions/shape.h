@@ -47,6 +47,8 @@ void XShapeCombineRectangles(Display *display, Window dest, int dest_kind,
                              int x_off, int y_off,
                              XRectangle *rectangles, int n_rectangles,
                              int op, int ordering);
+void XShapeCombineRegion(Display *display, Window dest, int dest_kind,
+                         int x_off, int y_off, Region region, int op);
 Status XShapeQueryExtents(Display *display, Window window,
                           Bool *bounding_shaped,
                           int *x_bounding, int *y_bounding,
@@ -56,6 +58,12 @@ Status XShapeQueryExtents(Display *display, Window window,
                           int *x_clip, int *y_clip,
                           unsigned int *w_clip,
                           unsigned int *h_clip);
+XRectangle *XShapeGetRectangles(Display *display, Window window,
+                                int kind, int *count_return,
+                                int *ordering_return);
+Bool XShapeInputSelected(Display *display, Window window);
+void XShapeOffsetShape(Display *display, Window window,
+                       int dest_kind, int x_off, int y_off);
 void XShapeSelectInput(Display *display, Window window,
                        unsigned long mask);
 

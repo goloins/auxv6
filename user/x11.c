@@ -8333,6 +8333,21 @@ void XShapeCombineRectangles(Display *display, Window dest, int dest_kind,
   }
 }
 
+void XShapeCombineRegion(Display *display, Window dest, int dest_kind,
+                         int x_off, int y_off, Region region, int op) {
+  XRectangle rect;
+
+  if (!region) {
+    XShapeCombineRectangles(display, dest, dest_kind, x_off, y_off,
+                            0, 0, op, 0);
+    return;
+  }
+
+  rect = region->extents;
+  XShapeCombineRectangles(display, dest, dest_kind, x_off, y_off,
+                          &rect, 1, op, 0);
+}
+
 Status XShapeQueryExtents(Display *display, Window window,
                           Bool *bounding_shaped,
                           int *x_bounding, int *y_bounding,
@@ -8368,6 +8383,96 @@ Status XShapeQueryExtents(Display *display, Window window,
   if (w_clip && s) *w_clip = s->w_clip;
   if (h_clip && s) *h_clip = s->h_clip;
   return 1;
+}
+
+XRectangle *XShapeGetRectangles(Display *display, Window window,
+                                int kind, int *count_return,
+                                int *ordering_return) {
+  struct x11_shape_state *s;
+  XRectangle *rects;
+  int ww;
+  int wh;
+
+  (void)display;
+
+  if (count_return)
+    *count_return = 0;
+  if (ordering_return)
+    *ordering_return = 0;
+
+  s = x11_find_shape(window);
+  if (!s)
+    return 0;
+
+  rects = (XRectangle *)malloc(sizeof(*rects));
+  if (!rects)
+    return 0;
+  memset(rects, 0, sizeof(*rects));
+
+  if (kind == ShapeClip) {
+    if (!s->clip_shaped) {
+      free(rects);
+      return 0;
+    }
+    rects[0].x = (short)s->x_clip;
+    rects[0].y = (short)s->y_clip;
+    rects[0].width = (unsigned short)s->w_clip;
+    rects[0].height = (unsigned short)s->h_clip;
+  } else {
+    if (!s->bounding_shaped) {
+      ww = 0;
+      wh = 0;
+      if (display && x11_drawable_size(display, window, &ww, &wh) == 0 &&
+          ww > 0 && wh > 0) {
+        rects[0].x = 0;
+        rects[0].y = 0;
+        rects[0].width = (unsigned short)ww;
+        rects[0].height = (unsigned short)wh;
+      } else {
+        free(rects);
+        return 0;
+      }
+    } else {
+      rects[0].x = (short)s->x_bounding;
+      rects[0].y = (short)s->y_bounding;
+      rects[0].width = (unsigned short)s->w_bounding;
+      rects[0].height = (unsigned short)s->h_bounding;
+    }
+  }
+
+  if (count_return)
+    *count_return = 1;
+  return rects;
+}
+
+Bool XShapeInputSelected(Display *display, Window window) {
+  struct x11_shape_state *s;
+
+  (void)display;
+
+  s = x11_find_shape(window);
+  if (!s)
+    return False;
+  return (s->event_mask & ShapeNotifyMask) ? True : False;
+}
+
+void XShapeOffsetShape(Display *display, Window window,
+                       int dest_kind, int x_off, int y_off) {
+  struct x11_shape_state *s;
+
+  s = x11_alloc_shape(display, window);
+  if (!s)
+    return;
+
+  if (dest_kind == ShapeBounding) {
+    s->x_bounding += x_off;
+    s->y_bounding += y_off;
+    x11_emit_shape_notify(display, s, ShapeBounding);
+  } else if (dest_kind == ShapeClip) {
+    s->x_clip += x_off;
+    s->y_clip += y_off;
+    x11_emit_shape_notify(display, s, ShapeClip);
+  }
 }
 
 void XShapeSelectInput(Display *display, Window window,
