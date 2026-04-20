@@ -108,16 +108,30 @@ static int
 hpet_pick_irq(uint route_cap)
 {
   int irq;
+  int fallback;
 
+  fallback = -1;
   for(irq = 16; irq < 32; irq++){
-    if((route_cap & (1U << irq)) && !hpet_irq_reserved(irq))
-      return irq;
+    if((route_cap & (1U << irq)) == 0 || hpet_irq_reserved(irq))
+      continue;
+    if(irq == 2){
+      if(fallback < 0)
+        fallback = irq;
+      continue;
+    }
+    return irq;
   }
   for(irq = 0; irq < 32; irq++){
-    if((route_cap & (1U << irq)) && !hpet_irq_reserved(irq))
-      return irq;
+    if((route_cap & (1U << irq)) == 0 || hpet_irq_reserved(irq))
+      continue;
+    if(irq == 2){
+      if(fallback < 0)
+        fallback = irq;
+      continue;
+    }
+    return irq;
   }
-  return -1;
+  return fallback;
 }
 
 static unsigned long long
@@ -146,14 +160,15 @@ hpet_irq_handler(int irq, void *arg)
 
   mask = 1U << timer;
   status = hpet_read32(HPET_GEN_INT_STATUS);
-  if((status & mask) == 0)
-    return;
+  if(status & mask)
+    hpet_write32(HPET_GEN_INT_STATUS, mask);
 
-  hpet_write32(HPET_GEN_INT_STATUS, mask);
+  /* For edge-triggered HPET delivery the status bit may remain clear, but the
+   * IRQ has still arrived at the CPU. Count the interrupt unconditionally. */
   hpet_test_irq_count++;
   if((hpet_test_irq_count & 0x3fU) == 1)
-    BOOTDBG("hpet: periodic irq=%d timer=%d count=%u\n",
-            irq, timer, hpet_test_irq_count);
+    BOOTDBG("hpet: periodic irq=%d timer=%d count=%u status=%x\n",
+            irq, timer, hpet_test_irq_count, status);
 }
 
 int

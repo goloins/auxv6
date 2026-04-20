@@ -1908,6 +1908,9 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     len = 0;
     if(procfs_buf_puts(buf, sizeof(buf), &len, "backend lapic\n") < 0)
       return -1;
+    if(procfs_buf_puts(buf, sizeof(buf), &len,
+                       ktime_uses_hpet() ? "clocksource hpet\n" : "clocksource tsc\n") < 0)
+      return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "ticks ", now) < 0)
       return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "tick_hz ", 100) < 0)

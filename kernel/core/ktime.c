@@ -11,9 +11,12 @@
 static struct spinlock ktime_lock;
 static uint            ktime_ticks;
 static uint            ktime_tsc_per_tick;
+static uint            ktime_hpet_period_fs;
 static uint64_t        ktime_last_tick_tsc;
+static uint64_t        ktime_last_tick_hpet;
 static uint64_t        ktime_last_ns;
 static int             ktime_realtime_ready;
+static int             ktime_use_hpet;
 static long long       ktime_realtime_offset_ns;
 
 static int
@@ -109,7 +112,16 @@ ktime_monotonic_now_locked(uint64_t now)
   base_ns = (uint64_t)ktime_ticks * KTIME_NSEC_PER_TICK;
   ns = base_ns;
 
-  if(ktime_tsc_per_tick != 0 && ktime_last_tick_tsc != 0 && now > ktime_last_tick_tsc) {
+  if(ktime_use_hpet) {
+    if(ktime_hpet_period_fs != 0 && ktime_last_tick_hpet != 0 && now > ktime_last_tick_hpet) {
+      delta_cycles = now - ktime_last_tick_hpet;
+      scaled_ns = delta_cycles * (uint64_t)ktime_hpet_period_fs;
+      ktime_u64_divmod_u32(scaled_ns, 1000000U, &delta_ns, 0);
+      if(delta_ns >= KTIME_NSEC_PER_TICK)
+        delta_ns = KTIME_NSEC_PER_TICK - 1ULL;
+      ns += delta_ns;
+    }
+  } else if(ktime_tsc_per_tick != 0 && ktime_last_tick_tsc != 0 && now > ktime_last_tick_tsc) {
     delta_cycles = now - ktime_last_tick_tsc;
     scaled_ns = delta_cycles * KTIME_NSEC_PER_TICK;
     ktime_u64_divmod_u32(scaled_ns, ktime_tsc_per_tick, &delta_ns, 0);
@@ -136,9 +148,12 @@ ktime_init(void)
   lockdep_set_rank(&ktime_lock, LOCK_RANK_DEFAULT, "ktime");
   ktime_ticks = 0;
   ktime_tsc_per_tick = 0;
+  ktime_hpet_period_fs = 0;
   ktime_last_tick_tsc = 0;
+  ktime_last_tick_hpet = 0;
   ktime_last_ns = 0;
   ktime_realtime_ready = 0;
+  ktime_use_hpet = 0;
   ktime_realtime_offset_ns = 0;
 
   cmostime(&rtc);
@@ -155,25 +170,48 @@ ktime_tick(uint current_ticks)
   uint64_t sample;
   uint64_t base_ns;
 
-  now = rdtsc();
-
   acquire(&ktime_lock);
-  if(ktime_last_tick_tsc != 0 && now > ktime_last_tick_tsc) {
-    sample = now - ktime_last_tick_tsc;
-    if(sample > 0 && sample <= 0xffffffffULL) {
-      if(ktime_tsc_per_tick == 0)
-        ktime_tsc_per_tick = (uint)sample;
-      else
-        ktime_tsc_per_tick = (uint)((((uint64_t)ktime_tsc_per_tick * 7ULL) + sample) >> 3);
+
+  if(!ktime_use_hpet && hpet_available() && hpet_period_fs() != 0) {
+    ktime_use_hpet = 1;
+    ktime_hpet_period_fs = hpet_period_fs();
+    ktime_last_tick_hpet = hpet_read_counter();
+    BOOTDBG("ktime: clocksource=hpet period_fs=%u\n", ktime_hpet_period_fs);
+  }
+
+  if(ktime_use_hpet) {
+    now = hpet_read_counter();
+    ktime_last_tick_hpet = now;
+  } else {
+    now = rdtsc();
+    if(ktime_last_tick_tsc != 0 && now > ktime_last_tick_tsc) {
+      sample = now - ktime_last_tick_tsc;
+      if(sample > 0 && sample <= 0xffffffffULL) {
+        if(ktime_tsc_per_tick == 0)
+          ktime_tsc_per_tick = (uint)sample;
+        else
+          ktime_tsc_per_tick = (uint)((((uint64_t)ktime_tsc_per_tick * 7ULL) + sample) >> 3);
+      }
     }
+    ktime_last_tick_tsc = now;
   }
 
   ktime_ticks = current_ticks;
-  ktime_last_tick_tsc = now;
   base_ns = (uint64_t)current_ticks * KTIME_NSEC_PER_TICK;
   if(ktime_last_ns < base_ns)
     ktime_last_ns = base_ns;
   release(&ktime_lock);
+}
+
+int
+ktime_uses_hpet(void)
+{
+  int enabled;
+
+  acquire(&ktime_lock);
+  enabled = ktime_use_hpet;
+  release(&ktime_lock);
+  return enabled;
 }
 
 void
@@ -187,9 +225,8 @@ ktime_get_monotonic(struct timespec *ts)
   if(ts == 0)
     return;
 
-  now = rdtsc();
-
   acquire(&ktime_lock);
+  now = ktime_use_hpet ? hpet_read_counter() : rdtsc();
   ns = ktime_monotonic_now_locked(now);
 
   ktime_u64_divmod_u32(ns, KTIME_NSEC_PER_SEC, &seconds, &nanoseconds);
@@ -212,9 +249,8 @@ ktime_get_realtime(struct timespec *ts)
   if(ts == 0)
     return;
 
-  now = rdtsc();
-
   acquire(&ktime_lock);
+  now = ktime_use_hpet ? hpet_read_counter() : rdtsc();
   mono_ns = ktime_monotonic_now_locked(now);
   if(ktime_realtime_ready) {
     realtime_ns = (long long)mono_ns + ktime_realtime_offset_ns;
@@ -251,9 +287,9 @@ ktime_set_realtime(const struct timespec *ts)
     return -1;
 
   target_ns = (uint64_t)ts->tv_sec * KTIME_NSEC_PER_SEC + (uint64_t)ts->tv_nsec;
-  now = rdtsc();
 
   acquire(&ktime_lock);
+  now = ktime_use_hpet ? hpet_read_counter() : rdtsc();
   mono_ns = ktime_monotonic_now_locked(now);
   ktime_realtime_offset_ns = (long long)target_ns - (long long)mono_ns;
   ktime_realtime_ready = 1;

@@ -558,6 +558,7 @@ void            mouseintr(void);
 // ktime.c
 void            ktime_init(void);
 void            ktime_tick(uint current_ticks);
+int             ktime_uses_hpet(void);
 void            ktime_get_monotonic(struct timespec *ts);
 void            ktime_get_realtime(struct timespec *ts);
 int             ktime_set_realtime(const struct timespec *ts);
