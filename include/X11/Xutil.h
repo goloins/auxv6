@@ -53,6 +53,19 @@ typedef struct {
 #define NormalState 1
 #define IconicState 3
 
+#ifndef BitmapSuccess
+#define BitmapSuccess 0
+#endif
+#ifndef BitmapOpenFailed
+#define BitmapOpenFailed 1
+#endif
+#ifndef BitmapFileInvalid
+#define BitmapFileInvalid 2
+#endif
+#ifndef BitmapNoMemory
+#define BitmapNoMemory 3
+#endif
+
 int XSetWMNormalHints(Display *display, Window w, XSizeHints *hints);
 int XSetTransientForHint(Display *display, Window w, Window prop_window);
 int XStoreName(Display *display, Window w, const char *name);

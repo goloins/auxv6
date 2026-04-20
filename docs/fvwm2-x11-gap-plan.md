@@ -77,6 +77,8 @@ Status (2026-04-19): implemented in-tree in `user/x11.c` and headers (`XDrawImag
 
 ### Tier 4 — Image / bitmap
 
+Status (2026-04-19): implemented in-tree in `user/x11.c` and headers (`XAddPixel`, `XGetSubImage`, `XCreateBitmapFromData`, `XReadBitmapFile`, `XQueryBestTile`).
+
 | Function | Xlib description | Notes |
 |----------|-----------------|-------|
 | `XAddPixel` | Add constant to every pixel in XImage | image recoloring |
@@ -297,8 +299,8 @@ make -C ports/fvwm-fvwm2-stable -f Makefile.auxv6 clean all 2>&1 | grep -c 'unde
 | T1 Core WM / event loop | 13 | implemented in-tree (2026-04-19), pending runtime verification |
 | T2 Color management | 5 | implemented in-tree (2026-04-19), pending runtime verification |
 | T3 Text / font | 5 | implemented in-tree (2026-04-19), pending runtime verification |
-| T4 Image / bitmap | 5 | implement with T3 |
-| T5 Shape completions | 4 | implement with T4 |
+| T4 Image / bitmap | 5 | implemented in-tree (2026-04-19), pending runtime verification |
+| T5 Shape completions | 4 | implement after T4 |
 | T6 Keyboard / screen meta | 4 | implement with T5 |
 | T7 ICCCM / property helpers | 2 | implement with T5 |
 | T8 Misc GC / region | 5 | implement with T5 |

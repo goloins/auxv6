@@ -4829,6 +4829,30 @@ int XPutPixel(XImage *ximage, int x, int y, unsigned long pixel) {
   return 1;
 }
 
+int XAddPixel(XImage *ximage, long value) {
+  int x;
+  int y;
+
+  if (!ximage || !ximage->data)
+    return 0;
+
+  for (y = 0; y < ximage->height; y++) {
+    for (x = 0; x < ximage->width; x++) {
+      unsigned long px = XGetPixel(ximage, x, y);
+      unsigned long out;
+      if (value >= 0)
+        out = px + (unsigned long)value;
+      else {
+        unsigned long delta = (unsigned long)(-value);
+        out = (px > delta) ? (px - delta) : 0;
+      }
+      XPutPixel(ximage, x, y, out);
+    }
+  }
+
+  return 1;
+}
+
 XImage *XSubImage(XImage *ximage, int x, int y, unsigned int subimage_width,
                   unsigned int subimage_height) {
   XImage *sub;
@@ -4896,6 +4920,37 @@ XImage *XGetImage(Display *display, Drawable d, int x, int y,
     }
   }
   return img;
+}
+
+XImage *XGetSubImage(Display *display, Drawable d, int x, int y,
+                    unsigned int width, unsigned int height,
+                    unsigned long plane_mask, int format,
+                    XImage *dest_image, int dest_x, int dest_y) {
+  XImage *tmp;
+  unsigned int i;
+  unsigned int j;
+
+  tmp = XGetImage(display, d, x, y, width, height, plane_mask, format);
+  if (!tmp)
+    return 0;
+
+  if (!dest_image)
+    return tmp;
+
+  for (j = 0; j < height; j++) {
+    for (i = 0; i < width; i++) {
+      int tx = dest_x + (int)i;
+      int ty = dest_y + (int)j;
+      unsigned long px;
+      if (tx < 0 || ty < 0 || tx >= dest_image->width || ty >= dest_image->height)
+        continue;
+      px = XGetPixel(tmp, (int)i, (int)j);
+      XPutPixel(dest_image, tx, ty, px);
+    }
+  }
+
+  XDestroyImage(tmp);
+  return dest_image;
 }
 
 int XPutImage(Display *display, Drawable d, GC gc, XImage *image,
@@ -7016,6 +7071,102 @@ int XReadBitmapFileData(const char *filename,
   if (y_hot_return && has_yhot)
     *y_hot_return = (int)yhot;
   return 0;
+}
+
+Pixmap XCreateBitmapFromData(Display *display, Drawable d, char *data,
+                             unsigned int width, unsigned int height) {
+  Pixmap pm;
+  XImage *img;
+  int stride;
+  size_t bytes;
+
+  if (!display || !data || width == 0 || height == 0)
+    return (Pixmap)0;
+
+  pm = XCreatePixmap(display, d, width, height, 1);
+  if (!pm)
+    return (Pixmap)0;
+
+  img = XCreateImage(display, 0, 1, XYPixmap, 0, 0, width, height, 8, 0);
+  if (!img) {
+    XFreePixmap(display, pm);
+    return (Pixmap)0;
+  }
+
+  stride = x11_image_bytes_per_line(width, 1, img->bitmap_pad);
+  if (stride <= 0) {
+    XDestroyImage(img);
+    XFreePixmap(display, pm);
+    return (Pixmap)0;
+  }
+
+  bytes = (size_t)stride * (size_t)height;
+  memcpy(img->data, data, bytes);
+  XPutImage(display, pm, (GC)0, img, 0, 0, 0, 0, width, height);
+  XDestroyImage(img);
+  return pm;
+}
+
+int XReadBitmapFile(Display *display, Drawable d, const char *filename,
+                    unsigned int *width_return,
+                    unsigned int *height_return,
+                    Pixmap *bitmap_return,
+                    int *x_hot_return,
+                    int *y_hot_return) {
+  unsigned char *data = 0;
+  unsigned int width = 0;
+  unsigned int height = 0;
+  int rc;
+  Pixmap pm;
+
+  if (width_return)
+    *width_return = 0;
+  if (height_return)
+    *height_return = 0;
+  if (bitmap_return)
+    *bitmap_return = (Pixmap)0;
+  if (x_hot_return)
+    *x_hot_return = -1;
+  if (y_hot_return)
+    *y_hot_return = -1;
+
+  if (!bitmap_return)
+    return BitmapFileInvalid;
+
+  rc = XReadBitmapFileData(filename, &width, &height, &data,
+                           x_hot_return, y_hot_return);
+  if (rc == 1)
+    return BitmapOpenFailed;
+  if (rc == 3)
+    return BitmapNoMemory;
+  if (rc != 0)
+    return BitmapFileInvalid;
+
+  pm = XCreateBitmapFromData(display, d, (char *)data, width, height);
+  free(data);
+  if (!pm)
+    return BitmapNoMemory;
+
+  *bitmap_return = pm;
+  if (width_return)
+    *width_return = width;
+  if (height_return)
+    *height_return = height;
+  return BitmapSuccess;
+}
+
+Status XQueryBestTile(Display *display, Drawable d,
+                      unsigned int width, unsigned int height,
+                      unsigned int *width_return,
+                      unsigned int *height_return) {
+  (void)display;
+  (void)d;
+
+  if (width_return)
+    *width_return = width ? width : 1;
+  if (height_return)
+    *height_return = height ? height : 1;
+  return 1;
 }
 int XGetWMProtocols(Display *display, Window w, Atom **protocols_return, int *count_return) {
   unsigned char *prop = 0;

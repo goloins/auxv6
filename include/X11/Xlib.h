@@ -1317,6 +1317,23 @@ XImage *XSubImage(XImage *ximage, int x, int y, unsigned int subimage_width,
                   unsigned int subimage_height);
 unsigned long XGetPixel(XImage *ximage, int x, int y);
 int XPutPixel(XImage *ximage, int x, int y, unsigned long pixel);
+int XAddPixel(XImage *ximage, long value);
+XImage *XGetSubImage(Display *display, Drawable d, int x, int y,
+                     unsigned int width, unsigned int height,
+                     unsigned long plane_mask, int format,
+                     XImage *dest_image, int dest_x, int dest_y);
+Pixmap XCreateBitmapFromData(Display *display, Drawable d, char *data,
+                             unsigned int width, unsigned int height);
+int XReadBitmapFile(Display *display, Drawable d, const char *filename,
+                    unsigned int *width_return,
+                    unsigned int *height_return,
+                    Pixmap *bitmap_return,
+                    int *x_hot_return,
+                    int *y_hot_return);
+Status XQueryBestTile(Display *display, Drawable d,
+                      unsigned int width, unsigned int height,
+                      unsigned int *width_return,
+                      unsigned int *height_return);
 
 Region XCreateRegion(void);
 int XUnionRectWithRegion(XRectangle *rectangle, Region src_region,
