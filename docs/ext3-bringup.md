@@ -16,11 +16,12 @@
 - Userland helper parity for the current probe-only flow exists via [targetfs/sbin/mount.ext3](targetfs/sbin/mount.ext3).
 - Validation for this bring-up path is currently manual by design. Manual image/QEMU targets remain in [Makefile](Makefile), while guest automation harnesses for ext3 bring-up were intentionally removed.
 - Manual validation now covers both the readable ext3 secondary-volume path and the recovery-required reject path. On April 20, 2026, `mount /dev/vda ext3fs /mnt/ext3rec ro` against the recovery image failed as expected.
+- Manual validation also reconfirmed after journal-scan changes that the readable ext3 probe path still succeeds and the recovery-required image still rejects as expected.
 
 ## Immediate Next Goals
 
 - Add a short manual validation recipe for the supported journal-discovery path, including the expected login-prompt-driven guest workflow.
-- Start Phase 2 replay work from the discovered journal superblock state rather than adding any new mount-surface complexity.
+- Start Phase 2 replay work from the discovered journal superblock state and last fully committed transaction summary rather than adding any new mount-surface complexity.
 
 ### Goals
 - Add a dedicated ext3 filesystem backend selectable via mount fstype ext3/ext3fs.
@@ -261,7 +262,7 @@ Phase 1 status: complete for the intended probe-only split.
 - Recovery replays committed metadata changes after crash simulation.
 - No replay of uncommitted transactions.
 
-Phase 2 status: journal discovery and read-only journal record scanning are in place; committed-transaction application and checkpoint handling remain unimplemented.
+Phase 2 status: journal discovery, read-only journal record scanning, and last-committed-transaction summary are in place; committed-transaction application and checkpoint handling remain unimplemented.
 
 ---
 

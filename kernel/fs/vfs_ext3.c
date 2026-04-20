@@ -28,17 +28,20 @@ ext3_mount_init(struct mount *m)
   if(ext3_journal_discover(data) < 0){
     MOUNTDBG("ext3: journal discovery failed dev=%d inum=%u\n",
              data->dev, data->sb.s_journal_inum);
-    kfree((char*)data);
+    kmalloc_free(data);
     return -1;
   }
 
   m->fs_data = data;
-  MOUNTDBG("ext3: mount ok dev=%d block=%d groups=%d journal_inum=%u journal_max=%u tx=%u desc=%u data=%u rev=%u commit=%u readonly-probe\n",
+  MOUNTDBG("ext3: mount ok dev=%d block=%d groups=%d journal_inum=%u journal_max=%u tx=%u desc=%u data=%u rev=%u commit=%u committed_data=%u open_data=%u last_commit=%u last_desc_blk=%u last_commit_blk=%u replay_seed=%d readonly-probe\n",
            data->dev, data->block_size, data->group_count,
            data->journal.inode_num, data->journal.maxlen,
            data->journal.transaction_count, data->journal.descriptor_blocks,
            data->journal.data_blocks, data->journal.revoke_blocks,
-           data->journal.commit_blocks);
+           data->journal.commit_blocks, data->journal.committed_data_blocks,
+           data->journal.open_data_blocks, data->journal.last_commit_sequence,
+           data->journal.last_descriptor_block, data->journal.last_commit_block,
+           data->journal.replay_seed_valid);
   return 0;
 }
 

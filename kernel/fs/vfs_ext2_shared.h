@@ -64,6 +64,16 @@ struct ext2_mount_data {
     uint revoke_blocks;
     uint commit_blocks;
     uint transaction_count;
+    uint committed_data_blocks;
+    uint committed_revoke_blocks;
+    uint open_data_blocks;
+    uint open_revoke_blocks;
+    uint last_commit_sequence;
+    uint last_descriptor_block;
+    uint last_commit_block;
+    uint last_data_blocks;
+    uint last_revoke_blocks;
+    int replay_seed_valid;
     uint end_sequence;
     int valid;
   } journal;

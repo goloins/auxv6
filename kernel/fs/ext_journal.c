@@ -104,6 +104,10 @@ ext3_journal_scan(struct ext2_mount_data *data, struct ext2_inode *journal_inode
   uint cur;
   uint seq;
   uint scanned;
+  uint open_data_blocks;
+  uint open_revoke_blocks;
+  uint open_descriptor_block;
+  int transaction_open;
 
   if(data == 0 || journal_inode == 0)
     return -1;
@@ -113,6 +117,16 @@ ext3_journal_scan(struct ext2_mount_data *data, struct ext2_inode *journal_inode
   data->journal.revoke_blocks = 0;
   data->journal.commit_blocks = 0;
   data->journal.transaction_count = 0;
+  data->journal.committed_data_blocks = 0;
+  data->journal.committed_revoke_blocks = 0;
+  data->journal.open_data_blocks = 0;
+  data->journal.open_revoke_blocks = 0;
+  data->journal.last_commit_sequence = 0;
+  data->journal.last_descriptor_block = 0;
+  data->journal.last_commit_block = 0;
+  data->journal.last_data_blocks = 0;
+  data->journal.last_revoke_blocks = 0;
+  data->journal.replay_seed_valid = 0;
   data->journal.end_sequence = data->journal.sequence;
 
   if(data->journal.start == 0)
@@ -125,6 +139,10 @@ ext3_journal_scan(struct ext2_mount_data *data, struct ext2_inode *journal_inode
   cur = data->journal.start;
   seq = data->journal.sequence;
   scanned = 0;
+  open_data_blocks = 0;
+  open_revoke_blocks = 0;
+  open_descriptor_block = 0;
+  transaction_open = 0;
 
   while(scanned < data->journal.maxlen){
     uint magic;
@@ -153,6 +171,10 @@ ext3_journal_scan(struct ext2_mount_data *data, struct ext2_inode *journal_inode
       int tags;
       uint step;
 
+      if(transaction_open){
+        kfree(buf);
+        return -1;
+      }
       tags = ext3_journal_descriptor_tags(buf, data->block_size);
       if(tags <= 0){
         kfree(buf);
@@ -165,25 +187,50 @@ ext3_journal_scan(struct ext2_mount_data *data, struct ext2_inode *journal_inode
       }
       data->journal.descriptor_blocks++;
       data->journal.data_blocks += (uint)tags;
+      open_descriptor_block = cur;
+      open_data_blocks = (uint)tags;
+      open_revoke_blocks = 0;
+      transaction_open = 1;
       cur = ext3_journal_advance(data, cur, step);
       scanned += step;
       continue;
     }
 
     if(blocktype == EXT3_JBD_REVOKE_BLOCK){
+      if(!transaction_open){
+        kfree(buf);
+        return -1;
+      }
       if(!ext3_journal_revoke_valid(buf, data->block_size)){
         kfree(buf);
         return -1;
       }
       data->journal.revoke_blocks++;
+      open_revoke_blocks++;
       cur = ext3_journal_advance(data, cur, 1);
       scanned++;
       continue;
     }
 
     if(blocktype == EXT3_JBD_COMMIT_BLOCK){
+      if(!transaction_open){
+        kfree(buf);
+        return -1;
+      }
       data->journal.commit_blocks++;
       data->journal.transaction_count++;
+      data->journal.committed_data_blocks += open_data_blocks;
+      data->journal.committed_revoke_blocks += open_revoke_blocks;
+      data->journal.last_commit_sequence = seq;
+      data->journal.last_descriptor_block = open_descriptor_block;
+      data->journal.last_commit_block = cur;
+      data->journal.last_data_blocks = open_data_blocks;
+      data->journal.last_revoke_blocks = open_revoke_blocks;
+      data->journal.replay_seed_valid = 1;
+      open_descriptor_block = 0;
+      open_data_blocks = 0;
+      open_revoke_blocks = 0;
+      transaction_open = 0;
       seq++;
       cur = ext3_journal_advance(data, cur, 1);
       scanned++;
@@ -194,6 +241,8 @@ ext3_journal_scan(struct ext2_mount_data *data, struct ext2_inode *journal_inode
     return -1;
   }
 
+  data->journal.open_data_blocks = open_data_blocks;
+  data->journal.open_revoke_blocks = open_revoke_blocks;
   data->journal.end_sequence = seq;
   kfree(buf);
   return 0;

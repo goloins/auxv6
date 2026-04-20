@@ -2905,9 +2905,10 @@ ext2_mount_setup(struct mount *m, int target, struct ext2_mount_data **out_data)
 {
   struct ext2_mount_data *data;
   struct ext_mount_probe probe;
+  struct ext_superblock sb;
   uint gd_off;
   uint gd_bytes;
-  uint gd_capacity;
+  uint total_bytes;
   int stage;
 
   stage = 0;
@@ -2918,44 +2919,49 @@ ext2_mount_setup(struct mount *m, int target, struct ext2_mount_data **out_data)
   if(bdev_nblocks(m->dev) == 0)
     return -1;
 
-  data = (struct ext2_mount_data *)kalloc();
-  if(data == 0)
-    return -1;
-  memset(data, 0, sizeof(*data));
-
-  data->dev = m->dev;
+  data = 0;
+  memset(&sb, 0, sizeof(sb));
   stage = 2;
-  if(ext2_dev_read(data->dev, EXT_SB_OFFSET, (char*)&data->sb, sizeof(data->sb)) < 0)
+  if(ext2_dev_read(m->dev, EXT_SB_OFFSET, (char*)&sb, sizeof(sb)) < 0)
     goto fail;
 
   stage = 3;
-  if(ext_mount_probe_superblock(&data->sb, target,
+  if(ext_mount_probe_superblock(&sb, target,
                                 (m->flags & MNT_RDONLY) != 0, &probe) < 0){
     MOUNTDBG("ext: mount reject dev=%d target=%d reason=%s compat=%x incompat=%x ro=%x\n",
-             data->dev, target, ext_mount_reject_reason_name(probe.reason),
+             m->dev, target, ext_mount_reject_reason_name(probe.reason),
              probe.compat, probe.incompat, probe.ro_compat);
     goto fail;
   }
 
-  stage = 4;
+  stage = 5;
+  gd_bytes = ((sb.s_blocks_count - sb.s_first_data_block +
+               sb.s_blocks_per_group - 1) /
+              sb.s_blocks_per_group) * sizeof(struct ext2_group_desc);
+  if(gd_bytes == 0)
+    goto fail;
+
+  stage = 6;
+  total_bytes = sizeof(*data) + gd_bytes;
+  if(total_bytes < sizeof(*data) || total_bytes < gd_bytes)
+    goto fail;
+
+  data = (struct ext2_mount_data *)kmalloc(total_bytes);
+  if(data == 0)
+    return -1;
+  memset(data, 0, total_bytes);
+  data->dev = m->dev;
+  memmove(&data->sb, &sb, sizeof(sb));
   data->block_size = probe.block_size;
   data->inode_size = probe.inode_size;
-
-  stage = 5;
   data->group_count = (data->sb.s_blocks_count - data->sb.s_first_data_block +
                        data->sb.s_blocks_per_group - 1) /
                       data->sb.s_blocks_per_group;
   if(data->group_count == 0)
     goto fail;
 
-  stage = 6;
-  gd_bytes = data->group_count * sizeof(struct ext2_group_desc);
-  gd_capacity = PGSIZE - sizeof(*data);
-  if(gd_bytes > gd_capacity)
-    goto fail;
-
   data->group_descs = (struct ext2_group_desc*)((char*)data + sizeof(*data));
-  memset((char*)data->group_descs, 0, gd_capacity);
+  memset((char*)data->group_descs, 0, gd_bytes);
 
   stage = 7;
   gd_off = (data->sb.s_first_data_block + 1) * data->block_size;
@@ -2968,7 +2974,8 @@ ext2_mount_setup(struct mount *m, int target, struct ext2_mount_data **out_data)
 fail:
   MOUNTDBG("ext: mount failed dev=%d target=%d stage=%d\n",
            m ? m->dev : -1, target, stage);
-  kfree((char*)data);
+  if(data)
+    kmalloc_free(data);
   return -1;
 }
 
