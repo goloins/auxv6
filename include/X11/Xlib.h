@@ -508,6 +508,18 @@ typedef struct {
   Display *display;
   Window event;
   Window window;
+  Window parent;
+  int x, y;
+  Bool override_redirect;
+} XReparentEvent;
+
+typedef struct {
+  int type;
+  unsigned long serial;
+  Bool send_event;
+  Display *display;
+  Window event;
+  Window window;
   Bool from_configure;
 } XUnmapEvent;
 
@@ -578,6 +590,17 @@ typedef struct {
   Time time;
   int state;
 } XPropertyEvent;
+
+typedef struct {
+  int type;
+  unsigned long serial;
+  Bool send_event;
+  Display *display;
+  Window window;
+  Colormap colormap;
+  Bool c_new;
+  int state;
+} XColormapEvent;
 
 typedef struct {
   int type;
@@ -670,6 +693,7 @@ typedef union {
   XExposeEvent xexpose;
   XVisibilityEvent xvisibility;
   XCreateWindowEvent xcreatewindow;
+  XReparentEvent xreparent;
   XMapEvent xmap;
   XMapRequestEvent xmaprequest;
   XUnmapEvent xunmap;
@@ -677,6 +701,7 @@ typedef union {
   XConfigureRequestEvent xconfigurerequest;
   XDestroyWindowEvent xdestroywindow;
   XPropertyEvent xproperty;
+  XColormapEvent xcolormap;
   XSelectionClearEvent xselectionclear;
   XSelectionRequestEvent xselectionrequest;
   XSelectionEvent xselection;
@@ -773,6 +798,7 @@ typedef struct {
 #define SubstructureRedirectMask (1L << 20)
 #define FocusChangeMask (1L << 21)
 #define PropertyChangeMask (1L << 22)
+#define ColormapChangeMask (1L << 23)
 #define VisibilityChangeMask (1L << 15)
 
 #define ShiftMask (1 << 0)
@@ -893,6 +919,9 @@ typedef struct {
 #define VisibilityUnobscured 0
 #define VisibilityPartiallyObscured 1
 #define VisibilityFullyObscured 2
+
+#define ColormapUninstalled 0
+#define ColormapInstalled 1
 
 #define NoSymbol 0L
 #define XBufferOverflow 0
@@ -1193,6 +1222,10 @@ int XSetWindowBorderWidth(Display *display, Window w, unsigned int width);
 int XSetWindowBackground(Display *display, Window w, unsigned long background_pixel);
 int XSetWindowBackgroundPixmap(Display *display, Window w, Pixmap background_pixmap);
 int XUndefineCursor(Display *display, Window w);
+Pixmap XCreatePixmapFromBitmapData(Display *display, Drawable d, char *data,
+                                   unsigned int width, unsigned int height,
+                                   unsigned long fg, unsigned long bg,
+                                   unsigned int depth);
 Cursor XCreatePixmapCursor(Display *display, Pixmap source, Pixmap mask,
                            XColor *foreground_color, XColor *background_color,
                            unsigned int x, unsigned int y);

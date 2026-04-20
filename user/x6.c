@@ -59,7 +59,10 @@
 #define X6_MASK_ENTER_WINDOW (1L << 4)
 #define X6_MASK_LEAVE_WINDOW (1L << 5)
 #define X6_MASK_EXPOSURE (1L << 15)
+#define X6_MASK_STRUCTURE_NOTIFY (1L << 17)
+#define X6_MASK_SUBSTRUCTURE_NOTIFY (1L << 19)
 #define X6_MASK_PROPERTY_CHANGE (1L << 22)
+#define X6_MASK_COLORMAP_CHANGE (1L << 23)
 #define X6_SHAPE_NOTIFY_MASK (1L << 0)
 #define X6_DAMAGE_NOTIFY_MASK (1L << 0)
 #define X6_RANDR_NOTIFY_MASKS ((1L << 0) | (1L << 1) | (1L << 2) | (1L << 3))
@@ -88,6 +91,9 @@
 #define X6_EVENT_DAMAGE_NOTIFY 21
 #define X6_EVENT_SHAPE_NOTIFY 22
 #define X6_EVENT_RANDR_NOTIFY 23
+#define X6_EVENT_CREATE_NOTIFY 24
+#define X6_EVENT_REPARENT_NOTIFY 25
+#define X6_EVENT_COLORMAP_NOTIFY 26
 
 // X11 CWStackMode values carried over wire by XConfigureWindow.
 #define X6_STACKMODE_ABOVE 0
@@ -175,6 +181,9 @@ struct x6_window {
   uint cursor;
   int z;
   long event_mask;  /* X11 event mask registered via SELECT_EVENTS / XSelectInput */
+  uint background_pixmap;
+  uint background_pixel;
+  uint colormap;
   long shape_owner_mask;
   long shape_wm_mask;
   long damage_owner_mask;
@@ -324,6 +333,8 @@ x6consolecrit(const char *fmt, ...)
 // WM state (Phase 2.1b: SubstructureRedirect semantics)
 static int wm_has_redirect = 0;  // Does WM hold SubstructureRedirect on root?
 static int wm_redirect_root = 1; // Root window ID is always 1
+static long wm_root_event_mask = 0;
+static uint x6_installed_colormap = 1;
 
 // Focus and keyboard state (Phase 2.1c)
 static uint focus_wid = 0;          // Currently focused window (0 = no focus)
@@ -420,6 +431,10 @@ static void x6_clear_button_grabs_for_fd(int owner_fd);
 static void x6_disconnect_client(struct x6_client *client);
 static int x6_flush_client_events(struct x6_client *client);
 static void x6_enqueue_property_notify(struct x6_window *win, const char *atom, int state);
+static void x6_enqueue_create_notify(struct x6_window *win);
+static void x6_enqueue_reparent_notify(struct x6_window *win, uint old_parent);
+static void x6_enqueue_colormap_notify(struct x6_window *win, uint colormap, int is_new, int state);
+static int x6_fill_window_background(struct x6_window *win, int x, int y, int w, int h);
 static void x6_event_queue_drop_extension_for_window(struct x6_event_queue *q, uint wid);
 static int x6_event_queue_merge_expose(struct x6_event_queue *q, struct x6_event *evt);
 static int x6_event_queue_merge_damage(struct x6_event_queue *q, struct x6_event *evt);
@@ -2073,6 +2088,172 @@ x6_enqueue_property_notify(struct x6_window *win, const char *atom, int state)
 }
 
 static void
+x6_enqueue_create_notify(struct x6_window *win)
+{
+  struct x6_event evt;
+  struct x6_window *parent_win;
+  struct x6_event_queue *q;
+
+  if(!win)
+    return;
+
+  q = 0;
+  if(win->parent == (uint)wm_redirect_root) {
+    if(wm_event_queue && (wm_root_event_mask & X6_MASK_SUBSTRUCTURE_NOTIFY))
+      q = wm_event_queue;
+  } else {
+    parent_win = find_window(win->parent);
+    if(parent_win && (parent_win->event_mask & X6_MASK_SUBSTRUCTURE_NOTIFY))
+      q = x6_queue_for_window(parent_win->id);
+  }
+  if(!q)
+    return;
+
+  memset(&evt, 0, sizeof(evt));
+  evt.type = X6_EVENT_CREATE_NOTIFY;
+  evt.wid = win->id;
+  evt.requestor = win->parent;
+  evt.x = win->x;
+  evt.y = win->y;
+  evt.w = win->w;
+  evt.h = win->h;
+  evt.detail = win->border_width;
+  evt.state = win->override_redirect ? 1U : 0U;
+  x6_event_queue_enqueue(q, &evt);
+}
+
+static void
+x6_enqueue_reparent_notify(struct x6_window *win, uint old_parent)
+{
+  struct x6_event evt;
+  struct x6_window *parent_win;
+  struct x6_event_queue *q;
+
+  if(!win)
+    return;
+
+  /* StructureNotify on the child itself. */
+  if(win->event_mask & X6_MASK_STRUCTURE_NOTIFY) {
+    q = x6_queue_for_window(win->id);
+    if(q) {
+      memset(&evt, 0, sizeof(evt));
+      evt.type = X6_EVENT_REPARENT_NOTIFY;
+      evt.wid = win->id;
+      evt.requestor = win->parent;
+      evt.data1 = win->id;
+      evt.data0 = old_parent;
+      evt.x = win->x;
+      evt.y = win->y;
+      evt.state = win->override_redirect ? 1U : 0U;
+      x6_event_queue_enqueue(q, &evt);
+    }
+  }
+
+  /* SubstructureNotify on the new parent. */
+  q = 0;
+  if(win->parent == (uint)wm_redirect_root) {
+    if(wm_event_queue && (wm_root_event_mask & X6_MASK_SUBSTRUCTURE_NOTIFY))
+      q = wm_event_queue;
+  } else {
+    parent_win = find_window(win->parent);
+    if(parent_win && (parent_win->event_mask & X6_MASK_SUBSTRUCTURE_NOTIFY))
+      q = x6_queue_for_window(parent_win->id);
+  }
+  if(q) {
+    memset(&evt, 0, sizeof(evt));
+    evt.type = X6_EVENT_REPARENT_NOTIFY;
+    evt.wid = win->id;
+    evt.requestor = win->parent;
+    evt.data1 = win->parent;
+    evt.data0 = old_parent;
+    evt.x = win->x;
+    evt.y = win->y;
+    evt.state = win->override_redirect ? 1U : 0U;
+    x6_event_queue_enqueue(q, &evt);
+  }
+}
+
+static void
+x6_enqueue_colormap_notify(struct x6_window *win, uint colormap, int is_new, int state)
+{
+  struct x6_event evt;
+  struct x6_event_queue *q;
+
+  if(!win)
+    return;
+  if((win->event_mask & X6_MASK_COLORMAP_CHANGE) == 0)
+    return;
+
+  q = x6_queue_for_window(win->id);
+  if(!q)
+    return;
+
+  memset(&evt, 0, sizeof(evt));
+  evt.type = X6_EVENT_COLORMAP_NOTIFY;
+  evt.wid = win->id;
+  evt.data0 = colormap;
+  evt.data1 = is_new ? 1U : 0U;
+  evt.state = state ? 1U : 0U;
+  x6_event_queue_enqueue(q, &evt);
+}
+
+static int
+x6_fill_window_background(struct x6_window *win, int x, int y, int w, int h)
+{
+  int x0;
+  int y0;
+  int x1;
+  int y1;
+  int dx;
+  int dy;
+
+  if(!win)
+    return -1;
+  if(w <= 0 || h <= 0)
+    return -1;
+
+  x0 = x;
+  y0 = y;
+  x1 = x + w;
+  y1 = y + h;
+  if(x0 < 0)
+    x0 = 0;
+  if(y0 < 0)
+    y0 = 0;
+  if(x1 > win->w)
+    x1 = win->w;
+  if(y1 > win->h)
+    y1 = win->h;
+  if(x1 <= x0 || y1 <= y0)
+    return -1;
+
+  if(win->background_pixmap > 1U) {
+    struct x6_pixmap *pm;
+
+    pm = find_pixmap(win->background_pixmap);
+    if(pm && pm->width > 0 && pm->height > 0) {
+      for(dy = y0; dy < y1; dy++) {
+        int sy = dy % pm->height;
+        if(sy < 0)
+          sy += pm->height;
+        for(dx = x0; dx < x1; dx++) {
+          int sx = dx % pm->width;
+          uint pix;
+          if(sx < 0)
+            sx += pm->width;
+          pix = pm->pixels[(size_t)sy * (size_t)pm->width + (size_t)sx] & 0x00ffffffU;
+          x6_canvas_fill_pixels(win->x + dx, win->y + dy, 1, 1, pix);
+        }
+      }
+      return 0;
+    }
+  }
+
+  x6_canvas_fill_pixels(win->x + x0, win->y + y0, x1 - x0, y1 - y0, win->background_pixel);
+  return 0;
+}
+
+static void
 x6_enqueue_expose_notify(struct x6_window *win, int x, int y, int w, int h)
 {
   struct x6_event evt;
@@ -2844,6 +3025,9 @@ alloc_window(uint id)
       wins[i].cursor = 0;
       wins[i].z = x6_next_z++;
       wins[i].event_mask = 0;
+      wins[i].background_pixmap = 0;
+      wins[i].background_pixel = 0;
+      wins[i].colormap = 1;
       wins[i].shape_owner_mask = 0;
       wins[i].shape_wm_mask = 0;
       wins[i].damage_owner_mask = 0;
@@ -3273,6 +3457,7 @@ handle_one_command(int cfd, char *cmd)
       {
         char out[96];
         snprintf(out, sizeof(out), "OK create wid=%u parent=%u\n", id, win->parent);
+        x6_enqueue_create_notify(win);
         x6_send_line(cfd, out);
       }
       return;
@@ -3459,6 +3644,7 @@ handle_one_command(int cfd, char *cmd)
 
   if(sscanf(cmd, "REPARENT %u %u %d %d", &id, &color, &x, &y) == 4) {
     uint parent_id;
+    uint old_parent;
     struct x6_window *parent_win;
     struct x6_window *walker;
 
@@ -3495,9 +3681,11 @@ handle_one_command(int cfd, char *cmd)
       walker = find_window(walker->parent);
     }
 
+    old_parent = win->parent;
     win->parent = parent_id;
     win->x = x;
     win->y = y;
+    x6_enqueue_reparent_notify(win, old_parent);
     x6_enqueue_shape_notify(win, 0, win->mapped ? 1 : 0);
     if(win->mapped)
       x6_enqueue_randr_notify(win->id, win->w, win->h);
@@ -5406,6 +5594,119 @@ handle_one_command(int cfd, char *cmd)
     x6_send_line(cfd, "OK border_color_set\n");
     return;
   }
+  if(strncmp(cmd, "SET_WINDOW_BACKGROUND_PIXMAP", 27) == 0) {
+    uint wid;
+    uint pmid;
+    struct x6_window *bwin;
+
+    if(sscanf(cmd, "SET_WINDOW_BACKGROUND_PIXMAP %u %u", &wid, &pmid) != 2) {
+      x6_send_line(cfd, "ERR bad-syntax\n");
+      return;
+    }
+
+    bwin = find_window(wid);
+    if(!bwin) {
+      x6_send_line(cfd, "ERR no-such-window\n");
+      return;
+    }
+    if(pmid > 1U && !find_pixmap(pmid)) {
+      x6_send_line(cfd, "ERR no-such-pixmap\n");
+      return;
+    }
+
+    bwin->background_pixmap = pmid;
+    x6_send_line(cfd, "OK background_pixmap_set\n");
+    return;
+  }
+  if(strncmp(cmd, "SET_WINDOW_BACKGROUND_PIXEL", 26) == 0) {
+    uint wid;
+    uint pix;
+    struct x6_window *bwin;
+
+    if(sscanf(cmd, "SET_WINDOW_BACKGROUND_PIXEL %u %u", &wid, &pix) != 2) {
+      x6_send_line(cfd, "ERR bad-syntax\n");
+      return;
+    }
+
+    bwin = find_window(wid);
+    if(!bwin) {
+      x6_send_line(cfd, "ERR no-such-window\n");
+      return;
+    }
+
+    bwin->background_pixel = pix & 0x00ffffffU;
+    x6_send_line(cfd, "OK background_pixel_set\n");
+    return;
+  }
+  if(strncmp(cmd, "SET_WINDOW_COLORMAP", 19) == 0) {
+    uint wid;
+    uint cmap;
+    struct x6_window *cwin;
+
+    if(sscanf(cmd, "SET_WINDOW_COLORMAP %u %u", &wid, &cmap) != 2) {
+      x6_send_line(cfd, "ERR bad-syntax\n");
+      return;
+    }
+
+    cwin = find_window(wid);
+    if(!cwin) {
+      x6_send_line(cfd, "ERR no-such-window\n");
+      return;
+    }
+
+    cwin->colormap = cmap ? cmap : 1U;
+    x6_enqueue_colormap_notify(cwin, cwin->colormap, 1, cwin->colormap == x6_installed_colormap ? 1 : 0);
+    x6_send_line(cfd, "OK colormap_set\n");
+    return;
+  }
+  if(strncmp(cmd, "INSTALL_COLORMAP", 16) == 0) {
+    uint cmap;
+    int wi;
+
+    if(sscanf(cmd, "INSTALL_COLORMAP %u", &cmap) != 1) {
+      x6_send_line(cfd, "ERR bad-syntax\n");
+      return;
+    }
+
+    x6_installed_colormap = cmap ? cmap : 1U;
+    for(wi = 0; wi < X6_MAX_WINDOWS; wi++) {
+      if(!wins[wi].in_use)
+        continue;
+      x6_enqueue_colormap_notify(&wins[wi], x6_installed_colormap, 0,
+                                 wins[wi].colormap == x6_installed_colormap ? 1 : 0);
+    }
+    x6_send_line(cfd, "OK colormap_installed\n");
+    return;
+  }
+  if(strncmp(cmd, "CLEAR_AREA", 10) == 0) {
+    uint wid;
+    int cx;
+    int cy;
+    int cw;
+    int ch;
+    int expose;
+    struct x6_window *cwin;
+
+    if(sscanf(cmd, "CLEAR_AREA %u %d %d %d %d %d", &wid, &cx, &cy, &cw, &ch, &expose) != 6) {
+      x6_send_line(cfd, "ERR bad-syntax\n");
+      return;
+    }
+    cwin = find_window(wid);
+    if(!cwin) {
+      x6_send_line(cfd, "ERR no-such-window\n");
+      return;
+    }
+    if(cw <= 0)
+      cw = cwin->w;
+    if(ch <= 0)
+      ch = cwin->h;
+    if(x6_fill_window_background(cwin, cx, cy, cw, ch) == 0)
+      x6_enqueue_damage_notify(cwin, cx, cy, cw, ch);
+    if(expose)
+      x6_enqueue_expose_notify(cwin, cx, cy, cw, ch);
+    x6_send_line(cfd, "OK cleared\n");
+    return;
+  }
   if(strncmp(cmd, "SET_OVERRIDE_REDIRECT", 21) == 0) {
     uint wid;
     int flag;
@@ -5435,6 +5736,8 @@ handle_one_command(int cfd, char *cmd)
     win = find_window(wid);
     if(!win) {
       /* Allow root window subscription even if not in wins[] table. */
+      if(wid == (uint)wm_redirect_root)
+        wm_root_event_mask = mask;
       x6_send_line(cfd, "OK events_set\n");
       return;
     }
@@ -5648,6 +5951,19 @@ x6_flush_client_events(struct x6_client *client)
       snprintf(eventbuf, sizeof(eventbuf),
                "EVENT RandRNotify wid=%u width=%d height=%d\n",
                evt.wid, evt.w, evt.h);
+    } else if(evt.type == X6_EVENT_CREATE_NOTIFY) {
+      snprintf(eventbuf, sizeof(eventbuf),
+               "EVENT CreateNotify parent=%u wid=%u x=%d y=%d w=%d h=%d bw=%d override=%u\n",
+               evt.requestor, evt.wid, evt.x, evt.y, evt.w, evt.h,
+               evt.detail, evt.state);
+    } else if(evt.type == X6_EVENT_REPARENT_NOTIFY) {
+      snprintf(eventbuf, sizeof(eventbuf),
+               "EVENT ReparentNotify event=%u wid=%u parent=%u old_parent=%u x=%d y=%d override=%u\n",
+               evt.data1, evt.wid, evt.requestor, evt.data0, evt.x, evt.y, evt.state);
+    } else if(evt.type == X6_EVENT_COLORMAP_NOTIFY) {
+      snprintf(eventbuf, sizeof(eventbuf),
+               "EVENT ColormapNotify wid=%u cmap=%u new=%u state=%u\n",
+               evt.wid, evt.data0, evt.data1, evt.state);
     } else {
       client->queue.head = (client->queue.head + 1) % X6_MAX_EVENTS_PER_CLIENT;
       continue;

@@ -13,6 +13,7 @@
 #include <fcntl.h>
 #include "X11/Xlib.h"
 #include "X11/Xutil.h"
+#include "X11/Xproto.h"
 #include "X11/Xresource.h"
 #include "X11/keysym.h"
 #include "X11/extensions/Xcomposite.h"
@@ -119,6 +120,26 @@ static unsigned long g_ext_event_serial = 1;
 static Time g_ext_event_time = 1;
 static unsigned long g_next_cursor_id = 0x10000;
 static int g_x11_sigpipe_ignored;
+
+static void
+x11_dispatch_error(Display *display, unsigned char error_code,
+                   unsigned char request_code, XID resourceid)
+{
+  XErrorEvent err;
+
+  if (!g_error_handler)
+    return;
+
+  memset(&err, 0, sizeof(err));
+  err.type = 0;
+  err.display = display;
+  err.resourceid = resourceid;
+  err.serial = 0;
+  err.error_code = error_code;
+  err.request_code = request_code;
+  err.minor_code = 0;
+  g_error_handler(display, &err);
+}
 
 static XEvent *
 x11_event_queue(Display *display)
@@ -2002,6 +2023,40 @@ x11_parse_event_line(Display *display, const char *line, XEvent *event)
     event->xmap.override_redirect = False;
     return 0;
   }
+  if (strncmp(line + 6, "CreateNotify", 12) == 0) {
+    event->type = CreateNotify;
+    sscanf(line, "EVENT CreateNotify parent=%u wid=%u x=%d y=%d w=%d h=%d bw=%d override=%d",
+           &event->xcreatewindow.parent,
+           &event->xcreatewindow.window,
+           &event->xcreatewindow.x,
+           &event->xcreatewindow.y,
+           &event->xcreatewindow.width,
+           &event->xcreatewindow.height,
+           &event->xcreatewindow.border_width,
+           &event->xcreatewindow.override_redirect);
+    return 0;
+  }
+  if (strncmp(line + 6, "ReparentNotify", 14) == 0) {
+    event->type = ReparentNotify;
+    sscanf(line, "EVENT ReparentNotify event=%u wid=%u parent=%u old_parent=%*u x=%d y=%d override=%d",
+           &event->xreparent.event,
+           &event->xreparent.window,
+           &event->xreparent.parent,
+           &event->xreparent.x,
+           &event->xreparent.y,
+           &event->xreparent.override_redirect);
+    return 0;
+  }
+  if (strncmp(line + 6, "ColormapNotify", 14) == 0) {
+    unsigned int cmap = 0;
+    unsigned int cnew = 0;
+    event->type = ColormapNotify;
+    sscanf(line, "EVENT ColormapNotify wid=%u cmap=%u new=%u state=%u",
+           &event->xcolormap.window, &cmap, &cnew, &event->xcolormap.state);
+    event->xcolormap.colormap = (Colormap)cmap;
+    event->xcolormap.c_new = cnew ? True : False;
+    return 0;
+  }
   if (strncmp(line + 6, "ConfigureRequest", 16) == 0) {
     event->type = ConfigureRequest;
     sscanf(line, "EVENT ConfigureRequest wid=%u geom=%d,%d %dx%d",
@@ -2333,6 +2388,10 @@ x11_event_mask_for_type(int type)
     return LeaveWindowMask;
   case Expose:
     return ExposureMask;
+  case CreateNotify:
+    return SubstructureNotifyMask;
+  case ReparentNotify:
+    return StructureNotifyMask | SubstructureNotifyMask;
   case MapRequest:
   case ConfigureRequest:
     return SubstructureRedirectMask;
@@ -2346,6 +2405,8 @@ x11_event_mask_for_type(int type)
     return StructureNotifyMask;
   case PropertyNotify:
     return PropertyChangeMask;
+  case ColormapNotify:
+    return ColormapChangeMask;
   case X11_EXT_EVENT_BASE_SHAPE + ShapeNotify:
     return ShapeNotifyMask;
   case X11_EXT_EVENT_BASE_RANDR + RRScreenChangeNotify:
@@ -2994,9 +3055,11 @@ XSelectInput(Display *display, Window w, long event_mask)
       return -1;
     if (strncmp(line, "OK redirect_granted", 19) == 0)
       display->is_wm = 1;
-    else if (strncmp(line, "ERR redirect-in-use", 19) == 0)
+    else if (strncmp(line, "ERR redirect-in-use", 19) == 0) {
       display->is_wm = 0;
-    else
+      x11_dispatch_error(display, BadAccess, X_ChangeWindowAttributes, (XID)display->root);
+      return 0;
+    } else
       return -1;
   }
 
@@ -3030,6 +3093,10 @@ x11_event_window(const XEvent *event)
     return event->xcrossing.window;
   case Expose:
     return event->xexpose.window;
+  case CreateNotify:
+    return event->xcreatewindow.parent;
+  case ReparentNotify:
+    return event->xreparent.event;
   case ConfigureNotify:
     return event->xconfigure.window;
   case ConfigureRequest:
@@ -3045,6 +3112,8 @@ x11_event_window(const XEvent *event)
     return event->xfocus.window;
   case PropertyNotify:
     return event->xproperty.window;
+  case ColormapNotify:
+    return event->xcolormap.window;
   case SelectionClear:
     return event->xselectionclear.window;
   case SelectionRequest:
@@ -3991,6 +4060,47 @@ int XAllowEvents(Display *display, int event_mode, Time time) {
   return 0;
 }
 
+int XChangeActivePointerGrab(Display *display, unsigned int event_mask,
+                             Cursor cursor, Time time) {
+  (void)event_mask;
+  (void)cursor;
+  (void)time;
+  if (!display)
+    return -1;
+  return 0;
+}
+
+int XSetWindowBorderWidth(Display *display, Window w, unsigned int width) {
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  if (!display)
+    return -1;
+  snprintf(cmd, sizeof(cmd), "SET_BORDER_WIDTH %u %u\n", (uint)w, width);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return -1;
+  return strncmp(line, "OK border_width_set", 19) == 0 ? 0 : -1;
+}
+
+int XSetWindowBackgroundPixmap(Display *display, Window w, Pixmap background_pixmap) {
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  if (!display)
+    return -1;
+  snprintf(cmd, sizeof(cmd), "SET_WINDOW_BACKGROUND_PIXMAP %u %u\n", (uint)w, (uint)background_pixmap);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return -1;
+  return strncmp(line, "OK background_pixmap_set", 24) == 0 ? 0 : -1;
+}
+
+int XSetWindowBackground(Display *display, Window w, unsigned long background_pixel) {
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  if (!display)
+    return -1;
+  snprintf(cmd, sizeof(cmd), "SET_WINDOW_BACKGROUND_PIXEL %u %u\n", (uint)w,
+           (uint)(background_pixel & 0x00ffffffUL));
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return -1;
+  return strncmp(line, "OK background_pixel_set", 23) == 0 ? 0 : -1;
+}
+
 int XSetWindowBorder(Display *display, Window w, unsigned long border_pixel) {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
   if (!display)
@@ -4006,6 +4116,27 @@ int XChangeWindowAttributes(Display *display, Window w, unsigned long valuemask,
 
   if ((valuemask & CWEventMask) && attributes) {
     snprintf(cmd, sizeof(cmd), "SELECT_EVENTS %u %ld\n", (uint)w, attributes->event_mask);
+    if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+      return -1;
+  }
+
+  if ((valuemask & CWBackPixmap) && attributes) {
+    snprintf(cmd, sizeof(cmd), "SET_WINDOW_BACKGROUND_PIXMAP %u %u\n",
+             (uint)w, (uint)attributes->background_pixmap);
+    if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+      return -1;
+  }
+
+  if ((valuemask & CWBackPixel) && attributes) {
+    snprintf(cmd, sizeof(cmd), "SET_WINDOW_BACKGROUND_PIXEL %u %u\n",
+             (uint)w, (uint)(attributes->background_pixel & 0x00ffffffUL));
+    if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+      return -1;
+  }
+
+  if ((valuemask & CWColormap) && attributes) {
+    snprintf(cmd, sizeof(cmd), "SET_WINDOW_COLORMAP %u %u\n",
+             (uint)w, (uint)attributes->colormap);
     if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
       return -1;
   }
@@ -4050,6 +4181,46 @@ int XUndefineCursor(Display *display, Window w) {
   return strncmp(line, "OK cursor_unset", 15) == 0 ? 0 : -1;
 }
 Cursor XCreateFontCursor(Display *display, unsigned int shape) { (void)display; return (Cursor)(shape + 1); }
+Pixmap XCreatePixmapFromBitmapData(Display *display, Drawable d, char *data,
+                                   unsigned int width, unsigned int height,
+                                   unsigned long fg, unsigned long bg,
+                                   unsigned int depth) {
+  Pixmap pm;
+  GC gc;
+  unsigned int stride;
+  unsigned int x;
+  unsigned int y;
+
+  if (!display || !data || width == 0 || height == 0)
+    return 0;
+
+  pm = XCreatePixmap(display, d, width, height, depth);
+  if (!pm)
+    return 0;
+
+  gc = XCreateGC(display, pm, 0, 0);
+  if (!gc) {
+    XFreePixmap(display, pm);
+    return 0;
+  }
+
+  XSetForeground(display, gc, bg);
+  XFillRectangle(display, pm, gc, 0, 0, width, height);
+
+  stride = (width + 7U) / 8U;
+  XSetForeground(display, gc, fg);
+  for (y = 0; y < height; y++) {
+    const unsigned char *row = (const unsigned char *)data + y * stride;
+    for (x = 0; x < width; x++) {
+      if (((row[x >> 3] >> (x & 7U)) & 1U) != 0)
+        XFillRectangle(display, pm, gc, (int)x, (int)y, 1, 1);
+    }
+  }
+
+  XFreeGC(display, gc);
+  return pm;
+}
+
 Cursor XCreatePixmapCursor(Display *display, Pixmap source, Pixmap mask,
                            XColor *foreground_color, XColor *background_color,
                            unsigned int x, unsigned int y) {
@@ -5459,11 +5630,9 @@ int XFillRectangles(Display *display, Drawable d, GC gc, XRectangle *rectangles,
 int XClearArea(Display *display, Window w, int x, int y,
                unsigned int width, unsigned int height,
                Bool exposures) {
-  char cmd[X6_BUF_SIZE];
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
   int rw;
   int rh;
-
-  (void)exposures;
 
   if (!display)
     return -1;
@@ -5484,8 +5653,11 @@ int XClearArea(Display *display, Window w, int x, int y,
   if (x11_sanitize_rect(display, &x, &y, &width, &height) < 0)
     return 0;
 
-  snprintf(cmd, sizeof(cmd), "DRAW_RECT %u %d %d %u %u %u\n", (uint)w, x, y, width, height, 0x000000U);
-  return x11_batch_draw(display, cmd);
+  snprintf(cmd, sizeof(cmd), "CLEAR_AREA %u %d %d %d %d %d\n",
+           (uint)w, x, y, (int)width, (int)height, exposures ? 1 : 0);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return -1;
+  return strncmp(line, "OK cleared", 10) == 0 ? 0 : -1;
 }
 
 int XClearWindow(Display *display, Window w) {
@@ -5897,10 +6069,55 @@ int (*XSetErrorHandler(int (*handler)(Display *, XErrorEvent *)))(Display *, XEr
 int XBell(Display *display, int percent) { (void)display; (void)percent; return 0; }
 int XAddToSaveSet(Display *display, Window w) { (void)display; (void)w; return 0; }
 int XRemoveFromSaveSet(Display *display, Window w) { (void)display; (void)w; return 0; }
+int XInstallColormap(Display *display, Colormap colormap) {
+  char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
+  if (!display)
+    return -1;
+  snprintf(cmd, sizeof(cmd), "INSTALL_COLORMAP %u\n", (uint)colormap);
+  if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    return -1;
+  return strncmp(line, "OK colormap_installed", 21) == 0 ? 0 : -1;
+}
 void XSetCloseDownMode(Display *display, int close_mode) { (void)display; (void)close_mode; }
 void XGrabServer(Display *display) { (void)display; }
 void XUngrabServer(Display *display) { (void)display; }
 int XKillClient(Display *display, XID resource) { (void)display; (void)resource; return 0; }
+
+int XGetErrorText(Display *display, int code, char *buffer_return, int length) {
+  const char *msg;
+  (void)display;
+
+  if (!buffer_return || length <= 0)
+    return 0;
+
+  switch (code) {
+  case Success: msg = "Success"; break;
+  case BadWindow: msg = "BadWindow"; break;
+  case BadMatch: msg = "BadMatch"; break;
+  case BadDrawable: msg = "BadDrawable"; break;
+  case BadAccess: msg = "BadAccess"; break;
+  default: msg = "UnknownError"; break;
+  }
+
+  snprintf(buffer_return, (size_t)length, "%s", msg);
+  return 0;
+}
+
+int XGetErrorDatabaseText(Display *display, const char *name,
+                          const char *message, const char *default_string,
+                          char *buffer_return, int length) {
+  (void)display;
+  (void)name;
+  (void)message;
+
+  if (!buffer_return || length <= 0)
+    return 0;
+  if (!default_string)
+    default_string = "";
+
+  snprintf(buffer_return, (size_t)length, "%s", default_string);
+  return 0;
+}
 
 void XFree(void *data) { if (data) free(data); }
 

@@ -1,6 +1,7 @@
 #ifndef _X11_XPROTO_H_
 #define _X11_XPROTO_H_
 
+#define X_ChangeWindowAttributes 2
 #define X_SetInputFocus 42
 #define X_PolyText8 74
 #define X_PolyFillRectangle 70
