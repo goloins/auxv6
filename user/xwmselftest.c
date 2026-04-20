@@ -1,6 +1,7 @@
 #include "types.h"
 #include "auxv6/user.h"
 #include "X11/Xlib.h"
+#include "X11/Xproto.h"
 #include "X11/extensions/shape.h"
 #include "X11/extensions/Xrandr.h"
 #include "X11/extensions/Xdamage.h"
@@ -18,6 +19,32 @@
 
 static int g_pass;
 static int g_fail;
+static int g_xerr_count;
+static unsigned char g_xerr_code;
+static unsigned char g_xerr_request;
+static XID g_xerr_resource;
+
+static void
+reset_error_capture(void)
+{
+  g_xerr_count = 0;
+  g_xerr_code = 0;
+  g_xerr_request = 0;
+  g_xerr_resource = (XID)0;
+}
+
+static int
+selftest_error_handler(Display *display, XErrorEvent *event)
+{
+  (void)display;
+  if(!event)
+    return 0;
+  g_xerr_count++;
+  g_xerr_code = event->error_code;
+  g_xerr_request = event->request_code;
+  g_xerr_resource = event->resourceid;
+  return 0;
+}
 
 static int
 selftest_read_line(int fd, char *buf, int cap)
@@ -368,6 +395,8 @@ event_window_match(const XEvent *ev, Window w,
     return ev->xmotion.window == w;
   if(ev->type == PropertyNotify)
     return ev->xproperty.window == w;
+  if(ev->type == ColormapNotify)
+    return ev->xcolormap.window == w;
   if(ev->type == MapNotify)
     return ev->xmap.window == w;
   if(ev->type == SelectionClear)
@@ -560,6 +589,8 @@ main(void)
   Window temp_window;
   Window doomed_parent;
   Window doomed_child;
+  Window clear_window;
+  Window cmap_window;
   Window geom_window;
   Window sel_owner;
   Window sel_requestor;
@@ -584,9 +615,9 @@ main(void)
   int randr_err;
   int damage_base;
   int damage_err;
-  int shape_type;
-  int randr_type;
-  int damage_type;
+  int shape_type = -1;
+  int randr_type = -1;
+  int damage_type = -1;
   int damage_count;
   Damage dmg;
   GC geom_gc;
@@ -600,6 +631,7 @@ main(void)
   int revert_to;
   int grab_rc;
   int injected_keycode;
+  int (*prev_error_handler)(Display *, XErrorEvent *);
   Window sel_owner_q;
   Window mc_owner_q;
   unsigned long black;
@@ -622,6 +654,8 @@ main(void)
   parent2 = XCreateSimpleWindow(dpy, root, 320, 40, 220, 140, 0, black, black);
   child_a = XCreateSimpleWindow(dpy, parent, 10, 10, 60, 40, 0, white, white);
   child_b = XCreateSimpleWindow(dpy, parent, 100, 10, 60, 40, 0, white, white);
+  clear_window = (Window)0;
+  cmap_window = (Window)0;
 
   XMapWindow(dpy, parent);
   XMapWindow(dpy, parent2);
@@ -769,6 +803,135 @@ main(void)
     report("select geom events", 0, "XSelectInput failed");
   XSync(dpy, False);
   drain_events(dpy);
+
+  clear_window = XCreateSimpleWindow(dpy, root, 560, 360, 48, 32, 0, white, black);
+  cmap_window = XCreateSimpleWindow(dpy, root, 620, 360, 48, 32, 0, white, black);
+  XMapWindow(dpy, clear_window);
+  XMapWindow(dpy, cmap_window);
+  XSync(dpy, False);
+
+  if(XSelectInput(dpy, clear_window, ExposureMask) == 0)
+    report("clear select expose", 1, "accepted");
+  else
+    report("clear select expose", 0, "XSelectInput failed");
+
+  if(XSetWindowBackground(dpy, clear_window, 0x00112233UL) == 0)
+    report("clear set backpixel", 1, "accepted");
+  else
+    report("clear set backpixel", 0, "XSetWindowBackground failed");
+
+  drain_events(dpy);
+  if(XClearArea(dpy, clear_window, 3, 4, 17, 11, True) == 0)
+    report("clear area pixel", 1, "accepted");
+  else
+    report("clear area pixel", 0, "XClearArea failed");
+  XSync(dpy, False);
+
+  if(wait_event_type_for_window(dpy, clear_window, Expose,
+                                shape_type, randr_type, damage_type, &ev)) {
+    if(ev.xexpose.x == 3 && ev.xexpose.y == 4 &&
+       ev.xexpose.width == 17 && ev.xexpose.height == 11)
+      report("clear expose pixel", 1, "Expose geometry matched");
+    else
+      report("clear expose pixel", 0, "Expose geometry mismatch");
+  } else {
+    report("clear expose pixel", 0, "Expose missing");
+  }
+
+  {
+    Pixmap bgpm;
+    GC bg_gc;
+
+    bgpm = XCreatePixmap(dpy, clear_window, 8, 8,
+                         (unsigned int)DefaultDepth(dpy, DefaultScreen(dpy)));
+    bg_gc = (GC)0;
+    if(bgpm != None)
+      bg_gc = XCreateGC(dpy, bgpm, 0, 0);
+
+    if(bgpm != None && bg_gc != 0) {
+      XSetForeground(dpy, bg_gc, 0x00556677UL);
+      XFillRectangle(dpy, bgpm, bg_gc, 0, 0, 8, 8);
+      if(XSetWindowBackgroundPixmap(dpy, clear_window, bgpm) == 0)
+        report("clear set backpixmap", 1, "accepted");
+      else
+        report("clear set backpixmap", 0, "XSetWindowBackgroundPixmap failed");
+
+      drain_events(dpy);
+      if(XClearArea(dpy, clear_window, 0, 0, 8, 8, True) == 0)
+        report("clear area pixmap", 1, "accepted");
+      else
+        report("clear area pixmap", 0, "XClearArea failed");
+      XSync(dpy, False);
+
+      if(wait_event_type_for_window(dpy, clear_window, Expose,
+                                    shape_type, randr_type, damage_type, &ev))
+        report("clear expose pixmap", 1, "Expose observed");
+      else
+        report("clear expose pixmap", 0, "Expose missing");
+
+      XFreeGC(dpy, bg_gc);
+      XFreePixmap(dpy, bgpm);
+    } else {
+      report("clear set backpixmap", 0, "pixmap/gc setup failed");
+      if(bg_gc)
+        XFreeGC(dpy, bg_gc);
+      if(bgpm != None)
+        XFreePixmap(dpy, bgpm);
+    }
+  }
+
+  if(XSetWindowBackgroundPixmap(dpy, clear_window, (Pixmap)999999) != 0)
+    report("clear invalid pixmap", 1, "expected failure");
+  else
+    report("clear invalid pixmap", 0, "unexpected success");
+
+  if(XSelectInput(dpy, cmap_window, ColormapChangeMask) == 0)
+    report("cmap select notify", 1, "accepted");
+  else
+    report("cmap select notify", 0, "XSelectInput failed");
+
+  {
+    XSetWindowAttributes swa;
+    memset(&swa, 0, sizeof(swa));
+    swa.colormap = (Colormap)77;
+    drain_events(dpy);
+    if(XChangeWindowAttributes(dpy, cmap_window, CWColormap, &swa) == 0)
+      report("cmap set 77", 1, "accepted");
+    else
+      report("cmap set 77", 0, "XChangeWindowAttributes failed");
+    XSync(dpy, False);
+
+    if(wait_event_type_for_window(dpy, cmap_window, ColormapNotify,
+                                  shape_type, randr_type, damage_type, &ev)) {
+      if(ev.xcolormap.colormap == (Colormap)77 &&
+         ev.xcolormap.c_new == True &&
+         ev.xcolormap.state == ColormapUninstalled)
+        report("cmap notify set", 1, "new/uninstalled event matched");
+      else
+        report("cmap notify set", 0, "unexpected ColormapNotify payload");
+    } else {
+      report("cmap notify set", 0, "ColormapNotify missing");
+    }
+  }
+
+  drain_events(dpy);
+  if(XInstallColormap(dpy, (Colormap)77) == 0)
+    report("cmap install 77", 1, "accepted");
+  else
+    report("cmap install 77", 0, "XInstallColormap failed");
+  XSync(dpy, False);
+
+  if(wait_event_type_for_window(dpy, cmap_window, ColormapNotify,
+                                shape_type, randr_type, damage_type, &ev)) {
+    if(ev.xcolormap.colormap == (Colormap)77 &&
+       ev.xcolormap.c_new == False &&
+       ev.xcolormap.state == ColormapInstalled)
+      report("cmap notify install", 1, "installed event matched");
+    else
+      report("cmap notify install", 0, "unexpected install payload");
+  } else {
+    report("cmap notify install", 0, "ColormapNotify missing");
+  }
 
   shape_base = 0;
   shape_err = 0;
@@ -2049,6 +2212,60 @@ main(void)
   check_tree_missing(dpy, doomed_parent, "tree missing doomed_parent");
   check_tree_missing(dpy, doomed_child, "tree missing doomed_child");
 
+  dpy2 = XOpenDisplay(0);
+  if(!dpy2) {
+    report("redirect dpy2 open", 0, "XOpenDisplay failed");
+  } else {
+    Window root_wm;
+    long wm_mask;
+    XSetWindowAttributes swa;
+
+    root_wm = DefaultRootWindow(dpy2);
+    wm_mask = SubstructureRedirectMask | SubstructureNotifyMask;
+    prev_error_handler = XSetErrorHandler(selftest_error_handler);
+
+    reset_error_capture();
+    if(XSelectInput(dpy, root, wm_mask) == 0) {
+      XSync(dpy, False);
+      if(g_xerr_count == 0)
+        report("redirect claim primary", 1, "granted");
+      else
+        report("redirect claim primary", 0, "unexpected XError");
+    } else {
+      report("redirect claim primary", 0, "XSelectInput failed");
+    }
+
+    reset_error_capture();
+    if(XSelectInput(dpy2, root_wm, wm_mask) == 0) {
+      XSync(dpy2, False);
+      if(g_xerr_count > 0 && g_xerr_code == BadAccess)
+        report("redirect conflict select", 1, "BadAccess observed");
+      else
+        report("redirect conflict select", 0, "missing BadAccess");
+    } else {
+      report("redirect conflict select", 0, "XSelectInput call failed");
+    }
+
+    reset_error_capture();
+    memset(&swa, 0, sizeof(swa));
+    swa.event_mask = wm_mask;
+    if(XChangeWindowAttributes(dpy2, root_wm, CWEventMask, &swa) == 0) {
+      XSync(dpy2, False);
+      if(g_xerr_count > 0 && g_xerr_code == BadAccess &&
+         g_xerr_request == X_ChangeWindowAttributes &&
+         g_xerr_resource == (XID)root_wm)
+        report("redirect conflict cwa", 1, "BadAccess + request matched");
+      else
+        report("redirect conflict cwa", 0, "missing expected XError payload");
+    } else {
+      report("redirect conflict cwa", 0, "XChangeWindowAttributes failed");
+    }
+
+    XSetErrorHandler(prev_error_handler);
+    XCloseDisplay(dpy2);
+    dpy2 = (Display *)0;
+  }
+
   XDestroyWindow(dpy, child_b);
   XDestroyWindow(dpy, child_a);
   XDestroyWindow(dpy, stack_c);
@@ -2057,6 +2274,8 @@ main(void)
   XDestroyWindow(dpy, stack_parent);
   XDestroyWindow(dpy, sel_requestor);
   XDestroyWindow(dpy, sel_owner);
+  XDestroyWindow(dpy, cmap_window);
+  XDestroyWindow(dpy, clear_window);
   XDestroyWindow(dpy, geom_window);
   XDestroyWindow(dpy, foreign_child);
   XDestroyWindow(dpy, foreign_parent);

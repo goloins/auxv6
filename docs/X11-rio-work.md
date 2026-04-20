@@ -16,6 +16,8 @@ Scope: auxv6 `x6` server + `user/x11.c` Xlib shim needed for plan9port `rio`
 2. Do not manually edit `targetfs` header mirrors (staged/generated from source tree).
 3. Keep changes incremental and behavior-focused.
 4. Validate after each slice with diagnostics and build checks.
+5. Building requires sudo, try and minimize the numbers of terminals we build
+in, because user does not want to re-auth constantly.
 
 ## Implementation Plan
 
@@ -77,12 +79,24 @@ Progress in this session:
      - `XInstallColormap` using `INSTALL_COLORMAP`
 4. Reparent event targeting parity improved:
    - Event payload now distinguishes child-structure and parent-substructure observers.
+5. WM redirect conflict parity tightened for rio startup path:
+   - `XChangeWindowAttributes(..., CWEventMask, ...)` now routes through `XSelectInput` so root-window redirect claim/fail behavior consistently dispatches `BadAccess` through the X error handler.
+6. Follow-up server compile fix in `x6`:
+   - Added missing forward declaration for `find_pixmap` used by background-fill paths (prevents implicit-declaration/conflicting-type build failure under `-Werror`).
+7. Added targeted X11 regression checks in `user/xwmselftest.c` for remaining rio-critical behaviors:
+   - Redirect conflict path: verifies second-WM claims on root deliver `BadAccess`, including the `XChangeWindowAttributes(CWEventMask)` path.
+   - Background clear path: verifies `XClearArea(..., exposures=True)` emits expected `Expose` under both background-pixel and background-pixmap configuration.
+   - Colormap path: verifies `ColormapNotify` payload/state for `CWColormap` updates and `XInstallColormap` transitions.
+8. Added rio-focused X11 manual validation flow in-session:
+   - Run `x6` and `xwmselftest` manually in guest to exercise redirect/background/colormap behavior directly.
 
 ## Current File-Level Progress
 
 Actively modified in working tree:
 1. `include/X11/Xlib.h`
 2. `user/x11.c`
+3. `user/x6.c`
+4. `user/xwmselftest.c`
 
 Additional behavioral code paths verified present in tree:
 1. `user/x6.c`
@@ -91,20 +105,28 @@ Additional behavioral code paths verified present in tree:
 ## Validation Status
 
 1. Editor diagnostics on touched files: clean (`get_errors` reports none).
-2. Non-sudo build check attempted (`make aux.kern`) failed due local toolchain environment (`i386-*` toolchain check), not due compile diagnostics in touched files.
-3. Preferred full validation command remains:
-   - `sudo make aux.kern`
-   - Use same terminal session to reuse sudo auth.
+2. Full preferred kernel build now succeeds in-session:
+   - `sudo make aux.kern` (exit 0)
+3. X11 target rebuild after latest fixes succeeds:
+   - `sudo make _x6 _x6test` (exit 0)
+   - Observed linker warning on `user/x6` RWX LOAD segment; build still completes.
+4. X11 selftest target rebuild after new rio-focused checks succeeds:
+   - `sudo make _xwmselftest` (exit 0)
+   - Observed linker warning on `user/xwmselftest` RWX LOAD segment; build still completes.
+5. Runtime validation remains manual-only by project preference:
+   - Boot guest manually and run `x6` / `xwmselftest` directly.
+   - Capture failing test names or event mismatches from manual runs for targeted follow-up patches.
 
 ## Remaining Work (Next Slice Steps)
 
 1. Rio-focused runtime verification pass:
+   - Run `xwmselftest` inside guest manually to execute the new redirect/background/colormap assertions end-to-end against live `x6`.
    - Confirm WM claim/fail behavior exactly matches rio startup expectations.
    - Confirm event ordering around create/reparent/map in rio paths.
 2. Tighten event fidelity as needed after real rio traces:
    - Reparent/Create field parity against real Xlib expectations.
    - Colormap notify state transitions for edge cases.
-3. Add targeted regression checks (small harness/tests or trace assertions) for:
+3. Add targeted regression checks (manual trace assertions/manual scripts) for:
    - Redirect conflict (`BadAccess` callback)
    - Background clear semantics
    - Colormap notify delivery

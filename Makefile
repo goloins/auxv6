@@ -399,7 +399,7 @@ libc-phase:
 	@printf '==> libc\n'
 	+$(MAKE) libc-phase-core
 
-libc-phase-core: $(CRT0_OBJ) $(LIBC_A) $(AUXRT_A) $(TARGETFS_LIBC_A)
+libc-phase-core: $(CRT0_OBJ) $(LIBC_A) $(AUXRT_A) $(TARGETFS_LIBC_A) $(X11_A)
 
 # Convenience static archive of the full auxv6 userland runtime library.
 # Used by native programs and by ports that need to link against our libc

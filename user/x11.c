@@ -2055,6 +2055,7 @@ x11_parse_event_line(Display *display, const char *line, XEvent *event)
            &event->xcolormap.window, &cmap, &cnew, &event->xcolormap.state);
     event->xcolormap.colormap = (Colormap)cmap;
     event->xcolormap.c_new = cnew ? True : False;
+    event->xcolormap.new = event->xcolormap.c_new;
     return 0;
   }
   if (strncmp(line + 6, "ConfigureRequest", 16) == 0) {
@@ -3034,6 +3035,7 @@ XGetWindowAttributes(Display *display, Window w, XWindowAttributes *attrs)
   attrs->height = hh;
   attrs->border_width = bw;
   attrs->depth = depth;
+  attrs->colormap = XDefaultColormap(display, display->screen);
   attrs->override_redirect = override ? True : False;
   attrs->map_state = mapped ? IsViewable : IsUnmapped;
   attrs->your_event_mask = evmask;
@@ -4115,8 +4117,9 @@ int XChangeWindowAttributes(Display *display, Window w, unsigned long valuemask,
     return -1;
 
   if ((valuemask & CWEventMask) && attributes) {
-    snprintf(cmd, sizeof(cmd), "SELECT_EVENTS %u %ld\n", (uint)w, attributes->event_mask);
-    if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+    /* Keep event-mask selection semantics aligned with XSelectInput,
+     * including WM redirect conflict handling on the root window. */
+    if (XSelectInput(display, w, attributes->event_mask) < 0)
       return -1;
   }
 
@@ -8882,6 +8885,37 @@ XrmMergeDatabases(XrmDatabase source_db, XrmDatabase *target_db)
                         source_db->entries[i].value);
   }
   XrmDestroyDatabase(source_db);
+}
+
+char *
+XDisplayName(const char *string)
+{
+  if(string && *string)
+    return (char *)string;
+  return ":0";
+}
+
+char *
+XKeysymToString(KeySym keysym)
+{
+  /* minimal stub — rio only uses this in debug/print paths */
+  (void)keysym;
+  return "?";
+}
+
+Status
+XAllocNamedColor(Display *display, Colormap colormap,
+                 const char *color_name, XColor *screen_def_return,
+                 XColor *exact_def_return)
+{
+  XColor c;
+  (void)colormap;
+  if(!x11_parse_named_color(color_name, &c))
+    return 0;
+  if(screen_def_return) *screen_def_return = c;
+  if(exact_def_return)  *exact_def_return  = c;
+  (void)display;
+  return 1;
 }
 
 

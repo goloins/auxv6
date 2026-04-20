@@ -33,13 +33,27 @@
 #define USPosition 1
 #define USSize 2
 #define PPosition 4
+#ifndef PSize
 #define PSize 8
+#endif
+#ifndef PMinSize
 #define PMinSize 16
+#endif
+#ifndef PMaxSize
 #define PMaxSize 32
+#endif
+#ifndef PResizeInc
 #define PResizeInc 64
+#endif
+#ifndef PAspect
 #define PAspect 128
+#endif
+#ifndef PBaseSize
 #define PBaseSize 256
+#endif
+#ifndef PWinGravity
 #define PWinGravity 512
+#endif
 
 /* Gravity constants */
 #define UnmapGravity 0

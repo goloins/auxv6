@@ -24,3 +24,6 @@ p7zip|https://github.com/ip7z/7zip/archive/refs/tags/26.00.zip|user|7zip-26.00|p
 openssh|https://mirror.planetunix.net/pub/OpenBSD/OpenSSH/portable/openssh-10.3p1.tar.gz|user|openssh-10.3p1|ssh
 openssh|https://mirror.planetunix.net/pub/OpenBSD/OpenSSH/portable/openssh-10.3p1.tar.gz|user|openssh-10.3p1|ssh-keygen
 openssh|https://mirror.planetunix.net/pub/OpenBSD/OpenSSH/portable/openssh-10.3p1.tar.gz|sbin|openssh-10.3p1|sshd
+
+# Non-first-class plan9port rio preparation lane: first configure/build pass only.
+rio|https://github.com/9fans/plan9port/archive/refs/heads/master.zip|user|plan9port-master|rio

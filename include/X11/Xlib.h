@@ -60,6 +60,7 @@ typedef struct _XExtData {
 } XExtData;
 
 struct _XDisplay;
+typedef struct _XDisplay Screen;
 
 /* Additional types for st/dwm compatibility */
 typedef struct _XIM *XIM;
@@ -362,6 +363,12 @@ struct _XImage {
 #ifndef False
 #define False 0
 #endif
+#ifndef TRUE
+#define TRUE 1
+#endif
+#ifndef FALSE
+#define FALSE 0
+#endif
 
 typedef struct _XDisplay Display;
 
@@ -493,6 +500,38 @@ typedef struct {
   unsigned long serial;
   Bool send_event;
   Display *display;
+  Drawable drawable;
+  int x, y;
+  int width, height;
+  int count;
+  int major_code;
+  int minor_code;
+} XGraphicsExposeEvent;
+
+typedef struct {
+  int type;
+  unsigned long serial;
+  Bool send_event;
+  Display *display;
+  Drawable drawable;
+  int major_code;
+  int minor_code;
+} XNoExposeEvent;
+
+typedef struct {
+  int type;
+  unsigned long serial;
+  Bool send_event;
+  Display *display;
+  Window window;
+  char key_vector[32];
+} XKeymapEvent;
+
+typedef struct {
+  int type;
+  unsigned long serial;
+  Bool send_event;
+  Display *display;
   Window parent;
   Window window;
   int x, y;
@@ -500,6 +539,16 @@ typedef struct {
   int border_width;
   Bool override_redirect;
 } XCreateWindowEvent;
+
+typedef struct {
+  int type;
+  unsigned long serial;
+  Bool send_event;
+  Display *display;
+  Window window;
+  int width;
+  int height;
+} XResizeRequestEvent;
 
 typedef struct {
   int type;
@@ -554,6 +603,16 @@ typedef struct {
   Display *display;
   Window event;
   Window window;
+  int x, y;
+} XGravityEvent;
+
+typedef struct {
+  int type;
+  unsigned long serial;
+  Bool send_event;
+  Display *display;
+  Window event;
+  Window window;
 } XDestroyWindowEvent;
 
 typedef struct {
@@ -564,6 +623,26 @@ typedef struct {
   Window parent;
   Window window;
 } XMapRequestEvent;
+
+typedef struct {
+  int type;
+  unsigned long serial;
+  Bool send_event;
+  Display *display;
+  Window event;
+  Window window;
+  int place;
+} XCirculateEvent;
+
+typedef struct {
+  int type;
+  unsigned long serial;
+  Bool send_event;
+  Display *display;
+  Window parent;
+  Window window;
+  int place;
+} XCirculateRequestEvent;
 
 typedef struct {
   int type;
@@ -599,6 +678,7 @@ typedef struct {
   Window window;
   Colormap colormap;
   Bool c_new;
+  Bool new;
   int state;
 } XColormapEvent;
 
@@ -690,13 +770,20 @@ typedef union {
   XMotionEvent xmotion;
   XCrossingEvent xcrossing;
   XFocusChangeEvent xfocus;
+  XKeymapEvent xkeymap;
   XExposeEvent xexpose;
+  XGraphicsExposeEvent xgraphicsexpose;
+  XNoExposeEvent xnoexpose;
   XVisibilityEvent xvisibility;
   XCreateWindowEvent xcreatewindow;
+  XGravityEvent xgravity;
   XReparentEvent xreparent;
   XMapEvent xmap;
   XMapRequestEvent xmaprequest;
+  XResizeRequestEvent xresizerequest;
   XUnmapEvent xunmap;
+  XCirculateEvent xcirculate;
+  XCirculateRequestEvent xcirculaterequest;
   XConfigureEvent xconfigure;
   XConfigureRequestEvent xconfigurerequest;
   XDestroyWindowEvent xdestroywindow;
@@ -715,6 +802,7 @@ typedef struct {
   int width, height;
   int border_width;
   int depth;
+  Colormap colormap;
   Bool override_redirect;
   int map_state;
   long your_event_mask;
@@ -755,6 +843,7 @@ typedef struct {
 #define ParentRelative 1L
 #define CopyFromParent 0
 #define InputOutput 1
+#define InputOnly 2
 
 #define KeyPress 2
 #define KeyRelease 3
@@ -779,7 +868,14 @@ typedef struct {
 #define LASTEvent 35
 
 #define NotifyNormal 0
+#define NotifyAncestor 0
+#define NotifyVirtual 1
 #define NotifyInferior 2
+#define NotifyNonlinear 3
+#define NotifyNonlinearVirtual 4
+#define NotifyPointer 5
+#define NotifyPointerRoot 6
+#define NotifyDetailNone 7
 #define MappingKeyboard 1
 #define PropertyDelete 1
 
@@ -791,7 +887,14 @@ typedef struct {
 #define EnterWindowMask (1L << 4)
 #define LeaveWindowMask (1L << 5)
 #define PointerMotionMask (1L << 6)
+#define PointerMotionHintMask (1L << 7)
+#define Button1MotionMask (1L << 8)
+#define Button2MotionMask (1L << 9)
+#define Button3MotionMask (1L << 10)
+#define Button4MotionMask (1L << 11)
+#define Button5MotionMask (1L << 12)
 #define ButtonMotionMask (1L << 13)
+#define KeymapStateMask (1L << 14)
 #define ExposureMask (1L << 15)
 #define StructureNotifyMask (1L << 17)
 #define SubstructureNotifyMask (1L << 19)
@@ -799,6 +902,7 @@ typedef struct {
 #define FocusChangeMask (1L << 21)
 #define PropertyChangeMask (1L << 22)
 #define ColormapChangeMask (1L << 23)
+#define OwnerGrabButtonMask (1L << 24)
 #define VisibilityChangeMask (1L << 15)
 
 #define ShiftMask (1 << 0)
@@ -820,6 +924,16 @@ typedef struct {
 #define AnyModifier (1 << 15)
 
 #define ReplayPointer 2
+#define AsyncPointer 0
+#define SyncPointer 1
+#define AsyncKeyboard 3
+#define SyncKeyboard 4
+#define ReplayKeyboard 5
+#define AsyncBoth 6
+#define SyncBoth 7
+#define NotifyGrab 1
+#define NotifyUngrab 2
+#define NotifyWhileGrabbed 3
 #define GrabModeSync 0
 #define GrabModeAsync 1
 #define GrabSuccess 0
@@ -832,6 +946,11 @@ typedef struct {
 
 #define Above 0
 #define Below 1
+#define TopIf 2
+#define BottomIf 3
+#define Opposite 4
+#define PlaceOnTop 0
+#define PlaceOnBottom 1
 
 #define IsUnmapped 0
 #define IsUnviewable 1
@@ -899,32 +1018,53 @@ typedef struct {
 #define BadMatch 8
 #define BadDrawable 9
 #define BadAccess 10
+#define BadColor 12
 
 #define XA_PRIMARY 1L
 #define XA_SECONDARY 2L
 #define XA_ATOM 4L
+#define XA_INTEGER 19L
 #define XA_STRING 31L
 #define XA_VISUALID 32L
 #define XA_WINDOW 33L
 #define XA_WM_HINTS 35L
 #define XA_WM_NAME 39L
+#define XA_WM_SIZE_HINTS 41L
+#define XA_WM_ZOOM_HINTS 42L
 #define XA_WM_NORMAL_HINTS 40L
 #define XA_WM_TRANSIENT_FOR 68L
 #define AnyPropertyType 0L
 
 #define NotifyNormal 0
-#define NotifyInferior 2
-#define NotifyGrab 3
+#define NotifyHint 1
 
 #define VisibilityUnobscured 0
 #define VisibilityPartiallyObscured 1
 #define VisibilityFullyObscured 2
 
 #define ColormapUninstalled 0
+#define MappingModifier 0
+#define MappingPointer 2
 #define ColormapInstalled 1
 
 #define NoSymbol 0L
 #define XBufferOverflow 0
+
+#define StaticGray 0
+#define GrayScale 1
+#define StaticColor 2
+#define PseudoColor 3
+#define TrueColor 4
+#define DirectColor 5
+
+#define AllocNone 0
+#define AllocAll 1
+
+#define ClipByChildren 0
+#define IncludeInferiors 1
+
+#define GXcopy 0x3
+#define GXxor 0x6
 
 #define GCFunction (1 << 0)
 #define GCPlaneMask (1 << 1)
@@ -991,6 +1131,23 @@ typedef struct {
 #define DefaultVisual(dpy, scr) ((void *)0)
 #define DefaultColormap(dpy, scr) (XDefaultColormap((dpy), (scr)))
 #define ConnectionNumber(dpy) ((dpy)->fd)
+#define BlackPixel(dpy, scr) XBlackPixel((dpy), (scr))
+#define WhitePixel(dpy, scr) XWhitePixel((dpy), (scr))
+#define ScreenCount(dpy) 1
+#define ScreenOfDisplay(dpy, scr) ((Screen *)(dpy))
+#define WidthOfScreen(screen) ((screen)->width)
+#define HeightOfScreen(screen) ((screen)->height)
+#define MinCmapsOfScreen(screen) 1
+#define DisplayString(dpy) XDisplayName((const char *)0)
+#define QLength(dpy) ((dpy)->event_count)
+#define XMatchVisualInfo(dpy, scrno, dpth, vclass, vinfo_return) \
+  (((vinfo_return) != 0)                                                   \
+     ? ((vinfo_return)->screen = (scrno),                                \
+       (vinfo_return)->depth = (dpth),                                   \
+       (vinfo_return)->class = (vclass),                                 \
+       (vinfo_return)->visual = (Visual *)DefaultVisual((dpy), (scrno)), \
+       1)                                                                 \
+     : 0)
 
 Display *XOpenDisplay(char *display_name);
 int XCloseDisplay(Display *display);
@@ -1249,6 +1406,8 @@ int XFindContext(Display *display, XID rid, XContext context, char **data_return
 int XDeleteContext(Display *display, XID rid, XContext context);
 
 int XAllocColor(Display *display, Colormap colormap, XColor *screen_in_out);
+int XAllocNamedColor(Display *display, Colormap colormap, const char *color_name,
+                     XColor *screen_def_return, XColor *exact_def_return);
 int XInstallColormap(Display *display, Colormap colormap);
 Colormap *XListInstalledColormaps(Display *display, Window w,
                                   int *num_return);

@@ -435,6 +435,7 @@ static void x6_enqueue_create_notify(struct x6_window *win);
 static void x6_enqueue_reparent_notify(struct x6_window *win, uint old_parent);
 static void x6_enqueue_colormap_notify(struct x6_window *win, uint colormap, int is_new, int state);
 static int x6_fill_window_background(struct x6_window *win, int x, int y, int w, int h);
+static struct x6_pixmap *find_pixmap(uint id);
 static void x6_event_queue_drop_extension_for_window(struct x6_event_queue *q, uint wid);
 static int x6_event_queue_merge_expose(struct x6_event_queue *q, struct x6_event *evt);
 static int x6_event_queue_merge_damage(struct x6_event_queue *q, struct x6_event *evt);

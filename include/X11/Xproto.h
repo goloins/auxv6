@@ -10,5 +10,6 @@
 #define X_GrabButton 28
 #define X_GrabKey 33
 #define X_CopyArea 62
+#define X_CopyPlane 63
 
 #endif

@@ -257,3 +257,7 @@ targetfs/usr/libexec/sshd-session
 user/libauxmenu.a
 .tmp
 targetfs/usr/include/*
+.make.*.log
+ports/plan9port-master/*
+ports/fvwm-fvwm2-stable/*
+ports/fvwm2-stable.zip
