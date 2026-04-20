@@ -14,8 +14,6 @@
 // Interrupt descriptor table (shared by all CPUs).
 struct gatedesc idt[256];
 extern uint vectors[];  // in vectors.S: array of 256 entry pointers
-struct spinlock tickslock;
-uint ticks;
 
 void
 tvinit(void)
@@ -26,9 +24,7 @@ tvinit(void)
     SETGATE(idt[i], 0, SEG_KCODE<<3, vectors[i], 0);
   SETGATE(idt[T_SYSCALL], 1, SEG_KCODE<<3, vectors[T_SYSCALL], DPL_USER);
 
-  initlock(&tickslock, "time");
-  lockdep_set_rank(&tickslock, LOCK_RANK_TICKS, "ticks");
-  ktime_init();
+  timerinit();
   irq_init();  // Initialize dynamic IRQ handlers
 }
 
@@ -58,36 +54,7 @@ trap(struct trapframe *tf)
     trap_kernel_fatal(tf, "double-fault");
     break;
   case T_IRQ0 + IRQ_TIMER:
-    if(cpuid() == 0){
-      uint current_ticks;
-
-      acquire(&tickslock);
-      ticks++;
-      current_ticks = ticks;
-      release(&tickslock);
-      if(proc_has_tick_sleepers())
-        wakeup(&ticks);
-      ktime_tick(current_ticks);
-      // Check all processes for expired alarms
-      proc_check_alarms(current_ticks);
-      // MLFQ: anti-starvation global boost check (every MLFQ_BOOST_INTERVAL ticks)
-      mlfq_apply_global_boost(current_ticks);
-      // Update load averages every 500 ticks (5 seconds at 100Hz)
-      if((current_ticks % 500) == 0)
-        proc_tick_loadavg();
-      usb_runtime_service();
-      // Poll network devices for RX/TX completions.
-      netdev_poll();
-      // TCP slow timer - every 10 ticks (100ms)
-      if((current_ticks % 10) == 0)
-        tcp_slowtimo();
-    }
-    // Charge one CPU tick to the process running on this CPU (all CPUs).
-    if(myproc()) {
-      myproc()->cticks++;
-      mlfq_timer_charge(myproc());  // MLFQ: decrement quantum budget
-    }
-    lapiceoi();
+    timerintr();
     break;
   case T_IRQ0 + IRQ_IDE:
     ideintr();

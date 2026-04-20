@@ -20,7 +20,7 @@ main(void)
   kinit1(end, P2V(BOOT_EARLY_PHYSTOP)); // phys page allocator (early mapped window)
   kvmalloc();      // kernel page table
   mpinit();        // detect other processors
-  lapicinit();     // interrupt controller
+  timercpuinit();  // active timer backend (Phase 0: LAPIC)
   seginit();       // segment descriptors
   picinit();       // disable pic
   ioapicinit();    // another interrupt controller
@@ -72,7 +72,7 @@ mpenter(void)
 {
   switchkvm();
   seginit();
-  lapicinit();
+  timercpuinit();
   mpmain();
 }
 

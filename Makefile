@@ -124,6 +124,7 @@ OBJS = \
 	kernel/core/swtch.o\
 	kernel/core/syscall.o\
 	kernel/core/ktime.o\
+	kernel/core/timer.o\
 	kernel/core/rng.o\
 	kernel/core/sysfile.o\
 	kernel/core/sysproc.o\
