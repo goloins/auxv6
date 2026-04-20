@@ -5,6 +5,7 @@
 #include "vfs.h"
 #include "fcntl.h"
 #include "ext_common.h"
+#include "ext_journal.h"
 #include "vfs_ext2_shared.h"
 
 static int
@@ -24,9 +25,20 @@ ext3_mount_init(struct mount *m)
   if(ext2_mount_setup(m, EXT_MOUNT_TARGET_EXT3, &data) < 0)
     return -1;
 
+  if(ext3_journal_discover(data) < 0){
+    MOUNTDBG("ext3: journal discovery failed dev=%d inum=%u\n",
+             data->dev, data->sb.s_journal_inum);
+    kfree((char*)data);
+    return -1;
+  }
+
   m->fs_data = data;
-  MOUNTDBG("ext3: mount ok dev=%d block=%d groups=%d readonly-probe\n",
-           data->dev, data->block_size, data->group_count);
+  MOUNTDBG("ext3: mount ok dev=%d block=%d groups=%d journal_inum=%u journal_max=%u tx=%u desc=%u data=%u rev=%u commit=%u readonly-probe\n",
+           data->dev, data->block_size, data->group_count,
+           data->journal.inode_num, data->journal.maxlen,
+           data->journal.transaction_count, data->journal.descriptor_blocks,
+           data->journal.data_blocks, data->journal.revoke_blocks,
+           data->journal.commit_blocks);
   return 0;
 }
 

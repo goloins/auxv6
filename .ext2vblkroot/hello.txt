@@ -1,0 +1,1 @@
+hello from auxv6 ext2 test image

@@ -28,6 +28,7 @@ OBJS = \
 	kernel/fs/fs.o\
 	kernel/fs/vfs.o\
 	kernel/fs/ext_common.o\
+	kernel/fs/ext_journal.o\
 	kernel/fs/procfs.o\
 	kernel/fs/vfs_ext2.o\
 	kernel/fs/vfs_ext3.o\
@@ -1477,6 +1478,7 @@ clean:
 	vblk0.img \
 	vblk1.img \
 	vblk-stress.img \
+	$(EXT2VBLKIMG) \
 	$(EXT3VBLKIMG) \
 	ahci-stress.img \
 	nvme-ext2.img \
@@ -1493,6 +1495,7 @@ clean:
 	.auxv6root \
 	.fatroot \
 	.fat32root \
+	$(EXT2VBLK_STAGE) \
 	$(EXT3VBLK_STAGE) \
 	.exfatroot \
 	.btrfsroot \
@@ -1592,8 +1595,12 @@ BTRFSIMG ?= nvme-btrfs.img
 BTRFSROOT_STAGE ?= .btrfsroot
 UFS2IMG ?= nvme-ufs2.img
 UFS2ROOT_STAGE ?= .ufs2root
+EXT2VBLKIMG ?= vblk-ext2-seeded.img
+EXT2VBLK_STAGE ?= .ext2vblkroot
 EXT3VBLKIMG ?= vblk-ext3.img
 EXT3VBLK_STAGE ?= .ext3vblkroot
+EXT3RECOVVBLKIMG ?= vblk-ext3-needs-recovery.img
+EXT3RECOVVBLK_STAGE ?= .ext3recovvblkroot
 # qemu* targets already depend on $(EXT2IMG), so always attach it as index=2.
 EXT2QEMU = -drive file=$(EXT2IMG)$(comma)index=2$(comma)media=disk$(comma)format=raw
 FATQEMU = -drive file=$(FATIMG)$(comma)index=3$(comma)media=disk$(comma)format=raw
@@ -1687,8 +1694,14 @@ vblk-stress.img:
 		exit 1; \
 	fi
 
+$(EXT2VBLKIMG): tools/stage-ext2-volume.sh
+	sh tools/stage-ext2-volume.sh $(EXT2VBLK_STAGE) $(EXT2VBLKIMG)
+
 $(EXT3VBLKIMG): tools/stage-ext3-volume.sh
 	sh tools/stage-ext3-volume.sh $(EXT3VBLK_STAGE) $(EXT3VBLKIMG)
+
+$(EXT3RECOVVBLKIMG): tools/stage-ext3-recovery-volume.sh
+	sh tools/stage-ext3-recovery-volume.sh $(EXT3RECOVVBLK_STAGE) $(EXT3RECOVVBLKIMG)
 
 ahci-stress.img:
 	@if command -v mke2fs >/dev/null 2>&1; then \
@@ -1734,6 +1747,14 @@ exfat-reset:
 ext3-vblk-reset:
 	rm -f $(EXT3VBLKIMG)
 	$(MAKE) $(EXT3VBLKIMG)
+
+ext3-recov-vblk-reset:
+	rm -f $(EXT3RECOVVBLKIMG)
+	$(MAKE) $(EXT3RECOVVBLKIMG)
+
+ext2-vblk-reset:
+	rm -f $(EXT2VBLKIMG)
+	$(MAKE) $(EXT2VBLKIMG)
 
 # NVMe FAT test image: 16 MB FAT16 volume for NVMe + msdosfs driver validation.
 # Mount inside the guest with: mount -t msdosfs n0 /mnt/nvme
@@ -1872,6 +1893,15 @@ qemu-nox-virtioblkext3: aux.bootkern $(EXT2IMG) $(EXT3VBLKIMG)
 		-drive file=aux.bootkern,index=0,media=disk,format=raw \
 		-drive file=$(EXT2IMG),index=2,media=disk,format=raw \
 		-drive file=$(EXT3VBLKIMG),if=virtio,format=raw \
+		$(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
+
+# Virtio-blk ext3 recovery test: attach a journaled ext3 image that advertises
+# needs_recovery so the current backend can reject it deterministically.
+qemu-nox-virtioblkext3recovery: aux.bootkern $(EXT2IMG) $(EXT3RECOVVBLKIMG)
+	$(QEMU) -nographic \
+		-drive file=aux.bootkern,index=0,media=disk,format=raw \
+		-drive file=$(EXT2IMG),index=2,media=disk,format=raw \
+		-drive file=$(EXT3RECOVVBLKIMG),if=virtio,format=raw \
 		$(QEMUNETOPTS) -smp $(CPUS) -m 512 $(QEMUEXTRA)
 
 # AHCI mount stress: one extra AHCI-backed ext2 disk attached on port 3.
@@ -2093,11 +2123,6 @@ test-virtioblk-mount-stress: aux.bootkern $(EXT2IMG) vblk-stress.img
 		AUXV6_QEMU_TARGET=qemu-nox-virtioblkstress \
 		AUXV6_TEST_SCRIPT=tools/tests/virtioblk-mount-stress.cmds
 
-test-virtioblk-ext3-ro: aux.bootkern $(EXT2IMG) $(EXT3VBLKIMG)
-	@$(MAKE) qemu-guesttest-template \
-		AUXV6_QEMU_TARGET=qemu-nox-virtioblkext3 \
-		AUXV6_TEST_SCRIPT=tools/tests/virtioblk-ext3-ro.cmds
-
 test-ahci-mount-stress: aux.bootkern $(EXT2IMG) ahci-stress.img
 	@$(MAKE) qemu-guesttest-template \
 		AUXV6_QEMU_TARGET=qemu-nox-ahcistress \
@@ -2197,4 +2222,4 @@ tar:
 	cp dist/* config/.gdbinit.tmpl /tmp/xv6
 	(cd /tmp; tar cf - xv6) | gzip >xv6-rev10.tar.gz  # the next one will be 10 (9/17)
 
-.PHONY: dist-test dist ext2-reset fat-reset fat32-reset exfat-reset ext3-vblk-reset btrfs-reset ufs2-reset ext2root qemu-ext2root qemu-nox-ext2root qemu-gdb-ext2root qemu-nox-gdb-ext2root qemu-fat qemu-nox-fat qemu-oldinit e1000 qemu-nox-virtioblkext3 qemu-nvme-btrfs qemu-nox-nvme-btrfs qemu-nvme-ufs2 qemu-nox-nvme-ufs2 qemu-nvme-fat32 qemu-nox-nvme-fat32 qemu-nvme-exfat qemu-nox-nvme-exfat btrfs-host-verify test-btrfs-smoke test-btrfs-regression test-virtioblk-ext3-ro
+.PHONY: dist-test dist ext2-reset fat-reset fat32-reset exfat-reset ext3-vblk-reset ext3-recov-vblk-reset ext2-vblk-reset btrfs-reset ufs2-reset ext2root qemu-ext2root qemu-nox-ext2root qemu-gdb-ext2root qemu-nox-gdb-ext2root qemu-fat qemu-nox-fat qemu-oldinit e1000 qemu-nox-virtioblkext3 qemu-nox-virtioblkext3recovery qemu-nox-virtioblkmatrix qemu-nvme-btrfs qemu-nox-nvme-btrfs qemu-nvme-ufs2 qemu-nox-nvme-ufs2 qemu-nvme-fat32 qemu-nox-nvme-fat32 qemu-nvme-exfat qemu-nox-nvme-exfat btrfs-host-verify test-btrfs-smoke test-btrfs-regression

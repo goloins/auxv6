@@ -21,28 +21,6 @@
 
 #define EXT2_BLOCK_GROUP_DESC_SIZE 32
 
-// ext2 inode structure (on-disk)
-struct ext2_inode {
-  ushort i_mode;            // Type and permissions
-  ushort i_uid;             // Owner UID
-  uint i_size;              // File size in bytes
-  uint i_atime;             // Access time
-  uint i_ctime;             // Creation time
-  uint i_mtime;             // Modification time
-  uint i_dtime;             // Deletion time
-  ushort i_gid;             // Owner GID
-  ushort i_links_count;     // Link count
-  uint i_blocks;            // Number of 512-byte blocks
-  uint i_flags;             // File flags
-  uint i_osd1;              // OS-specific value
-  uint i_block[15];         // Block pointers (12 direct, 3 indirect)
-  uint i_generation;        // Generation number
-  uint i_file_acl;          // File ACL location
-  uint i_dir_acl;           // Directory ACL location
-  uint i_faddr;             // Fragment address
-  uint i_osd2[3];           // OS-specific value
-};
-
 #define EXT2_MIN_INODE_SIZE 128
 #define EXT2_NAME_MAX 255
 
@@ -110,14 +88,14 @@ ext2_fault_inject_set(int which, int value)
   return -1;
 }
 
-static int ext2_inode_blockno(struct ext2_mount_data *data, struct ext2_inode *dip,
-                              uint lbn, uint *out);
+int ext2_inode_blockno(struct ext2_mount_data *data, struct ext2_inode *dip,
+                       uint lbn, uint *out);
 static int ext2_read_data(struct ext2_mount_data *data, struct ext2_inode *dip,
                           char *dst, uint off, uint n);
 static int ext2_name_equal(char *want, char *got, uint gotlen);
 struct inode* ext2_dirlookup(struct inode *dp, char *name, uint *poff);
-static int ext2_read_disk_inode(struct ext2_mount_data *data, uint inum,
-                                struct ext2_inode *out);
+int ext2_read_disk_inode(struct ext2_mount_data *data, uint inum,
+                         struct ext2_inode *out);
 static int ext2_write_disk_inode(struct ext2_mount_data *data, uint inum,
                                  struct ext2_inode *in);
 static struct inode* ext2_make_inode(uint dev, uint inum);
@@ -223,7 +201,7 @@ ext2_decode_dev(uint raw, short *major, short *minor)
     *minor = (short)(raw & 0xFFFF);
 }
 
-static int
+int
 ext2_dev_read(uint dev, uint off, char *dst, uint n)
 {
   struct proc *p;
@@ -1194,7 +1172,7 @@ fail:
   return 0;
 }
 
-static int
+int
 ext2_read_disk_inode(struct ext2_mount_data *data, uint inum, struct ext2_inode *out)
 {
   uint inode_off;
@@ -1298,7 +1276,7 @@ ext2_make_inode(uint dev, uint inum)
   return ip;
 }
 
-static int
+int
 ext2_inode_blockno(struct ext2_mount_data *data, struct ext2_inode *dip, uint lbn, uint *out)
 {
   uint ptrs;

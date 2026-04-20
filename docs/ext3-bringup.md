@@ -1,11 +1,26 @@
 # ext3 Bring-Up Checklist
 **Date**: April 20, 2026  
 **Objective**: Add ext3 support with metadata journaling while preserving ext2 behavior and code ownership boundaries.  
-**Status**: Phase 0 design draft in progress
+**Status**: Phase 0 complete; Phase 1 landed as a read-only probe backend; Phase 2 journal discovery groundwork is in place; replay remains future work
 
 ---
 
 ## Scope And Principles
+
+## Current Status Snapshot
+
+- ext3 now has a distinct backend in [kernel/fs/vfs_ext3.c](kernel/fs/vfs_ext3.c) and mount dispatch support in [kernel/core/sysfile.c](kernel/core/sysfile.c).
+- ext-family mount policy and superblock feature parsing were split into [kernel/fs/ext_common.c](kernel/fs/ext_common.c) and [kernel/fs/ext_common.h](kernel/fs/ext_common.h).
+- The ext3 backend is intentionally probe-only and read-only in the current tree. It reuses ext2 read-side helpers, discovers the internal journal inode/superblock at mount time, performs a read-only scan of journal descriptor/revoke/commit records, and rejects non-read-only mounts and recovery-required images.
+- Host-side staging support exists for seeded secondary-volume images via [tools/stage-ext2-volume.sh](tools/stage-ext2-volume.sh), [tools/stage-ext3-volume.sh](tools/stage-ext3-volume.sh), and [tools/stage-ext3-recovery-volume.sh](tools/stage-ext3-recovery-volume.sh).
+- Userland helper parity for the current probe-only flow exists via [targetfs/sbin/mount.ext3](targetfs/sbin/mount.ext3).
+- Validation for this bring-up path is currently manual by design. Manual image/QEMU targets remain in [Makefile](Makefile), while guest automation harnesses for ext3 bring-up were intentionally removed.
+- Manual validation now covers both the readable ext3 secondary-volume path and the recovery-required reject path. On April 20, 2026, `mount /dev/vda ext3fs /mnt/ext3rec ro` against the recovery image failed as expected.
+
+## Immediate Next Goals
+
+- Add a short manual validation recipe for the supported journal-discovery path, including the expected login-prompt-driven guest workflow.
+- Start Phase 2 replay work from the discovered journal superblock state rather than adding any new mount-surface complexity.
 
 ### Goals
 - Add a dedicated ext3 filesystem backend selectable via mount fstype ext3/ext3fs.
@@ -42,10 +57,11 @@
 
 ### Current Implementation Baseline
 
-- [kernel/fs/vfs_ext2.c](/home/dakota/auxv6/kernel/fs/vfs_ext2.c#L2970) currently mounts ext-family images by checking the superblock magic, deriving block size, defaulting inode size when needed, and reading group descriptors.
-- The current in-kernel ext2 superblock struct stops before the ext extended feature words, journal UUID/inode/dev fields, and orphan-head field, so ext2 mount code cannot yet distinguish plain ext2 from journal-requiring ext3 images.
-- [kernel/core/sysfile.c](/home/dakota/auxv6/kernel/core/sysfile.c#L2216) currently dispatches only `ext2` and `ext2fs`; there is no distinct `ext3` or `ext3fs` mount entry point yet.
-- Secondary-volume ext3 bring-up also exposed a host-filesystem pathwalk requirement: when a pathname crosses a mountpoint as an intermediate component, the owning walker for the host filesystem must hand off into the mounted root before continuing. In practice this surfaced in the ext2 walker for paths like `/mnt/ext3/docs` and `ext3/docs` from within `/mnt`.
+- [kernel/fs/ext_common.c](kernel/fs/ext_common.c) now owns shared ext superblock parsing and mount-policy decisions, including deterministic reject reasons for unsupported feature combinations.
+- [kernel/fs/vfs_ext2.c](kernel/fs/vfs_ext2.c) now mounts through a shared `ext2_mount_setup(...)` path and exports read-side helpers used by the ext3 backend.
+- [kernel/core/sysfile.c](kernel/core/sysfile.c) now dispatches both `ext2`/`ext2fs` and `ext3`/`ext3fs` mount requests.
+- [kernel/fs/vfs_ext3.c](kernel/fs/vfs_ext3.c) now provides a separate ext3 backend that requires `MNT_RDONLY` and reuses the ext2 read-side substrate for probe-only access.
+- Secondary-volume ext3 bring-up exposed a host-filesystem pathwalk requirement that is now fixed: when a pathname crosses a mountpoint as an intermediate component, the owning walker for the host filesystem must hand off into the mounted root before continuing.
 
 ### Phase 0 Output
 
@@ -175,10 +191,10 @@ Even if the syscall surface only returns `-1`, kernel debug output and tests sho
 
 ### Phase 0 Code Changes Expected
 
-- extend the ext superblock definition in [kernel/fs/vfs_ext2.c](/home/dakota/auxv6/kernel/fs/vfs_ext2.c#L16) or, preferably, move the shared on-disk definitions into a new ext-common header once Phase 1 starts
+- extend the ext superblock definition via shared on-disk definitions in [kernel/fs/ext_common.h](kernel/fs/ext_common.h)
 - add a shared feature-validation helper that both ext2 and ext3 mount paths can call
-- add a distinct `ext3` and `ext3fs` branch in [kernel/core/sysfile.c](/home/dakota/auxv6/kernel/core/sysfile.c#L2216) once the ext3 backend stub exists
-- add mount tests that cover accepted and rejected feature combinations before journaling work begins
+- add a distinct `ext3` and `ext3fs` branch in [kernel/core/sysfile.c](kernel/core/sysfile.c)
+- validate accepted and rejected feature combinations through manual guest bring-up using seeded secondary-volume images
 
 ### Phase 0 Exit Criteria
 
@@ -186,45 +202,49 @@ Even if the syscall surface only returns `-1`, kernel debug output and tests sho
 - ext2 mount rejects journaled or replay-required images deterministically
 - ext3 mount rejects non-journaled images deterministically
 - unsupported feature bits are rejected by policy, not by incidental downstream parse failure
-- tests cover the full mount matrix and each rejection category
+- validation covers the expected mount matrix and rejection categories using the current manual test flow
 - intermediate-component mountpoint crossover remains correct for mounted ext3 secondary volumes; this is a path-resolution correctness constraint, not ext3 journal work
 
 ### Checklist
-- [ ] Document ext3 on-disk feature subset to support now.
-- [ ] Define mount behavior matrix:
+- [x] Document ext3 on-disk feature subset to support now.
+- [x] Define mount behavior matrix:
   - ext2 image + ext2 mount
   - ext3 image + ext3 mount
   - ext3 image + ext2 mount (must fail if journal-required bits are set)
-- [ ] Extend superblock parsing model to include feature flags and journal metadata fields needed for ext3 detection and mount decisions.
-- [ ] Add explicit unsupported-feature rejection list with deterministic errors.
+- [x] Extend superblock parsing model to include feature flags and journal metadata fields needed for ext3 detection and mount decisions.
+- [x] Add explicit unsupported-feature rejection list with deterministic errors.
 
 ### Acceptance Criteria
 - All mount decisions are deterministic and testable.
 - No silent fallback from ext3 semantics to ext2 semantics.
+
+Phase 0 status: implementation complete in the current tree; manual validation has covered readable ext3 mounts and recovery-required rejection.
 
 ---
 
 ## Phase 1: Backend Split And Shared Core Extraction
 
 ### Checklist
-- [ ] Create ext3 backend entry point and wiring:
+- [x] Create ext3 backend entry point and wiring:
   - add vfs_ext3_init declaration in [include/vfs.h](include/vfs.h)
   - add mount dispatcher branch in [kernel/core/sysfile.c](kernel/core/sysfile.c)
-- [ ] Introduce new files for ext3 backend and ext-common helpers.
-- [ ] Move purely shared, journal-agnostic helpers (inode decode, dirent validation, block mapping helpers) into ext-common module.
-- [ ] Keep ext2 backend compiling and behavior-identical after extraction.
+- [x] Introduce new files for ext3 backend and ext-common helpers.
+- [x] Move purely shared, journal-agnostic helpers needed for probe/read-side operation into shared ext code and exported ext2 helpers.
+- [x] Keep ext2 backend compiling and behavior-identical after extraction.
 
 ### Acceptance Criteria
 - ext2 regression behavior remains unchanged.
 - ext3 backend compiles and mounts only in read-only probe mode initially.
+
+Phase 1 status: complete for the intended probe-only split.
 
 ---
 
 ## Phase 2: ext3 Journal Core (Internal Journal Inode)
 
 ### Checklist
-- [ ] Implement ext3 journal state object bound to mount fs_data.
-- [ ] Implement mount-time journal discovery (internal journal inode).
+- [x] Implement ext3 journal state object bound to mount fs_data.
+- [x] Implement mount-time journal discovery (internal journal inode).
 - [ ] Implement replay path at mount:
   - load journal superblock
   - scan descriptor/commit records
@@ -240,6 +260,8 @@ Even if the syscall surface only returns `-1`, kernel debug output and tests sho
 ### Acceptance Criteria
 - Recovery replays committed metadata changes after crash simulation.
 - No replay of uncommitted transactions.
+
+Phase 2 status: journal discovery and read-only journal record scanning are in place; committed-transaction application and checkpoint handling remain unimplemented.
 
 ---
 
@@ -285,19 +307,30 @@ Even if the syscall surface only returns `-1`, kernel debug output and tests sho
 ## Phase 5: VFS Semantics, Mount Flags, And Userland UX
 
 ### Checklist
-- [ ] Add ext3/ext3fs fstype support in mount syscall dispatch in [kernel/core/sysfile.c](kernel/core/sysfile.c).
-- [ ] Add mount helper parity:
+- [x] Add ext3/ext3fs fstype support in mount syscall dispatch in [kernel/core/sysfile.c](kernel/core/sysfile.c).
+- [x] Add mount helper parity:
   - create [targetfs/sbin/mount.ext3](targetfs/sbin/mount.ext3)
-- [ ] Add image creation support for ext3 journaled test images in tooling, likely extending [tools/stage-ext2-root.sh](tools/stage-ext2-root.sh) or adding a sibling script.
+- [x] Add image creation support for ext3 journaled test images in tooling via [tools/stage-ext3-volume.sh](tools/stage-ext3-volume.sh).
+- [x] Add a recovery-required ext3 image builder for manual rejection testing via [tools/stage-ext3-recovery-volume.sh](tools/stage-ext3-recovery-volume.sh).
 - [ ] Ensure mount read-only semantics are enforced in VFS write path capability checks in [kernel/fs/vfs.c](kernel/fs/vfs.c).
 
 ### Acceptance Criteria
 - User can mount ext3 images with ext3 fstype and see expected behavior.
 - Read-only mounts reject write paths consistently.
 
+Current note: the supported bring-up workflow is manual secondary-volume testing. Keep manual image builders and QEMU targets; do not reintroduce guest automation harnesses for this path unless explicitly requested.
+
+Recommended manual rejection check:
+- build or refresh the recovery image with `make ext3-recov-vblk-reset` or `make vblk-ext3-needs-recovery.img`
+- boot target `make qemu-nox-virtioblkext3recovery`
+- after login, attempt a read-only ext3 mount of the virtio-blk disk and confirm the current backend rejects it because replay is not implemented yet
+- current observed result: `mount: /mnt/ext3rec ext3fs failed`
+
 ---
 
 ## Phase 6: Test Plan And Crash Harness
+
+Current note: ext3 bring-up validation is currently manual by project policy. The near-term goal here is to define crisp manual validation steps and then add automation only if explicitly requested later for a specific phase.
 
 ### Functional And Regression Checklist
 - [ ] Add ext3 bring-up tests for:
@@ -343,18 +376,20 @@ Even if the syscall surface only returns `-1`, kernel debug output and tests sho
 ## File Plan (Expected New Or Modified)
 
 ### New (Planned)
-- [ ] kernel/fs/vfs_ext3.c
-- [ ] kernel/fs/ext_journal.c
-- [ ] kernel/fs/ext_journal.h
-- [ ] kernel/fs/ext_common.c
-- [ ] kernel/fs/ext_common.h
-- [ ] targetfs/sbin/mount.ext3
+- [x] kernel/fs/vfs_ext3.c
+- [x] kernel/fs/ext_journal.c
+- [x] kernel/fs/ext_journal.h
+- [x] kernel/fs/ext_common.c
+- [x] kernel/fs/ext_common.h
+- [x] targetfs/sbin/mount.ext3
+- [x] tools/stage-ext3-recovery-volume.sh
 
 ### Modified (Planned)
-- [ ] [include/vfs.h](include/vfs.h)
-- [ ] [kernel/core/sysfile.c](kernel/core/sysfile.c)
-- [ ] [kernel/fs/vfs.c](kernel/fs/vfs.c)
-- [ ] [tools/stage-ext2-root.sh](tools/stage-ext2-root.sh) or sibling ext3 staging script
+- [x] [include/vfs.h](include/vfs.h)
+- [x] [kernel/core/sysfile.c](kernel/core/sysfile.c)
+- [x] [kernel/fs/vfs.c](kernel/fs/vfs.c)
+- [x] [tools/stage-ext3-volume.sh](tools/stage-ext3-volume.sh)
+- [x] [Makefile](Makefile)
 - [ ] [user/fsregress.c](user/fsregress.c)
 
 ---

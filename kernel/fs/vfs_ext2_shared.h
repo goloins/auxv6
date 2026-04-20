@@ -10,6 +10,27 @@ struct mount;
 struct stat;
 struct vfs;
 
+struct ext2_inode {
+  ushort i_mode;
+  ushort i_uid;
+  uint i_size;
+  uint i_atime;
+  uint i_ctime;
+  uint i_mtime;
+  uint i_dtime;
+  ushort i_gid;
+  ushort i_links_count;
+  uint i_blocks;
+  uint i_flags;
+  uint i_osd1;
+  uint i_block[15];
+  uint i_generation;
+  uint i_file_acl;
+  uint i_dir_acl;
+  uint i_faddr;
+  uint i_osd2[3];
+};
+
 struct ext2_group_desc {
   uint bg_block_bitmap;
   uint bg_inode_bitmap;
@@ -27,12 +48,35 @@ struct ext2_mount_data {
   uint group_count;
   uint block_size;
   uint inode_size;
+  struct {
+    uint inode_num;
+    uint superblock_block;
+    uint block_size;
+    uint maxlen;
+    uint first;
+    uint sequence;
+    uint start;
+    uint feature_compat;
+    uint feature_incompat;
+    uint feature_ro_compat;
+    uint descriptor_blocks;
+    uint data_blocks;
+    uint revoke_blocks;
+    uint commit_blocks;
+    uint transaction_count;
+    uint end_sequence;
+    int valid;
+  } journal;
   int dev;
 };
 
 #define EXT2_ROOT_INO 2
 
 int ext2_mount_setup(struct mount *m, int target, struct ext2_mount_data **out_data);
+int ext2_dev_read(uint dev, uint off, char *dst, uint n);
+int ext2_read_disk_inode(struct ext2_mount_data *data, uint inum, struct ext2_inode *out);
+int ext2_inode_blockno(struct ext2_mount_data *data, struct ext2_inode *dip,
+                       uint lbn, uint *out);
 struct inode* ext2_root_inode(struct vfs *fs);
 struct inode* ext2_namei(struct vfs *fs, char *path);
 struct inode* ext2_nameiparent(struct vfs *fs, char *path, char *name);

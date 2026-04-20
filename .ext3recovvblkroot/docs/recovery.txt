@@ -1,0 +1,1 @@
+this image should be rejected until replay exists
