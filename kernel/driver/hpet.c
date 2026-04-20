@@ -33,6 +33,7 @@ static int hpet_ready;
 static int hpet_test_timer = -1;
 static int hpet_test_irq = -1;
 static uint hpet_test_irq_count;
+static uint hpet_test_route_cap_cached;
 static int hpet_test_armed;
 
 static volatile uint*
@@ -108,30 +109,21 @@ static int
 hpet_pick_irq(uint route_cap)
 {
   int irq;
-  int fallback;
-
-  fallback = -1;
   for(irq = 16; irq < 32; irq++){
     if((route_cap & (1U << irq)) == 0 || hpet_irq_reserved(irq))
       continue;
-    if(irq == 2){
-      if(fallback < 0)
-        fallback = irq;
+    if(irq == 2)
       continue;
-    }
     return irq;
   }
   for(irq = 0; irq < 32; irq++){
     if((route_cap & (1U << irq)) == 0 || hpet_irq_reserved(irq))
       continue;
-    if(irq == 2){
-      if(fallback < 0)
-        fallback = irq;
+    if(irq == 2)
       continue;
-    }
     return irq;
   }
-  return fallback;
+  return -1;
 }
 
 static unsigned long long
@@ -270,6 +262,7 @@ hpet_start_periodic_test(uint freq_hz)
     hpet_test_timer = (int)i;
     hpet_test_irq = irq;
     hpet_test_irq_count = 0;
+    hpet_test_route_cap_cached = route_cap;
     hpet_test_armed = 1;
 
     BOOTDBG("hpet: armed test timer=%d irq=%d hz=%u\n", hpet_test_timer, hpet_test_irq, freq_hz);
@@ -309,6 +302,18 @@ int
 hpet_irq_line(void)
 {
   return hpet_test_irq;
+}
+
+uint
+hpet_test_route_cap(void)
+{
+  return hpet_test_route_cap_cached;
+}
+
+int
+hpet_test_timer_index(void)
+{
+  return hpet_test_timer;
 }
 
 int

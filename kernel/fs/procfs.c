@@ -1895,6 +1895,7 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     uint ctr_hi;
     uint ctr_lo;
     int irq_line;
+    int timer_idx;
 
     acquire(&tickslock);
     now = ticks;
@@ -1904,6 +1905,7 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
     ctr_hi = (uint)(ctr >> 32);
     ctr_lo = (uint)ctr;
     irq_line = hpet_irq_line();
+    timer_idx = hpet_test_timer_index();
 
     len = 0;
     if(procfs_buf_puts(buf, sizeof(buf), &len, "backend lapic\n") < 0)
@@ -1917,13 +1919,21 @@ procfs_readi(struct inode *ip, char *dst, uint64_t off, uint n)
       return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "tick_sleepers ", (uint)proc_has_tick_sleepers()) < 0)
       return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "lapic_calibrated ", (uint)lapic_timer_is_calibrated()) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "lapic_ticr ", lapic_timer_initial_count()) < 0)
+      return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "hpet_available ", (uint)hpet_available()) < 0)
       return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "hpet_test_enabled ", (uint)hpet_test_enabled()) < 0)
       return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "hpet_timer_index ", timer_idx >= 0 ? (uint)timer_idx : 0U) < 0)
+      return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "hpet_irq_line ", irq_line >= 0 ? (uint)irq_line : 0U) < 0)
       return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "hpet_irq_count ", hpet_irq_count()) < 0)
+      return -1;
+    if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "hpet_route_cap ", hpet_test_route_cap()) < 0)
       return -1;
     if(procfs_buf_putkv_u(buf, sizeof(buf), &len, "hpet_period_fs ", hpet_period_fs()) < 0)
       return -1;

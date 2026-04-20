@@ -45,6 +45,8 @@ volatile uint *lapic;  // Initialized in mp.c
 static uint lapic_boot_addr;
 static uint lapic_pointer_repairs;
 static uint lapic_eoi_kpgdir_fallbacks;
+static uint lapic_timer_initial = 10000000U;
+static int lapic_timer_calibrated;
 extern pde_t *kpgdir;
 
 static volatile uint*
@@ -106,7 +108,7 @@ lapicinit(void)
   // TICR would be calibrated using an external time source.
   lapicw(TDCR, X1);
   lapicw(TIMER, PERIODIC | (T_IRQ0 + IRQ_TIMER));
-  lapicw(TICR, 10000000);
+  lapicw(TICR, lapic_timer_initial);
 
   // Disable logical interrupt lines.
   lapicw(LINT0, MASKED);
@@ -146,6 +148,64 @@ lapicid(void)
   if (!p)
     return 0;
   return p[ID] >> 24;
+}
+
+int
+lapic_timer_calibrate_hpet(uint freq_hz)
+{
+  volatile uint *p;
+  unsigned long long start_hpet;
+  unsigned long long now_hpet;
+  unsigned long long hpet_counts;
+  uint start_ccr;
+  uint end_ccr;
+  uint delta;
+
+  p = lapic_ptr();
+  if(p == 0 || !hpet_available() || hpet_period_fs() == 0 || freq_hz == 0)
+    return -1;
+
+  hpet_counts = 1000000000000000ULL /
+                ((unsigned long long)hpet_period_fs() * (unsigned long long)freq_hz);
+  if(hpet_counts == 0)
+    return -1;
+
+  lapicw(TDCR, X1);
+  lapicw(TIMER, PERIODIC | (T_IRQ0 + IRQ_TIMER));
+  lapicw(TICR, 0xffffffffU);
+
+  start_hpet = hpet_read_counter();
+  start_ccr = p[TCCR];
+  do {
+    now_hpet = hpet_read_counter();
+  } while(now_hpet - start_hpet < hpet_counts);
+  end_ccr = p[TCCR];
+
+  delta = start_ccr - end_ccr;
+  if(delta == 0 || delta == 0xffffffffU)
+    return -1;
+
+  lapic_timer_initial = delta;
+  lapic_timer_calibrated = 1;
+
+  lapicw(TDCR, X1);
+  lapicw(TIMER, PERIODIC | (T_IRQ0 + IRQ_TIMER));
+  lapicw(TICR, lapic_timer_initial);
+
+  BOOTDBG("lapic: calibrated via hpet freq=%u ticr=%u\n", freq_hz, lapic_timer_initial);
+  return 0;
+}
+
+uint
+lapic_timer_initial_count(void)
+{
+  return lapic_timer_initial;
+}
+
+int
+lapic_timer_is_calibrated(void)
+{
+  return lapic_timer_calibrated;
 }
 
 // Acknowledge interrupt.
