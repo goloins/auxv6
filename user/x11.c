@@ -535,6 +535,7 @@ struct _XOC {
   Font font_id;
   char *font_name;
   XFontStruct font;
+  XFontSetExtents extents;
   XFontStruct *font_list_entry[1];
   char *font_name_list_entry[1];
 };
@@ -5269,9 +5270,46 @@ XFontSet XCreateFontSet(Display *display, const char *base_font_name_list,
   }
 
   x11_fill_font_struct(&oc->font, fs);
+  oc->extents.max_ink_extent.x = 0;
+  oc->extents.max_ink_extent.y = (short)(-fs->ascent);
+  oc->extents.max_ink_extent.width = (unsigned short)fs->width;
+  oc->extents.max_ink_extent.height = (unsigned short)fs->height;
+  oc->extents.max_logical_extent = oc->extents.max_ink_extent;
   oc->font_list_entry[0] = &oc->font;
   oc->font_name_list_entry[0] = oc->font_name;
   return (XFontSet)oc;
+}
+
+XFontSetExtents *XExtentsOfFontSet(XFontSet font_set) {
+  struct _XOC *oc;
+
+  oc = (struct _XOC *)font_set;
+  if (!oc)
+    return 0;
+  return &oc->extents;
+}
+
+Status XGetFontProperty(XFontStruct *font_struct, Atom atom,
+                        unsigned long *value_return) {
+  struct x11_font_state *fs;
+  Atom font_atom;
+
+  if (!font_struct || !value_return)
+    return 0;
+  /* XA_FONT */
+  if (atom != (Atom)18L)
+    return 0;
+
+  fs = x11_find_font(font_struct->fid);
+  if (!fs || !g_display)
+    return 0;
+
+  font_atom = XInternAtom(g_display, fs->name, False);
+  if (font_atom == None)
+    return 0;
+
+  *value_return = (unsigned long)font_atom;
+  return 1;
 }
 
 int XFontsOfFontSet(XFontSet font_set, XFontStruct ***font_struct_list_return,
@@ -5411,6 +5449,25 @@ int XDrawString(Display *display, Drawable d, GC gc, int x, int y, const char *s
   snprintf(cmd, sizeof(cmd), "DRAW_TEXT %u %d %d %u %d %.*s\n", (uint)d, x, y, color, n, n, string);
   g_x11_draw_call_count++;
   return x11_batch_draw(display, cmd);
+}
+
+int XDrawImageString(Display *display, Drawable d, GC gc, int x, int y,
+                     const char *string, int length) {
+  struct x11_gc_state *gs;
+
+  if (!display || !string || length <= 0)
+    return 0;
+
+  gs = x11_find_gc(gc);
+  if (gs) {
+    unsigned int w = (unsigned int)(length * 8);
+    unsigned int h = 16;
+    (void)XSetForeground(display, gc, gs->bg);
+    (void)XFillRectangle(display, d, gc, x, y - 12, w, h);
+    (void)XSetForeground(display, gc, gs->fg);
+  }
+
+  return XDrawString(display, d, gc, x, y, string, length);
 }
 
 int XDrawLine(Display *display, Drawable d, GC gc, int x1, int y1, int x2, int y2) {
@@ -7095,6 +7152,19 @@ int XGetWMNormalHints(Display *display, Window w, XSizeHints *hints_return, long
   if (supplied_return) *supplied_return = 0;
   return 0;
 }
+
+Status XGetNormalHints(Display *display, Window w, XSizeHints *hints_return) {
+  long supplied = 0;
+  return XGetWMNormalHints(display, w, hints_return, &supplied);
+}
+
+Status XGetSizeHints(Display *display, Window w, XSizeHints *hints_return,
+                     Atom property) {
+  long supplied = 0;
+  (void)property;
+  return XGetWMNormalHints(display, w, hints_return, &supplied);
+}
+
 int XSetClassHint(Display *display, Window w, XClassHint *class_hints) {
   char buf[256];
   const char *name;

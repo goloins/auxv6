@@ -64,6 +64,9 @@ int XGetWMProtocols(Display *display, Window w, Atom **protocols_return, int *co
 XWMHints *XGetWMHints(Display *display, Window w);
 int XSetWMHints(Display *display, Window w, XWMHints *wmhints);
 int XGetWMNormalHints(Display *display, Window w, XSizeHints *hints_return, long *supplied_return);
+int XGetNormalHints(Display *display, Window w, XSizeHints *hints_return);
+int XGetSizeHints(Display *display, Window w, XSizeHints *hints_return,
+                  Atom property);
 int XSetClassHint(Display *display, Window w, XClassHint *class_hints);
 
 #endif

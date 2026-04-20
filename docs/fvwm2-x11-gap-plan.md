@@ -65,6 +65,8 @@ Grouped by implementation priority.
 
 ### Tier 3 — Text / font
 
+Status (2026-04-19): implemented in-tree in `user/x11.c` and headers (`XDrawImageString`, `XExtentsOfFontSet`, `XGetFontProperty`, `XGetNormalHints`, `XGetSizeHints`).
+
 | Function | Xlib description | Notes |
 |----------|-----------------|-------|
 | `XDrawImageString` | Draw string + fill background | menu / title bar labels |
@@ -292,9 +294,9 @@ make -C ports/fvwm-fvwm2-stable -f Makefile.auxv6 clean all 2>&1 | grep -c 'unde
 
 | Tier | Count | Status |
 |------|-------|--------|
-| T1 Core WM / event loop | 13 | **implement first** |
-| T2 Color management | 5 | implement second |
-| T3 Text / font | 5 | implement with T2 |
+| T1 Core WM / event loop | 13 | implemented in-tree (2026-04-19), pending runtime verification |
+| T2 Color management | 5 | implemented in-tree (2026-04-19), pending runtime verification |
+| T3 Text / font | 5 | implemented in-tree (2026-04-19), pending runtime verification |
 | T4 Image / bitmap | 5 | implement with T3 |
 | T5 Shape completions | 4 | implement with T4 |
 | T6 Keyboard / screen meta | 4 | implement with T5 |

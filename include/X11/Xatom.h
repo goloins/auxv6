@@ -8,6 +8,7 @@
 #define XA_SECONDARY 2L
 #define XA_ATOM 4L
 #define XA_CARDINAL 6L
+#define XA_FONT 18L
 #define XA_STRING 31L
 #define XA_VISUALID 32L
 #define XA_WINDOW 33L

@@ -92,6 +92,11 @@ typedef struct {
   unsigned short width, height;
 } XRectangle;
 
+typedef struct {
+  XRectangle max_ink_extent;
+  XRectangle max_logical_extent;
+} XFontSetExtents;
+
 typedef struct _XImage XImage;
 
 typedef struct {
@@ -1267,6 +1272,8 @@ Status XGetGCValues(Display *display, GC gc, unsigned long valuemask,
 int XFillRectangle(Display *display, Drawable d, GC gc, int x, int y, unsigned int width, unsigned int height);
 int XDrawRectangle(Display *display, Drawable d, GC gc, int x, int y, unsigned int width, unsigned int height);
 int XDrawString(Display *display, Drawable d, GC gc, int x, int y, const char *string, int length);
+int XDrawImageString(Display *display, Drawable d, GC gc, int x, int y,
+                     const char *string, int length);
 int XDrawLine(Display *display, Drawable d, GC gc, int x1, int y1, int x2, int y2);
 int XDrawLines(Display *display, Drawable d, GC gc, XPoint *points, int npoints, int mode);
 int XDrawSegments(Display *display, Drawable d, GC gc, void *segments, int nsegments);
@@ -1366,10 +1373,13 @@ XFontSet XCreateFontSet(Display *display, const char *base_font_name_list,
                         char ***missing_charset_list_return,
                         int *missing_charset_count_return,
                         char **def_string_return);
+XFontSetExtents *XExtentsOfFontSet(XFontSet font_set);
 int XFontsOfFontSet(XFontSet font_set, XFontStruct ***font_struct_list_return,
                     char ***font_name_list_return);
 void XFreeFontSet(Display *display, XFontSet font_set);
 int XTextWidth(XFontStruct *font_struct, const char *string, int count);
+Status XGetFontProperty(XFontStruct *font_struct, Atom atom,
+                        unsigned long *value_return);
 
 XVisualInfo *XGetVisualInfo(Display *display, long vinfo_mask,
                             XVisualInfo *vinfo_template,
