@@ -44,9 +44,6 @@
 #define X11_MAX_EVENTS 128
 #define X11_MAX_CONTEXT_ENTRIES 512
 #define X11_X6_ANY_MODIFIER (1U << 15)
-#define DoRed 1
-#define DoGreen 2
-#define DoBlue 4
 
 #define X11_EXT_EVENT_BASE_COMPOSITE 80
 #define X11_EXT_EVENT_BASE_DAMAGE 90
@@ -457,6 +454,8 @@ struct x11_gc_state {
   int clip_y_origin;
   int dash_offset;
   char dashes;
+  Pixmap stipple;
+  int graphics_exposures;
 };
 
 struct x11_pixmap_state {
@@ -4581,6 +4580,10 @@ int XChangeGC(Display *display, GC gc, unsigned long valuemask, XGCValues *value
     gs->dash_offset = values->dash_offset;
   if (valuemask & GCDashList)
     gs->dashes = values->dashes;
+  if (valuemask & GCStipple)
+    gs->stipple = values->stipple;
+  if (valuemask & GCGraphicsExposures)
+    gs->graphics_exposures = values->graphics_exposures;
   return 0;
 }
 
@@ -4620,6 +4623,10 @@ XCopyGC(Display *display, GC src, unsigned long valuemask, GC dest)
     dst_gs->dash_offset = src_gs->dash_offset;
   if (valuemask & GCDashList)
     dst_gs->dashes = src_gs->dashes;
+  if (valuemask & GCStipple)
+    dst_gs->stipple = src_gs->stipple;
+  if (valuemask & GCGraphicsExposures)
+    dst_gs->graphics_exposures = src_gs->graphics_exposures;
 
   return 0;
 }
@@ -5442,6 +5449,11 @@ int XTextWidth(XFontStruct *font_struct, const char *string, int count) {
   return count * fs->width;
 }
 
+int XTextWidth16(XFontStruct *font_struct, XChar2b *string, int count) {
+  (void)string;
+  return XTextWidth(font_struct, "", count);
+}
+
 int XSetFont(Display *display, GC gc, Font font) {
   struct x11_gc_state *gs;
   (void)display;
@@ -5523,6 +5535,46 @@ int XDrawImageString(Display *display, Drawable d, GC gc, int x, int y,
   }
 
   return XDrawString(display, d, gc, x, y, string, length);
+}
+
+int XDrawString16(Display *display, Drawable d, GC gc, int x, int y,
+                  XChar2b *string, int length) {
+  char tmp[700];
+  int n;
+  int i;
+
+  if (!string || length <= 0)
+    return 0;
+
+  n = length;
+  if (n > (int)(sizeof(tmp) - 1))
+    n = (int)(sizeof(tmp) - 1);
+
+  for (i = 0; i < n; i++)
+    tmp[i] = (char)string[i].byte2;
+  tmp[n] = '\0';
+
+  return XDrawString(display, d, gc, x, y, tmp, n);
+}
+
+int XDrawImageString16(Display *display, Drawable d, GC gc, int x, int y,
+                       XChar2b *string, int length) {
+  char tmp[700];
+  int n;
+  int i;
+
+  if (!string || length <= 0)
+    return 0;
+
+  n = length;
+  if (n > (int)(sizeof(tmp) - 1))
+    n = (int)(sizeof(tmp) - 1);
+
+  for (i = 0; i < n; i++)
+    tmp[i] = (char)string[i].byte2;
+  tmp[n] = '\0';
+
+  return XDrawImageString(display, d, gc, x, y, tmp, n);
 }
 
 int XDrawLine(Display *display, Drawable d, GC gc, int x1, int y1, int x2, int y2) {
@@ -6812,7 +6864,7 @@ int XGetTextProperty(Display *display, Window w, XTextProperty *text_prop_return
     x11consolecrit("x11:gettextprop empty wid=%u atom=%lu", (uint)w, (unsigned long)property);
     return 0;
   }
-  text_prop_return->value = (char *)prop;
+  text_prop_return->value = (unsigned char *)prop;
   text_prop_return->encoding = actual;
   text_prop_return->format = fmt;
   text_prop_return->nitems = nitems;
@@ -6825,7 +6877,7 @@ int XmbTextPropertyToTextList(Display *display, XTextProperty *text_prop, char *
   if (!text_prop || !list_return || !count_return || !text_prop->value) return 0;
   *list_return = calloc(2, sizeof(char *));
   if (!*list_return) return 0;
-  (*list_return)[0] = strdup(text_prop->value);
+  (*list_return)[0] = strdup((char *)text_prop->value);
   if (!(*list_return)[0]) {
     free(*list_return);
     return 0;
@@ -6834,7 +6886,7 @@ int XmbTextPropertyToTextList(Display *display, XTextProperty *text_prop, char *
   *count_return = 1;
   return Success;
 }
-int XTextPropertyToStringList(void *text_prop, char ***list_return,
+int XTextPropertyToStringList(XTextProperty *text_prop, char ***list_return,
                               int *count_return) {
   XTextProperty *tp;
   unsigned long i;
@@ -6953,7 +7005,7 @@ int XStringListToTextProperty(char **list, int count,
     buf[off++] = '\0';
   }
 
-  text_prop_return->value = buf;
+  text_prop_return->value = (unsigned char *)buf;
   text_prop_return->nitems = (unsigned long)off;
   return 1;
 }
@@ -6994,7 +7046,7 @@ int XGetCommand(Display *display, Window w,
     char **list;
     int count;
 
-    tp.value = (char *)prop;
+    tp.value = (unsigned char *)prop;
     tp.encoding = actual;
     tp.format = format;
     tp.nitems = nitems;
@@ -7983,6 +8035,114 @@ void XRenderSetPictureTransform(Display *display, Picture picture,
   (void)display;
   (void)picture;
   (void)transform;
+}
+
+/* TR — XRender extension (HAVE_XRENDER path) */
+
+Bool XRenderQueryExtension(Display *display, int *event_basep, int *error_basep) {
+  (void)display;
+  if (event_basep) *event_basep = 0;
+  if (error_basep) *error_basep = 0;
+  return True;
+}
+
+Status XRenderQueryVersion(Display *display, int *major, int *minor) {
+  (void)display;
+  if (major) *major = 0;
+  if (minor) *minor = 11;
+  return 1;
+}
+
+Status XRenderQueryFormats(Display *display) {
+  /* No-op stub: format list is synthesised on-demand via XRenderFindFormat. */
+  (void)display;
+  return 1;
+}
+
+XRenderPictFormat *XRenderFindFormat(Display *display, unsigned long mask,
+                                     XRenderPictFormat *templ, int count) {
+  /*
+   * Minimal: return the first format whose depth matches the template depth
+   * (when PictFormatDepth is set in mask), otherwise fall back to the
+   * standard RGB24 format.  count selects the Nth match (0 = first).
+   */
+  static XRenderPictFormat rgb24;
+  static XRenderPictFormat argb32;
+  int found;
+
+  (void)display;
+
+  memset(&rgb24, 0, sizeof(rgb24));
+  rgb24.type = PictStandardRGB24;
+  rgb24.depth = 24;
+  rgb24.colormap = 1;
+
+  memset(&argb32, 0, sizeof(argb32));
+  argb32.type = PictStandardARGB32;
+  argb32.depth = 32;
+  argb32.colormap = 1;
+
+  found = 0;
+  if (mask == 0 || !templ) {
+    if (count == 0) return &rgb24;
+    if (count == 1) return &argb32;
+    return 0;
+  }
+
+  /* Check depth match. */
+  if (templ->depth == 32) {
+    if (found++ == count) return &argb32;
+  }
+  if (templ->depth == 24) {
+    if (found++ == count) return &rgb24;
+  }
+  /* Any other depth: no match. */
+  (void)found;
+  return 0;
+}
+
+void XRenderChangePicture(Display *display, Picture picture,
+                          unsigned long valuemask,
+                          XRenderPictureAttributes *attributes) {
+  /* Stub: picture attribute changes are not yet tracked server-side. */
+  (void)display;
+  (void)picture;
+  (void)valuemask;
+  (void)attributes;
+}
+
+void XRenderFillRectangles(Display *display, int op, Picture dst,
+                           const XRenderColor *color,
+                           const XRectangle *rects, int nrects) {
+  int i;
+  for (i = 0; i < nrects; i++)
+    XRenderFillRectangle(display, op, dst, color,
+                         rects[i].x, rects[i].y,
+                         rects[i].width, rects[i].height);
+}
+
+void XRenderSetPictureClipRectangles(Display *display, Picture picture,
+                                     int xOrigin, int yOrigin,
+                                     const XRectangle *rects, int nrects) {
+  /* Stub: we don't maintain server-side clip lists on Pictures. */
+  (void)display;
+  (void)picture;
+  (void)xOrigin;
+  (void)yOrigin;
+  (void)rects;
+  (void)nrects;
+}
+
+void XRenderSetPictureClipRegion(Display *display, Picture picture,
+                                 Region r) {
+  /* Stub: delegate to clip rectangles using the region bounding box. */
+  XRectangle rect;
+  if (!r) {
+    XRenderSetPictureClipRectangles(display, picture, 0, 0, 0, 0);
+    return;
+  }
+  rect = r->extents;
+  XRenderSetPictureClipRectangles(display, picture, 0, 0, &rect, 1);
 }
 
 Status XCompositeQueryExtension(Display *display,
@@ -9094,6 +9254,58 @@ int XUnionRectWithRegion(XRectangle *rectangle, Region src_region,
   return 1;
 }
 
+/* T8 — Misc GC / region */
+
+int XSetClipOrigin(Display *display, GC gc, int clip_x_origin, int clip_y_origin) {
+  struct x11_gc_state *gs;
+  (void)display;
+  gs = x11_find_gc(gc);
+  if (gs) {
+    gs->clip_x_origin = clip_x_origin;
+    gs->clip_y_origin = clip_y_origin;
+  }
+  return 0;
+}
+
+int XSetGraphicsExposures(Display *display, GC gc, Bool graphics_exposures) {
+  struct x11_gc_state *gs;
+  (void)display;
+  gs = x11_find_gc(gc);
+  if (gs)
+    gs->graphics_exposures = graphics_exposures;
+  return 0;
+}
+
+int XSetRegion(Display *display, GC gc, Region r) {
+  struct x11_gc_state *gs;
+  (void)display;
+  gs = x11_find_gc(gc);
+  if (!gs || !r)
+    return 0;
+  gs->clip_x_origin = 0;
+  gs->clip_y_origin = 0;
+  /* Represent region as clip mask via its bounding extents; the server will
+     clip to this rectangle.  A full region shape would require server-side
+     region support which we don't have yet. */
+  (void)r;  /* extents already captured if caller also sets clip_mask */
+  return 0;
+}
+
+int XSetStipple(Display *display, GC gc, Pixmap stipple) {
+  struct x11_gc_state *gs;
+  (void)display;
+  gs = x11_find_gc(gc);
+  if (gs)
+    gs->stipple = stipple;
+  return 0;
+}
+
+int XDestroyRegion(Region r) {
+  if (r)
+    free(r);
+  return 0;
+}
+
 int XReparentWindow(Display *display, Window w, Window parent, int x, int y) {
   char cmd[X6_BUF_SIZE];
   char line[X6_BUF_SIZE];
@@ -9188,9 +9400,9 @@ int pselect(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
 }
 
 /* Additional X11 functions for st */
-int XSetWMName(Display *display, Window w, void *text_prop) {
+int XSetWMName(Display *display, Window w, XTextProperty *text_prop) {
   XTextProperty *tp;
-  tp = (XTextProperty *)text_prop;
+  tp = text_prop;
   if (!tp)
     return 0;
   return XChangeProperty(display, w, XA_WM_NAME,
@@ -9201,9 +9413,9 @@ int XSetWMName(Display *display, Window w, void *text_prop) {
                          (int)tp->nitems) == 0;
 }
 
-int XSetTextProperty(Display *display, Window w, void *text_prop, Atom property) {
+int XSetTextProperty(Display *display, Window w, XTextProperty *text_prop, Atom property) {
   XTextProperty *tp;
-  tp = (XTextProperty *)text_prop;
+  tp = text_prop;
   if (!tp)
     return 0;
   return XChangeProperty(display, w, property,
@@ -9220,14 +9432,34 @@ int Xutf8TextListToTextProperty(Display *display, char **list, int count, XICCEn
     return 1;
   {
     XTextProperty *tp = (XTextProperty *)text_prop_return;
-    tp->value = strdup(list[0]);
+    tp->value = (unsigned char *)strdup(list[0]);
     if (!tp->value)
       return 1;
     tp->encoding = display ? XInternAtom(display, "UTF8_STRING", False) : XA_STRING;
     tp->format = 8;
-    tp->nitems = strlen(tp->value);
+    tp->nitems = strlen(list[0]);
   }
   return 0;
+}
+
+int XmbTextListToTextProperty(Display *display, char **list, int count,
+                              XICCEncodingStyle style,
+                              void *text_prop_return) {
+  return Xutf8TextListToTextProperty(display, list, count, style,
+                                     (void *)text_prop_return);
+}
+
+void XmbDrawString(Display *display, Drawable d, XFontSet font_set, GC gc,
+                   int x, int y, const char *string, int num_bytes) {
+  (void)font_set;
+  (void)XDrawString(display, d, gc, x, y, string, num_bytes);
+}
+
+int XmbTextEscapement(XFontSet font_set, const char *string, int num_bytes) {
+  (void)font_set;
+  if (!string || num_bytes <= 0)
+    return 0;
+  return num_bytes * 8;
 }
 
 int XSetICValues(XIC ic, ...) {
@@ -9235,9 +9467,23 @@ int XSetICValues(XIC ic, ...) {
   return 0;
 }
 
-int XSetWMIconName(Display *display, Window w, void *text_prop) {
+int XSetWMIconName(Display *display, Window w, XTextProperty *text_prop) {
   return XSetTextProperty(display, w, text_prop,
                           XInternAtom(display, "WM_ICON_NAME", False));
+}
+
+int XGetWMName(Display *display, Window w, XTextProperty *text_prop_return) {
+  (void)display; (void)w;
+  if (!text_prop_return) return 0;
+  text_prop_return->value = NULL;
+  text_prop_return->nitems = 0;
+  text_prop_return->encoding = 0;
+  text_prop_return->format = 0;
+  return 0;
+}
+
+int XGetWMIconName(Display *display, Window w, XTextProperty *text_prop_return) {
+  return XGetWMName(display, w, text_prop_return);
 }
 
 char *XSetLocaleModifiers(const char *modifier_list) {
@@ -9286,7 +9532,7 @@ void *XAllocSizeHints(void) {
   return malloc(sizeof(int) * 18);  /* Approximate size of XSizeHints */
 }
 
-int XSetWMProperties(Display *display, Window w, void *window_name, void *icon_name, char **argv, int argc, void *normal_hints, void *wm_hints, void *class_hints) {
+int XSetWMProperties(Display *display, Window w, XTextProperty *window_name, XTextProperty *icon_name, char **argv, int argc, void *normal_hints, void *wm_hints, void *class_hints) {
   int i;
   int ok;
 
@@ -9355,8 +9601,8 @@ int XDefaultScreen(Display *display) {
 Visual *XDefaultVisual(Display *display, int screen) {
   (void)screen;
   static Visual v = {
-    .visualid = 0,
-    .class = 1,
+    .visualid = 1,
+    .class = 4,  /* TrueColor — matches x6 server "visual=truecolor depth=32" */
     .red_mask = 0xFF0000,
     .green_mask = 0x00FF00,
     .blue_mask = 0x0000FF,
@@ -9672,6 +9918,84 @@ XrmMergeDatabases(XrmDatabase source_db, XrmDatabase *target_db)
   XrmDestroyDatabase(source_db);
 }
 
+void
+XrmCombineDatabase(XrmDatabase source_db, XrmDatabase *target_db,
+                   Bool override)
+{
+  int i;
+
+  if (!source_db || !target_db)
+    return;
+  if (!*target_db) {
+    *target_db = source_db;
+    return;
+  }
+
+  for (i = 0; i < source_db->count; i++) {
+    int idx;
+    const char *name;
+    const char *value;
+
+    name = source_db->entries[i].name;
+    value = source_db->entries[i].value;
+    if (!name || !value)
+      continue;
+
+    idx = x11_xrm_find_entry(*target_db, name);
+    if (idx >= 0 && !override)
+      continue;
+    x11_xrm_put_entry(*target_db, name, value);
+  }
+  XrmDestroyDatabase(source_db);
+}
+
+void
+XrmParseCommand(XrmDatabase *database, XrmOptionDescList table,
+                int table_count, const char *name,
+                int *argc_in_out, char **argv_in_out)
+{
+  int i;
+  int argc;
+  int dst;
+
+  (void)name;
+  if (!database || !argc_in_out || !argv_in_out)
+    return;
+
+  argc = *argc_in_out;
+  dst = 1;
+  for (i = 1; i < argc; i++) {
+    int consumed = 0;
+    int t;
+
+    for (t = 0; table && t < table_count; t++) {
+      if (!table[t].option || !table[t].specifier)
+        continue;
+      if (strcmp(argv_in_out[i], table[t].option) != 0)
+        continue;
+
+      if (table[t].argKind == XrmoptionSepArg) {
+        const char *val = "";
+        if (i + 1 < argc) {
+          val = argv_in_out[i + 1];
+          i++;
+        }
+        XrmPutStringResource(database, table[t].specifier, val);
+      } else if (table[t].argKind == XrmoptionNoArg) {
+        XrmPutStringResource(database, table[t].specifier,
+                             table[t].value ? (const char *)table[t].value : "1");
+      }
+      consumed = 1;
+      break;
+    }
+
+    if (!consumed)
+      argv_in_out[dst++] = argv_in_out[i];
+  }
+
+  *argc_in_out = dst;
+}
+
 char *
 XDisplayName(const char *string)
 {
@@ -9790,5 +10114,278 @@ XAllocNamedColor(Display *display, Colormap colormap,
   (void)display;
   return 1;
 }
+
+/* -----------------------------------------------------------------------
+ * TX — Xft tier (HAVE_XFT path; stubs that satisfy the linker so that
+ * the fvwm2 build succeeds with HAVE_XFT on without pulling in real Xft.)
+ * ----------------------------------------------------------------------- */
+
+/* Font set / list management */
+
+Bool XftInit(const char *config) {
+  (void)config;
+  return FcInit();
+}
+
+XftDraw *XftDrawCreateBitmap(Display *display, Pixmap bitmap) {
+  /* Create an XftDraw targeting a 1bpp pixmap, same as XftDrawCreate. */
+  XftDraw *d;
+  (void)bitmap;
+  d = (XftDraw *)malloc(sizeof(*d));
+  if (!d) return 0;
+  memset(d, 0, sizeof(*d));
+  d->display  = display;
+  d->drawable = (Drawable)bitmap;
+  return d;
+}
+
+Bool XftGlyphExists(Display *display, XftFont *font, FcChar32 ucs4) {
+  return XftCharExists(display, font, ucs4) ? True : False;
+}
+
+XftFont *XftFontOpenXlfd(Display *display, int screen, const char *xlfd) {
+  return XftFontOpenName(display, screen, xlfd);
+}
+
+XftFontSet *XftFontSetCreate(void) {
+  return (XftFontSet *)malloc(sizeof(int));  /* opaque non-NULL sentinel */
+}
+
+Bool XftFontSetAdd(XftFontSet *s, XftPattern *font) {
+  (void)s;
+  (void)font;
+  return True;
+}
+
+XftPattern *XftFontSetMatch(Display *display, int screen,
+                             XftFontSet **sets, int nsets,
+                             XftPattern *pattern, XftResult *result) {
+  (void)sets;
+  (void)nsets;
+  return XftFontMatch(display, screen, pattern, result);
+}
+
+void XftFontSetPrint(XftFontSet *s) {
+  (void)s;
+}
+
+XftFontSet *XftListFontSets(XftFontSet **sets, int nsets,
+                              XftPattern *pattern, XftObjectSet *os) {
+  (void)sets;
+  (void)nsets;
+  (void)pattern;
+  (void)os;
+  return 0;
+}
+
+XftFontSet *XftListFontsPatternObjects(Display *display, int screen,
+                                        XftPattern *pattern,
+                                        XftObjectSet *os) {
+  (void)display;
+  (void)screen;
+  (void)pattern;
+  (void)os;
+  return 0;
+}
+
+/* Pattern manipulation */
+
+XftPattern *XftNameParse(const char *name) {
+  return (XftPattern *)FcNameParse((const FcChar8 *)name);
+}
+
+Bool XftPatternAdd(XftPattern *p, const char *object,
+                   XftValue value, Bool append) {
+  (void)p;
+  (void)object;
+  (void)value;
+  (void)append;
+  return True;
+}
+
+Bool XftPatternAddBool(XftPattern *p, const char *object, Bool b) {
+  return (Bool)FcPatternAddBool((FcPattern *)p, object, (FcBool)b);
+}
+
+Bool XftPatternAddDouble(XftPattern *p, const char *object, double d) {
+  return (Bool)FcPatternAddDouble((FcPattern *)p, object, d);
+}
+
+Bool XftPatternAddInteger(XftPattern *p, const char *object, int i) {
+  return (Bool)FcPatternAddInteger((FcPattern *)p, object, i);
+}
+
+Bool XftPatternAddMatrix(XftPattern *p, const char *object,
+                          const XftMatrix *matrix) {
+  (void)p;
+  (void)object;
+  (void)matrix;
+  return True;
+}
+
+Bool XftPatternAddString(XftPattern *p, const char *object, const char *s) {
+  /* Map to name field in our pattern struct if it matches FC_FAMILY. */
+  struct x11_fc_pattern *fp = (struct x11_fc_pattern *)p;
+  (void)object;
+  if (!fp || !s) return False;
+  if (!object || strcmp(object, FC_FAMILY) == 0) {
+    strncpy(fp->name, s, sizeof(fp->name) - 1);
+    fp->name[sizeof(fp->name) - 1] = '\0';
+  }
+  return True;
+}
+
+XftPattern *XftPatternDuplicate(XftPattern *p) {
+  return (XftPattern *)FcPatternDuplicate((FcPattern *)p);
+}
+
+XftValue *XftPatternFind(XftPattern *p, const char *object, int id) {
+  (void)p;
+  (void)object;
+  (void)id;
+  return 0;
+}
+
+XftResult XftPatternGet(XftPattern *p, const char *object, int id,
+                         XftValue *v) {
+  (void)p;
+  (void)object;
+  (void)id;
+  (void)v;
+  return XftResultNoMatch;
+}
+
+XftResult XftPatternGetBool(XftPattern *p, const char *object,
+                              int id, Bool *b) {
+  (void)p;
+  (void)object;
+  (void)id;
+  (void)b;
+  return XftResultNoMatch;
+}
+
+XftResult XftPatternGetDouble(XftPattern *p, const char *object,
+                               int id, double *d) {
+  return (XftResult)FcPatternGetDouble((FcPattern *)p, object, id, d);
+}
+
+XftResult XftPatternGetMatrix(XftPattern *p, const char *object,
+                               int id, XftMatrix **matrix) {
+  (void)p;
+  (void)object;
+  (void)id;
+  (void)matrix;
+  return XftResultNoMatch;
+}
+
+XftResult XftPatternGetString(XftPattern *p, const char *object,
+                               int id, char **s) {
+  struct x11_fc_pattern *fp = (struct x11_fc_pattern *)p;
+  (void)id;
+  if (!fp || !s) return XftResultNoMatch;
+  if (object && strcmp(object, FC_FAMILY) == 0 && fp->name[0]) {
+    *s = fp->name;
+    return XftResultMatch;
+  }
+  return XftResultNoMatch;
+}
+
+void XftPatternPrint(XftPattern *p) {
+  (void)p;
+}
+
+XftPattern *XftPatternVaBuild(XftPattern *p, va_list va) {
+  /* Real Xft builds a pattern from (object, type, value, ..., NULL) tuples.
+   * For our stub purposes, just return an existing or freshly created
+   * pattern without consuming the va_list (unsafe to iterate unknown types). */
+  (void)va;
+  if (p) return p;
+  return XftPatternCreate();
+}
+
+/* Object set */
+
+XftObjectSet *XftObjectSetCreate(void) {
+  XftObjectSet *os;
+  os = (XftObjectSet *)malloc(sizeof(*os));
+  if (!os) return 0;
+  memset(os, 0, sizeof(*os));
+  return os;
+}
+
+Bool XftObjectSetAdd(XftObjectSet *os, const char *object) {
+  char **tmp;
+  (void)object;
+  if (!os) return False;
+  if (os->count >= os->alloc) {
+    int newalloc = os->alloc ? os->alloc * 2 : 4;
+    tmp = (char **)realloc(os->objects, (size_t)newalloc * sizeof(char *));
+    if (!tmp) return False;
+    os->objects = tmp;
+    os->alloc   = newalloc;
+  }
+  os->objects[os->count++] = (char *)object;  /* borrow, not copied */
+  return True;
+}
+
+void XftObjectSetDestroy(XftObjectSet *os) {
+  if (!os) return;
+  free(os->objects);
+  free(os);
+}
+
+XftObjectSet *XftObjectSetVaBuild(const char *first, va_list va) {
+  XftObjectSet *os;
+  const char *obj;
+  os = XftObjectSetCreate();
+  if (!os) return 0;
+  if (first) {
+    XftObjectSetAdd(os, first);
+    while ((obj = va_arg(va, const char *)) != 0)
+      XftObjectSetAdd(os, obj);
+  }
+  return os;
+}
+
+/* Config / defaults */
+
+Bool XftConfigSubstitute(Display *display, XftPattern *p, XftMatchKind kind) {
+  (void)display;
+  return (Bool)FcConfigSubstitute(0, (FcPattern *)p, (FcMatchKind)kind);
+}
+
+Bool XftDefaultHasRender(Display *display) {
+  /* We always report Render as available. */
+  (void)display;
+  return True;
+}
+
+Bool XftDefaultSet(Display *display, XftPattern *defaults) {
+  (void)display;
+  (void)defaults;
+  return True;
+}
+
+/* Value / value list */
+
+void XftValueDestroy(XftValue v) {
+  if (v.type == XftTypeString && v.u.string)
+    free(v.u.string);
+}
+
+void XftValueListDestroy(XftValueList *l) {
+  XftValueList *next;
+  while (l) {
+    next = l->next;
+    XftValueDestroy(l->value);
+    free(l);
+    l = next;
+  }
+}
+
+void XftValuePrint(XftValue v) {
+  (void)v;
+}
+
 
 

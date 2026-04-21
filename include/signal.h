@@ -59,7 +59,12 @@ struct sigaction {
 };
 
 /* POSIX sigaction flags (subset currently supported by auxv6). */
+#define SA_NOCLDSTOP 0x00000001
+#define SA_NOCLDWAIT 0x00000002
+#define SA_SIGINFO 0x00000004
 #define SA_RESTART 0x10000000
+#define SA_ONSTACK 0x08000000
+#define SA_NODEFER 0x40000000
 
 // Signal frame pushed onto user stack during signal delivery.
 // The trampoline code at the top returns to sigreturn.

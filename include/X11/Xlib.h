@@ -14,6 +14,7 @@ typedef XID Font;
 typedef XID Colormap;
 typedef XID Atom;
 typedef XID VisualID;
+typedef unsigned long Pixel;
 typedef unsigned long Time;
 typedef unsigned long KeySym;
 typedef unsigned char KeyCode;
@@ -83,6 +84,15 @@ typedef struct {
   short x;
   short y;
 } XPoint;
+
+typedef struct {
+  short x1, y1, x2, y2;
+} XSegment;
+
+typedef struct {
+  unsigned char byte1;
+  unsigned char byte2;
+} XChar2b;
 
 /* st application types - defined in x.c, not here */
 typedef unsigned int uint;
@@ -325,6 +335,9 @@ struct _XImage {
 #define ClientMessage 33
 #define MappingNotify 34
 
+/* Core protocol extension error base */
+#define FirstExtensionError 128
+
 /* Button masks */
 #define Button1Mask (1 << 8)
 #define Button2Mask (1 << 9)
@@ -347,12 +360,6 @@ struct _XImage {
 /* Property notify states */
 #define PropertyNewValue 0
 #define PropertyDelete 1
-
-/* Cursor font shapes */
-#define XC_arrow 0
-#define XC_xterm 152
-#define XC_hand2 60
-#define XC_watch 150
 
 /* Input Method constants */
 #define XNDestroyCallback "destroyCallback"
@@ -478,6 +485,8 @@ typedef struct {
   Bool focus;
   unsigned int state;
 } XCrossingEvent;
+typedef XCrossingEvent XEnterWindowEvent;
+typedef XCrossingEvent XLeaveWindowEvent;
 
 typedef struct {
   int type;
@@ -767,6 +776,8 @@ typedef struct {
   unsigned char minor_code;
 } XErrorEvent;
 
+typedef int (*XErrorHandler)(Display *, XErrorEvent *);
+
 typedef union {
   int type;
   XAnyEvent xany;
@@ -807,10 +818,22 @@ typedef struct {
   int width, height;
   int border_width;
   int depth;
+  Visual *visual;
+  int class;
+  int bit_gravity;
+  int win_gravity;
+  int backing_store;
+  unsigned long backing_planes;
+  unsigned long backing_pixel;
+  Bool save_under;
   Colormap colormap;
-  Bool override_redirect;
+  Bool map_installed;
   int map_state;
+  long all_event_masks;
   long your_event_mask;
+  long do_not_propagate_mask;
+  Bool override_redirect;
+  Screen *screen;
 } XWindowAttributes;
 
 typedef struct {
@@ -965,6 +988,11 @@ typedef struct {
 #define RevertToParent 2
 #define PointerRoot 1
 
+#define XCNOENT 1
+#define XCNOMEM 2
+
+#define DefaultScreenOfDisplay(dpy) ((Screen *)(dpy))
+
 #define Above 0
 #define Below 1
 #define TopIf 2
@@ -976,6 +1004,16 @@ typedef struct {
 #define IsUnmapped 0
 #define IsUnviewable 1
 #define IsViewable 2
+
+#define NotUseful 0
+#define WhenMapped 1
+#define Always 2
+
+#define GrabSuccess 0
+#define AlreadyGrabbed 1
+#define GrabInvalidTime 2
+#define GrabNotViewable 3
+#define GrabFrozen 4
 
 #define CWX (1 << 0)
 #define CWY (1 << 1)
@@ -1001,6 +1039,17 @@ typedef struct {
 #define CWColormap (1L << 13)
 #define CWCursor (1L << 14)
 
+#define VisualNoMask 0x0
+#define VisualIDMask 0x1
+#define VisualScreenMask 0x2
+#define VisualDepthMask 0x4
+#define VisualClassMask 0x8
+#define VisualRedMaskMask 0x10
+#define VisualGreenMaskMask 0x20
+#define VisualBlueMaskMask 0x40
+#define VisualColormapSizeMask 0x80
+#define VisualBitsPerRGBMask 0x100
+
 #define LineSolid 0
 #define LineOnOffDash 1
 #define LineDoubleDash 2
@@ -1012,6 +1061,9 @@ typedef struct {
 #define WindingRule 1
 #define ArcChord 0
 #define ArcPieSlice 1
+#define Complex 0
+#define Nonconvex 1
+#define Convex 2
 #define CapButt 1
 #define CapRound 2
 #define CapProjecting 3
@@ -1022,7 +1074,13 @@ typedef struct {
 #define CoordModeOrigin 0
 #define CoordModePrevious 1
 
+#define Unsorted 0
+#define YSorted 1
+#define YXSorted 2
+#define YXBanded 3
+
 #define AllPlanes (~0UL)
+#define XYBitmap 0
 #define XYPixmap 1
 #define ZPixmap 2
 #define LSBFirst 0
@@ -1035,11 +1093,19 @@ typedef struct {
 #define DestroyAll 0
 
 #define Success 0
+#define XNoMemory -1
+#define XLocaleNotSupported -2
+#define XConverterNotFound -3
 #define BadWindow 3
 #define BadMatch 8
 #define BadDrawable 9
 #define BadAccess 10
 #define BadColor 12
+#define BadGC 13
+
+#define DoRed   (1 << 0)
+#define DoGreen (1 << 1)
+#define DoBlue  (1 << 2)
 
 #define XA_PRIMARY 1L
 #define XA_SECONDARY 2L
@@ -1065,6 +1131,19 @@ typedef struct {
 
 #define ColormapUninstalled 0
 #define MappingModifier 0
+
+#define ForgetGravity 0
+#define UnmapGravity 0
+#define NorthWestGravity 1
+#define NorthGravity 2
+#define NorthEastGravity 3
+#define WestGravity 4
+#define CenterGravity 5
+#define EastGravity 6
+#define SouthWestGravity 7
+#define SouthGravity 8
+#define SouthEastGravity 9
+#define StaticGravity 10
 #define MappingPointer 2
 #define ColormapInstalled 1
 
@@ -1084,8 +1163,22 @@ typedef struct {
 #define ClipByChildren 0
 #define IncludeInferiors 1
 
+#define GXclear 0x0
+#define GXand 0x1
+#define GXandReverse 0x2
 #define GXcopy 0x3
+#define GXandInverted 0x4
+#define GXnoop 0x5
 #define GXxor 0x6
+#define GXor 0x7
+#define GXnor 0x8
+#define GXequiv 0x9
+#define GXinvert 0xa
+#define GXorReverse 0xb
+#define GXcopyInverted 0xc
+#define GXorInverted 0xd
+#define GXnand 0xe
+#define GXset 0xf
 
 #define GCFunction (1 << 0)
 #define GCPlaneMask (1 << 1)
@@ -1144,12 +1237,16 @@ typedef struct {
 #define XNPreeditAttributes "preeditAttributes"
 
 #define DefaultScreen(dpy) ((dpy)->screen)
+#define DefaultGC(dpy, scr) ((GC)1)
 #define DefaultRootWindow(dpy) ((dpy)->root)
+#define ServerVendor(dpy) ((char *)"auxv6")
+#define DoesBackingStore(screen) (0)
+#define DoesSaveUnders(screen) (0)
 #define RootWindow(dpy, scr) ((dpy)->root)
 #define DisplayWidth(dpy, scr) ((dpy)->width)
 #define DisplayHeight(dpy, scr) ((dpy)->height)
 #define DefaultDepth(dpy, scr) ((dpy)->depth)
-#define DefaultVisual(dpy, scr) ((void *)0)
+#define DefaultVisual(dpy, scr) XDefaultVisual((dpy), (scr))
 #define DefaultColormap(dpy, scr) (XDefaultColormap((dpy), (scr)))
 #define ConnectionNumber(dpy) ((dpy)->fd)
 #define BlackPixel(dpy, scr) XBlackPixel((dpy), (scr))
@@ -1290,6 +1387,10 @@ int XDrawRectangle(Display *display, Drawable d, GC gc, int x, int y, unsigned i
 int XDrawString(Display *display, Drawable d, GC gc, int x, int y, const char *string, int length);
 int XDrawImageString(Display *display, Drawable d, GC gc, int x, int y,
                      const char *string, int length);
+int XDrawString16(Display *display, Drawable d, GC gc, int x, int y,
+                  XChar2b *string, int length);
+int XDrawImageString16(Display *display, Drawable d, GC gc, int x, int y,
+                       XChar2b *string, int length);
 int XDrawLine(Display *display, Drawable d, GC gc, int x1, int y1, int x2, int y2);
 int XDrawLines(Display *display, Drawable d, GC gc, XPoint *points, int npoints, int mode);
 int XDrawSegments(Display *display, Drawable d, GC gc, void *segments, int nsegments);
@@ -1310,6 +1411,9 @@ int XSetTSOrigin(Display *display, GC gc, int ts_x_origin, int ts_y_origin);
 int XSetClipMask(Display *display, GC gc, Pixmap pixmap);
 int XSetClipRectangles(Display *display, GC gc, int clip_x_origin, int clip_y_origin, XRectangle *rectangles, int n, int ordering);
 int XSetDashes(Display *display, GC gc, int dash_offset, const char *dash_list, int n);
+int XSetClipOrigin(Display *display, GC gc, int clip_x_origin, int clip_y_origin);
+int XSetGraphicsExposures(Display *display, GC gc, Bool graphics_exposures);
+int XSetStipple(Display *display, GC gc, Pixmap stipple);
 int XCopyArea(Display *display, Drawable src, Drawable dest, GC gc,
               int src_x, int src_y, unsigned int width, unsigned int height,
               int dest_x, int dest_y);
@@ -1354,6 +1458,8 @@ Status XQueryBestTile(Display *display, Drawable d,
 Region XCreateRegion(void);
 int XUnionRectWithRegion(XRectangle *rectangle, Region src_region,
                          Region dest_region);
+int XSetRegion(Display *display, GC gc, Region r);
+int XDestroyRegion(Region r);
 
 int XGetTransientForHint(Display *display, Window w, Window *prop_window_return);
 int XQueryTree(Display *display, Window w, Window *root_return, Window *parent_return,
@@ -1418,6 +1524,7 @@ int XFontsOfFontSet(XFontSet font_set, XFontStruct ***font_struct_list_return,
                     char ***font_name_list_return);
 void XFreeFontSet(Display *display, XFontSet font_set);
 int XTextWidth(XFontStruct *font_struct, const char *string, int count);
+int XTextWidth16(XFontStruct *font_struct, XChar2b *string, int count);
 Status XGetFontProperty(XFontStruct *font_struct, Atom atom,
                         unsigned long *value_return);
 
@@ -1490,7 +1597,15 @@ int XQueryColors(Display *display, Colormap colormap, XColor *defs_in_out,
 int XStoreColors(Display *display, Colormap colormap, XColor *defs,
                  int ncolors);
 
-int XTextPropertyToStringList(void *text_prop, char ***list_return,
+typedef struct {
+  unsigned char *value;
+  Atom encoding;
+  int format;
+  unsigned long nitems;
+} XTextProperty;
+#define _XTEXTPROPERTY_DEFINED_
+
+int XTextPropertyToStringList(XTextProperty *text_prop, char ***list_return,
                               int *count_return);
 
 int XReadBitmapFileData(const char *filename,
@@ -1509,10 +1624,21 @@ int XSetWMProtocols(Display *display, Window w, Atom *protocols, int count);
 int XConnectionNumber(Display *display);
 Bool XFilterEvent(XEvent *event, Window w);
 int XParseGeometry(const char *parsestring, int *x_return, int *y_return, unsigned int *width_return, unsigned int *height_return);
-int XSetWMName(Display *display, Window w, void *text_prop);
-int XSetTextProperty(Display *display, Window w, void *text_prop, Atom property);
+int XSetWMName(Display *display, Window w, XTextProperty *text_prop);
+int XGetWMName(Display *display, Window w, XTextProperty *text_prop_return);
+int XGetWMIconName(Display *display, Window w, XTextProperty *text_prop_return);
+
+#define DontCareState 0
+#define InactiveState 4
+int XSetTextProperty(Display *display, Window w, XTextProperty *text_prop, Atom property);
 int Xutf8TextListToTextProperty(Display *display, char **list, int count, XICCEncodingStyle style, void *text_prop_return);
-int XSetWMIconName(Display *display, Window w, void *text_prop);
+int XmbTextListToTextProperty(Display *display, char **list, int count,
+                              XICCEncodingStyle style,
+                              void *text_prop_return);
+void XmbDrawString(Display *display, Drawable d, XFontSet font_set, GC gc,
+                   int x, int y, const char *string, int num_bytes);
+int XmbTextEscapement(XFontSet font_set, const char *string, int num_bytes);
+int XSetWMIconName(Display *display, Window w, XTextProperty *text_prop);
 int XSetICValues(XIC ic, ...);
 char *XGetICValues(XIC ic, ...);
 char *XSetLocaleModifiers(const char *modifier_list);
@@ -1522,7 +1648,7 @@ Status XDestroyIC(XIC ic);
 int XSetIMValues(XIM im, ...);
 void *XVaCreateNestedList(int dummy, ...);
 void *XAllocSizeHints(void);
-int XSetWMProperties(Display *display, Window w, void *window_name, void *icon_name, char **argv, int argc, void *normal_hints, void *wm_hints, void *class_hints);
+int XSetWMProperties(Display *display, Window w, XTextProperty *window_name, XTextProperty *icon_name, char **argv, int argc, void *normal_hints, void *wm_hints, void *class_hints);
 int XmbLookupString(XIC ic, XKeyEvent *event, char *buffer, int nbytes, KeySym *keysym, void *status);
 int XSetICFocus(XIC ic);
 int XUnsetICFocus(XIC ic);
@@ -1534,11 +1660,5 @@ int XRecolorCursor(Display *display, Cursor cursor, XColor *foreground, XColor *
 XIC XCreateIC(XIM im, ...);
 int XUnregisterIMInstantiateCallback(Display *display, void *rdb, char *res_name, char *res_class, void (*callback)(Display *, XPointer, XPointer), void *client_data);
 int XParseColor(Display *display, Colormap colormap, const char *spec, XColor *exact_def_return);
-
-/*
- * auxv6 compatibility: several upstream ports (e.g. dwm/st) expect Xft types
- * like XftColor/XftFont to be visible when including core X11 headers.
- */
-#include <X11/Xft/Xft.h>
 
 #endif

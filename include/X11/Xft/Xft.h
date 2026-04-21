@@ -7,6 +7,7 @@
 #ifndef _XFT_H_
 #define _XFT_H_
 
+#include <stdarg.h>
 #include "X11/Xlib.h"
 #include "X11/Xutil.h"
 
@@ -36,6 +37,7 @@ typedef unsigned int FT_UInt;
 #define FcResultNoMatch 1
 #define FcMatchPattern 0
 #define FcMatchFont 1
+typedef int XftMatchKind;
 
 /* FontConfig boolean constants */
 #define FcTrue 1
@@ -167,5 +169,107 @@ extern FcBool FcPatternAddInteger(FcPattern *p, const char *object, int i);
 extern FcResult FcPatternGetDouble(FcPattern *p, const char *object, int id, double *d);
 extern XftPattern *XftXlfdParse(const char *xlfd, int expand, FcBool ignore_scalable);
 extern FcBool FcInit(void);
+
+/* TX — Xft tier: types */
+
+typedef struct {
+  double xx, xy, yx, yy;
+} XftMatrix;
+
+typedef enum {
+  XftTypeVoid,
+  XftTypeInteger,
+  XftTypeDouble,
+  XftTypeString,
+  XftTypeBool,
+  XftTypeMatrix,
+  XftTypeCharSet,
+  XftTypeFontSet
+} XftType;
+
+typedef struct {
+  XftType type;
+  union {
+    int       integer;
+    double    d;
+    char     *string;
+    int       b;
+    XftMatrix matrix;
+  } u;
+} XftValue;
+
+typedef struct _XftValueList XftValueList;
+struct _XftValueList {
+  XftValue     value;
+  XftValueList *next;
+};
+
+typedef struct {
+  char **objects;
+  int    count;
+  int    alloc;
+} XftObjectSet;
+
+/* TX — Xft tier: font set / list management */
+extern Bool   XftInit(const char *config);
+extern XftDraw *XftDrawCreateBitmap(Display *display, Pixmap bitmap);
+extern Bool   XftGlyphExists(Display *display, XftFont *font, FcChar32 ucs4);
+extern XftFont *XftFontOpenXlfd(Display *display, int screen, const char *xlfd);
+typedef FcFontSet XftFontSet;
+extern XftFontSet *XftFontSetCreate(void);
+extern Bool   XftFontSetAdd(XftFontSet *s, XftPattern *font);
+extern XftPattern *XftFontSetMatch(Display *display, int screen,
+                                   XftFontSet **sets, int nsets,
+                                   XftPattern *pattern, XftResult *result);
+extern void   XftFontSetPrint(XftFontSet *s);
+extern XftFontSet *XftListFontSets(XftFontSet **sets, int nsets,
+                                   XftPattern *pattern,
+                                   XftObjectSet *os);
+extern XftFontSet *XftListFontsPatternObjects(Display *display, int screen,
+                                              XftPattern *pattern,
+                                              XftObjectSet *os);
+
+/* TX — Xft tier: pattern manipulation */
+extern XftPattern *XftNameParse(const char *name);
+extern Bool   XftPatternAdd(XftPattern *p, const char *object,
+                            XftValue value, Bool append);
+extern Bool   XftPatternAddBool(XftPattern *p, const char *object, Bool b);
+extern Bool   XftPatternAddDouble(XftPattern *p, const char *object, double d);
+extern Bool   XftPatternAddInteger(XftPattern *p, const char *object, int i);
+extern Bool   XftPatternAddMatrix(XftPattern *p, const char *object,
+                                  const XftMatrix *matrix);
+extern Bool   XftPatternAddString(XftPattern *p, const char *object,
+                                  const char *s);
+extern XftPattern *XftPatternDuplicate(XftPattern *p);
+extern XftValue *XftPatternFind(XftPattern *p, const char *object, int id);
+extern XftResult XftPatternGet(XftPattern *p, const char *object, int id,
+                               XftValue *v);
+extern XftResult XftPatternGetBool(XftPattern *p, const char *object,
+                                   int id, Bool *b);
+extern XftResult XftPatternGetDouble(XftPattern *p, const char *object,
+                                     int id, double *d);
+extern XftResult XftPatternGetMatrix(XftPattern *p, const char *object,
+                                     int id, XftMatrix **matrix);
+extern XftResult XftPatternGetString(XftPattern *p, const char *object,
+                                     int id, char **s);
+extern void   XftPatternPrint(XftPattern *p);
+extern XftPattern *XftPatternVaBuild(XftPattern *p, va_list va);
+
+/* TX — Xft tier: object set */
+extern XftObjectSet *XftObjectSetCreate(void);
+extern Bool   XftObjectSetAdd(XftObjectSet *os, const char *object);
+extern void   XftObjectSetDestroy(XftObjectSet *os);
+extern XftObjectSet *XftObjectSetVaBuild(const char *first, va_list va);
+
+/* TX — Xft tier: config / defaults */
+extern Bool   XftConfigSubstitute(Display *display, XftPattern *p,
+                                  XftMatchKind kind);
+extern Bool   XftDefaultHasRender(Display *display);
+extern Bool   XftDefaultSet(Display *display, XftPattern *defaults);
+
+/* TX — Xft tier: value */
+extern void   XftValueDestroy(XftValue v);
+extern void   XftValueListDestroy(XftValueList *l);
+extern void   XftValuePrint(XftValue v);
 
 #endif /* _XFT_H_ */

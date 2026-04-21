@@ -19,7 +19,7 @@ include $(dir $(abspath $(PORTS_COMMON_CALLER)))../../config/ports-common.mk
 
 SRCDIR  := $(realpath $(dir $(abspath $(PORTS_COMMON_CALLER))))
 BUILDDIR := $(SRCDIR)/.auxv6-build
-OUT     := $(SRCDIR)/fvwm
+OUT     := $(SRCDIR)/_fvwm2
 LOG     := $(BUILDDIR)/first-pass.log
 
 # fvwm2 source subtrees to compile
@@ -32,7 +32,7 @@ LIBS_DIR := $(SRCDIR)/libs
 FVWM_EXCLUDE := %/session.c
 LIBS_EXCLUDE := %/FRender.c %/FRenderInit.c %/Fft.c %/FBidi.c \
                 %/Ficonv.c %/FGettext.c %/Fsvg.c %/Fpng.c %/Fxpm.c \
-                %/FShm.c %/PictureImageLoader.c
+                %/FShm.c %/PictureImageLoader.c %/strcasecmp.c %/strncasecmp.c
 
 FVWM_SRCS_ALL := $(shell find $(FVWM_DIR) -maxdepth 1 -type f -name '*.c' 2>/dev/null)
 LIBS_SRCS_ALL := $(shell find $(LIBS_DIR) -maxdepth 1 -type f -name '*.c' 2>/dev/null)
@@ -117,6 +117,27 @@ define FVWM_CONFIG_H
 #define VERSIONINFO   "fvwm 2.6.9 (from fvwm2-stable branch)"
 #define FVWM_CONFIG   "config"
 #define FVWM2RC       ".fvwm2rc"
+
+/* Pull in default constants used throughout fvwm headers/sources. */
+#include "libs/defaults.h"
+
+/* Common libc declarations needed by many fvwm units under auxv6. */
+#include <stdlib.h>
+#include <string.h>
+
+/* auxv6 termios header expects speed_t to exist. */
+#ifndef _SPEED_T_DEFINED
+#define _SPEED_T_DEFINED
+typedef unsigned int speed_t;
+#endif
+
+/* Pull termios once, then drop ECHO macro to avoid collision with fvwm's
+ * message-level enum token named ECHO. Subsequent termios includes are
+ * guarded and won't reintroduce it. */
+#include <termios.h>
+#ifdef ECHO
+#undef ECHO
+#endif
 /* Default image search path */
 #define FVWM_IMAGEPATH "/usr/share/fvwm/images:/usr/share/pixmaps"
 /* POSIX / libc features present in auxv6 libc */
@@ -165,6 +186,91 @@ define FVWM_CONFIG_H
 #define HAVE_ICON_CSET      0
 #define HAVE_ICONV_CHARSET  0
 #define HAVE_LENGTH         0
+
+/* configure feature toggles consumed directly by source */
+#define FMiniIconsSupported 1
+#define USEDECOR 1
+#define FVWM_COLORSET_PRIVATE 1
+
+/* Forward declarations for types used under FVWM_COLORSET_PRIVATE */
+struct FvwmPictureThing;
+typedef struct FvwmPictureThing FvwmPicture;
+
+/* Debug no-op macros - must come before fvwm headers define their own */
+#ifndef DBUG
+#define DBUG(...) ((void)0)
+#endif
+#ifndef FEV_IS_EVENT_INVALID
+#define FEV_IS_EVENT_INVALID(e) 0
+#endif
+#ifndef FEV_INVALIDATE_EVENT
+#define FEV_INVALIDATE_EVENT(e) ((void)0)
+#endif
+#ifndef FEV_HAS_EVENT_WINDOW
+#define FEV_HAS_EVENT_WINDOW(type) (1)
+#endif
+
+/* alloca via compiler builtin */
+#ifndef alloca
+#define alloca(s) __builtin_alloca(s)
+#endif
+
+/* fvwm_KeycodeToKeysym: wrapper around XKeycodeToKeysym */
+#ifndef fvwm_KeycodeToKeysym
+#define fvwm_KeycodeToKeysym(d, k, x, i) (XKeycodeToKeysym((d), (k), (i)))
+#endif
+
+/* install-path defines */
+#ifndef FVWM_DATADIR
+#define FVWM_DATADIR "/usr/share/fvwm"
+#endif
+#ifndef FVWM_CONFDIR
+#define FVWM_CONFDIR "/etc/X11/fvwm"
+#endif
+#ifndef LOCALEDIR
+#define LOCALEDIR "/usr/share/locale"
+#endif
+
+/* configure-ac compatibility shims used by fvwm libs */
+typedef int fd_set_size_t;
+#ifndef SUPPRESS_UNUSED_VAR_WARNING
+#define SUPPRESS_UNUSED_VAR_WARNING(x) ((void)(x))
+#endif
+#ifndef RETSIGTYPE
+#define RETSIGTYPE void
+#endif
+#ifndef SIGNAL_RETURN
+#define SIGNAL_RETURN return
+#endif
+#ifndef SELECT_FD_SET_CAST
+#define SELECT_FD_SET_CAST
+#endif
+#ifndef CLOCK_SKEW_MS
+#define CLOCK_SKEW_MS 30000
+#endif
+
+#ifndef EXECUTABLE_EXTENSION
+#define EXECUTABLE_EXTENSION NULL
+#endif
+
+#ifndef FVWM_MODULEDIR
+#define FVWM_MODULEDIR "/usr/libexec/fvwm"
+#endif
+
+#ifndef STROKE_ARG
+#define STROKE_ARG(x)
+#endif
+#ifndef STROKE_CODE
+#define STROKE_CODE(x)
+#endif
+
+#ifndef min
+#define min(a,b) ((a) < (b) ? (a) : (b))
+#endif
+#ifndef max
+#define max(a,b) ((a) > (b) ? (a) : (b))
+#endif
+
 #endif /* FVWM_CONFIG_H */
 endef
 export FVWM_CONFIG_H
@@ -209,6 +315,14 @@ first-pass: config-h | $(BUILDDIR)
 		fi; \
 		objs="$$objs $$obj"; \
 	done; \
+	stubs_obj="$(BUILDDIR)/fvwm2-stubs.o"; \
+	if ! $(CC) $(COMMON_CPPFLAGS) $(COMMON_CFLAGS) -I"$(SRCDIR)" \
+		-c "$(ROOT)/ports/makefiles/fvwm2-stubs.c" \
+		-o "$$stubs_obj" >>"$(LOG)" 2>&1; then \
+		echo "  FAIL [stubs] fvwm2-stubs.c" >> "$(LOG)"; \
+		rc=1; \
+	fi; \
+	objs="$$objs $$stubs_obj"; \
 	if [ $$rc -eq 0 ]; then \
 		$(CC) $(COMMON_LDFLAGS) $$objs $(PORT_LIBS) -o "$(BUILDDIR)/fvwm" >>"$(LOG)" 2>&1 || rc=$$?; \
 	fi; \
@@ -242,6 +356,12 @@ install-targetfs: $(OUT)
 	@install -d "$(TARGETFS_USR_BIN)"
 	@install -m 0755 "$(OUT)" "$(TARGETFS_USR_BIN)/fvwm2"
 	@echo "fvwm2: installed to $(TARGETFS_USR_BIN)/fvwm2"
+	@install -d "$(TARGETFS_DIR)/usr/share/fvwm"
+	@cd "$(SRCDIR)/default-config" && \
+		find . -type d | while read d; do install -d "$(TARGETFS_DIR)/usr/share/fvwm/$$d"; done && \
+		find . -type f | while read f; do install -m 0644 "$$f" "$(TARGETFS_DIR)/usr/share/fvwm/$$f"; done
+	@install -d "$(TARGETFS_DIR)/etc/X11/fvwm"
+	@echo "fvwm2: staged default-config to $(TARGETFS_DIR)/usr/share/fvwm"
 
 clean:
 	rm -rf "$(BUILDDIR)" "$(OUT)"

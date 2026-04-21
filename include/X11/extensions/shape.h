@@ -15,6 +15,7 @@
 
 #define ShapeNotifyMask (1L << 0)
 #define ShapeNotify 0
+#define ShapeNumberEvents 1
 
 typedef struct {
   int type;

@@ -83,10 +83,26 @@ void XRenderFillRectangle(Display *display, int op, Picture dst,
                           const XRenderColor *color,
                           int x, int y,
                           unsigned int width, unsigned int height);
+void XRenderFillRectangles(Display *display, int op, Picture dst,
+                           const XRenderColor *color,
+                           const XRectangle *rects, int nrects);
 void XRenderSetPictureFilter(Display *display, Picture picture,
                              const char *filter,
                              XFixed *params, int nparams);
 void XRenderSetPictureTransform(Display *display, Picture picture,
                                 const XTransform *transform);
+Bool XRenderQueryExtension(Display *display, int *event_basep, int *error_basep);
+Status XRenderQueryVersion(Display *display, int *major, int *minor);
+Status XRenderQueryFormats(Display *display);
+XRenderPictFormat *XRenderFindFormat(Display *display, unsigned long mask,
+                                     XRenderPictFormat *templ, int count);
+void XRenderChangePicture(Display *display, Picture picture,
+                          unsigned long valuemask,
+                          XRenderPictureAttributes *attributes);
+void XRenderSetPictureClipRectangles(Display *display, Picture picture,
+                                     int xOrigin, int yOrigin,
+                                     const XRectangle *rects, int nrects);
+void XRenderSetPictureClipRegion(Display *display, Picture picture,
+                                 Region r);
 
 #endif

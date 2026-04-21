@@ -15,12 +15,15 @@ typedef struct {
   int win_gravity;
 } XSizeHints;
 
+#ifndef _XTEXTPROPERTY_DEFINED_
+#define _XTEXTPROPERTY_DEFINED_
 typedef struct {
-  char *value;
+  unsigned char *value;
   Atom encoding;
   int format;
   unsigned long nitems;
 } XTextProperty;
+#endif
 
 typedef struct {
   char *res_name;
@@ -38,20 +41,96 @@ typedef struct {
   XID window_group;
 } XWMHints;
 
+#ifndef PMinSize
 #define PMinSize (1L << 4)
+#endif
+#ifndef PSize
 #define PSize (1L << 3)
+#endif
+#ifndef PMaxSize
 #define PMaxSize (1L << 5)
+#endif
+#ifndef PResizeInc
 #define PResizeInc (1L << 6)
+#endif
+#ifndef PBaseSize
 #define PBaseSize (1L << 8)
+#endif
+#ifndef PAspect
 #define PAspect (1L << 7)
+#endif
+#ifndef PWinGravity
+#define PWinGravity (1L << 9)
+#endif
 
+#ifndef InputHint
 #define InputHint (1L << 0)
+#endif
+#ifndef StateHint
+#define StateHint (1L << 1)
+#endif
+#ifndef IconPixmapHint
+#define IconPixmapHint (1L << 2)
+#endif
+#ifndef IconWindowHint
+#define IconWindowHint (1L << 3)
+#endif
+#ifndef IconPositionHint
+#define IconPositionHint (1L << 4)
+#endif
+#ifndef IconMaskHint
+#define IconMaskHint (1L << 5)
+#endif
+#ifndef WindowGroupHint
 #define WindowGroupHint (1L << 6)
+#endif
+#ifndef XUrgencyHint
 #define XUrgencyHint (1L << 8)
+#endif
 
+#ifndef USPosition
+#define USPosition (1L << 0)
+#endif
+#ifndef USSize
+#define USSize (1L << 1)
+#endif
+#ifndef PPosition
+#define PPosition (1L << 2)
+#endif
+#ifndef WithdrawnState
 #define WithdrawnState 0
+#endif
+#ifndef NormalState
 #define NormalState 1
+#endif
+#ifndef IconicState
 #define IconicState 3
+#endif
+
+#ifndef NoValue
+#define NoValue 0x0000
+#endif
+#ifndef XValue
+#define XValue 0x0001
+#endif
+#ifndef YValue
+#define YValue 0x0002
+#endif
+#ifndef WidthValue
+#define WidthValue 0x0004
+#endif
+#ifndef HeightValue
+#define HeightValue 0x0008
+#endif
+#ifndef AllValues
+#define AllValues 0x000F
+#endif
+#ifndef XNegative
+#define XNegative 0x0010
+#endif
+#ifndef YNegative
+#define YNegative 0x0020
+#endif
 
 #ifndef BitmapSuccess
 #define BitmapSuccess 0

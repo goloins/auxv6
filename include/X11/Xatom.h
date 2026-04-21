@@ -19,55 +19,14 @@
 #define XA_WM_COLORMAP_WINDOWS 71L
 #define XA_WM_ICON_NAME 37L
 #define XA_WM_CLASS 67L
+#define XA_PIXMAP 20L
+#define XA_BITMAP 5L
+#define XA_INTEGER 19L
+#define XA_RGB_COLOR_MAP 24L
+#define XA_RESOURCE_MANAGER 23L
 
 /* Special atom value */
 #define AnyPropertyType 0L
-
-/* Window property constants */
-#define XValue 1
-#define YValue 2
-#define WidthValue 4
-#define HeightValue 8
-#define AllValues 15
-#define XNegative 16
-#define YNegative 32
-#define USPosition 1
-#define USSize 2
-#define PPosition 4
-#ifndef PSize
-#define PSize 8
-#endif
-#ifndef PMinSize
-#define PMinSize 16
-#endif
-#ifndef PMaxSize
-#define PMaxSize 32
-#endif
-#ifndef PResizeInc
-#define PResizeInc 64
-#endif
-#ifndef PAspect
-#define PAspect 128
-#endif
-#ifndef PBaseSize
-#define PBaseSize 256
-#endif
-#ifndef PWinGravity
-#define PWinGravity 512
-#endif
-
-/* Gravity constants */
-#define UnmapGravity 0
-#define NorthWestGravity 1
-#define NorthGravity 2
-#define NorthEastGravity 3
-#define WestGravity 4
-#define CenterGravity 5
-#define EastGravity 6
-#define SouthWestGravity 7
-#define SouthGravity 8
-#define SouthEastGravity 9
-#define StaticGravity 10
 
 #endif
 

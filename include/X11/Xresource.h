@@ -12,6 +12,24 @@ typedef struct {
 } XrmValue;
 typedef struct _XrmHashBucketRec *XrmDatabase;
 
+typedef enum {
+  XrmoptionNoArg,
+  XrmoptionIsArg,
+  XrmoptionStickyArg,
+  XrmoptionSepArg,
+  XrmoptionResArg,
+  XrmoptionSkipArg,
+  XrmoptionSkipLine,
+  XrmoptionSkipNArgs
+} XrmOptionKind;
+
+typedef struct {
+  char *option;
+  char *specifier;
+  XrmOptionKind argKind;
+  XPointer value;
+} XrmOptionDescRec, *XrmOptionDescList;
+
 void XrmInitialize(void);
 char *XResourceManagerString(Display *display);
 XrmDatabase XrmGetStringDatabase(const char *data);
@@ -21,6 +39,11 @@ Bool XrmGetResource(XrmDatabase database, const char *str_name,
                     XrmValue *value_return);
 void XrmPutStringResource(XrmDatabase *database, const char *specifier,
                           const char *value);
+void XrmCombineDatabase(XrmDatabase source_db, XrmDatabase *target_db,
+                        Bool override);
 void XrmMergeDatabases(XrmDatabase source_db, XrmDatabase *target_db);
+void XrmParseCommand(XrmDatabase *database, XrmOptionDescList table,
+                     int table_count, const char *name,
+                     int *argc_in_out, char **argv_in_out);
 
 #endif
