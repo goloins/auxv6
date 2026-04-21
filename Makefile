@@ -1131,6 +1131,7 @@ ports-progs:
 			sha256sum "$(CRT0_OBJ)"; \
 			sha256sum "$(AUXRT_A)"; \
 			sha256sum "$(LIBC_A)"; \
+			sha256sum "$(X11_A)"; \
 		} 2>/dev/null | sha256sum | awk '{print $$1}')"; \
 		stored_sig=""; \
 		if [ -f "$$stamp" ]; then \

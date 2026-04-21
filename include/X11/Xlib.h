@@ -299,6 +299,25 @@ struct _XImage {
 #define XK_KP_7 0xfff7
 #define XK_KP_8 0xfff8
 #define XK_KP_9 0xfff9
+/* Modifier and special keys */
+#define XK_Shift_L    0xffe1
+#define XK_Shift_R    0xffe2
+#define XK_Control_L  0xffe3
+#define XK_Control_R  0xffe4
+#define XK_Caps_Lock  0xffe5
+#define XK_Shift_Lock 0xffe6
+#define XK_Meta_L     0xffe7
+#define XK_Meta_R     0xffe8
+#define XK_Alt_L      0xffe9
+#define XK_Alt_R      0xffea
+#define XK_Super_L    0xffeb
+#define XK_Super_R    0xffec
+#define XK_Hyper_L    0xffed
+#define XK_Hyper_R    0xffee
+#define XK_Multi_key  0xff20
+#define XK_Pause      0xff13
+#define XK_Scroll_Lock 0xff14
+#define XK_Sys_Req    0xff15
 
 /* Event type codes */
 #define KeyPress 2
@@ -1032,10 +1051,10 @@ typedef struct {
 #define CWBackingStore (1L << 6)
 #define CWBackingPlanes (1L << 7)
 #define CWBackingPixel (1L << 8)
-#define CWSaveUnder (1L << 9)
-#define CWEventMask (1L << 10)
-#define CWDontPropagate (1L << 11)
-#define CWOverrideRedirect (1L << 12)
+#define CWOverrideRedirect (1L << 9)
+#define CWSaveUnder (1L << 10)
+#define CWEventMask (1L << 11)
+#define CWDontPropagate (1L << 12)
 #define CWColormap (1L << 13)
 #define CWCursor (1L << 14)
 
@@ -1237,7 +1256,7 @@ typedef struct {
 #define XNPreeditAttributes "preeditAttributes"
 
 #define DefaultScreen(dpy) ((dpy)->screen)
-#define DefaultGC(dpy, scr) ((GC)1)
+#define DefaultGC(dpy, scr) XDefaultGC((dpy), (scr))
 #define DefaultRootWindow(dpy) ((dpy)->root)
 #define ServerVendor(dpy) ((char *)"auxv6")
 #define DoesBackingStore(screen) (0)
@@ -1376,6 +1395,7 @@ int XFreeColormap(Display *display, Colormap colormap);
 Pixmap XCreatePixmap(Display *display, Drawable d, unsigned int width, unsigned int height, unsigned int depth);
 int XFreePixmap(Display *display, Pixmap pixmap);
 GC XCreateGC(Display *display, Drawable d, unsigned long valuemask, void *values);
+GC XDefaultGC(Display *display, int screen);
 int XFreeGC(Display *display, GC gc);
 int XSetForeground(Display *display, GC gc, unsigned long foreground);
 int XSetFont(Display *display, GC gc, Font font);

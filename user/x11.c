@@ -2794,22 +2794,26 @@ XCreateWindow(Display *display, Window parent, int x, int y,
 
   snprintf(cmd, sizeof(cmd), "CREATE %u %d %d %d %d\n", (uint)(parent ? parent : display->root),
            x, y, (int)width, (int)height);
+  fprintf(stderr, "x11[DBG]: XCreateWindow CREATE parent=%u\n", (uint)(parent ? parent : display->root));
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return None;
   if (sscanf(line, "OK create wid=%lu", &w) != 1)
     return None;
+  fprintf(stderr, "x11[DBG]: XCreateWindow created wid=%lu\n", w);
 
   if (border_width > 0) {
     snprintf(attrcmd, sizeof(attrcmd), "SET_BORDER_WIDTH %u %u\n", (uint)w, border_width);
+    fprintf(stderr, "x11[DBG]: XCreateWindow SET_BORDER_WIDTH\n");
     if (x11_cmd(display, attrcmd, line, sizeof(line)) < 0)
       return None;
   }
 
   if (valuemask && attributes) {
+    fprintf(stderr, "x11[DBG]: XCreateWindow XChangeWindowAttributes vm=0x%lx\n", valuemask);
     if (XChangeWindowAttributes(display, w, valuemask, attributes) < 0)
       return None;
   }
-
+  fprintf(stderr, "x11[DBG]: XCreateWindow done wid=%lu\n", w);
   return w;
 }
 
@@ -3079,6 +3083,8 @@ XGetWindowAttributes(Display *display, Window w, XWindowAttributes *attrs)
   attrs->override_redirect = override ? True : False;
   attrs->map_state = mapped ? IsViewable : IsUnmapped;
   attrs->your_event_mask = evmask;
+  attrs->visual = XDefaultVisual(display, display->screen);
+  attrs->screen = (Screen *)display;
   return 1;
 }
 
@@ -4215,20 +4221,25 @@ int XChangeWindowAttributes(Display *display, Window w, unsigned long valuemask,
     return -1;
 
   if ((valuemask & CWEventMask) && attributes) {
+    fprintf(stderr, "x11[DBG]: XChangeWindowAttributes CWEventMask em=0x%lx\n", attributes->event_mask);
     /* Keep event-mask selection semantics aligned with XSelectInput,
      * including WM redirect conflict handling on the root window. */
     if (XSelectInput(display, w, attributes->event_mask) < 0)
       return -1;
+    fprintf(stderr, "x11[DBG]: XChangeWindowAttributes CWEventMask done\n");
   }
 
   if ((valuemask & CWBackPixmap) && attributes) {
+    fprintf(stderr, "x11[DBG]: XChangeWindowAttributes CWBackPixmap pm=%u\n", (uint)attributes->background_pixmap);
     snprintf(cmd, sizeof(cmd), "SET_WINDOW_BACKGROUND_PIXMAP %u %u\n",
              (uint)w, (uint)attributes->background_pixmap);
     if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
       return -1;
+    fprintf(stderr, "x11[DBG]: XChangeWindowAttributes CWBackPixmap done resp='%s'\n", line);
   }
 
   if ((valuemask & CWBackPixel) && attributes) {
+    fprintf(stderr, "x11[DBG]: XChangeWindowAttributes CWBackPixel\n");
     snprintf(cmd, sizeof(cmd), "SET_WINDOW_BACKGROUND_PIXEL %u %u\n",
              (uint)w, (uint)(attributes->background_pixel & 0x00ffffffUL));
     if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
@@ -4236,13 +4247,16 @@ int XChangeWindowAttributes(Display *display, Window w, unsigned long valuemask,
   }
 
   if ((valuemask & CWColormap) && attributes) {
+    fprintf(stderr, "x11[DBG]: XChangeWindowAttributes CWColormap cmap=%u\n", (uint)attributes->colormap);
     snprintf(cmd, sizeof(cmd), "SET_WINDOW_COLORMAP %u %u\n",
              (uint)w, (uint)attributes->colormap);
     if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
       return -1;
+    fprintf(stderr, "x11[DBG]: XChangeWindowAttributes CWColormap done resp='%s'\n", line);
   }
 
   if ((valuemask & CWOverrideRedirect) && attributes) {
+    fprintf(stderr, "x11[DBG]: XChangeWindowAttributes CWOverrideRedirect\n");
     snprintf(cmd, sizeof(cmd), "SET_OVERRIDE_REDIRECT %u %d\n", (uint)w,
              attributes->override_redirect ? 1 : 0);
     if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
@@ -4250,6 +4264,7 @@ int XChangeWindowAttributes(Display *display, Window w, unsigned long valuemask,
   }
 
   if ((valuemask & CWCursor) && attributes) {
+    fprintf(stderr, "x11[DBG]: XChangeWindowAttributes CWCursor cursor=%u\n", (uint)attributes->cursor);
     if (attributes->cursor == None) {
       snprintf(cmd, sizeof(cmd), "UNSET_CURSOR %u\n", (uint)w);
       if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
@@ -4259,8 +4274,10 @@ int XChangeWindowAttributes(Display *display, Window w, unsigned long valuemask,
       if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
         return -1;
     }
+    fprintf(stderr, "x11[DBG]: XChangeWindowAttributes CWCursor done resp='%s'\n", line);
   }
 
+  fprintf(stderr, "x11[DBG]: XChangeWindowAttributes done\n");
   return 0;
 }
 int XDefineCursor(Display *display, Window w, Cursor cursor) {
@@ -6642,12 +6659,24 @@ static KeySym
 x11_keycode_to_keysym(KeyCode keycode)
 {
   switch ((unsigned int)keycode) {
+    /* Control characters (ASCII / auxv6 raw) */
     case 8:   return XK_BackSpace;
     case 9:   return XK_Tab;
     case 10:  return XK_Return;
     case 13:  return XK_Return;
     case 27:  return XK_Escape;
     case 127: return XK_Delete;
+    /* Linux evdev modifier keycodes */
+    case 29:  return XK_Control_L;
+    case 42:  return XK_Shift_L;
+    case 54:  return XK_Shift_R;
+    case 56:  return XK_Alt_L;
+    case 58:  return XK_Caps_Lock;
+    case 69:  return XK_Num_Lock;
+    case 97:  return XK_Control_R;
+    case 100: return XK_Alt_R;
+    case 125: return XK_Super_L;
+    case 126: return XK_Super_R;
     default:  return (KeySym)keycode;
   }
 }
@@ -6692,12 +6721,22 @@ int XLookupString(XKeyEvent *event_struct, char *buffer_return, int bytes_buffer
 KeyCode XKeysymToKeycode(Display *display, KeySym keysym) {
   (void)display;
   switch ((unsigned long)keysym) {
-    case XK_BackSpace: return 8;
-    case XK_Tab:       return 9;
-    case XK_Return:    return 10;
-    case XK_Escape:    return 27;
-    case XK_Delete:    return 127;
-    default:           return (KeyCode)(keysym & 0xff);
+    case XK_BackSpace:  return 8;
+    case XK_Tab:        return 9;
+    case XK_Return:     return 10;
+    case XK_Escape:     return 27;
+    case XK_Delete:     return 127;
+    case XK_Control_L:  return 29;
+    case XK_Shift_L:    return 42;
+    case XK_Shift_R:    return 54;
+    case XK_Alt_L:      return 56;
+    case XK_Caps_Lock:  return 58;
+    case XK_Num_Lock:   return 69;
+    case XK_Control_R:  return 97;
+    case XK_Alt_R:      return 100;
+    case XK_Super_L:    return 125;
+    case XK_Super_R:    return 126;
+    default:            return (KeyCode)(keysym & 0xff);
   }
 }
 KeySym XKeycodeToKeysym(Display *display, KeyCode keycode, int index) {
@@ -6738,16 +6777,37 @@ KeySym *XGetKeyboardMapping(Display *display, KeyCode first_keycode, int keycode
 }
 XModifierKeymap *XGetModifierMapping(Display *display) {
   XModifierKeymap *m;
+  /* 2 keycodes per modifier, 8 modifiers = 16 entries.
+   * Layout matches X11 convention:
+   *   [0..1]   ShiftMask    (Shift_L=42, Shift_R=54)
+   *   [2..3]   LockMask     (Caps_Lock=58)
+   *   [4..5]   ControlMask  (Control_L=29, Control_R=97)
+   *   [6..7]   Mod1Mask     (Alt_L=56, Alt_R=100)
+   *   [8..9]   Mod2Mask     (Num_Lock=69)
+   *   [10..11] Mod3Mask     (empty)
+   *   [12..13] Mod4Mask     (Super_L=125, Super_R=126)
+   *   [14..15] Mod5Mask     (empty)
+   */
+  static const KeyCode kmap[16] = {
+    42, 54,   /* ShiftMask */
+    58,  0,   /* LockMask  */
+    29, 97,   /* ControlMask */
+    56, 100,  /* Mod1Mask (Alt) */
+    69,  0,   /* Mod2Mask (NumLock) */
+     0,  0,   /* Mod3Mask */
+   125, 126,  /* Mod4Mask (Super) */
+     0,  0,   /* Mod5Mask */
+  };
   (void)display;
   m = malloc(sizeof(*m));
   if (!m) return 0;
-  m->max_keypermod = 1;
-  m->modifiermap = malloc(8 * sizeof(KeyCode));
+  m->max_keypermod = 2;
+  m->modifiermap = malloc(16 * sizeof(KeyCode));
   if (!m->modifiermap) {
     free(m);
     return 0;
   }
-  memset(m->modifiermap, 0, 8 * sizeof(KeyCode));
+  memcpy(m->modifiermap, kmap, 16 * sizeof(KeyCode));
   return m;
 }
 int XFreeModifiermap(XModifierKeymap *modmap) {
@@ -9598,6 +9658,18 @@ int XDefaultScreen(Display *display) {
   return display->screen;
 }
 
+GC XDefaultGC(Display *display, int screen) {
+  /* Return a lazily-allocated, persistent default GC for this display.
+   * The GC is never freed.  All calls after the first return the same GC. */
+  static GC default_gc = (GC)0;
+  (void)screen;
+  if (!display)
+    return (GC)0;
+  if (!default_gc)
+    default_gc = XCreateGC(display, display->root, 0, 0);
+  return default_gc;
+}
+
 Visual *XDefaultVisual(Display *display, int screen) {
   (void)screen;
   static Visual v = {
@@ -10033,20 +10105,40 @@ char *
 XKeysymToString(KeySym keysym)
 {
   switch ((unsigned long)keysym) {
-    case XK_BackSpace: return "BackSpace";
-    case XK_Tab:       return "Tab";
-    case XK_Return:    return "Return";
-    case XK_Escape:    return "Escape";
-    case XK_Delete:    return "Delete";
-    case XK_Left:      return "Left";
-    case XK_Right:     return "Right";
-    case XK_Up:        return "Up";
-    case XK_Down:      return "Down";
-    case XK_Home:      return "Home";
-    case XK_End:       return "End";
-    case XK_Prior:     return "Prior";
-    case XK_Next:      return "Next";
-    case XK_space:     return "space";
+    case XK_BackSpace:   return "BackSpace";
+    case XK_Tab:         return "Tab";
+    case XK_Return:      return "Return";
+    case XK_Escape:      return "Escape";
+    case XK_Delete:      return "Delete";
+    case XK_Left:        return "Left";
+    case XK_Right:       return "Right";
+    case XK_Up:          return "Up";
+    case XK_Down:        return "Down";
+    case XK_Home:        return "Home";
+    case XK_End:         return "End";
+    case XK_Prior:       return "Prior";
+    case XK_Next:        return "Next";
+    case XK_Insert:      return "Insert";
+    case XK_Print:       return "Print";
+    case XK_Pause:       return "Pause";
+    case XK_Scroll_Lock: return "Scroll_Lock";
+    case XK_Num_Lock:    return "Num_Lock";
+    case XK_Caps_Lock:   return "Caps_Lock";
+    case XK_Shift_Lock:  return "Shift_Lock";
+    case XK_Shift_L:     return "Shift_L";
+    case XK_Shift_R:     return "Shift_R";
+    case XK_Control_L:   return "Control_L";
+    case XK_Control_R:   return "Control_R";
+    case XK_Meta_L:      return "Meta_L";
+    case XK_Meta_R:      return "Meta_R";
+    case XK_Alt_L:       return "Alt_L";
+    case XK_Alt_R:       return "Alt_R";
+    case XK_Super_L:     return "Super_L";
+    case XK_Super_R:     return "Super_R";
+    case XK_Hyper_L:     return "Hyper_L";
+    case XK_Hyper_R:     return "Hyper_R";
+    case XK_Multi_key:   return "Multi_key";
+    case XK_space:       return "space";
     default:
       break;
   }
@@ -10077,23 +10169,60 @@ XStringToKeysym(const char *string)
   if (strncmp(name, "XK_", 3) == 0)
     name += 3;
 
-  if (strcmp(name, "BackSpace") == 0) return XK_BackSpace;
-  if (strcmp(name, "Tab") == 0)       return XK_Tab;
-  if (strcmp(name, "Return") == 0)    return XK_Return;
-  if (strcmp(name, "Escape") == 0)    return XK_Escape;
-  if (strcmp(name, "Delete") == 0)    return XK_Delete;
-  if (strcmp(name, "Left") == 0)      return XK_Left;
-  if (strcmp(name, "Right") == 0)     return XK_Right;
-  if (strcmp(name, "Up") == 0)        return XK_Up;
-  if (strcmp(name, "Down") == 0)      return XK_Down;
-  if (strcmp(name, "Home") == 0)      return XK_Home;
-  if (strcmp(name, "End") == 0)       return XK_End;
-  if (strcmp(name, "Prior") == 0 || strcmp(name, "Page_Up") == 0) return XK_Prior;
-  if (strcmp(name, "Next") == 0 || strcmp(name, "Page_Down") == 0) return XK_Next;
-  if (strcmp(name, "space") == 0)     return XK_space;
+  if (strcmp(name, "BackSpace") == 0)  return XK_BackSpace;
+  if (strcmp(name, "Tab") == 0)        return XK_Tab;
+  if (strcmp(name, "Return") == 0)     return XK_Return;
+  if (strcmp(name, "Escape") == 0)     return XK_Escape;
+  if (strcmp(name, "Delete") == 0)     return XK_Delete;
+  if (strcmp(name, "Insert") == 0)     return XK_Insert;
+  if (strcmp(name, "Left") == 0)       return XK_Left;
+  if (strcmp(name, "Right") == 0)      return XK_Right;
+  if (strcmp(name, "Up") == 0)         return XK_Up;
+  if (strcmp(name, "Down") == 0)       return XK_Down;
+  if (strcmp(name, "Home") == 0)       return XK_Home;
+  if (strcmp(name, "End") == 0)        return XK_End;
+  if (strcmp(name, "Prior") == 0 || strcmp(name, "Page_Up") == 0)   return XK_Prior;
+  if (strcmp(name, "Next") == 0  || strcmp(name, "Page_Down") == 0) return XK_Next;
+  if (strcmp(name, "Print") == 0)      return XK_Print;
+  if (strcmp(name, "Pause") == 0)      return XK_Pause;
+  if (strcmp(name, "Scroll_Lock") == 0) return XK_Scroll_Lock;
+  if (strcmp(name, "Num_Lock") == 0)   return XK_Num_Lock;
+  if (strcmp(name, "Caps_Lock") == 0)  return XK_Caps_Lock;
+  if (strcmp(name, "Shift_Lock") == 0) return XK_Shift_Lock;
+  if (strcmp(name, "Shift_L") == 0)    return XK_Shift_L;
+  if (strcmp(name, "Shift_R") == 0)    return XK_Shift_R;
+  if (strcmp(name, "Control_L") == 0)  return XK_Control_L;
+  if (strcmp(name, "Control_R") == 0)  return XK_Control_R;
+  if (strcmp(name, "Meta_L") == 0)     return XK_Meta_L;
+  if (strcmp(name, "Meta_R") == 0)     return XK_Meta_R;
+  if (strcmp(name, "Alt_L") == 0)      return XK_Alt_L;
+  if (strcmp(name, "Alt_R") == 0)      return XK_Alt_R;
+  if (strcmp(name, "Super_L") == 0)    return XK_Super_L;
+  if (strcmp(name, "Super_R") == 0)    return XK_Super_R;
+  if (strcmp(name, "Hyper_L") == 0)    return XK_Hyper_L;
+  if (strcmp(name, "Hyper_R") == 0)    return XK_Hyper_R;
+  if (strcmp(name, "Multi_key") == 0)  return XK_Multi_key;
+  if (strcmp(name, "space") == 0)      return XK_space;
+  if (strcmp(name, "ISO_Left_Tab") == 0) return XK_ISO_Left_Tab;
+  if (strcmp(name, "KP_Enter") == 0)   return XK_KP_Enter;
+  if (strcmp(name, "KP_Multiply") == 0) return XK_KP_Multiply;
+  if (strcmp(name, "KP_Add") == 0)     return XK_KP_Add;
+  if (strcmp(name, "KP_Subtract") == 0) return XK_KP_Subtract;
+  if (strcmp(name, "KP_Decimal") == 0) return XK_KP_Decimal;
+  if (strcmp(name, "KP_Divide") == 0)  return XK_KP_Divide;
+  if (strcmp(name, "KP_0") == 0)  return XK_KP_0;
+  if (strcmp(name, "KP_1") == 0)  return XK_KP_1;
+  if (strcmp(name, "KP_2") == 0)  return XK_KP_2;
+  if (strcmp(name, "KP_3") == 0)  return XK_KP_3;
+  if (strcmp(name, "KP_4") == 0)  return XK_KP_4;
+  if (strcmp(name, "KP_5") == 0)  return XK_KP_5;
+  if (strcmp(name, "KP_6") == 0)  return XK_KP_6;
+  if (strcmp(name, "KP_7") == 0)  return XK_KP_7;
+  if (strcmp(name, "KP_8") == 0)  return XK_KP_8;
+  if (strcmp(name, "KP_9") == 0)  return XK_KP_9;
 
   if (name[0] == 'F' && sscanf(name + 1, "%d", &fnum) == 1) {
-    if (fnum >= 1 && fnum <= 12)
+    if (fnum >= 1 && fnum <= 35)
       return (KeySym)(XK_F1 + (fnum - 1));
   }
 

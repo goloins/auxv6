@@ -57,7 +57,6 @@ cow_fault(pde_t *pgdir, uint va)
 int
 proc_try_grow_stack(struct proc *p, uint fault_addr)
 {
-  uint stack_guard;
   uint pages_used;
   int pst;
 
@@ -66,37 +65,46 @@ proc_try_grow_stack(struct proc *p, uint fault_addr)
   if(p->stack_bot >= p->stack_top)
     return 0;
 
-  stack_guard = p->stack_bot - PGSIZE;
-
-  if(fault_addr < stack_guard || fault_addr >= p->stack_bot)
+  /* Reject faults that are above the current stack bottom (not a grow) or
+   * beyond the hard pre-allocation limit. */
+  if(fault_addr >= p->stack_bot)
+    return 0;
+  if(fault_addr < p->stack_top - USER_STACK_MAX_PAGES * PGSIZE)
     return 0;
 
-  pages_used = (p->stack_top - p->stack_bot) / PGSIZE;
-  if(pages_used >= USER_STACK_MAX_PAGES) {
-    STACKDBG("stack: pid %d tried to grow beyond max (%d pages)\n",
-             p->pid, USER_STACK_MAX_PAGES);
-    return 0;
-  }
+  /* Grow one page at a time from the current bottom down to (and including)
+   * the page containing fault_addr.  This handles multi-page frame jumps
+   * produced by large local-variable allocations (e.g. sub esp,8192). */
+  while(p->stack_bot > PGROUNDDOWN(fault_addr)) {
+    uint guard = p->stack_bot - PGSIZE;
 
-  pst = user_page_state(proc_pgdir(p), (char*)stack_guard);
-  if(pst == 1){
-    setpteu(proc_pgdir(p), (char*)stack_guard);
-  } else if(pst == 0){
-    if(p->addrsp){
-      if(allocuvm_as(p->addrsp, stack_guard, stack_guard + PGSIZE) == 0)
-        return 0;
-    } else {
-      if(allocuvm(proc_pgdir(p), stack_guard, stack_guard + PGSIZE) == 0)
-        return 0;
+    pages_used = (p->stack_top - p->stack_bot) / PGSIZE;
+    if(pages_used >= USER_STACK_MAX_PAGES) {
+      STACKDBG("stack: pid %d tried to grow beyond max (%d pages)\n",
+               p->pid, USER_STACK_MAX_PAGES);
+      return 0;
     }
-  } else {
-    return 0;
+
+    pst = user_page_state(proc_pgdir(p), (char*)guard);
+    if(pst == 1){
+      setpteu(proc_pgdir(p), (char*)guard);
+    } else if(pst == 0){
+      if(p->addrsp){
+        if(allocuvm_as(p->addrsp, guard, guard + PGSIZE) == 0)
+          return 0;
+      } else {
+        if(allocuvm(proc_pgdir(p), guard, guard + PGSIZE) == 0)
+          return 0;
+      }
+    } else {
+      return 0;
+    }
+
+    p->stack_bot = guard;
+    STACKDBG("stack: pid %d grew stack to 0x%x (%d/%d pages used)\n",
+             p->pid, p->stack_bot, (p->stack_top - p->stack_bot) / PGSIZE,
+             USER_STACK_MAX_PAGES);
   }
-
-  p->stack_bot = stack_guard;
-
-  STACKDBG("stack: pid %d grew stack to 0x%x (%d/%d pages used)\n",
-           p->pid, p->stack_bot, pages_used + 1, USER_STACK_MAX_PAGES);
 
   switchuvm(p);
   return 1;

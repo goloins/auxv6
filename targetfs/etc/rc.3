@@ -12,13 +12,13 @@ echo "rc.3: starting ntpd"
 /bin/ntpd
 
 # BEGIN auxv6-openssh
-/bin/echo "rc.3: starting sshd (OpenSSH)"
-/usr/bin/ssh-keygen -A
-/sbin/chmod 0600 /etc/ssh/ssh_host_rsa_key
-/sbin/chmod 0600 /etc/ssh/ssh_host_ecdsa_key
-/sbin/chmod 0600 /etc/ssh/ssh_host_ed25519_key
-/sbin/chmod 0644 /etc/ssh/ssh_host_rsa_key.pub
-/sbin/chmod 0644 /etc/ssh/ssh_host_ecdsa_key.pub
-/sbin/chmod 0644 /etc/ssh/ssh_host_ed25519_key.pub
+#/bin/echo "rc.3: starting sshd (OpenSSH)"
+#/usr/bin/ssh-keygen -A
+#/sbin/chmod 0600 /etc/ssh/ssh_host_rsa_key
+#/sbin/chmod 0600 /etc/ssh/ssh_host_ecdsa_key
+#/sbin/chmod 0600 /etc/ssh/ssh_host_ed25519_key
+#/sbin/chmod 0644 /etc/ssh/ssh_host_rsa_key.pub
+#/sbin/chmod 0644 /etc/ssh/ssh_host_ecdsa_key.pub
+#/sbin/chmod 0644 /etc/ssh/ssh_host_ed25519_key.pub
 #/usr/sbin/sshd &
 # END auxv6-openssh

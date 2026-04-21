@@ -262,3 +262,5 @@ ports/plan9port-master/*
 ports/fvwm-fvwm2-stable/*
 ports/fvwm2-stable.zip
 targetfs/usr/bin/rio
+targetfs/usr/bin/fvwm
+targetfs/usr/bin/fvwm2

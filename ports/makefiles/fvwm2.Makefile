@@ -360,8 +360,10 @@ install-targetfs: $(OUT)
 	@cd "$(SRCDIR)/default-config" && \
 		find . -type d | while read d; do install -d "$(TARGETFS_DIR)/usr/share/fvwm/$$d"; done && \
 		find . -type f | while read f; do install -m 0644 "$$f" "$(TARGETFS_DIR)/usr/share/fvwm/$$f"; done
+	@install -m 0644 "$(SRCDIR)/fvwm/ConfigFvwmDefaults" "$(TARGETFS_DIR)/usr/share/fvwm/ConfigFvwmDefaults"
+	@install -m 0644 "$(SRCDIR)/fvwm/ConfigFvwmSetup"    "$(TARGETFS_DIR)/usr/share/fvwm/ConfigFvwmSetup"
 	@install -d "$(TARGETFS_DIR)/etc/X11/fvwm"
-	@echo "fvwm2: staged default-config to $(TARGETFS_DIR)/usr/share/fvwm"
+	@echo "fvwm2: staged default-config and system config files to $(TARGETFS_DIR)/usr/share/fvwm"
 
 clean:
 	rm -rf "$(BUILDDIR)" "$(OUT)"
