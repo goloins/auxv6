@@ -1,0 +1,74 @@
+# /root/.fvwm/config - minimal fvwm2 config for auxv6 bringup
+#
+# Avoids: xft fonts, external modules, fvwm-root, PipeRead.
+# Uses:   XLFD "fixed" (any name works - x6 renders with its built-in font).
+#         wallpaper is set by .xinitrc before fvwm launches.
+#         st terminal is launched by .xinitrc.
+
+DefaultFont "-*-fixed-medium-r-normal-*-14-*-*-*-*-*-*-*"
+
+# Desktops
+DesktopName 0 Main
+DesktopSize 1x1
+
+# Basic appearance
+Style * BorderWidth 4, HandleWidth 4
+Style * FvwmBorder, FirmBorder
+Style * SloppyFocus, MouseFocusClickRaises
+Style * TileCascadePlacement
+
+# Root cursor
+CursorStyle Root Left_ptr
+
+# Don't show icons on desktop
+Style * !Icon
+
+#######
+# Colorsets
+#######
+Colorset 0 fg #ffffff, bg #2d5a8e, hi, sh, Plain, NoShape
+Colorset 1 fg #000000, bg #8f9f8f, hi, sh, Plain, NoShape
+Colorset 2 fg #ffffff, bg #2d5a8e, hi, sh, Plain, NoShape
+
+Style * Colorset 1, HilightColorset 2
+
+# MenuStyle must be set AFTER Colorsets so Colorset[0] is allocated
+# when menustyle_update() runs.  Without this, default_menu_style stays
+# NULL and fvwm crashes the moment the root-click menu is shown.
+MenuStyle * Font "-*-fixed-medium-r-normal-*-14-*-*-*-*-*-*-*", Foreground #000000, Background #c0c0c0
+
+#######
+# Menus
+#######
+DestroyMenu MenuRoot
+AddToMenu MenuRoot "fvwm2" Title
++ "Terminal (st)"  Exec exec /usr/bin/st
++ "" Nop
++ "Refresh"        Refresh
++ "Restart"        Restart
++ "Quit"           Quit
+
+#######
+# Key bindings
+#######
+# Alt-F1: root menu
+Silent Key F1 A M Menu MenuRoot
+# Alt-Return: new terminal
+Silent Key Return A M Exec exec /usr/bin/st
+# Alt-F4: close focused window
+Silent Key F4 A M Close
+
+#######
+# Mouse bindings
+#######
+# Root window
+Mouse 1 R A Menu MenuRoot
+Mouse 3 R A Menu MenuRoot
+# Title bar
+Mouse 1 T A MoveClickX Move Raise Maximize
+Mouse 3 T A Menu MenuRoot
+# Borders/handles
+Mouse 1 FS A Resize
+# Buttons: 1=menu, 2=close
+Mouse 1 1 A Menu MenuRoot
+Mouse 1 2 A Close

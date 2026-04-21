@@ -2844,6 +2844,9 @@ XMapWindow(Display *display, Window w)
 {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
 
+  fprintf(stderr, "x11[DBG]: XMapWindow begin wid=%u is_wm=%d\n",
+          (uint)w, display ? display->is_wm : -1);
+
   if (display->is_wm)
     snprintf(cmd, sizeof(cmd), "WM_MAP %u\n", (uint)w);
   else
@@ -2851,7 +2854,8 @@ XMapWindow(Display *display, Window w)
 
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return -1;
-  x11dbg("x11:map wid=%u resp='%s'", (uint)w, line);
+  fprintf(stderr, "x11[DBG]: XMapWindow resp wid=%u resp='%s'\n",
+          (uint)w, line);
   if (strncmp(line, "OK map", 6) == 0 ||
       strncmp(line, "OK mapped", 9) == 0 ||
       strncmp(line, "PENDING map", 11) == 0)
@@ -2892,6 +2896,9 @@ XUnmapWindow(Display *display, Window w)
 {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
 
+  fprintf(stderr, "x11[DBG]: XUnmapWindow begin wid=%u is_wm=%d\n",
+          (uint)w, display ? display->is_wm : -1);
+
   if (display->is_wm)
     snprintf(cmd, sizeof(cmd), "WM_UNMAP %u\n", (uint)w);
   else
@@ -2899,6 +2906,8 @@ XUnmapWindow(Display *display, Window w)
 
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return -1;
+  fprintf(stderr, "x11[DBG]: XUnmapWindow resp wid=%u resp='%s'\n",
+          (uint)w, line);
   return strncmp(line, "OK unmap", 8) == 0 ||
          strncmp(line, "OK unmapped", 11) == 0 ? 0 : -1;
 }
@@ -2908,6 +2917,10 @@ XMoveResizeWindow(Display *display, Window w, int x, int y, unsigned int width, 
 {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
 
+  fprintf(stderr,
+          "x11[DBG]: XMoveResizeWindow begin wid=%u is_wm=%d x=%d y=%d w=%u h=%u\n",
+          (uint)w, display ? display->is_wm : -1, x, y, width, height);
+
   if (display->is_wm)
     snprintf(cmd, sizeof(cmd), "WM_CONFIGURE %u %d %d %d %d\n", (uint)w, x, y, (int)width, (int)height);
   else
@@ -2915,6 +2928,8 @@ XMoveResizeWindow(Display *display, Window w, int x, int y, unsigned int width, 
 
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return -1;
+  fprintf(stderr, "x11[DBG]: XMoveResizeWindow resp wid=%u resp='%s'\n",
+          (uint)w, line);
   if (strncmp(line, "OK configure", 12) == 0 ||
       strncmp(line, "OK configured", 13) == 0 ||
       strncmp(line, "PENDING configure", 17) == 0)
@@ -2947,18 +2962,26 @@ int XRaiseWindow(Display *display, Window w) {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
   if (!display)
     return -1;
+  fprintf(stderr, "x11[DBG]: XRaiseWindow begin wid=%u is_wm=%d\n",
+          (uint)w, display->is_wm);
   snprintf(cmd, sizeof(cmd), "RAISE %u\n", (uint)w);
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return -1;
+  fprintf(stderr, "x11[DBG]: XRaiseWindow resp wid=%u resp='%s'\n",
+          (uint)w, line);
   return strncmp(line, "OK raised", 9) == 0 ? 0 : -1;
 }
 int XLowerWindow(Display *display, Window w) {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
   if (!display)
     return -1;
+  fprintf(stderr, "x11[DBG]: XLowerWindow begin wid=%u is_wm=%d\n",
+          (uint)w, display->is_wm);
   snprintf(cmd, sizeof(cmd), "LOWER %u\n", (uint)w);
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return -1;
+  fprintf(stderr, "x11[DBG]: XLowerWindow resp wid=%u resp='%s'\n",
+          (uint)w, line);
   return strncmp(line, "OK lowered", 10) == 0 ? 0 : -1;
 }
 
@@ -2998,6 +3021,17 @@ XConfigureWindow(Display *display, Window w, unsigned int value_mask, XWindowCha
   if (!display)
     return -1;
 
+  fprintf(stderr,
+          "x11[DBG]: XConfigureWindow begin wid=%u mask=0x%x x=%d y=%d w=%d h=%d bw=%d sibling=%u stack=%d\n",
+          (uint)w, value_mask,
+          values ? values->x : 0,
+          values ? values->y : 0,
+          values ? values->width : 0,
+          values ? values->height : 0,
+          values ? values->border_width : 0,
+          (uint)((values && (value_mask & CWSibling)) ? values->sibling : 0),
+          values ? values->stack_mode : 0);
+
   if (value_mask & CWBorderWidth) {
     int bw = values ? values->border_width : 0;
     if (bw < 0)
@@ -3005,6 +3039,9 @@ XConfigureWindow(Display *display, Window w, unsigned int value_mask, XWindowCha
     snprintf(cmd, sizeof(cmd), "SET_BORDER_WIDTH %u %d\n", (uint)w, bw);
     if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
       return -1;
+    fprintf(stderr,
+            "x11[DBG]: XConfigureWindow border wid=%u bw=%d resp='%s'\n",
+            (uint)w, bw, line);
   }
 
   if (value_mask & CWStackMode) {
@@ -3020,6 +3057,9 @@ XConfigureWindow(Display *display, Window w, unsigned int value_mask, XWindowCha
     snprintf(cmd, sizeof(cmd), "RESTACK %u %u %d\n", (uint)w, (uint)sibling, stack_mode);
     if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
       return -1;
+    fprintf(stderr,
+            "x11[DBG]: XConfigureWindow restack wid=%u sibling=%u stack=%d resp='%s'\n",
+            (uint)w, (uint)sibling, stack_mode, line);
     if (strncmp(line, "OK restack", 10) != 0)
       return -1;
   }
@@ -6101,10 +6141,16 @@ int XClearArea(Display *display, Window w, int x, int y,
   if (x11_sanitize_rect(display, &x, &y, &width, &height) < 0)
     return 0;
 
+  fprintf(stderr,
+          "x11[DBG]: XClearArea begin wid=%u x=%d y=%d w=%u h=%u exp=%d\n",
+          (uint)w, x, y, width, height, exposures ? 1 : 0);
+
   snprintf(cmd, sizeof(cmd), "CLEAR_AREA %u %d %d %d %d %d\n",
            (uint)w, x, y, (int)width, (int)height, exposures ? 1 : 0);
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return -1;
+  fprintf(stderr, "x11[DBG]: XClearArea resp wid=%u resp='%s'\n",
+          (uint)w, line);
   return strncmp(line, "OK cleared", 10) == 0 ? 0 : -1;
 }
 
