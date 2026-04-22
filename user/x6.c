@@ -148,9 +148,12 @@ struct x6_event_queue {
 };
 
 // Property storage for windows (Phase 2.1d)
-#define X6_MAX_PROPERTIES_PER_WINDOW 16
+#define X6_MAX_PROPERTIES_PER_WINDOW 64
 #define X6_MAX_PROP_NAME 64
 #define X6_MAX_PROP_VALUE 3072
+
+#define X6_WINDOW_CLASS_INPUT_OUTPUT 1
+#define X6_WINDOW_CLASS_INPUT_ONLY 2
 
 struct x6_property {
   char name[X6_MAX_PROP_NAME];
@@ -168,6 +171,7 @@ struct x6_window {
   int in_use;
   uint id;
   uint parent;
+  int window_class;
   int owner_fd;
   int x;
   int y;
@@ -219,6 +223,7 @@ struct x6_client {
 
 static volatile sig_atomic_t keep_running = 1;
 static struct x6_window wins[X6_MAX_WINDOWS];
+static struct x6_window x6_root_window;
 static struct x6_window *wins_by_id[256];  // Hash table for O(1) window lookup by ID (id % 256)
 static struct x6_client clients[X6_MAX_CLIENTS];
 static struct x6_key_grab key_grabs[X6_MAX_KEY_GRABS];
@@ -2069,15 +2074,25 @@ x6_enqueue_property_notify(struct x6_window *win, const char *atom, int state)
 {
   struct x6_event evt;
   struct x6_event_queue *q;
+  long mask;
 
   if(!win || !atom)
     return;
-  if((win->event_mask & X6_MASK_PROPERTY_CHANGE) == 0)
+  mask = (win->id == (uint)wm_redirect_root) ? wm_root_event_mask : win->event_mask;
+  fprintf(stderr,
+          "x6: prop-notify candidate wid=%u atom=%s state=%d mask=0x%lx\n",
+          win ? win->id : 0, atom ? atom : "(null)", state,
+          mask);
+  if((mask & X6_MASK_PROPERTY_CHANGE) == 0)
     return;
 
   q = x6_queue_for_window(win->id);
   if(!q)
+  {
+    fprintf(stderr, "x6: prop-notify drop wid=%u atom=%s no-queue\n",
+            win->id, atom);
     return;
+  }
 
   memset(&evt, 0, sizeof(evt));
   evt.type = X6_EVENT_PROPERTY_NOTIFY;
@@ -2086,6 +2101,8 @@ x6_enqueue_property_notify(struct x6_window *win, const char *atom, int state)
   strncpy(evt.atom, atom, sizeof(evt.atom) - 1);
   evt.atom[sizeof(evt.atom) - 1] = '\0';
   x6_event_queue_enqueue(q, &evt);
+  fprintf(stderr, "x6: prop-notify queued wid=%u atom=%s state=%d\n",
+          win->id, atom, state);
 }
 
 static void
@@ -2207,6 +2224,8 @@ x6_fill_window_background(struct x6_window *win, int x, int y, int w, int h)
   int y1;
   int dx;
   int dy;
+  int ox;
+  int oy;
 
   if(!win)
     return -1;
@@ -2228,6 +2247,8 @@ x6_fill_window_background(struct x6_window *win, int x, int y, int w, int h)
   if(x1 <= x0 || y1 <= y0)
     return -1;
 
+  x6_window_root_origin(win, &ox, &oy);
+
   if(win->background_pixmap > 1U) {
     struct x6_pixmap *pm;
 
@@ -2243,14 +2264,14 @@ x6_fill_window_background(struct x6_window *win, int x, int y, int w, int h)
           if(sx < 0)
             sx += pm->width;
           pix = pm->pixels[(size_t)sy * (size_t)pm->width + (size_t)sx] & 0x00ffffffU;
-          x6_canvas_fill_pixels(win->x + dx, win->y + dy, 1, 1, pix);
+          x6_canvas_fill_pixels(ox + dx, oy + dy, 1, 1, pix);
         }
       }
       return 0;
     }
   }
 
-  x6_canvas_fill_pixels(win->x + x0, win->y + y0, x1 - x0, y1 - y0, win->background_pixel);
+  x6_canvas_fill_pixels(ox + x0, oy + y0, x1 - x0, y1 - y0, win->background_pixel);
   return 0;
 }
 
@@ -3013,6 +3034,7 @@ alloc_window(uint id)
       wins[i].in_use = 1;
       wins[i].id = id;
       wins[i].parent = (uint)wm_redirect_root;
+      wins[i].window_class = X6_WINDOW_CLASS_INPUT_OUTPUT;
       wins[i].owner_fd = -1;
       wins[i].x = 0;
       wins[i].y = 0;
@@ -3378,6 +3400,14 @@ x6_find_property(struct x6_window *win, const char *atom)
   return 0;
 }
 
+static struct x6_window *
+x6_property_window(uint wid)
+{
+  if(wid == (uint)wm_redirect_root)
+    return &x6_root_window;
+  return find_window(wid);
+}
+
 static void
 handle_one_command(int cfd, char *cmd)
 {
@@ -3428,10 +3458,16 @@ handle_one_command(int cfd, char *cmd)
   {
     uint parent_id;
     int parsed;
+    int window_class;
 
     parent_id = (uint)wm_redirect_root;
-    parsed = sscanf(cmd, "CREATE %u %d %d %d %d", &parent_id, &x, &y, &w, &h);
-    if(parsed == 5 || (parsed = sscanf(cmd, "CREATE %d %d %d %d", &x, &y, &w, &h)) == 4) {
+    window_class = X6_WINDOW_CLASS_INPUT_OUTPUT;
+    parsed = sscanf(cmd, "CREATE %u %d %d %d %d %d", &parent_id, &x, &y, &w, &h, &window_class);
+    if(parsed != 6)
+      parsed = sscanf(cmd, "CREATE %u %d %d %d %d", &parent_id, &x, &y, &w, &h);
+    if(parsed != 6 && parsed != 5)
+      parsed = sscanf(cmd, "CREATE %d %d %d %d", &x, &y, &w, &h);
+    if(parsed == 6 || parsed == 5 || parsed == 4) {
       if(parsed == 4)
         parent_id = (uint)wm_redirect_root;
 
@@ -3445,6 +3481,9 @@ handle_one_command(int cfd, char *cmd)
       if(parent_id != (uint)wm_redirect_root && find_window(parent_id) == 0)
         parent_id = (uint)wm_redirect_root;
       win->parent = parent_id;
+      if(window_class != X6_WINDOW_CLASS_INPUT_ONLY)
+        window_class = X6_WINDOW_CLASS_INPUT_OUTPUT;
+      win->window_class = window_class;
 
       if(w < 1)
         w = 1;
@@ -3503,7 +3542,8 @@ handle_one_command(int cfd, char *cmd)
         me.type = X6_EVENT_MAP_NOTIFY;
         me.wid = id;
         x6_event_queue_enqueue(&owner->queue, &me);
-        x6_enqueue_expose_notify(win, 0, 0, win->w, win->h);
+        if(win->window_class != X6_WINDOW_CLASS_INPUT_ONLY)
+          x6_enqueue_expose_notify(win, 0, 0, win->w, win->h);
         x6_enqueue_shape_notify(win, 0, 1);
       }
     }
@@ -3544,7 +3584,8 @@ handle_one_command(int cfd, char *cmd)
         me.wid = id;
         x6_event_queue_enqueue(&owner->queue, &me);
         x6trace_console(X6_TRACE_WMMAP, "x6:wm_map step=after_mapnotify wid=%u head=%d tail=%d", id, owner->queue.head, owner->queue.tail);
-        x6_enqueue_expose_notify(win, 0, 0, win->w, win->h);
+        if(win->window_class != X6_WINDOW_CLASS_INPUT_ONLY)
+          x6_enqueue_expose_notify(win, 0, 0, win->w, win->h);
         x6trace_console(X6_TRACE_WMMAP, "x6:wm_map step=after_expose wid=%u head=%d tail=%d", id, owner->queue.head, owner->queue.tail);
         x6_enqueue_shape_notify(win, 0, 1);
         x6trace_console(X6_TRACE_WMMAP, "x6:wm_map step=after_shape wid=%u head=%d tail=%d", id, owner->queue.head, owner->queue.tail);
@@ -3772,7 +3813,7 @@ handle_one_command(int cfd, char *cmd)
       cn.w = w;
       cn.h = h;
       x6_event_queue_enqueue(&owner->queue, &cn);
-      if(win->mapped)
+      if(win->mapped && win->window_class != X6_WINDOW_CLASS_INPUT_ONLY)
         x6_enqueue_expose_notify(win, 0, 0, win->w, win->h);
       x6_flush_client_events(owner);
     }
@@ -3859,7 +3900,7 @@ handle_one_command(int cfd, char *cmd)
       if(!win->mapped)
         return;
       ox = win->x;
-      oy = win->y;
+      x6_window_root_origin(win, &ox, &oy);
       x6dbg("x6:draw_rect win=%u mapped=%d local=%d,%d wh=%dx%d abs=%d,%d color=%u",
         id, win->mapped, x, y, w, h, ox + x, oy + y, color);
     } else if(x6_root_draw_rect_seen < 8) {
@@ -3992,7 +4033,7 @@ handle_one_command(int cfd, char *cmd)
         if(!win->mapped)
           return;
         ox = win->x;
-        oy = win->y;
+        x6_window_root_origin(win, &ox, &oy);
       } else if(tlen > 0 && x6_root_draw_text_seen < 8) {
         x6_root_draw_text_seen++;
         x6consolecrit("x6:root draw_text #%d local=%d,%d len=%d color=%u",
@@ -4144,7 +4185,14 @@ handle_one_command(int cfd, char *cmd)
           j1 = dst_win->h - dest_y;
 
         base_dx = dst_win->x + dest_x;
-        base_dy = dst_win->y + dest_y;
+        {
+          int dst_ox;
+          int dst_oy;
+
+          x6_window_root_origin(dst_win, &dst_ox, &dst_oy);
+          base_dx = dst_ox + dest_x;
+          base_dy = dst_oy + dest_y;
+        }
 
         if(base_dx + i0 < 0)
           i0 = -base_dx;
@@ -4223,7 +4271,14 @@ handle_one_command(int cfd, char *cmd)
             }
 
             absx = src_win->x + sx;
-            absy = src_win->y + sy;
+            {
+              int src_ox;
+              int src_oy;
+
+              x6_window_root_origin(src_win, &src_ox, &src_oy);
+              absx = src_ox + sx;
+              absy = src_oy + sy;
+            }
             if(x6_backend == X6_BACKEND_FB && x6_fb_shadow &&
                absx >= 0 && absy >= 0 &&
                absx < x6_fb_shadow_w && absy < x6_fb_shadow_h) {
@@ -4262,13 +4317,18 @@ handle_one_command(int cfd, char *cmd)
       }
 
       if(dst_win) {
+        int dst_ox;
+        int dst_oy;
+
+        x6_window_root_origin(dst_win, &dst_ox, &dst_oy);
+
         if(x6_backend == X6_BACKEND_FB && x6_fb.fd >= 0) {
           int need_cursor_refresh;
           int dirty_y0;
           int dirty_y1;
 
-          need_cursor_refresh = x6_cursor_overlaps_rect(dst_win->x + dest_x,
-                                                        dst_win->y + dest_y,
+          need_cursor_refresh = x6_cursor_overlaps_rect(dst_ox + dest_x,
+                                                        dst_oy + dest_y,
                                                         (int)width, (int)height);
           if(need_cursor_refresh)
             x6_cursor_hide();
@@ -4290,8 +4350,8 @@ handle_one_command(int cfd, char *cmd)
                 idx++;
                 continue;
               }
-              dx = dst_win->x + dx_local;
-              dy = dst_win->y + dy_local;
+              dx = dst_ox + dx_local;
+              dy = dst_oy + dy_local;
               if(dx >= 0 && dy >= 0 && dx < x6_fb.width && dy < x6_fb.height) {
                 if(x6_fb_shadow)
                   x6_fb_shadow[(size_t)dy * (size_t)x6_fb_shadow_w + (size_t)dx] = tmp[idx] & 0x00ffffffU;
@@ -4309,7 +4369,7 @@ handle_one_command(int cfd, char *cmd)
               x6_fb_mark_dirty(dirty_y0, dirty_y1);
             } else {
               int abs_base_x;
-              abs_base_x = dst_win->x + dest_x;
+              abs_base_x = dst_ox + dest_x;
               for(j = 0; j < (int)height; j++) {
                 int dy_local;
                 int dy;
@@ -4322,7 +4382,7 @@ handle_one_command(int cfd, char *cmd)
                 dy_local = dest_y + j;
                 if(dy_local < 0 || dy_local >= dst_win->h)
                   continue;
-                dy = dst_win->y + dy_local;
+                dy = dst_oy + dy_local;
                 if(dy < 0 || dy >= x6_fb.height)
                   continue;
 
@@ -4393,8 +4453,8 @@ handle_one_command(int cfd, char *cmd)
                 idx++;
                 continue;
               }
-              px = dst_win->x + dx_local;
-              py = dst_win->y + dy_local;
+              px = dst_ox + dx_local;
+              py = dst_oy + dy_local;
               cx = px / X6_CELL_W;
               cy = py / X6_CELL_H;
               if(cx >= 0 && cy >= 0 && cx < X6_CANVAS_COLS && cy < X6_CANVAS_ROWS) {
@@ -4947,17 +5007,26 @@ handle_one_command(int cfd, char *cmd)
   }
 
   if(strncmp(cmd, "GRAB_POINTER", 12) == 0) {
+      fprintf(stderr, "x6: grab-pointer cmd='%s' active=%d win=%u\n",
+        cmd, pointer_grab_active, pointer_grab_window);
     pointer_grab_active = 1;
     pointer_grab_window = wm_redirect_root;
-    if(sscanf(cmd, "GRAB_POINTER %u", &id) == 1)
+    if(sscanf(cmd, "GRAB_POINTER %u", &id) == 1) {
       pointer_grab_window = id;
+    }
+      fprintf(stderr, "x6: grab-pointer set active=%d win=%u\n",
+        pointer_grab_active, pointer_grab_window);
     x6_send_line(cfd, "OK pointer_grabbed\n");
     return;
   }
 
   if(strncmp(cmd, "UNGRAB_POINTER", 14) == 0) {
+      fprintf(stderr, "x6: ungrab-pointer cmd='%s' active=%d win=%u\n",
+        cmd, pointer_grab_active, pointer_grab_window);
     pointer_grab_active = 0;
     pointer_grab_window = 0;
+      fprintf(stderr, "x6: ungrab-pointer set active=%d win=%u\n",
+        pointer_grab_active, pointer_grab_window);
     x6_send_line(cfd, "OK pointer_ungrabbed\n");
     return;
   }
@@ -5421,7 +5490,7 @@ handle_one_command(int cfd, char *cmd)
       return;
     }
 
-    win = find_window(wid);
+    win = x6_property_window(wid);
     if(!win) {
       x6_send_line(cfd, "ERR no-such-window\n");
       return;
@@ -5429,9 +5498,14 @@ handle_one_command(int cfd, char *cmd)
 
     prop = x6_find_property(win, atom);
     if(!prop) {
+          fprintf(stderr, "x6: get-property miss wid=%u atom=%s props=%d\n",
+            wid, atom, win->prop_count);
       x6_send_line(cfd, "ERR no-such-property\n");
       return;
     }
+
+        fprintf(stderr, "x6: get-property wid=%u atom=%s len=%d props=%d\n",
+          wid, atom, (int)strlen(prop->value), win->prop_count);
 
     // Return property value as VALUE <atom> <value>
     char out[4096];
@@ -5461,11 +5535,16 @@ handle_one_command(int cfd, char *cmd)
     strncpy(value, p, sizeof(value) - 1);
     value[sizeof(value) - 1] = '\0';
 
-    win = find_window(wid);
+    win = x6_property_window(wid);
     if(!win) {
       x6_send_line(cfd, "ERR no-such-window\n");
       return;
     }
+
+    fprintf(stderr,
+            "x6: set-property wid=%u atom=%s len=%d props=%d/%d\n",
+            wid, atom, (int)strlen(value), win->prop_count,
+            X6_MAX_PROPERTIES_PER_WINDOW);
 
     // Find existing property or add new one
     prop = x6_find_property(win, atom);
@@ -5476,6 +5555,9 @@ handle_one_command(int cfd, char *cmd)
     } else {
       // Add new property if we have space
       if(win->prop_count >= X6_MAX_PROPERTIES_PER_WINDOW) {
+        fprintf(stderr,
+                "x6: set-property full wid=%u atom=%s props=%d/%d\n",
+                wid, atom, win->prop_count, X6_MAX_PROPERTIES_PER_WINDOW);
         x6_send_line(cfd, "ERR no-property-space\n");
         return;
       }
@@ -5486,6 +5568,10 @@ handle_one_command(int cfd, char *cmd)
       prop->value[X6_MAX_PROP_VALUE - 1] = '\0';
       win->prop_count++;
     }
+
+    fprintf(stderr,
+            "x6: set-property stored wid=%u atom=%s props-now=%d\n",
+            wid, atom, win->prop_count);
 
     x6_enqueue_property_notify(win, atom, 0);
 
@@ -5503,7 +5589,7 @@ handle_one_command(int cfd, char *cmd)
       return;
     }
 
-    win = find_window(wid);
+    win = x6_property_window(wid);
     if(!win) {
       x6_send_line(cfd, "ERR no-such-window\n");
       return;
@@ -5550,9 +5636,12 @@ handle_one_command(int cfd, char *cmd)
     }
 
     snprintf(out, sizeof(out),
-             "OK attr x=%d y=%d w=%d h=%d bw=%d depth=32 mapped=%d override=%d events=%ld\n",
+             "OK attr x=%d y=%d w=%d h=%d bw=%d depth=%d class=%d mapped=%d override=%d events=%ld\n",
              win->x, win->y, win->w, win->h,
-             win->border_width, win->mapped ? 1 : 0,
+             win->border_width,
+             (win->window_class == X6_WINDOW_CLASS_INPUT_ONLY) ? 0 : 32,
+             win->window_class,
+             win->mapped ? 1 : 0,
              win->override_redirect ? 1 : 0, win->event_mask);
     x6_send_line(cfd, out);
     return;
@@ -6136,6 +6225,13 @@ main(int argc, char **argv)
   pointer_grab_window = 0;
   root_cursor = 1;
   memset(&x6_cursor, 0, sizeof(x6_cursor));
+  memset(&x6_root_window, 0, sizeof(x6_root_window));
+  x6_root_window.in_use = 1;
+  x6_root_window.id = (uint)wm_redirect_root;
+  x6_root_window.mapped = 1;
+  x6_root_window.colormap = 1;
+  x6_root_window.w = x6_fb.width > 0 ? x6_fb.width : 1200;
+  x6_root_window.h = x6_fb.height > 0 ? x6_fb.height : 800;
 
   fd = socket(AF_INET, SOCK_STREAM, 0);
   if(fd < 0) {
@@ -6323,7 +6419,7 @@ main(int argc, char **argv)
     }
 
     for(i = 0; i < nfds; i++) {
-      char line[2048];
+      char line[X6_CLIENT_RXBUF];
       struct x6_client *client;
       int idx;
       int should_detach;

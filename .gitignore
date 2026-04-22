@@ -265,3 +265,4 @@ targetfs/usr/bin/rio
 targetfs/usr/bin/fvwm
 targetfs/usr/bin/fvwm2
 targetfs/usr/share/fvwm/*
+ports/.ports-install-hooks.seen

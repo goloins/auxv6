@@ -1,10 +1,10 @@
 # One port name per line. Blank lines and # comments are ignored.
 # Only ports listed here are eligible for ports-sync and ports-progs.
 
-libressl
-lacc
-p7zip
+#libressl
+#lacc
+#p7zip
 bash
-openssh
+#openssh
 rio
 fvwm2

@@ -12,6 +12,7 @@
 #include <stdarg.h>
 #include <fcntl.h>
 #include "X11/Xlib.h"
+#include "X11/Xatom.h"
 #include "X11/Xutil.h"
 #include "X11/Xproto.h"
 #include "X11/Xresource.h"
@@ -2030,6 +2031,9 @@ x11_parse_event_line(Display *display, const char *line, XEvent *event)
   x11dbg("x11:event-parse raw='%s'", line);
 
   memset(event, 0, sizeof(*event));
+  event->xany.display = display;
+  event->xany.send_event = False;
+  event->xany.serial = g_ext_event_serial++;
   if (strncmp(line + 6, "MapRequest", 10) == 0) {
     event->type = MapRequest;
     sscanf(line, "EVENT MapRequest wid=%u", &event->xmaprequest.window);
@@ -2636,6 +2640,7 @@ atom_to_name(Atom a)
   case XA_STRING: return "STRING";
   case XA_VISUALID: return "VISUALID";
   case XA_WINDOW: return "WINDOW";
+  case XA_WM_CLASS: return "WM_CLASS";
   case XA_WM_HINTS: return "WM_HINTS";
   case XA_WM_NAME: return "WM_NAME";
   case XA_WM_NORMAL_HINTS: return "WM_NORMAL_HINTS";
@@ -2792,8 +2797,8 @@ XCreateWindow(Display *display, Window parent, int x, int y,
   if (!display)
     return None;
 
-  snprintf(cmd, sizeof(cmd), "CREATE %u %d %d %d %d\n", (uint)(parent ? parent : display->root),
-           x, y, (int)width, (int)height);
+  snprintf(cmd, sizeof(cmd), "CREATE %u %d %d %d %d %u\n", (uint)(parent ? parent : display->root),
+           x, y, (int)width, (int)height, class);
   fprintf(stderr, "x11[DBG]: XCreateWindow CREATE parent=%u\n", (uint)(parent ? parent : display->root));
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return None;
@@ -2823,10 +2828,14 @@ XCreateSimpleWindow(Display *display, Window parent, int x, int y,
                     unsigned int border_width, unsigned long border,
                     unsigned long background)
 {
-  (void)border;
-  (void)background;
+  XSetWindowAttributes attrs;
+
+  memset(&attrs, 0, sizeof(attrs));
+  attrs.border_pixel = border;
+  attrs.background_pixel = background;
   return XCreateWindow(display, parent, x, y, width, height, border_width,
-                       CopyFromParent, InputOutput, 0, 0, 0);
+                       CopyFromParent, InputOutput, 0,
+                       CWBorderPixel | CWBackPixel, &attrs);
 }
 
 int
@@ -3095,7 +3104,7 @@ int
 XGetWindowAttributes(Display *display, Window w, XWindowAttributes *attrs)
 {
   char cmd[X6_BUF_SIZE], line[X6_BUF_SIZE];
-  int x, y, ww, hh, bw, depth, mapped, override;
+  int x, y, ww, hh, bw, depth, klass, mapped, override;
   long evmask;
 
   if (!display)
@@ -3108,8 +3117,8 @@ XGetWindowAttributes(Display *display, Window w, XWindowAttributes *attrs)
     return 0;
 
   if (sscanf(line,
-             "OK attr x=%d y=%d w=%d h=%d bw=%d depth=%d mapped=%d override=%d events=%ld",
-             &x, &y, &ww, &hh, &bw, &depth, &mapped, &override, &evmask) != 9)
+             "OK attr x=%d y=%d w=%d h=%d bw=%d depth=%d class=%d mapped=%d override=%d events=%ld",
+             &x, &y, &ww, &hh, &bw, &depth, &klass, &mapped, &override, &evmask) != 10)
     return 0;
 
   memset(attrs, 0, sizeof(*attrs));
@@ -3119,6 +3128,7 @@ XGetWindowAttributes(Display *display, Window w, XWindowAttributes *attrs)
   attrs->height = hh;
   attrs->border_width = bw;
   attrs->depth = depth;
+  attrs->class = klass;
   attrs->colormap = XDefaultColormap(display, display->screen);
   attrs->override_redirect = override ? True : False;
   attrs->map_state = mapped ? IsViewable : IsUnmapped;
@@ -3438,6 +3448,7 @@ XInternAtom(Display *display, char *atom_name, Bool only_if_exists)
   if (!atom_name)
     return None;
 
+  if (!strcmp(atom_name, "WM_CLASS")) return XA_WM_CLASS;
   if (!strcmp(atom_name, "WM_NAME")) return XA_WM_NAME;
   if (!strcmp(atom_name, "WM_NORMAL_HINTS")) return XA_WM_NORMAL_HINTS;
   if (!strcmp(atom_name, "WM_HINTS")) return XA_WM_HINTS;
@@ -3579,6 +3590,7 @@ x11_prop_pack(Atom type, int format, const unsigned char *data, unsigned long ne
 {
   static const char hexd[] = "0123456789abcdef";
   unsigned long nbytes;
+  unsigned long client_stride;
   unsigned long i;
   char *out;
   int unit;
@@ -3587,6 +3599,13 @@ x11_prop_pack(Atom type, int format, const unsigned char *data, unsigned long ne
   unit = x11_prop_unit_bytes(format);
   if (unit <= 0)
     return 0;
+
+  if (format == 8)
+    client_stride = 1;
+  else if (format == 16)
+    client_stride = sizeof(unsigned short);
+  else
+    client_stride = sizeof(unsigned long);
 
   nbytes = nelements * (unsigned long)unit;
   out = (char *)malloc((size_t)(nbytes * 2 + 96));
@@ -3599,10 +3618,48 @@ x11_prop_pack(Atom type, int format, const unsigned char *data, unsigned long ne
     return 0;
   }
 
-  for (i = 0; i < nbytes; i++) {
-    unsigned char b = data ? data[i] : 0;
-    out[hdr + (int)(2 * i)] = hexd[(b >> 4) & 0x0f];
-    out[hdr + (int)(2 * i) + 1] = hexd[b & 0x0f];
+  for (i = 0; i < nelements; i++) {
+    unsigned long j;
+
+    if (format == 8) {
+      unsigned char b = data ? data[i] : 0;
+
+      out[hdr + (int)(2 * i)] = hexd[(b >> 4) & 0x0f];
+      out[hdr + (int)(2 * i) + 1] = hexd[b & 0x0f];
+      continue;
+    }
+
+    if (format == 16) {
+      unsigned short v = 0;
+      const unsigned char *src = data ? data + i * client_stride : 0;
+
+      if (src)
+        memmove(&v, src, sizeof(v));
+      for (j = 0; j < 2; j++) {
+        unsigned char b = (unsigned char)((v >> (8 * j)) & 0xffU);
+
+        out[hdr + (int)(2 * (i * 2 + j))] = hexd[(b >> 4) & 0x0f];
+        out[hdr + (int)(2 * (i * 2 + j)) + 1] = hexd[b & 0x0f];
+      }
+      continue;
+    }
+
+    {
+      uint v = 0;
+      const unsigned char *src = data ? data + i * client_stride : 0;
+
+      if (src) {
+        unsigned long lv = 0;
+        memmove(&lv, src, sizeof(lv));
+        v = (uint)lv;
+      }
+      for (j = 0; j < 4; j++) {
+        unsigned char b = (unsigned char)((v >> (8 * j)) & 0xffU);
+
+        out[hdr + (int)(2 * (i * 4 + j))] = hexd[(b >> 4) & 0x0f];
+        out[hdr + (int)(2 * (i * 4 + j)) + 1] = hexd[b & 0x0f];
+      }
+    }
   }
   out[hdr + (int)(2 * nbytes)] = '\0';
   return out;
@@ -3684,6 +3741,69 @@ x11_prop_unpack(const char *wire,
   return 0;
 }
 
+static int
+x11_prop_client_unit_bytes(int format)
+{
+  switch (format) {
+  case 8:
+    return 1;
+  case 16:
+    return (int)sizeof(short);
+  case 32:
+    return (int)sizeof(long);
+  default:
+    return -1;
+  }
+}
+
+static unsigned char *
+x11_prop_to_client_data(const unsigned char *src, unsigned long nitems,
+                        int format, unsigned long *bytes_out)
+{
+  int wire_unit;
+  int client_unit;
+  unsigned char *dst;
+  unsigned long i;
+
+  if (bytes_out)
+    *bytes_out = 0;
+
+  wire_unit = x11_prop_unit_bytes(format);
+  client_unit = x11_prop_client_unit_bytes(format);
+  if (wire_unit <= 0 || client_unit <= 0)
+    return 0;
+
+  dst = (unsigned char *)calloc((size_t)(nitems + 1), (size_t)client_unit);
+  if (!dst)
+    return 0;
+
+  if (format == 8) {
+    if (nitems > 0 && src)
+      memmove(dst, src, (size_t)nitems);
+    if (bytes_out)
+      *bytes_out = nitems;
+    return dst;
+  }
+
+  for (i = 0; i < nitems; i++) {
+    const unsigned char *sp = src + i * (unsigned long)wire_unit;
+
+    if (format == 16) {
+      unsigned short v = 0;
+      memmove(&v, sp, sizeof(v));
+      ((unsigned short *)dst)[i] = v;
+    } else {
+      uint v = 0;
+      memmove(&v, sp, sizeof(v));
+      ((unsigned long *)dst)[i] = (unsigned long)v;
+    }
+  }
+
+  if (bytes_out)
+    *bytes_out = nitems * (unsigned long)client_unit;
+  return dst;
+}
+
 int
 XChangeProperty(Display *display, Window w, Atom property, Atom type,
                 int format, int mode, unsigned char *data, int nelements)
@@ -3698,6 +3818,11 @@ XChangeProperty(Display *display, Window w, Atom property, Atom type,
 
   if (!display)
     return -1;
+
+  fprintf(stderr,
+          "x11[DBG]: XChangeProperty begin wid=%u prop=%s type=%lu fmt=%d mode=%d n=%d\n",
+          (uint)w, name ? name : "(null)", (unsigned long)type,
+          format, mode, nelements);
 
   if (mode == PropModeReplace || nelements <= 0) {
     packed = x11_prop_pack(type, format, data, nelements > 0 ? (unsigned long)nelements : 0UL);
@@ -3724,7 +3849,7 @@ XChangeProperty(Display *display, Window w, Atom property, Atom type,
       base_format = format;
     }
 
-    unit = x11_prop_unit_bytes(format);
+    unit = x11_prop_client_unit_bytes(format);
     if (unit <= 0 || base_format != format || base_type != type) {
       if (old_bytes) XFree(old_bytes);
       return -1;
@@ -3768,6 +3893,9 @@ XChangeProperty(Display *display, Window w, Atom property, Atom type,
   free(packed);
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return -1;
+  fprintf(stderr,
+          "x11[DBG]: XChangeProperty resp wid=%u prop=%s resp='%s'\n",
+          (uint)w, name ? name : "(null)", line);
   return strncmp(line, "OK property_set", 15) == 0 ? 0 : -1;
 }
 
@@ -3788,11 +3916,13 @@ XGetWindowProperty(Display *display, Window w, Atom property,
   Atom all_type;
   int all_format;
   int unit;
-  unsigned long start_item;
-  unsigned long want_items;
-  unsigned long avail_items;
+  unsigned long total_bytes;
+  unsigned long start_byte;
+  unsigned long want_bytes;
+  unsigned long avail_bytes;
   unsigned long copy_items;
   unsigned long copy_bytes;
+  unsigned long client_bytes;
   char *space;
   const char *name = atom_to_name(property);
   int track_title_prop;
@@ -3865,48 +3995,51 @@ XGetWindowProperty(Display *display, Window w, Atom property,
     return -1;
   }
 
-  start_item = (long_offset < 0) ? 0UL : (unsigned long)long_offset;
-  if (start_item > all_nitems)
-    start_item = all_nitems;
+  total_bytes = all_nitems * (unsigned long)unit;
+  start_byte = (long_offset < 0) ? 0UL : (unsigned long)long_offset * 4UL;
+  if (start_byte > total_bytes)
+    start_byte = total_bytes;
 
-  avail_items = all_nitems - start_item;
-  want_items = (long_length < 0) ? avail_items : (unsigned long)long_length;
-  if (want_items > avail_items)
-    want_items = avail_items;
-  copy_items = want_items;
-  copy_bytes = copy_items * (unsigned long)unit;
+  avail_bytes = total_bytes - start_byte;
+  want_bytes = (long_length < 0) ? avail_bytes : (unsigned long)long_length * 4UL;
+  if (want_bytes > avail_bytes)
+    want_bytes = avail_bytes;
+  copy_bytes = want_bytes - (want_bytes % (unsigned long)unit);
+  copy_items = copy_bytes / (unsigned long)unit;
 
-  if (!del && start_item == 0 && copy_items == all_nitems) {
-    *prop_return = all_bytes;
+  if (!del && start_byte == 0 && copy_bytes == total_bytes) {
+    *prop_return = x11_prop_to_client_data(all_bytes, copy_items, all_format,
+                                           &client_bytes);
+    XFree(all_bytes);
+    if (!*prop_return)
+      return -1;
     if (actual_type_return) *actual_type_return = all_type;
     if (actual_format_return) *actual_format_return = all_format;
     if (nitems_return) *nitems_return = copy_items;
     if (bytes_after_return) *bytes_after_return = 0;
     if (track_title_prop)
       x11consolecrit("x11:getprop fast-return wid=%u bytes=%lu ptr=%p", (uint)w,
-                     copy_bytes, *prop_return);
+                     client_bytes, *prop_return);
     return Success;
   }
 
-  *prop_return = (unsigned char *)malloc((size_t)copy_bytes + 1);
+  *prop_return = x11_prop_to_client_data(all_bytes + start_byte,
+                                         copy_items, all_format, &client_bytes);
   if (!*prop_return) {
     XFree(all_bytes);
     return -1;
   }
   if (track_title_prop)
     x11consolecrit("x11:getprop copy-return wid=%u bytes=%lu src=%p dst=%p", (uint)w,
-                   copy_bytes, all_bytes, *prop_return);
-  if (copy_bytes > 0)
-    memmove(*prop_return, all_bytes + start_item * (unsigned long)unit, (size_t)copy_bytes);
-  (*prop_return)[copy_bytes] = '\0';
+                   client_bytes, all_bytes, *prop_return);
 
   if (actual_type_return) *actual_type_return = all_type;
   if (actual_format_return) *actual_format_return = all_format;
   if (nitems_return) *nitems_return = copy_items;
   if (bytes_after_return)
-    *bytes_after_return = (all_nitems - (start_item + copy_items)) * (unsigned long)unit;
+    *bytes_after_return = total_bytes - (start_byte + copy_bytes);
 
-  if (del && (all_nitems - (start_item + copy_items) == 0))
+  if (del && (start_byte + copy_bytes >= total_bytes))
     XDeleteProperty(display, w, property);
   if (track_title_prop)
     x11consolecrit("x11:getprop return wid=%u bytes=%lu ptr=%p", (uint)w,
@@ -4121,16 +4254,24 @@ int XGrabPointer(Display *display, Window grab_window, Bool owner_events, unsign
   char cmd[X6_BUF_SIZE];
   char line[X6_BUF_SIZE];
   (void)grab_window; (void)owner_events; (void)event_mask; (void)pointer_mode; (void)keyboard_mode; (void)confine_to; (void)cursor; (void)time;
+  fprintf(stderr,
+          "x11[DBG]: XGrabPointer begin grab_window=%u owner=%d mask=0x%x pmode=%d kmode=%d confine=%u cursor=%lu time=%lu\n",
+          (uint)grab_window, owner_events ? 1 : 0, event_mask,
+          pointer_mode, keyboard_mode, (uint)confine_to,
+          (unsigned long)cursor, (unsigned long)time);
   snprintf(cmd, sizeof(cmd), "GRAB_POINTER %u\n", (uint)grab_window);
   if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
     return BadAccess;
+  fprintf(stderr, "x11[DBG]: XGrabPointer resp '%s'\n", line);
   return strncmp(line, "OK pointer_grabbed", 18) == 0 ? GrabSuccess : BadAccess;
 }
 int XUngrabPointer(Display *display, Time time) {
   char line[X6_BUF_SIZE];
   (void)time;
+  fprintf(stderr, "x11[DBG]: XUngrabPointer begin time=%lu\n", (unsigned long)time);
   if (x11_cmd(display, "UNGRAB_POINTER\n", line, sizeof(line)) < 0)
     return -1;
+  fprintf(stderr, "x11[DBG]: XUngrabPointer resp '%s'\n", line);
   return strncmp(line, "OK pointer_ungrabbed", 20) == 0 ? 0 : -1;
 }
 int XWarpPointer(Display *display, Window src_w, Window dest_w, int src_x, int src_y, unsigned int src_width, unsigned int src_height, int dest_x, int dest_y) {
@@ -4213,6 +4354,9 @@ int XChangeActivePointerGrab(Display *display, unsigned int event_mask,
   (void)time;
   if (!display)
     return -1;
+  fprintf(stderr,
+          "x11[DBG]: XChangeActivePointerGrab mask=0x%x cursor=%lu time=%lu\n",
+          event_mask, (unsigned long)cursor, (unsigned long)time);
   return 0;
 }
 
@@ -4282,6 +4426,14 @@ int XChangeWindowAttributes(Display *display, Window w, unsigned long valuemask,
     fprintf(stderr, "x11[DBG]: XChangeWindowAttributes CWBackPixel\n");
     snprintf(cmd, sizeof(cmd), "SET_WINDOW_BACKGROUND_PIXEL %u %u\n",
              (uint)w, (uint)(attributes->background_pixel & 0x00ffffffUL));
+    if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
+      return -1;
+  }
+
+  if ((valuemask & CWBorderPixel) && attributes) {
+    fprintf(stderr, "x11[DBG]: XChangeWindowAttributes CWBorderPixel\n");
+    snprintf(cmd, sizeof(cmd), "SET_BORDER_COLOR %u %u\n",
+             (uint)w, (uint)(attributes->border_pixel & 0x00ffffffUL));
     if (x11_cmd(display, cmd, line, sizeof(line)) < 0)
       return -1;
   }
@@ -6266,25 +6418,22 @@ int XGetTransientForHint(Display *display, Window w, Window *prop_window_return)
   unsigned long nitems = 0;
   Atom actual = 0;
   int fmt = 0;
-  unsigned int pw = 0;
+  unsigned long pw = 0;
 
   if (prop_window_return)
     *prop_window_return = None;
   if (!display)
     return 0;
   if (XGetWindowProperty(display, w, XA_WM_TRANSIENT_FOR, 0, 64, False,
-                         XA_STRING, &actual, &fmt, &nitems, 0, &prop) != Success)
+                         XA_WINDOW, &actual, &fmt, &nitems, 0, &prop) != Success)
     return 0;
-  if (!prop)
+  if (!prop || actual != XA_WINDOW || fmt != 32 || nitems < 1)
     return 0;
-  if (sscanf((char *)prop, "%u", &pw) == 1) {
-    if (prop_window_return)
-      *prop_window_return = (Window)pw;
-    XFree(prop);
-    return 1;
-  }
+  pw = ((unsigned long *)prop)[0];
+  if (prop_window_return)
+    *prop_window_return = (Window)pw;
   XFree(prop);
-  return 0;
+  return 1;
 }
 int XQueryTree(Display *display, Window w, Window *root_return, Window *parent_return, Window **children_return, unsigned int *nchildren_return) {
   char cmd[X6_BUF_SIZE];
@@ -6436,7 +6585,10 @@ int XGetGeometry(Display *display, Drawable d, Window *root_return,
 static int
 x11_window_origin(Display *display, Window w, int *x_out, int *y_out)
 {
-  XWindowAttributes attrs;
+  Window cur;
+  int ox;
+  int oy;
+  int guard;
 
   if (!display || !x_out || !y_out)
     return -1;
@@ -6445,10 +6597,31 @@ x11_window_origin(Display *display, Window w, int *x_out, int *y_out)
     *y_out = 0;
     return 0;
   }
-  if (!XGetWindowAttributes(display, w, &attrs))
-    return -1;
-  *x_out = attrs.x;
-  *y_out = attrs.y;
+
+  cur = w;
+  ox = 0;
+  oy = 0;
+  for (guard = 0; guard < 256 && cur != None && cur != display->root; guard++) {
+    XWindowAttributes attrs;
+    Window root;
+    Window parent;
+
+    if (!XGetWindowAttributes(display, cur, &attrs))
+      return -1;
+    ox += attrs.x;
+    oy += attrs.y;
+
+    root = None;
+    parent = None;
+    if (!XQueryTree(display, cur, &root, &parent, 0, 0))
+      return -1;
+    if (parent == None || parent == cur)
+      break;
+    cur = parent;
+  }
+
+  *x_out = ox;
+  *y_out = oy;
   return 0;
 }
 
@@ -6867,36 +7040,37 @@ int XRefreshKeyboardMapping(XMappingEvent *event_map) { (void)event_map; return 
 int XSupportsLocale(void) { return 1; }
 
 int XSetWMNormalHints(Display *display, Window w, XSizeHints *hints) {
-  char buf[256];
-  int n;
+  uint data[18];
   if (!display || !hints)
     return 0;
-  n = snprintf(buf, sizeof(buf),
-               "flags=%ld size=%dx%d min=%dx%d max=%dx%d base=%dx%d inc=%dx%d pos=%d,%d gravity=%d aspect=%d/%d:%d/%d",
-               hints->flags,
-               hints->width, hints->height,
-               hints->min_width, hints->min_height,
-               hints->max_width, hints->max_height,
-               hints->base_width, hints->base_height,
-               hints->width_inc, hints->height_inc,
-               hints->x, hints->y, hints->win_gravity,
-               hints->min_aspect.x, hints->min_aspect.y,
-               hints->max_aspect.x, hints->max_aspect.y);
-  if (n < 0)
-    return 0;
-  return XChangeProperty(display, w, XA_WM_NORMAL_HINTS, XA_STRING, 8,
-                         PropModeReplace, (unsigned char *)buf, (int)strlen(buf));
+  data[0] = (uint)hints->flags;
+  data[1] = (uint)hints->x;
+  data[2] = (uint)hints->y;
+  data[3] = (uint)hints->width;
+  data[4] = (uint)hints->height;
+  data[5] = (uint)hints->min_width;
+  data[6] = (uint)hints->min_height;
+  data[7] = (uint)hints->max_width;
+  data[8] = (uint)hints->max_height;
+  data[9] = (uint)hints->width_inc;
+  data[10] = (uint)hints->height_inc;
+  data[11] = (uint)hints->min_aspect.x;
+  data[12] = (uint)hints->min_aspect.y;
+  data[13] = (uint)hints->max_aspect.x;
+  data[14] = (uint)hints->max_aspect.y;
+  data[15] = (uint)hints->base_width;
+  data[16] = (uint)hints->base_height;
+  data[17] = (uint)hints->win_gravity;
+  return XChangeProperty(display, w, XA_WM_NORMAL_HINTS, XA_WM_SIZE_HINTS, 32,
+                         PropModeReplace, (unsigned char *)data, 18);
 }
 int XSetTransientForHint(Display *display, Window w, Window prop_window) {
-  char buf[64];
-  int n;
+  uint value;
   if (!display)
     return 0;
-  n = snprintf(buf, sizeof(buf), "%u", (uint)prop_window);
-  if (n < 0)
-    return 0;
-  return XChangeProperty(display, w, XA_WM_TRANSIENT_FOR, XA_STRING, 8,
-                         PropModeReplace, (unsigned char *)buf, (int)strlen(buf));
+  value = (uint)prop_window;
+  return XChangeProperty(display, w, XA_WM_TRANSIENT_FOR, XA_WINDOW, 32,
+                         PropModeReplace, (unsigned char *)&value, 1);
 }
 int XStoreName(Display *display, Window w, const char *name) {
   return XChangeProperty(display, w, XA_WM_NAME, XA_STRING, 8, PropModeReplace, (unsigned char *)name, name ? (int)strlen(name) : 0);
@@ -7525,8 +7699,6 @@ int XGetWMProtocols(Display *display, Window w, Atom **protocols_return, int *co
 }
 XWMHints *XGetWMHints(Display *display, Window w) {
   XWMHints *h = malloc(sizeof(*h));
-  char cmd[X6_BUF_SIZE];
-  char line[X6_BUF_SIZE];
   unsigned char *prop = 0;
   unsigned long nitems = 0;
   Atom actual = 0;
@@ -7536,85 +7708,81 @@ XWMHints *XGetWMHints(Display *display, Window w) {
   h->input = 1;
   if (!display)
     return h;
-  snprintf(cmd, sizeof(cmd), "GET_PROPERTY %u %s\n", (uint)w, atom_to_name(XA_WM_HINTS));
-  if (x11_cmd(display, cmd, line, sizeof(line)) == 0 && strncmp(line, "VALUE ", 6) == 0) {
-    char *space = strchr(line + 6, ' ');
-    if (space)
-      x11_prop_unpack(space + 1, &actual, &fmt, &nitems, &prop);
-  }
-  if (prop) {
-    long flags = 0;
-    int input = 1;
-    int istate = 0;
-    if (sscanf((char *)prop, "flags=%ld input=%d initial=%d", &flags, &input, &istate) == 3) {
-      h->flags = flags;
-      h->input = input;
-      h->initial_state = istate;
-    }
+  if (XGetWindowProperty(display, w, XA_WM_HINTS, 0, 9, False,
+                         XA_WM_HINTS, &actual, &fmt, &nitems, 0, &prop) == Success &&
+      prop && actual == XA_WM_HINTS && fmt == 32 && nitems >= 3) {
+    unsigned long *vals = (unsigned long *)prop;
+
+    h->flags = (long)vals[0];
+    h->input = (int)vals[1];
+    h->initial_state = (int)vals[2];
+    if (nitems > 3) h->icon_pixmap = (Pixmap)vals[3];
+    if (nitems > 4) h->icon_window = (Window)vals[4];
+    if (nitems > 5) h->icon_x = (int)vals[5];
+    if (nitems > 6) h->icon_y = (int)vals[6];
+    if (nitems > 7) h->icon_mask = (Pixmap)vals[7];
+    if (nitems > 8) h->window_group = (XID)vals[8];
     XFree(prop);
   }
   return h;
 }
 int XSetWMHints(Display *display, Window w, XWMHints *wmhints) {
-  char buf[128];
+  uint data[9];
   if (!display || !wmhints)
     return 0;
-  snprintf(buf, sizeof(buf), "flags=%ld input=%d initial=%d",
-           wmhints->flags, wmhints->input, wmhints->initial_state);
-  return XChangeProperty(display, w, XA_WM_HINTS, XA_STRING, 8,
-                         PropModeReplace, (unsigned char *)buf, (int)strlen(buf));
+  data[0] = (uint)wmhints->flags;
+  data[1] = (uint)wmhints->input;
+  data[2] = (uint)wmhints->initial_state;
+  data[3] = (uint)wmhints->icon_pixmap;
+  data[4] = (uint)wmhints->icon_window;
+  data[5] = (uint)wmhints->icon_x;
+  data[6] = (uint)wmhints->icon_y;
+  data[7] = (uint)wmhints->icon_mask;
+  data[8] = (uint)wmhints->window_group;
+  return XChangeProperty(display, w, XA_WM_HINTS, XA_WM_HINTS, 32,
+                         PropModeReplace, (unsigned char *)data, 9);
 }
 int XGetWMNormalHints(Display *display, Window w, XSizeHints *hints_return, long *supplied_return) {
-  char cmd[X6_BUF_SIZE];
-  char line[X6_BUF_SIZE];
   unsigned char *prop = 0;
   unsigned long nitems = 0;
   Atom actual = 0;
   int fmt = 0;
-  long flags = 0;
-  int matched;
+  unsigned long *vals;
   if (hints_return) memset(hints_return, 0, sizeof(*hints_return));
   if (!display || !hints_return)
     return 0;
   x11consolecrit("x11:getwmnormalhints enter wid=%u", (uint)w);
-  snprintf(cmd, sizeof(cmd), "GET_PROPERTY %u %s\n", (uint)w, atom_to_name(XA_WM_NORMAL_HINTS));
-  if (x11_cmd(display, cmd, line, sizeof(line)) == 0 && strncmp(line, "VALUE ", 6) == 0) {
-    char *space = strchr(line + 6, ' ');
-    if (space)
-      x11_prop_unpack(space + 1, &actual, &fmt, &nitems, &prop);
-  }
-  if (prop) {
-    matched = sscanf((char *)prop,
-           "flags=%ld size=%dx%d min=%dx%d max=%dx%d base=%dx%d inc=%dx%d pos=%d,%d gravity=%d aspect=%d/%d:%d/%d",
-           &flags,
-           &hints_return->width, &hints_return->height,
-           &hints_return->min_width, &hints_return->min_height,
-           &hints_return->max_width, &hints_return->max_height,
-           &hints_return->base_width, &hints_return->base_height,
-           &hints_return->width_inc, &hints_return->height_inc,
-           &hints_return->x, &hints_return->y,
-           &hints_return->win_gravity,
-           &hints_return->min_aspect.x, &hints_return->min_aspect.y,
-           &hints_return->max_aspect.x, &hints_return->max_aspect.y);
-    if (matched < 9) {
-      matched = sscanf((char *)prop,
-             "flags=%ld min=%dx%d max=%dx%d base=%dx%d inc=%dx%d",
-             &flags,
-             &hints_return->min_width, &hints_return->min_height,
-             &hints_return->max_width, &hints_return->max_height,
-             &hints_return->base_width, &hints_return->base_height,
-             &hints_return->width_inc, &hints_return->height_inc);
-    }
-    hints_return->flags = flags;
-    x11consolecrit("x11:getwmnormalhints done wid=%u matched=%d flags=%ld min=%dx%d max=%dx%d base=%dx%d inc=%dx%d",
-                   (uint)w, matched, hints_return->flags,
+  if (XGetWindowProperty(display, w, XA_WM_NORMAL_HINTS, 0, 18, False,
+                         XA_WM_SIZE_HINTS, &actual, &fmt, &nitems, 0, &prop) == Success &&
+      prop && actual == XA_WM_SIZE_HINTS && fmt == 32 && nitems >= 15) {
+    vals = (unsigned long *)prop;
+    hints_return->flags = (long)vals[0];
+    hints_return->x = (int)vals[1];
+    hints_return->y = (int)vals[2];
+    hints_return->width = (int)vals[3];
+    hints_return->height = (int)vals[4];
+    hints_return->min_width = (int)vals[5];
+    hints_return->min_height = (int)vals[6];
+    hints_return->max_width = (int)vals[7];
+    hints_return->max_height = (int)vals[8];
+    hints_return->width_inc = (int)vals[9];
+    hints_return->height_inc = (int)vals[10];
+    hints_return->min_aspect.x = (int)vals[11];
+    hints_return->min_aspect.y = (int)vals[12];
+    hints_return->max_aspect.x = (int)vals[13];
+    hints_return->max_aspect.y = (int)vals[14];
+    if (nitems > 15) hints_return->base_width = (int)vals[15];
+    if (nitems > 16) hints_return->base_height = (int)vals[16];
+    if (nitems > 17) hints_return->win_gravity = (int)vals[17];
+    x11consolecrit("x11:getwmnormalhints done wid=%u flags=%ld min=%dx%d max=%dx%d base=%dx%d inc=%dx%d",
+                   (uint)w, hints_return->flags,
                    hints_return->min_width, hints_return->min_height,
                    hints_return->max_width, hints_return->max_height,
                    hints_return->base_width, hints_return->base_height,
                    hints_return->width_inc, hints_return->height_inc);
     XFree(prop);
     if (supplied_return) *supplied_return = hints_return->flags;
-    return matched >= 9 ? 1 : 0;
+    return 1;
   }
   x11consolecrit("x11:getwmnormalhints empty wid=%u", (uint)w);
   if (supplied_return) *supplied_return = 0;
@@ -7634,16 +7802,29 @@ Status XGetSizeHints(Display *display, Window w, XSizeHints *hints_return,
 }
 
 int XSetClassHint(Display *display, Window w, XClassHint *class_hints) {
-  char buf[256];
   const char *name;
   const char *klass;
+  unsigned long name_len;
+  unsigned long class_len;
+  unsigned char *buf;
+  int ok;
   if (!display || !class_hints)
     return 0;
   name = class_hints->res_name ? class_hints->res_name : "";
   klass = class_hints->res_class ? class_hints->res_class : "";
-  snprintf(buf, sizeof(buf), "%s,%s", name, klass);
-  return XChangeProperty(display, w, XInternAtom(display, "WM_CLASS", False), XA_STRING, 8,
-                         PropModeReplace, (unsigned char *)buf, (int)strlen(buf));
+  name_len = (unsigned long)strlen(name);
+  class_len = (unsigned long)strlen(klass);
+  buf = (unsigned char *)calloc((size_t)(name_len + class_len + 2), 1);
+  if (!buf)
+    return 0;
+  if (name_len > 0)
+    memmove(buf, name, (size_t)name_len);
+  if (class_len > 0)
+    memmove(buf + name_len + 1, klass, (size_t)class_len);
+  ok = XChangeProperty(display, w, XInternAtom(display, "WM_CLASS", False), XA_STRING, 8,
+                       PropModeReplace, buf, (int)(name_len + class_len + 2));
+  free(buf);
+  return ok;
 }
 
 /* ------- Xft function implementations for st compatibility ------- */
